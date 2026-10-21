@@ -1,0 +1,9 @@
+[versions]
+springBoot = "4.1.1"
+dependencyManagement = "1.1.7"
+jsonSchemaValidator = "3.0.8"
+greenmail = "2.1.14"
+
+[libraries]
+json-schema-validator = { module = "com.networknt:json-schema-validator", version.ref = "jsonSchemaValidator" }
+greenmail-junit5 = { module = "com.icegreen:greenmail-junit5", version.ref = "greenmail" }

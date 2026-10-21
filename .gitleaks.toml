@@ -1,0 +1,5 @@
+# 비밀값 검사 설정. gitleaks 기본 규칙을 그대로 확장한다.
+title = "stock-reading gitleaks config"
+
+[extend]
+useDefault = true

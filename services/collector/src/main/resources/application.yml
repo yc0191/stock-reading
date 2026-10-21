@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: collector
+  main:
+    web-application-type: none
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: collector
+      auto-offset-reset: latest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      acks: all
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+collector:
+  # 가짜 종목 코드만 쓴다. 실제 종목은 커밋하지 않는다.
+  symbols: TEST01,TEST02,TEST03
+  tick-interval-ms: 30000

@@ -1,0 +1,36 @@
+spring:
+  application:
+    name: notifier
+  main:
+    web-application-type: none
+  config:
+    # 로컬 개발용 비밀값(SMTP 자격증명, 수신자)은 저장소 루트의 git 제외 .env에서 가져온다.
+    import: optional:file:./.env[.properties],optional:file:../../.env[.properties]
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: notifier
+      # 'latest': 처음 시작할 때 쌓여 있는 과거 브리핑을 메일로 보내지 않는다. 이후 재시작은 커밋된 오프셋부터 이어서 읽는다.
+      auto-offset-reset: latest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+  mail:
+    host: ${SMTP_HOST:}
+    port: ${SMTP_PORT:587}
+    username: ${SMTP_USERNAME:}
+    password: ${SMTP_PASSWORD:}
+    properties:
+      mail.smtp.auth: true
+      mail.smtp.starttls.enable: true
+      mail.smtp.starttls.required: true
+      mail.smtp.connectiontimeout: 10000
+      mail.smtp.timeout: 10000
+      mail.smtp.writetimeout: 10000
+
+notifier:
+  # false = 드라이런(로그만). 실제 발송에는 .env에 NOTIFIER_SEND_ENABLED=true와 SMTP_*, 발신·수신 주소가 필요하다.
+  send-enabled: ${NOTIFIER_SEND_ENABLED:false}
+  sender: ${NOTIFIER_SENDER:}
+  recipient: ${NOTIFIER_RECIPIENT:}
+  subject-prefix: ${NOTIFIER_SUBJECT_PREFIX:[시뮬레이션]}
+  max-per-hour: ${NOTIFIER_MAX_PER_HOUR:6}

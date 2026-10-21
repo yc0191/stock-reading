@@ -1,0 +1,9 @@
+# 비밀값이 든 커밋을 막는다. 최초 1회 `pre-commit install`로 설치한다.
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: gitleaks (staged changes)
+        entry: gitleaks git --pre-commit --staged --redact --verbose
+        language: system
+        pass_filenames: false

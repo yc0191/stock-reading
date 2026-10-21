@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stock-reading.local/contracts/briefing.generated.v1",
+  "title": "briefing.generated v1",
+  "description": "가격 변동을 설명하는 브리핑과 그 근거 목록. 공개 정보만 담는다(보유 종목·수량 없음).",
+  "type": "object",
+  "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "const": "briefing.generated" },
+    "schemaVersion": { "const": 1 },
+    "occurredAt": { "type": "string", "format": "date-time", "description": "변동의 asOf, 즉 설명하려는 시점." },
+    "producedAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1 },
+    "payload": {
+      "type": "object",
+      "required": ["symbol", "changePercent", "asOf", "text", "evidence", "generatedBy"],
+      "properties": {
+        "symbol": { "type": "string", "pattern": "^[0-9A-Z]{6}$" },
+        "changePercent": { "type": "number" },
+        "asOf": { "type": "string", "format": "date-time" },
+        "text": { "type": "string", "minLength": 1 },
+        "generatedBy": { "type": "string", "minLength": 1, "description": "알려진 값: rule-based" },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["title", "source", "publishedAt"],
+            "properties": {
+              "title": { "type": "string", "minLength": 1 },
+              "source": { "type": "string", "minLength": 1 },
+              "publishedAt": { "type": "string", "format": "date-time" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

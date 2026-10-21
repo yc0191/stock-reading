@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stock-reading.local/contracts/market.snapshot.v1",
+  "title": "market.snapshot v1",
+  "description": "종목 하나의 시세 스냅샷. 보유 종목·수량 같은 개인정보를 절대 담지 않는다.",
+  "type": "object",
+  "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "const": "market.snapshot" },
+    "schemaVersion": { "const": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "producedAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1 },
+    "payload": {
+      "type": "object",
+      "required": ["symbol", "price", "asOf", "source"],
+      "properties": {
+        "symbol": { "type": "string", "pattern": "^[0-9A-Z]{6}$" },
+        "price": { "type": "integer", "minimum": 0, "description": "원화(KRW) 기준 가격." },
+        "asOf": { "type": "string", "format": "date-time" },
+        "source": { "type": "string", "minLength": 1, "description": "알려진 값: simulator" }
+      }
+    }
+  }
+}

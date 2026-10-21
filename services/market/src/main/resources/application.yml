@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: market
+  main:
+    web-application-type: none
+  config:
+    # 로컬 개발용 비밀값은 저장소 루트의 git 제외 .env에서 가져온다.
+    import: optional:file:./.env[.properties],optional:file:../../.env[.properties]
+  datasource:
+    url: jdbc:postgresql://localhost:5432/${POSTGRES_DB:stock}?currentSchema=market
+    username: ${MARKET_DB_USER:market_svc}
+    password: ${MARKET_DB_PASSWORD}
+  flyway:
+    schemas: market
+    default-schema: market
+    create-schemas: false
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: market
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      acks: all
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+market:
+  # 직전 스냅샷 대비 변동의 절댓값이 이 값(%) 이상이면 "변동"으로 본다.
+  move-threshold-percent: 1.00

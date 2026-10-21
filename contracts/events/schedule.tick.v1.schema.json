@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stock-reading.local/contracts/schedule.tick.v1",
+  "title": "schedule.tick v1",
+  "description": "예약된 작업의 실행 시각이 되면 타이머가 발행한다. 임시 봉투 형식(ADR-010 초안).",
+  "type": "object",
+  "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "const": "schedule.tick" },
+    "schemaVersion": { "const": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "producedAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1 },
+    "payload": {
+      "type": "object",
+      "required": ["jobType", "scheduledFor"],
+      "properties": {
+        "jobType": { "type": "string", "minLength": 1, "description": "알려진 값: collect" },
+        "scheduledFor": { "type": "string", "format": "date-time", "description": "작업이 실행되어야 했던 논리적 시각. 늦게 발행돼도 그대로 유지한다." }
+      }
+    }
+  }
+}
