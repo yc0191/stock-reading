@@ -1,0 +1,12 @@
+{
+  "eventId": "0b8c2d3e-4f50-4a6b-9c7d-1e2f3a4b5c6d",
+  "eventType": "schedule.tick",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T16:00:00+09:00",
+  "producedAt": "2026-10-20T16:00:00.120+09:00",
+  "correlationId": "collect-2026-10-20T16:00:00+09:00",
+  "payload": {
+    "jobType": "collect",
+    "scheduledFor": "2026-10-20T16:00:00+09:00"
+  }
+}

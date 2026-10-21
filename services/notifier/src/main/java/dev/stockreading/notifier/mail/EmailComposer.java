@@ -1,0 +1,33 @@
+package dev.stockreading.notifier.mail;
+
+import java.math.BigDecimal;
+
+import org.springframework.stereotype.Component;
+
+import dev.stockreading.notifier.NotifierProperties;
+import dev.stockreading.notifier.event.BriefingEnvelope;
+
+/** 브리핑으로 이메일을 만든다. 공개 정보만 쓴다: 보유 종목·수량은 넣지 않는다. */
+@Component
+public class EmailComposer {
+
+    private final String subjectPrefix;
+
+    public EmailComposer(NotifierProperties properties) {
+        this.subjectPrefix = properties.subjectPrefix() == null ? "" : properties.subjectPrefix().trim();
+    }
+
+    public EmailMessage compose(BriefingEnvelope briefing) {
+        BriefingEnvelope.Payload payload = briefing.payload();
+        String direction = payload.changePercent().compareTo(BigDecimal.ZERO) > 0 ? "상승" : "하락";
+        String core = "[%s] %s %+.2f%% 브리핑".formatted(payload.symbol(), direction, payload.changePercent());
+        String subject = subjectPrefix.isEmpty() ? core : subjectPrefix + " " + core;
+
+        String body = payload.text()
+                + "\n\n----------------------------------------"
+                + "\n브리핑 ID: " + briefing.eventId()
+                + "\n추적 ID: " + briefing.correlationId()
+                + "\n생성 방식: " + payload.generatedBy();
+        return new EmailMessage(subject, body);
+    }
+}

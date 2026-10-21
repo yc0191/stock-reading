@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stock-reading.local/contracts/market.move.v1",
+  "title": "market.move v1",
+  "description": "종목의 직전 스냅샷 대비 변동이 설정한 임계값에 도달하면 발행한다. 보유 종목·수량 같은 개인정보를 절대 담지 않는다.",
+  "type": "object",
+  "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "const": "market.move" },
+    "schemaVersion": { "const": 1 },
+    "occurredAt": { "type": "string", "format": "date-time", "description": "가격이 관측된 시각 (스냅샷의 asOf)." },
+    "producedAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1 },
+    "payload": {
+      "type": "object",
+      "required": ["symbol", "previousPrice", "price", "changePercent", "thresholdPercent", "asOf"],
+      "properties": {
+        "symbol": { "type": "string", "pattern": "^[0-9A-Z]{6}$" },
+        "previousPrice": { "type": "integer", "minimum": 0 },
+        "price": { "type": "integer", "minimum": 0 },
+        "changePercent": { "type": "number", "description": "(price - previousPrice) / previousPrice * 100, 소수점 2자리." },
+        "thresholdPercent": { "type": "number", "minimum": 0 },
+        "asOf": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

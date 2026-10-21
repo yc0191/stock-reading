@@ -1,0 +1,83 @@
+# 로컬 개발용 인프라. 포트는 모두 localhost에만 바인딩한다.
+# 저장소 루트에서 실행: docker compose -f infra/compose/docker-compose.yml --env-file .env up -d
+services:
+  kafka:
+    image: apache/kafka:4.2.2
+    container_name: stock-kafka
+    ports:
+      - "127.0.0.1:9092:9092"
+    environment:
+      # 이미지 기본값과 같지만, 다른 컨테이너(kafka-ui)가 붙을 수 있도록 INTERNAL(kafka:19092)을 추가했다.
+      # 호스트의 앱은 계속 localhost:9092를 쓴다.
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,INTERNAL://:19092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # 토픽은 서비스가 명시적으로 선언한다. 자동 생성을 켜 두면 소비자가 먼저 떠서
+      # 파티션 1개짜리 토픽을 만들어 버려, 나머지 파티션이 조용히 읽히지 않는다.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  postgres:
+    image: pgvector/pgvector:0.8.7-pg17-trixie
+    container_name: stock-postgres
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      MARKET_DB_USER: ${MARKET_DB_USER}
+      MARKET_DB_PASSWORD: ${MARKET_DB_PASSWORD}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_ADMIN_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # 개발 전용 GUI이며 localhost에만 열린다. Kafka UI: http://localhost:8080  Adminer: http://localhost:8081
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: stock-kafka-ui
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
+      DYNAMIC_CONFIG_ENABLED: "false"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # 브라우저에서 로그인: System=PostgreSQL, Server=postgres, 사용자·비밀번호는 .env 값, DB=${POSTGRES_DB}
+  adminer:
+    image: adminer:4.8.1
+    container_name: stock-adminer
+    ports:
+      - "127.0.0.1:8081:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  kafka-data:
+  pg-data:

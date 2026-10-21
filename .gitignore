@@ -1,0 +1,72 @@
+# ---- 비밀·자격증명 (절대 커밋 금지) ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+*.tfvars
+*.tfvars.json
+secrets/
+credentials*
+
+# ---- Terraform (상태 파일에 비밀이 들어갈 수 있음) ----
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+crash.log
+
+# ---- 개인·비공개 데이터 ----
+# 보유 종목·계좌 정보·스크린샷·수집한 외부 데이터는 로컬에만 둔다.
+private/
+local/
+screenshots/
+data/
+# 브리핑 샘플 뉴스(전부 가짜 데이터) 한 파일만 예외로 커밋한다. data/ 안의 나머지는 계속 제외한다.
+!services/briefing/data/
+services/briefing/data/*
+!services/briefing/data/sample_news.json
+dumps/
+*.csv
+*.sqlite
+*.db
+
+# ---- 외부 API 명세·라이선스 데이터 (재배포 불가) ----
+docs/external/
+*.xlsx
+*.xls
+
+# ---- AI 도구 설정·로컬 메모 ----
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+.cursor/
+.aider*
+notes/
+
+# ---- Python ----
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# ---- 빌드 산출물 ----
+build/
+.gradle/
+out/
+bin/
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# ---- IDE·OS ----
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# ---- 로그 ----
+*.log
+logs/

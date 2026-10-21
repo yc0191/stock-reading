@@ -1,0 +1,44 @@
+[
+  {
+    "id": "sample-001",
+    "symbols": ["TEST01"],
+    "title": "Sample: sector outlook revised downward by analysts",
+    "source": "sample",
+    "hoursAgo": 3
+  },
+  {
+    "id": "sample-002",
+    "symbols": ["TEST01", "TEST02"],
+    "title": "Sample: policy announcement raises uncertainty for the sector",
+    "source": "sample",
+    "hoursAgo": 8
+  },
+  {
+    "id": "sample-003",
+    "symbols": ["*"],
+    "title": "Sample: broad market falls on overseas index decline",
+    "source": "sample",
+    "hoursAgo": 1
+  },
+  {
+    "id": "sample-004",
+    "symbols": ["TEST03"],
+    "title": "Sample: strong earnings report lifts expectations",
+    "source": "sample",
+    "hoursAgo": 5
+  },
+  {
+    "id": "sample-005",
+    "symbols": ["TEST01"],
+    "title": "Sample: OLD item outside the 24h evidence window",
+    "source": "sample",
+    "hoursAgo": 72
+  },
+  {
+    "id": "sample-006",
+    "symbols": ["TEST01"],
+    "title": "Sample: FUTURE item published after the move (must never be used as evidence)",
+    "source": "sample",
+    "hoursAgo": -6
+  }
+]
