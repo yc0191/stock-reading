@@ -19,7 +19,7 @@
         "symbol": { "type": "string", "pattern": "^[0-9A-Z]{6}$" },
         "price": { "type": "integer", "minimum": 0, "description": "원화(KRW) 기준 가격." },
         "asOf": { "type": "string", "format": "date-time" },
-        "source": { "type": "string", "minLength": 1, "description": "알려진 값: simulator" }
+        "source": { "type": "string", "minLength": 1, "description": "알려진 값: simulator, broker" }
       }
     }
   }

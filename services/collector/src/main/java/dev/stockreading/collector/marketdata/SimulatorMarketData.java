@@ -8,10 +8,12 @@ import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /** 같은 결과가 재현되도록 시드를 고정한 랜덤 워크 가격 생성기. */
 @Component
+@ConditionalOnProperty(name = "collector.market-data.source", havingValue = "simulator", matchIfMissing = true)
 public class SimulatorMarketData implements MarketDataPort {
 
     static final long START_PRICE = 10_000L;

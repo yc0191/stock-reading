@@ -1,0 +1,12 @@
+package dev.stockreading.collector.marketdata;
+
+public class BrokerApiException extends RuntimeException {
+
+    public BrokerApiException(String message) {
+        super(message);
+    }
+
+    public BrokerApiException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}

@@ -19,6 +19,15 @@ collector:
   # 가짜 종목 코드만 쓴다. 실제 종목은 커밋하지 않는다.
   symbols: TEST01,TEST02,TEST03
   tick-interval-ms: 30000
+  market-data:
+    # simulator | broker
+    source: ${COLLECTOR_MARKET_DATA_SOURCE:simulator}
+  broker:
+    # 주소와 키는 환경변수로만 받는다(키는 Parameter Store -> .env).
+    base-url: ${BROKER_BASE_URL:}
+    app-key: ${BROKER_APP_KEY:}
+    app-secret: ${BROKER_APP_SECRET:}
+    timeout-seconds: 10
   dart:
     base-url: https://opendart.fss.or.kr/api
     # 비밀: 환경변수로만 받는다(Parameter Store -> .env).
