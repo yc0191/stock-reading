@@ -120,3 +120,39 @@ def test_read_failure_does_not_echo_raw_error(tmp_path, capsys):
         return subprocess.CompletedProcess(cmd, 255, "", "arn:aws:iam::123456789012:user/x denied")
     assert lc.main(["--env-file", str(tmp_path / ".env")], run=run) == 1
     assert "123456789012" not in capsys.readouterr().out
+
+
+def collector_param(short, value):
+    return {"Name": lc.COLLECTOR_PREFIX + short, "Value": value}
+
+
+def test_every_collector_parameter_maps_to_its_env_name():
+    parameters = [collector_param(short, f"v-{short}") for short in lc.COLLECTOR_ENV_NAMES]
+    updates, ignored = lc.to_env_updates(parameters, lc.COLLECTOR_PREFIX, lc.COLLECTOR_ENV_NAMES)
+    assert updates == {env: f"v-{short}" for short, env in lc.COLLECTOR_ENV_NAMES.items()}
+    assert ignored == []
+
+
+def test_main_loads_collector_key_after_notifier(tmp_path, capsys):
+    env = tmp_path / ".env"
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        params = full_parameters() if "/notifier" in cmd[cmd.index("--path") + 1] else [collector_param("dart-api-key", "secret-k")]
+        return subprocess.CompletedProcess(cmd, 0, json.dumps({"Parameters": params}), "")
+
+    assert lc.main(["--env-file", str(env)], run=run) == 0
+    assert "DART_API_KEY=secret-k" in env.read_text()
+    assert "secret-k" not in capsys.readouterr().out
+
+
+def test_main_still_works_without_collector_key(tmp_path):
+    env = tmp_path / ".env"
+
+    def run(cmd, **kwargs):
+        params = full_parameters() if "/notifier" in cmd[cmd.index("--path") + 1] else []
+        return subprocess.CompletedProcess(cmd, 0, json.dumps({"Parameters": params}), "")
+
+    assert lc.main(["--env-file", str(env)], run=run) == 0
+    assert "DART_API_KEY" not in env.read_text()
