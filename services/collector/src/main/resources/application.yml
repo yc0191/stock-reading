@@ -19,3 +19,9 @@ collector:
   # 가짜 종목 코드만 쓴다. 실제 종목은 커밋하지 않는다.
   symbols: TEST01,TEST02,TEST03
   tick-interval-ms: 30000
+  dart:
+    base-url: https://opendart.fss.or.kr/api
+    # 비밀: 환경변수로만 받는다(Parameter Store -> .env).
+    api-key: ${DART_API_KEY:}
+    page-count: 100
+    timeout-seconds: 10
