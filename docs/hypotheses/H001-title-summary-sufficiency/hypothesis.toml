@@ -1,0 +1,20 @@
+# 기계가 읽는 정의. 사람이 읽는 배경과 위협 요인은 hypothesis.md 에 있다.
+id = "H001"
+title = "제목과 요약만으로 가격 변동의 근거 후보를 판단할 수 있다"
+claim = "뉴스 검색 결과의 제목과 요약만으로 관련성(J1)과 원인 진술 여부(J3) 판단에서 정확도 95% 이상(신뢰하한 기준)을 달성하고, 모델이 답한 비율은 일정 수준 이상이다"
+state = "draft"        # draft: 판정 기준 미확정이라 README 에 노출하지 않는다. 기준을 모두 정하면 active 로 바꾼다.
+feature = "뉴스 선별 서비스"
+related_adr = ["ADR-007"]
+
+# ---- active 로 올리려면 아래를 확정하고 주석을 푼다 (hypothesis.md "확정할 항목") ----
+# [rule]
+# kind = "proportion"
+# target = 0.95                       # 목표 정확도
+# confidence = 0.95                   # 단측 신뢰수준 (정확 이항 신뢰하한이 target 이상이어야 통과)
+# min_coverage = 0.60                 # C: 확정 필요 (제안 값)
+# min_total = 330                     # 측정당 최소 항목 수. 확정 필요
+# measures = ["J1", "J3"]             # 모두 통과해야 지지됨. 확정 필요 (J2 는 참고)
+#
+# [verify]
+# command = "python3 scripts/h001_eval.py"   # 아직 없음. 라벨링 데이터와 모델 출력으로 집계를 JSON 으로 출력해야 한다
+# needs = "local-data"                # 비공개 라벨링 데이터가 필요해 CI 에서는 재현할 수 없다

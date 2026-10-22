@@ -63,6 +63,14 @@ flowchart LR
 - [ ] 개인화 서비스 (월별 증감, 수신자 관리)
 - [ ] 클라우드 배포와 CI/CD
 
+## 검증한 가설
+
+구현 전에 증명해야 할 주장을 가설로 등록하고, 판정 기준을 **데이터를 보기 전에** 고정한 뒤 측정합니다. 아래 표는 [`docs/hypotheses/`](docs/hypotheses/README.md)의 정의와 실행 결과에서 자동 생성됩니다. 판정 기준이 완성되지 않은 가설은 표시하지 않습니다.
+
+<!-- hypotheses:start -->
+아직 공개할 가설이 없습니다.
+<!-- hypotheses:end -->
+
 ## 문서
 
-설계 결정과 근거: [`docs/adr/`](docs/adr/README.md) · 로컬 실행: [`docs/local-development.md`](docs/local-development.md)
+설계 결정과 근거: [`docs/adr/`](docs/adr/README.md) · 가설 검증: [`docs/hypotheses/`](docs/hypotheses/README.md) · 로컬 실행: [`docs/local-development.md`](docs/local-development.md)
