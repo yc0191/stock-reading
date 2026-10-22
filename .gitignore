@@ -39,8 +39,8 @@ docs/external/
 *.xls
 
 # ---- AI 도구 설정·로컬 메모 ----
-.claude/
-CLAUDE.md
+.claude/settings.local.json
+.claude/rules/private/
 CLAUDE.local.md
 .cursor/
 .aider*

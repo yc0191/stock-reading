@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew cleanTest test:*)",
+      "Bash(./gradlew test:*)",
+      "Bash(./gradlew bootJar:*)",
+      "Bash(services/briefing/.venv/bin/python -m pytest:*)"
+    ],
+    "deny": [
+      "Read(./.env)"
+    ]
+  }
+}
