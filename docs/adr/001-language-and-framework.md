@@ -14,7 +14,7 @@ Kotlin + Spring Boot, Go, Node.js(NestJS)
 - 브리핑 AI(RAG/LLM): **Python**
 
 ## 이유
-1. 학습 목표를 Kafka, Redis, 배포에 집중시키기 위해 기존 경험이 있는 스택을 택한다.
+1. 학습 목표를 Kafka, Redis, 배포에 집중시키기 위해 익숙한 스택을 택한다.
 2. `spring-kafka`, `spring-data-redis`, Testcontainers 등 연동 생태계가 성숙해 있다.
 3. Java 21 가상 스레드로 외부 API 폴링, LLM 호출 같은 I/O 대기를 단순하게 처리할 수 있다.
 4. LLM/임베딩/평가 도구 생태계 때문에 RAG 서비스는 Python으로 분리하고, 언어 경계가 자연스러운 서비스 분리 이유가 된다(ADR-006).
