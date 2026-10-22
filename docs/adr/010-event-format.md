@@ -31,7 +31,7 @@ Avro + 스키마 레지스트리, Protobuf
 - **형식 검증이 기본으로 꺼져 있다:** JSON 스키마 검증 라이브러리는 `date-time` 등 형식을 기본으로 검사하지 않는다(Java는 옵션을 켜야 하고, Python `jsonschema`는 선택 패키지가 없으면 조용히 통과). 형식 검사를 켜고, **잘못된 입력이 실제로 거부되는지** 음성 테스트로 확인한다.
 
 ## 구현 단계에서 정할 사항
-공통 봉투(Envelope) 필드 구성(현재 잠정: `eventId, eventType, schemaVersion, occurredAt, producedAt, correlationId, payload`), 개인 금액이 담긴 메시지의 전달 경로.
+공통 봉투(Envelope) 필드 구성(현재 잠정: `eventId, eventType, schemaVersion, occurredAt, producedAt, correlationId, payload`), 개인 정보가 담긴 메시지의 전달 경로.
 
 ## 감수하는 단점
 형식 강제를 서버가 아닌 테스트와 규칙으로 직접 지켜야 한다.

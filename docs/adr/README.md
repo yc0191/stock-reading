@@ -19,7 +19,7 @@ ADR = Architecture Decision Record. "무엇을, 왜, 어떤 대안을 놓고 정
 | [012](012-scheduling.md) | 스케줄링: Kafka 이벤트 | 초안 |
 | [013](013-topic-declaration.md) | 토픽은 서비스가 선언, 브로커 자동 생성 끔 | 확정 (구현·검증됨) |
 | [014](014-notifier-safety-rules.md) | 발송기 안전 규칙 | 확정 (구현·검증됨) |
-| [015](015-parameter-store.md) | 이메일 설정·비밀을 Parameter Store에 보관 | 확정 (시드니, 읽기 검증됨) |
+| [015](015-parameter-store.md) | 이메일 설정·비밀을 Parameter Store에 보관 | 확정 (시드니) |
 
 ## 상태 표기
 - **확정**: 합의했고, 구현이 있으면 테스트로 검증됨
