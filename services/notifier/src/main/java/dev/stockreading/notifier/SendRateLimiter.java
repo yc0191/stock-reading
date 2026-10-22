@@ -10,7 +10,7 @@ import org.springframework.stereotype.Component;
 
 /** 실제로 발송한 이메일에 대한 1시간 슬라이딩 한도. 자동 반복이 실제 받은편지함을 가득 채우지 못하게 한다. */
 @Component
-public class SendRateLimiter {
+class SendRateLimiter {
 
     private static final Duration WINDOW = Duration.ofHours(1);
 
