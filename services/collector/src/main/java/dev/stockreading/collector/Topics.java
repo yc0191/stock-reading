@@ -11,11 +11,15 @@ public class Topics {
     public static final String SCHEDULE_TICK = "schedule.tick";
     public static final String MARKET_SNAPSHOT = "market.snapshot";
 
+    public static final String NEWS_COLLECTED = "news.collected";
+
     // 파티션 수는 시작값이며, ADR-005 부하 검증으로 확인한다.
+    // news.collected 의 파티션 수는 소비 쪽 선언과 같아야 한다(ADR-013).
     @Bean
     NewTopics kafkaTopics() {
         return new NewTopics(
                 TopicBuilder.name(SCHEDULE_TICK).partitions(1).replicas(1).build(),
-                TopicBuilder.name(MARKET_SNAPSHOT).partitions(3).replicas(1).build());
+                TopicBuilder.name(MARKET_SNAPSHOT).partitions(3).replicas(1).build(),
+                TopicBuilder.name(NEWS_COLLECTED).partitions(3).replicas(1).build());
     }
 }

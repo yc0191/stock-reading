@@ -19,6 +19,11 @@ collector:
   # 가짜 종목 코드만 쓴다. 실제 종목은 커밋하지 않는다.
   symbols: TEST01,TEST02,TEST03
   tick-interval-ms: 30000
+  schedule:
+    # 꺼 두면 타이머가 tick 을 발행하지 않는다. 로컬에서는 scripts/publish-tick.sh 로 수동 발행한다.
+    enabled: ${COLLECTOR_SCHEDULE_ENABLED:false}
+    # 뉴스 수집 주기(15분)
+    news-interval-ms: 900000
   market-data:
     # simulator | broker
     source: ${COLLECTOR_MARKET_DATA_SOURCE:simulator}
