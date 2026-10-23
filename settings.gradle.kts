@@ -12,4 +12,5 @@ dependencyResolutionManagement {
 
 include(":services:collector")
 include(":services:market")
+include(":services:news")
 include(":services:notifier")
