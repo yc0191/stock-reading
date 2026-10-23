@@ -16,7 +16,7 @@
       "type": "object",
       "required": ["jobType", "scheduledFor"],
       "properties": {
-        "jobType": { "type": "string", "minLength": 1, "description": "알려진 값: collect" },
+        "jobType": { "type": "string", "minLength": 1, "description": "알려진 값: collect, collect-news" },
         "scheduledFor": { "type": "string", "format": "date-time", "description": "작업이 실행되어야 했던 논리적 시각. 늦게 발행돼도 그대로 유지한다." }
       }
     }

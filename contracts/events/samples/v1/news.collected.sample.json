@@ -1,0 +1,17 @@
+{
+  "eventId": "7a1d9c52-3b64-4e8f-a0c1-5d2e6f7a8b90",
+  "eventType": "news.collected",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T15:42:00+09:00",
+  "producedAt": "2026-10-20T16:00:03.450+09:00",
+  "correlationId": "collect-news-2026-10-20T16:00:00+09:00",
+  "payload": {
+    "title": "테스트 기사 제목",
+    "summary": "테스트 기사 요약입니다.",
+    "url": "https://news.example.com/articles/12345",
+    "publisher": "news.example.com",
+    "publishedAt": "2026-10-20T15:42:00+09:00",
+    "symbols": ["TEST01"],
+    "matchedQueries": ["테스트검색어"]
+  }
+}
