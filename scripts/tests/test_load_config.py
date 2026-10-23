@@ -133,6 +133,39 @@ def test_every_collector_parameter_maps_to_its_env_name():
     assert ignored == []
 
 
+def test_news_search_settings_map_to_the_env_names_the_collector_reads():
+    names = {
+        "news-search-base-url": "NEWS_SEARCH_BASE_URL",
+        "news-search-id-header": "NEWS_SEARCH_ID_HEADER",
+        "news-search-secret-header": "NEWS_SEARCH_SECRET_HEADER",
+        "news-search-queries": "NEWS_SEARCH_QUERIES",
+    }
+    parameters = [collector_param(short, f"v-{short}") for short in names]
+    updates, ignored = lc.to_env_updates(parameters, lc.COLLECTOR_PREFIX, lc.COLLECTOR_ENV_NAMES)
+    assert updates == {env: f"v-{short}" for short, env in names.items()}
+    assert ignored == []
+
+
+def test_queries_value_with_separators_is_written_as_is(tmp_path):
+    # 검색어 설정은 '=', ',', ';' 를 쓰는 형식이라 값이 그대로 .env 에 들어가야 한다.
+    env = tmp_path / ".env"
+    queries = "테스트검색어=TEST01,TEST02;테스트검색어2=*"
+
+    def run(cmd, **kwargs):
+        params = full_parameters() if "/notifier" in cmd[cmd.index("--path") + 1] \
+            else [collector_param("news-search-queries", queries)]
+        return subprocess.CompletedProcess(cmd, 0, json.dumps({"Parameters": params}), "")
+
+    assert lc.main(["--env-file", str(env)], run=run) == 0
+    assert f"NEWS_SEARCH_QUERIES={queries}" in env.read_text()
+
+
+def test_queries_value_with_newline_is_rejected():
+    with pytest.raises(ValueError):
+        lc.to_env_updates([collector_param("news-search-queries", "a=TEST01\nSMTP_PASSWORD=x")],
+                          lc.COLLECTOR_PREFIX, lc.COLLECTOR_ENV_NAMES)
+
+
 def test_main_loads_collector_key_after_notifier(tmp_path, capsys):
     env = tmp_path / ".env"
     calls = []

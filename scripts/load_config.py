@@ -28,6 +28,10 @@ COLLECTOR_ENV_NAMES = {
     "kb-app-secret": "BROKER_APP_SECRET",
     "naver-client-id": "NEWS_SEARCH_CLIENT_ID",
     "naver-client-secret": "NEWS_SEARCH_CLIENT_SECRET",
+    "news-search-base-url": "NEWS_SEARCH_BASE_URL",
+    "news-search-id-header": "NEWS_SEARCH_ID_HEADER",
+    "news-search-secret-header": "NEWS_SEARCH_SECRET_HEADER",
+    "news-search-queries": "NEWS_SEARCH_QUERIES",
 }
 
 
