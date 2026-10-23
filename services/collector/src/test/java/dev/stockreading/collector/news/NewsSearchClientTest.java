@@ -44,7 +44,7 @@ class NewsSearchClientTest {
         });
         server.start();
         var properties = new NewsSearchProperties("http://127.0.0.1:" + server.getAddress().getPort(), id, secret,
-                "X-Test-Id", "X-Test-Secret", 20, 5, "");
+                "X-Test-Id", "X-Test-Secret", 20, 5, "", 100);
         return new NewsSearchClient(properties, JsonMapper.builder().build());
     }
 
@@ -58,7 +58,7 @@ class NewsSearchClientTest {
             ]}""";
 
     @Test
-    void cleansFieldsAndParsesTime() throws IOException {
+    void cleansFieldsParsesTimeAndDropsItemsMissingLinkOrTime() throws IOException {
         var client = client(200, RESPONSE, "id", "secret");
 
         List<NewsItem> items = client.search("테스트검색어", 20);
@@ -114,7 +114,7 @@ class NewsSearchClientTest {
 
     @Test
     void missingHeaderNamesFailBeforeAnyCall() throws IOException {
-        var properties = new NewsSearchProperties("http://127.0.0.1:1", "id", "secret", "", "", 20, 5, "");
+        var properties = new NewsSearchProperties("http://127.0.0.1:1", "id", "secret", "", "", 20, 5, "", 100);
         var client = new NewsSearchClient(properties, JsonMapper.builder().build());
 
         assertThatThrownBy(() -> client.search("테스트검색어", 10)).isInstanceOf(NewsSearchApiException.class);
@@ -131,7 +131,7 @@ class NewsSearchClientTest {
 
     @Test
     void propertiesToStringHidesSecrets() {
-        assertThat(new NewsSearchProperties("u", "secret-id", "secret-secret", "h1", "h2", 20, 5, "q=A").toString())
+        assertThat(new NewsSearchProperties("u", "secret-id", "secret-secret", "h1", "h2", 20, 5, "q=A", 100).toString())
                 .doesNotContain("secret-id", "secret-secret");
     }
 }
