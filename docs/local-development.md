@@ -107,7 +107,7 @@ python3 scripts/load_config.py
 
 | 대상 | 명령 | 개수 |
 |---|---|---|
-| Java (수집기, 시세처리기, 발송기) | `./gradlew cleanTest test --no-build-cache` | 136 (실서버 확인·실험용 2개는 건너뜀) |
+| Java (수집기, 시세처리기, 발송기) | `./gradlew cleanTest test --no-build-cache` | 138 (실서버 확인·실험용 2개는 건너뜀) |
 | Python (브리핑) | `services/briefing/.venv/bin/python -m pytest services/briefing` | 26 |
 | Python (설정 로더, 가설 검증 도구) | `services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests` | 39 |
 

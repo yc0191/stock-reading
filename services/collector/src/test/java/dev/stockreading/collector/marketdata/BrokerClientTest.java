@@ -126,6 +126,31 @@ class BrokerClientTest {
     }
 
     @Test
+    void serverErrorKeepsProcessCodeButNotServerMessage() throws IOException {
+        tokenStatus = 500;
+        tokenBody = "{\"dataHeader\":{\"resultCode\":\"9000\",\"processCode\":\"E777\",\"processMessage\":\"테스트용 서버 오류 문구\"}}";
+        var client = client(clockAt("2026-10-22T01:00:00Z"), "ak", "as");
+
+        assertThatThrownBy(() -> client.currentPrice("TEST01"))
+                .isInstanceOf(BrokerApiException.class)
+                .hasMessageContaining("http=500")
+                .hasMessageContaining("processCode=E777")
+                .hasMessageNotContaining("테스트용 서버 오류 문구");
+    }
+
+    @Test
+    void serverErrorWithMalformedProcessCodeIsNotEchoed() throws IOException {
+        tokenStatus = 500;
+        tokenBody = "{\"dataHeader\":{\"resultCode\":\"9000\",\"processCode\":\"bad code!\"}}";
+        var client = client(clockAt("2026-10-22T01:00:00Z"), "ak", "as");
+
+        assertThatThrownBy(() -> client.currentPrice("TEST01"))
+                .isInstanceOf(BrokerApiException.class)
+                .hasMessageContaining("processCode=invalid")
+                .hasMessageNotContaining("bad code");
+    }
+
+    @Test
     void missingCredentialsFailBeforeAnyCall() throws IOException {
         var client = client(clockAt("2026-10-22T01:00:00Z"), "", "");
 

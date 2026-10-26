@@ -102,9 +102,9 @@ class BrokerClient {
             JsonNode json = mapper.readTree(response.body());
             JsonNode responseHeader = json.path("dataHeader");
             if (response.statusCode() != 200 || !RESULT_OK.equals(responseHeader.path("resultCode").asString(""))) {
+                // 서버 문구는 외부 원문이라 남기지 않고 원인 구분용 코드만 남긴다.
                 throw new BrokerApiException("시세 API 오류 http=" + response.statusCode()
-                        + " processCode=" + responseHeader.path("processCode").asString("")
-                        + " message=" + responseHeader.path("processMessage").asString(""));
+                        + " processCode=" + safeCode(responseHeader.path("processCode").asString("")));
             }
             return json;
         } catch (IOException e) {
