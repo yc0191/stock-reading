@@ -55,7 +55,7 @@ class BrokerClient {
         JsonNode response = post("/api/v1/ivu10140", body, true);
 
         JsonNode data = response.path("dataBody");
-        long price = parsePrice(data.path("now_prc").asString(""), symbol);
+        long price = parsePrice(data.path("now_prc").asString(""), symbol, response.path("dataHeader"));
         return new PriceQuote(symbol, price, processedAt(response.path("dataHeader")));
     }
 
@@ -116,7 +116,7 @@ class BrokerClient {
         }
     }
 
-    private static long parsePrice(String raw, String symbol) {
+    private static long parsePrice(String raw, String symbol, JsonNode header) {
         try {
             long price = Long.parseLong(raw.trim());
             if (price <= 0) {
@@ -124,8 +124,15 @@ class BrokerClient {
             }
             return price;
         } catch (NumberFormatException e) {
-            throw new BrokerApiException("현재가를 읽을 수 없습니다 symbol=" + symbol);
+            // 없는 종목 등은 HTTP 200, resultCode 200 으로 오고 본문만 비어 있다. 서버 문구는 외부 원문이라 남기지 않고 원인 구분용 코드만 남긴다.
+            throw new BrokerApiException("현재가를 읽을 수 없습니다 symbol=" + symbol
+                    + " processCode=" + safeCode(header.path("processCode").asString("")));
         }
+    }
+
+    // 외부 응답의 코드는 짧은 영숫자일 때만 로그에 남긴다.
+    private static String safeCode(String code) {
+        return code.matches("[A-Za-z0-9]{1,8}") ? code : "invalid";
     }
 
     private OffsetDateTime processedAt(JsonNode header) {
