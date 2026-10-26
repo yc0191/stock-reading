@@ -126,6 +126,31 @@ class BrokerClientTest {
     }
 
     @Test
+    void serverErrorKeepsProcessCodeButNotServerMessage() throws IOException {
+        tokenStatus = 500;
+        tokenBody = "{\"dataHeader\":{\"resultCode\":\"9000\",\"processCode\":\"E777\",\"processMessage\":\"테스트용 서버 오류 문구\"}}";
+        var client = client(clockAt("2026-10-22T01:00:00Z"), "ak", "as");
+
+        assertThatThrownBy(() -> client.currentPrice("TEST01"))
+                .isInstanceOf(BrokerApiException.class)
+                .hasMessageContaining("http=500")
+                .hasMessageContaining("processCode=E777")
+                .hasMessageNotContaining("테스트용 서버 오류 문구");
+    }
+
+    @Test
+    void serverErrorWithMalformedProcessCodeIsNotEchoed() throws IOException {
+        tokenStatus = 500;
+        tokenBody = "{\"dataHeader\":{\"resultCode\":\"9000\",\"processCode\":\"bad code!\"}}";
+        var client = client(clockAt("2026-10-22T01:00:00Z"), "ak", "as");
+
+        assertThatThrownBy(() -> client.currentPrice("TEST01"))
+                .isInstanceOf(BrokerApiException.class)
+                .hasMessageContaining("processCode=invalid")
+                .hasMessageNotContaining("bad code");
+    }
+
+    @Test
     void missingCredentialsFailBeforeAnyCall() throws IOException {
         var client = client(clockAt("2026-10-22T01:00:00Z"), "", "");
 
@@ -142,6 +167,61 @@ class BrokerClientTest {
 
         priceBody = "{\"dataHeader\":" + OK_HEADER + ",\"dataBody\":{\"now_prc\":\"abc\"}}";
         assertThatThrownBy(() -> client.currentPrice("TEST01")).isInstanceOf(BrokerApiException.class);
+    }
+
+    // 실제 응답의 형태(헤더 코드, 공백이 붙은 숫자 필드, 모르는 필드)만 본떠 가짜 값으로 만든다.
+    private static String priceResponse(String header, String body) {
+        return "{\"dataHeader\":" + header + ",\"dataBody\":" + body + "}";
+    }
+
+    @Test
+    void ignoresUnknownAndPaddedFields() throws IOException {
+        priceBody = priceResponse(OK_HEADER, "{\"now_prc\":\"10250\",\"up_dwn_r_p2\":\"   -0.50\","
+                + "\"expct_ccls_q\":\"  12\",\"later_added_field\":\"x\"}");
+        var client = client(clockAt("2026-10-26T06:00:00Z"), "ak", "as");
+
+        assertThat(client.currentPrice("TEST01").price()).isEqualTo(10250L);
+    }
+
+    @Test
+    void afterCloseResponseUsesProcessTimeAsAsOf() throws IOException {
+        // 장 마감 후에도 성공 코드와 구조는 장중과 같고, 시세 시각이 없어 처리 시각이 asOf 가 된다.
+        String afterClose = "{\"resultCode\":\"200\",\"processCode\":\"0001\",\"processTime\":\"20260102153501123\"}";
+        priceBody = priceResponse(afterClose, "{\"now_prc\":\"12345\"}");
+        var client = client(clockAt("2026-10-26T06:50:00Z"), "ak", "as");
+
+        PriceQuote quote = client.currentPrice("TEST01");
+
+        assertThat(quote.price()).isEqualTo(12345L);
+        assertThat(quote.asOf().toString()).isEqualTo("2026-01-02T15:35:01+09:00");
+    }
+
+    @Test
+    void emptyPriceFailureKeepsProcessCodeButNotServerMessage() throws IOException {
+        // 없는 종목은 HTTP 200, resultCode 200 으로 오고 본문 값이 모두 비어 있다.
+        String header = "{\"resultCode\":\"200\",\"processCode\":\"0999\",\"processMessage\":\"테스트용 조회 오류\","
+                + "\"processTime\":\"20260102101010101\"}";
+        priceBody = priceResponse(header, "{\"now_prc\":\"\",\"is_nm\":\"\"}");
+        var client = client(clockAt("2026-10-26T06:00:00Z"), "ak", "as");
+
+        assertThatThrownBy(() -> client.currentPrice("TEST99"))
+                .isInstanceOf(BrokerApiException.class)
+                .hasMessageContaining("TEST99")
+                .hasMessageContaining("processCode=0999")
+                .hasMessageNotContaining("테스트용 조회 오류")
+                .hasMessageNotContaining("tok-1");
+    }
+
+    @Test
+    void malformedProcessCodeIsNotEchoed() throws IOException {
+        String header = "{\"resultCode\":\"200\",\"processCode\":\"<b>evil</b>\\nline\"}";
+        priceBody = priceResponse(header, "{\"now_prc\":\"\"}");
+        var client = client(clockAt("2026-10-26T06:00:00Z"), "ak", "as");
+
+        assertThatThrownBy(() -> client.currentPrice("TEST99"))
+                .isInstanceOf(BrokerApiException.class)
+                .hasMessageContaining("processCode=invalid")
+                .hasMessageNotContaining("evil");
     }
 
     @Test
