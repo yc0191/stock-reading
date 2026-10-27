@@ -15,6 +15,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -28,7 +29,7 @@ class NewsCollectorTest {
 
     private final NewsSearchPort search = mock(NewsSearchPort.class);
     private final NewsCollector collector =
-            new NewsCollector(search, new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 100), CLOCK);
+            new NewsCollector(search, new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 100, 0), CLOCK, ms -> { });
 
     private static NewsItem item(String query, String title, String url, String time) {
         // 요약에 검색어를 넣어 검색어 토큰 필터를 통과하게 한다.
@@ -129,7 +130,7 @@ class NewsCollectorTest {
     @Test
     void queriesBeyondTheDailyCallLimitAreSkippedWithoutCallingTheApi() {
         NewsCollector limited = new NewsCollector(search,
-                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 2), CLOCK);
+                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 2, 0), CLOCK, ms -> { });
         when(search.search(anyString(), anyInt())).thenReturn(List.of());
 
         limited.collect(List.of(query("가", "A"), query("나", "A"), query("다", "A")));
@@ -143,12 +144,64 @@ class NewsCollectorTest {
     @Test
     void failedCallsStillCountTowardTheDailyLimit() {
         NewsCollector limited = new NewsCollector(search,
-                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 1), CLOCK);
+                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 1, 0), CLOCK, ms -> { });
         when(search.search(eq("가"), anyInt())).thenThrow(new NewsSearchApiException("boom"));
 
         limited.collect(List.of(query("가", "A"), query("나", "A")));
 
         verify(search, never()).search(eq("나"), anyInt());
+    }
+
+    private NewsCollector collectorWithInterval(long intervalMs, int dailyLimit, List<Long> pauses) {
+        return new NewsCollector(search,
+                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", dailyLimit, intervalMs), CLOCK, pauses::add);
+    }
+
+    @Test
+    void pausesBetweenConsecutiveCallsButNotBeforeTheFirst() {
+        List<Long> pauses = new ArrayList<>();
+        when(search.search(anyString(), anyInt())).thenReturn(List.of());
+
+        collectorWithInterval(200, 100, pauses).collect(List.of(query("가", "A"), query("나", "A"), query("다", "A")));
+
+        assertThat(pauses).containsExactly(200L, 200L);
+    }
+
+    @Test
+    void doesNotPauseWhenTheIntervalIsZero() {
+        List<Long> pauses = new ArrayList<>();
+        when(search.search(anyString(), anyInt())).thenReturn(List.of());
+
+        collectorWithInterval(0, 100, pauses).collect(List.of(query("가", "A"), query("나", "A")));
+
+        assertThat(pauses).isEmpty();
+    }
+
+    @Test
+    void failedCallsAreFollowedByAPauseToo() {
+        List<Long> pauses = new ArrayList<>();
+        when(search.search(eq("가"), anyInt())).thenThrow(new NewsSearchApiException("boom"));
+        when(search.search(eq("나"), anyInt())).thenReturn(List.of());
+
+        collectorWithInterval(100, 100, pauses).collect(List.of(query("가", "A"), query("나", "A")));
+
+        assertThat(pauses).containsExactly(100L);
+    }
+
+    @Test
+    void skippedQueriesOverTheDailyLimitDoNotPause() {
+        List<Long> pauses = new ArrayList<>();
+        when(search.search(anyString(), anyInt())).thenReturn(List.of());
+
+        collectorWithInterval(100, 1, pauses).collect(List.of(query("가", "A"), query("나", "A"), query("다", "A")));
+
+        assertThat(pauses).isEmpty();
+    }
+
+    @Test
+    void negativeIntervalIsRejectedAtStartup() {
+        assertThatThrownBy(() -> new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 1, -1))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -164,7 +217,7 @@ class NewsCollectorTest {
     }
 
     private NewsCollector collectorWithQueries(String queries) {
-        return new NewsCollector(search, new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, queries, 100), CLOCK);
+        return new NewsCollector(search, new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, queries, 100, 0), CLOCK, ms -> { });
     }
 
     @Test

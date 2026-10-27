@@ -79,10 +79,10 @@ class DailyCallLimitTest {
 
     @Test
     void limitBelowOneIsRejectedAtConfigurationTime() {
-        assertThatThrownBy(() -> new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 0))
+        assertThatThrownBy(() -> new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 0, 0))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", -1))
+        assertThatThrownBy(() -> new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", -1, 0))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThat(new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 1).dailyCallLimit()).isEqualTo(1);
+        assertThat(new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 1, 0).dailyCallLimit()).isEqualTo(1);
     }
 }

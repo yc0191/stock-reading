@@ -22,12 +22,14 @@ public class NewsCollector {
     private final NewsSearchProperties properties;
     private final Clock clock;
     private final DailyCallLimit dailyCallLimit;
+    private final NewsCallPause pause;
     private final List<NewsQuery> configuredQueries;
 
-    NewsCollector(NewsSearchPort search, NewsSearchProperties properties, Clock clock) {
+    NewsCollector(NewsSearchPort search, NewsSearchProperties properties, Clock clock, NewsCallPause pause) {
         this.search = search;
         this.properties = properties;
         this.clock = clock;
+        this.pause = pause;
         this.dailyCallLimit = new DailyCallLimit(properties.dailyCallLimit(), clock);
         // 설정 오타로 모든 기사가 조용히 버려지지 않도록 시작할 때 한 번 검증해서 보관한다.
         this.configuredQueries = NewsQuery.parseValidated(properties.queries());
@@ -53,12 +55,18 @@ public class NewsCollector {
         int unmatched = 0;
         int skippedByLimit = 0;
         int index = 0;
+        boolean called = false;
         for (NewsQuery query : queries) {
             index++;
             if (!dailyCallLimit.tryAcquire()) {
                 skippedByLimit++;
                 continue;
             }
+            // 짧은 시간에 호출을 몰면 제공자가 429로 거절해 그 검색어의 기사가 해당 주기에 빠진다.
+            if (called && properties.callIntervalMs() > 0) {
+                pause.pause(properties.callIntervalMs());
+            }
+            called = true;
             List<NewsItem> found;
             try {
                 found = search.search(query.query(), properties.display());

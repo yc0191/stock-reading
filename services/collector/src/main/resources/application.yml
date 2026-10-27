@@ -46,6 +46,8 @@ collector:
     queries: ${NEWS_SEARCH_QUERIES:}
     # 하루(한국 시간) 검색 API 호출 상한. 제공자 한도보다 조금 낮게 둔다. 0 이하이면 시작 단계에서 실패한다.
     daily-call-limit: ${NEWS_SEARCH_DAILY_CALL_LIMIT:19500}
+    # 검색어를 연달아 호출할 때 호출 사이의 대기(밀리초). 0이면 기다리지 않는다.
+    call-interval-ms: ${NEWS_SEARCH_CALL_INTERVAL_MS:60}
   dart:
     base-url: https://opendart.fss.or.kr/api
     # 비밀: 환경변수로만 받는다(Parameter Store -> .env).
