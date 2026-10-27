@@ -189,3 +189,31 @@ def test_main_still_works_without_collector_key(tmp_path):
 
     assert lc.main(["--env-file", str(env)], run=run) == 0
     assert "DART_API_KEY" not in env.read_text()
+
+
+def test_only_collector_skips_notifier_group(tmp_path, capsys):
+    env = tmp_path / ".env"
+    paths = []
+
+    def run(cmd, **kwargs):
+        path = cmd[cmd.index("--path") + 1]
+        paths.append(path)
+        return subprocess.CompletedProcess(cmd, 0, json.dumps({"Parameters": [collector_param("dart-api-key", "secret-k")]}), "")
+
+    assert lc.main(["--env-file", str(env), "--only", "collector"], run=run) == 0
+    assert paths == ["/stock-reading/dev/collector"]
+    assert env.read_text() == "DART_API_KEY=secret-k\n"
+    assert "SMTP" not in env.read_text()
+
+
+def test_only_notifier_skips_collector_group(tmp_path):
+    env = tmp_path / ".env"
+    paths = []
+
+    def run(cmd, **kwargs):
+        paths.append(cmd[cmd.index("--path") + 1])
+        return subprocess.CompletedProcess(cmd, 0, json.dumps({"Parameters": full_parameters()}), "")
+
+    assert lc.main(["--env-file", str(env), "--only", "notifier"], run=run) == 0
+    assert paths == ["/stock-reading/dev/notifier"]
+    assert "SMTP_HOST=v-smtp-host" in env.read_text()

@@ -97,33 +97,38 @@ def main(argv=None, run=subprocess.run):
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--profile", help="AWS CLI 프로필. 없으면 기본 자격증명 방식(AWS_PROFILE 등)을 쓴다")
     parser.add_argument("--region", default=DEFAULT_REGION)
+    # 뉴스 검증처럼 한 그룹의 키만 필요할 때, 다른 그룹의 비밀이 .env 에 들어오지 않게 한다.
+    parser.add_argument("--only", choices=["notifier", "collector"], help="한 그룹만 가져온다. 없으면 둘 다 가져온다")
     parser.add_argument("--dry-run", action="store_true", help="파일을 쓰지 않고 반영될 키 이름만 보여 준다")
     args = parser.parse_args(argv)
 
-    try:
-        updates, ignored = to_env_updates(fetch_parameters(args.profile, args.region, run))
-    except (RuntimeError, ValueError) as error:
-        print("중단:", error)
-        return 1
+    updates = {}
+    if args.only != "collector":
+        try:
+            updates, ignored = to_env_updates(fetch_parameters(args.profile, args.region, run))
+        except (RuntimeError, ValueError) as error:
+            print("중단:", error)
+            return 1
 
-    if ignored:
-        print("무시한 파라미터:", ", ".join(sorted(ignored)))
-    missing = missing_names(updates)
-    if missing:
-        # 일부만 반영하면 로컬이 어정쩡한 상태가 되므로 아무것도 쓰지 않는다.
-        print("중단: 필요한 파라미터가 없습니다 ->", ", ".join(missing))
-        return 1
+        if ignored:
+            print("무시한 파라미터:", ", ".join(sorted(ignored)))
+        missing = missing_names(updates)
+        if missing:
+            # 일부만 반영하면 로컬이 어정쩡한 상태가 되므로 아무것도 쓰지 않는다.
+            print("중단: 필요한 파라미터가 없습니다 ->", ", ".join(missing))
+            return 1
 
-    try:
-        collector_updates, _ = to_env_updates(
-            fetch_parameters(args.profile, args.region, run, COLLECTOR_PREFIX), COLLECTOR_PREFIX, COLLECTOR_ENV_NAMES)
-    except (RuntimeError, ValueError) as error:
-        print("중단:", error)
-        return 1
-    updates.update(collector_updates)
-    for short, env_name in COLLECTOR_ENV_NAMES.items():
-        if env_name not in collector_updates:
-            print(f"참고: collector/{short} 가 없어 {env_name} 은 반영하지 않습니다")
+    if args.only != "notifier":
+        try:
+            collector_updates, _ = to_env_updates(
+                fetch_parameters(args.profile, args.region, run, COLLECTOR_PREFIX), COLLECTOR_PREFIX, COLLECTOR_ENV_NAMES)
+        except (RuntimeError, ValueError) as error:
+            print("중단:", error)
+            return 1
+        updates.update(collector_updates)
+        for short, env_name in COLLECTOR_ENV_NAMES.items():
+            if env_name not in collector_updates:
+                print(f"참고: collector/{short} 가 없어 {env_name} 은 반영하지 않습니다")
 
     print("반영할 키:", ", ".join(sorted(updates)))
     if args.dry_run:
