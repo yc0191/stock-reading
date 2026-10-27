@@ -1,0 +1,15 @@
+{
+  "eventId": "5c0e7a41-92d3-4b6f-8e1a-3f4d5c6b7a89",
+  "eventType": "market.insight",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T16:30:01.800+09:00",
+  "producedAt": "2026-10-20T16:30:02.350+09:00",
+  "correlationId": "collect-post-close-2026-10-20T16:30:00+09:00",
+  "payload": {
+    "apiType": "daily-price",
+    "target": "TEST01",
+    "response": "{\"dataHeader\": {\"resultCode\": \"0000\", \"processedAt\": \"20261020163001\"}, \"dataBody\": {\"items\": [{\"date\": \"20261020\", \"close\": \" 10000 \"}]}}",
+    "scheduledFor": "2026-10-20T16:30:00+09:00",
+    "fetchedAt": "2026-10-20T16:30:01.800+09:00"
+  }
+}
