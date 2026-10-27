@@ -18,11 +18,14 @@ class SnapshotListener {
     private static final Logger log = LoggerFactory.getLogger(SnapshotListener.class);
 
     private final PriceSnapshotRepository repository;
+    private final PricePartitions partitions;
     private final MovePublisher movePublisher;
     private final ObjectMapper mapper;
 
-    SnapshotListener(PriceSnapshotRepository repository, MovePublisher movePublisher, ObjectMapper mapper) {
+    SnapshotListener(PriceSnapshotRepository repository, PricePartitions partitions,
+            MovePublisher movePublisher, ObjectMapper mapper) {
         this.repository = repository;
+        this.partitions = partitions;
         this.movePublisher = movePublisher;
         this.mapper = mapper;
     }
@@ -33,8 +36,10 @@ class SnapshotListener {
         SnapshotEnvelope.SnapshotPayload payload = event.payload();
         OffsetDateTime asOf = OffsetDateTime.parse(payload.asOf());
 
+        partitions.ensure(asOf);
         boolean inserted = repository.insertIfAbsent(
-                UUID.fromString(event.eventId()), payload.symbol(), asOf, payload.price());
+                UUID.fromString(event.eventId()), payload.symbol(), asOf, payload.price(),
+                RawJson.toJsonb(mapper, payload.raw()));
         if (!inserted) {
             log.info("duplicate snapshot ignored eventId={}", event.eventId());
             return;
