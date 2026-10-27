@@ -21,8 +21,8 @@ ADR = Architecture Decision Record. "무엇을, 왜, 어떤 대안을 놓고 정
 | [014](014-notifier-safety-rules.md) | 발송기 안전 규칙 | 확정 (구현·검증됨) |
 | [015](015-parameter-store.md) | 이메일 설정·비밀을 Parameter Store에 보관 | 확정 (시드니) |
 | [017](017-news-collection-and-storage.md) | 뉴스 수집·발행·저장 (news.collected, 수집 스케줄, news 서비스) | 초안 |
-| [018](018-quote-storage.md) | 시세 응답 원문 저장(날짜 파티션)과 조회 실패 기록 | 초안 |
-| [019](019-move-detection.md) | 급변동 감지(최근 5분·전일 종가), 재발행 규칙, 변동 시각 | 초안 |
+| [018](018-quote-storage.md) | 시세 응답 원문 저장(날짜 파티션)과 조회 실패 기록 | 확정 (구현·검증됨) |
+| [019](019-move-detection.md) | 급변동 감지(최근 5분·전일 종가), 재발행 규칙, 변동 시각 | 확정 (구현·검증됨) |
 
 ## 상태 표기
 - **확정**: 합의했고, 구현이 있으면 테스트로 검증됨

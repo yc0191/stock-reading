@@ -32,7 +32,7 @@ java -jar services/market/build/libs/market-0.0.1-SNAPSHOT.jar
 |---|---|---|
 | `market.window-minutes` | `5` | 유형 1이 비교할 최근 이력의 길이(분) |
 | `market.window-threshold-percent` | `1.00` | 유형 1 임계값(%) |
-| `market.prev-close-field` | `PREV_CLOSE_PLACEHOLDER` | 유형 2가 원문에서 읽을 전일 종가 필드(점으로 중첩 경로). **임시값입니다. 실제 응답을 보고 확정해야 하며, 그 전에는 유형 2가 감지하지 않습니다.** |
+| `market.prev-close-field` | `bdy_cls_prc` | 유형 2가 원문에서 읽을 전일 종가 필드(점으로 중첩 경로). 실제 응답 샘플로 확인한 이름입니다. 항목 이름이 바뀌면 `MARKET_PREV_CLOSE_FIELD` 환경변수로 바꿉니다. 값이 없거나 숫자가 아니면 유형 2는 그 스냅샷을 판단하지 않습니다 |
 | `market.prev-close-threshold-percent` | `3.00` | 유형 2 임계값(%) |
 
 이전 키 `market.move-threshold-percent`는 없어졌습니다. 마이그레이션(`services/market/src/main/resources/db/migration/`)은 서비스 기동 때 Flyway가 적용하며, 단위 테스트는 저장소를 대역으로 쓰므로 SQL은 로컬 Postgres에서 따로 확인해야 합니다.
@@ -128,7 +128,7 @@ python3 scripts/load_config.py --only collector
 
 | 대상 | 명령 | 개수 |
 |---|---|---|
-| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 341 (실서버 확인·실험용 2개는 건너뜀) |
+| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 343 (실서버 확인·실험용 2개는 건너뜀) |
 | Python (브리핑) | `services/briefing/.venv/bin/python -m pytest services/briefing` | 28 |
 | Python (설정 로더, 가설 검증 도구) | `services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests` | 44 |
 
