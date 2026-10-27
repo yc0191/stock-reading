@@ -6,7 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public record BrokerProperties(String baseUrl, String appKey, String appSecret, int timeoutSeconds,
                                int maxCallsPerSecond) {
 
-    static final int DEFAULT_MAX_CALLS_PER_SECOND = 10;
+    static final int DEFAULT_MAX_CALLS_PER_SECOND = 15;
 
     public BrokerProperties {
         if (maxCallsPerSecond <= 0) {

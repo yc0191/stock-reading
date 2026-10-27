@@ -71,11 +71,11 @@ class DataSourceWiringTest {
     }
 
     @Test
-    void collectionDefaultsAreOneSecondTickThreeSecondAgeAndTenCallsPerSecond() {
+    void collectionDefaultsAreOneSecondTickThreeSecondAgeAndFifteenCallsPerSecond() {
         runner().run(context -> {
             assertThat(context.getBean(CollectorProperties.class).tickIntervalMs()).isEqualTo(1_000);
             assertThat(context.getBean(CollectorProperties.class).maxTickAgeMs()).isEqualTo(3_000);
-            assertThat(context.getBean(BrokerProperties.class).maxCallsPerSecond()).isEqualTo(10);
+            assertThat(context.getBean(BrokerProperties.class).maxCallsPerSecond()).isEqualTo(15);
         });
     }
 
