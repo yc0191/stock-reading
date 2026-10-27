@@ -29,7 +29,9 @@
             "properties": {
               "title": { "type": "string", "minLength": 1 },
               "source": { "type": "string", "minLength": 1 },
-              "publishedAt": { "type": "string", "format": "date-time" }
+              "publishedAt": { "type": "string", "format": "date-time" },
+              "articleId": { "type": "string", "minLength": 1, "description": "선택. news.articles.responded의 articleId. 리포트가 근거를 인용할 때 쓰는 식별자다. 없으면 이전 형식이다." },
+              "url": { "type": "string", "format": "uri", "description": "선택. 기사 주소." }
             }
           }
         }
