@@ -26,7 +26,9 @@ flowchart LR
     MAIL(["이메일 (AWS SES)"]):::ext
 
     C -->|publish| S1[["market.snapshot"]]:::topic
+    C -->|"조회 실패·건너뜀"| S0[["market.snapshot.failed"]]:::topic
     S1 --> M
+    S0 --> M
     M --> DB
     M -->|"변동률 ≥ 임계값"| S2[["market.move"]]:::topic
     S2 --> B

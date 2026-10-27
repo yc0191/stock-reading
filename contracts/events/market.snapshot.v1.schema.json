@@ -19,7 +19,8 @@
         "symbol": { "type": "string", "pattern": "^[0-9A-Z]{6}$" },
         "price": { "type": "integer", "minimum": 0, "description": "원화(KRW) 기준 가격." },
         "asOf": { "type": "string", "format": "date-time" },
-        "source": { "type": "string", "minLength": 1, "description": "알려진 값: simulator, broker" }
+        "source": { "type": "string", "minLength": 1, "description": "알려진 값: simulator, broker" },
+        "raw": { "type": "string", "description": "선택. 시세 조회 응답 원문. trim 외에 가공하지 않는다. 토큰 발급 응답은 담지 않는다. 이전 형식의 이벤트에는 없으므로 소비자는 없는 경우도 처리해야 한다." }
       }
     }
   }

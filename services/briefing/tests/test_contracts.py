@@ -22,3 +22,22 @@ def test_unknown_fields_are_tolerated_for_forward_compatibility():
     future["payload"]["venue"] = "future"
 
     assert validate("market.move.v1.schema.json", future) == []
+
+
+def test_move_sample_carries_detection_fields_and_older_form_still_valid():
+    current = sample("market.move.sample.json")
+    assert current["payload"]["detectionType"] == "window"
+    assert "moveStartedAt" in current["payload"]
+    assert validate("market.move.v1.schema.json", current) == []
+
+    older = sample("market.move.sample.json")
+    del older["payload"]["detectionType"]
+    del older["payload"]["moveStartedAt"]
+    assert validate("market.move.v1.schema.json", older) == []
+
+
+def test_move_with_unknown_detection_type_is_rejected():
+    broken = sample("market.move.sample.json")
+    broken["payload"]["detectionType"] = "other"
+
+    assert validate("market.move.v1.schema.json", broken) != []
