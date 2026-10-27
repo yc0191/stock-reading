@@ -19,5 +19,5 @@
 - `quote_failure`의 보관 기간도 함께 정한다.
 
 ## 후속
-- `findPreviousPrice`는 `as_of` 하한 없이 모든 파티션을 훑을 수 있다. 변동 감지 쪽에서 범위 조건을 붙인다.
+- ~~`findPreviousPrice`는 `as_of` 하한 없이 모든 파티션을 훑을 수 있다.~~ [ADR-019](019-move-detection.md)에서 `as_of` 상·하한을 둔 `findBetween`으로 대체했다.
 - 마이그레이션 SQL의 로컬 Postgres 실행 검증 후 상태를 확정으로 바꾼다.

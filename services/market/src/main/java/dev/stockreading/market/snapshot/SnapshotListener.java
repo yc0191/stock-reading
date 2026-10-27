@@ -1,6 +1,5 @@
 package dev.stockreading.market.snapshot;
 
-import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -19,14 +18,14 @@ class SnapshotListener {
 
     private final PriceSnapshotRepository repository;
     private final PricePartitions partitions;
-    private final MovePublisher movePublisher;
+    private final MoveTracker moveTracker;
     private final ObjectMapper mapper;
 
     SnapshotListener(PriceSnapshotRepository repository, PricePartitions partitions,
-            MovePublisher movePublisher, ObjectMapper mapper) {
+            MoveTracker moveTracker, ObjectMapper mapper) {
         this.repository = repository;
         this.partitions = partitions;
-        this.movePublisher = movePublisher;
+        this.moveTracker = moveTracker;
         this.mapper = mapper;
     }
 
@@ -45,15 +44,7 @@ class SnapshotListener {
             return;
         }
 
-        repository.findPreviousPrice(payload.symbol(), asOf).ifPresentOrElse(
-                previous -> {
-                    BigDecimal change = ChangeRate.percent(previous, payload.price());
-                    log.info("{} price={} change={}% corr={}",
-                            payload.symbol(), payload.price(), change, event.correlationId());
-                    movePublisher.publishIfSignificant(
-                            payload.symbol(), previous, payload.price(), change, asOf, event.correlationId());
-                },
-                () -> log.info("{} first snapshot price={} corr={}",
-                        payload.symbol(), payload.price(), event.correlationId()));
+        log.info("{} price={} corr={}", payload.symbol(), payload.price(), event.correlationId());
+        moveTracker.onSnapshot(payload.symbol(), asOf, payload.price(), payload.raw(), event.correlationId());
     }
 }

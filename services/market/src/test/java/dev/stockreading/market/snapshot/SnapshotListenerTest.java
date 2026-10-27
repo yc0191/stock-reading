@@ -15,9 +15,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
-import java.math.BigDecimal;
 import java.time.OffsetDateTime;
-import java.util.Optional;
 import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -35,38 +33,27 @@ class SnapshotListenerTest {
 
     private PriceSnapshotRepository repository;
     private PricePartitions partitions;
-    private MovePublisher movePublisher;
+    private MoveTracker moveTracker;
     private SnapshotListener listener;
 
     @BeforeEach
     void setUp() {
         repository = mock(PriceSnapshotRepository.class);
         partitions = mock(PricePartitions.class);
-        movePublisher = mock(MovePublisher.class);
-        listener = new SnapshotListener(repository, partitions, movePublisher, JsonMapper.builder().build());
+        moveTracker = mock(MoveTracker.class);
+        listener = new SnapshotListener(repository, partitions, moveTracker, JsonMapper.builder().build());
     }
 
     @Test
-    void storesTheSnapshotAndLooksUpThePreviousPrice() throws IOException {
+    void storesTheSnapshotAndHandsItToTheMoveTracker() throws IOException {
         when(repository.insertIfAbsent(eq(EVENT_ID), eq("TEST01"), any(OffsetDateTime.class), eq(10_250L), any())).thenReturn(true);
-        when(repository.findPreviousPrice(eq("TEST01"), any(OffsetDateTime.class))).thenReturn(Optional.of(10_000L));
 
         listener.onSnapshot(ContractSchemas.sample("market.snapshot.sample.json"));
 
         verify(repository).insertIfAbsent(eq(EVENT_ID), eq("TEST01"), eq(AS_OF), eq(10_250L), any());
-        verify(repository).findPreviousPrice("TEST01", AS_OF);
-    }
-
-    @Test
-    void forwardsTheComputedChangeAndTheCorrelationIdToTheMovePublisher() throws IOException {
-        when(repository.insertIfAbsent(any(UUID.class), anyString(), any(OffsetDateTime.class), anyLong(), any())).thenReturn(true);
-        when(repository.findPreviousPrice(anyString(), any(OffsetDateTime.class))).thenReturn(Optional.of(10_000L));
-
-        listener.onSnapshot(ContractSchemas.sample("market.snapshot.sample.json"));
-
-        // 10000 -> 10250은 +2.50%이며, 상관관계 ID가 파이프라인을 따라 이어져야 한다.
-        verify(movePublisher).publishIfSignificant(
-                "TEST01", 10_000L, 10_250L, new BigDecimal("2.50"), AS_OF, CORRELATION_ID);
+        // 상관관계 ID가 파이프라인을 따라 이어져야 하고, 원문은 전일 종가를 읽을 수 있게 그대로 넘긴다.
+        verify(moveTracker).onSnapshot(
+                eq("TEST01"), eq(AS_OF), eq(10_250L), eq("{\"example\":\"fake-response\",\"price\":\"10250\"}"), eq(CORRELATION_ID));
     }
 
     @Test
@@ -75,19 +62,7 @@ class SnapshotListenerTest {
 
         listener.onSnapshot(ContractSchemas.sample("market.snapshot.sample.json"));
 
-        verify(repository, never()).findPreviousPrice(anyString(), any(OffsetDateTime.class));
-        verifyNoInteractions(movePublisher);
-    }
-
-    @Test
-    void firstSnapshotOfAnInstrumentHasNoChangeToPublish() throws IOException {
-        when(repository.insertIfAbsent(any(UUID.class), anyString(), any(OffsetDateTime.class), anyLong(), any())).thenReturn(true);
-        when(repository.findPreviousPrice(anyString(), any(OffsetDateTime.class))).thenReturn(Optional.empty());
-
-        listener.onSnapshot(ContractSchemas.sample("market.snapshot.sample.json"));
-
-        verify(repository).findPreviousPrice("TEST01", AS_OF);
-        verifyNoInteractions(movePublisher);
+        verifyNoInteractions(moveTracker);
     }
 
     @Test
@@ -127,7 +102,6 @@ class SnapshotListenerTest {
     @Test
     void snapshotFromOlderProducersWithoutRawIsStillStored() throws IOException {
         when(repository.insertIfAbsent(any(UUID.class), anyString(), any(OffsetDateTime.class), anyLong(), any())).thenReturn(true);
-        when(repository.findPreviousPrice(anyString(), any(OffsetDateTime.class))).thenReturn(Optional.empty());
         String withoutRaw = ContractSchemas.sample("market.snapshot.sample.json")
                 .replaceAll(",\\s*\"raw\": \"(\\\\.|[^\"\\\\])*\"", "");
         assertThat(withoutRaw).doesNotContain("\"raw\"");

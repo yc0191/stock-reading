@@ -1,7 +1,7 @@
 package dev.stockreading.market.snapshot;
 
 import java.time.OffsetDateTime;
-import java.util.Optional;
+import java.util.List;
 import java.util.UUID;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -32,16 +32,17 @@ class PriceSnapshotRepository {
         return rows == 1;
     }
 
-    Optional<Long> findPreviousPrice(String symbol, OffsetDateTime before) {
+    /** [from, to) 구간의 스냅샷을 시간 순으로 돌려준다. 날짜 파티션 가지치기를 위해 항상 as_of 범위 조건을 쓴다. */
+    List<PricePoint> findBetween(String symbol, OffsetDateTime from, OffsetDateTime to) {
         return jdbc.sql("""
-                        SELECT price FROM price_snapshot
-                        WHERE symbol = :symbol AND as_of < :asOf
-                        ORDER BY as_of DESC
-                        LIMIT 1
+                        SELECT as_of, price FROM price_snapshot
+                        WHERE symbol = :symbol AND as_of >= :from AND as_of < :to
+                        ORDER BY as_of
                         """)
                 .param("symbol", symbol)
-                .param("asOf", before)
-                .query(Long.class)
-                .optional();
+                .param("from", from)
+                .param("to", to)
+                .query((rs, rowNum) -> new PricePoint(rs.getObject("as_of", OffsetDateTime.class), rs.getLong("price")))
+                .list();
     }
 }

@@ -24,7 +24,18 @@ java -jar services/market/build/libs/market-0.0.1-SNAPSHOT.jar
 # 브리핑, 발송기는 아래 참고
 ```
 
-시세처리기(market)는 `market.snapshot`을 `price_snapshot`(`as_of` 기준 날짜별 파티션, 응답 원문은 jsonb `raw`)에, `market.snapshot.failed`를 `quote_failure`에 저장합니다. 파티션은 저장 직전에 없으면 만들며(Asia/Seoul 자정 경계), 새 설정 키는 없습니다. 테이블 구조와 근거는 [ADR-018](adr/018-quote-storage.md)입니다. 원문 보존 기간은 아직 정하지 않았습니다. 마이그레이션(`services/market/src/main/resources/db/migration/`)은 서비스 기동 때 Flyway가 적용하며, 단위 테스트는 저장소를 대역으로 쓰므로 SQL은 로컬 Postgres에서 따로 확인해야 합니다.
+시세처리기(market)는 `market.snapshot`을 `price_snapshot`(`as_of` 기준 날짜별 파티션, 응답 원문은 jsonb `raw`)에, `market.snapshot.failed`를 `quote_failure`에 저장합니다. 파티션은 저장 직전에 없으면 만들며(Asia/Seoul 자정 경계), 테이블 구조와 근거는 [ADR-018](adr/018-quote-storage.md)입니다. 원문 보존 기간은 아직 정하지 않았습니다.
+
+시세처리기는 스냅샷마다 급변동을 감지해 `market.move`를 발행합니다([ADR-019](adr/019-move-detection.md)). 유형 1(`window`)은 최근 N분 이력의 가장 오래된 스냅샷 대비, 유형 2(`prevClose`)는 응답 원문의 전일 종가 필드 대비 변동률이 임계값 이상일 때이며, 한 번 발행한 뒤에는 마지막 발행 가격에서 임계값만큼 더 움직일 때만 다시 발행합니다(상태는 `move_state` 테이블에 둡니다). 설정은 `services/market/src/main/resources/application.yml`의 `market.*`이고 환경변수로 덮어쓸 수 있습니다.
+
+| 설정 키 | 기본값 | 설명 |
+|---|---|---|
+| `market.window-minutes` | `5` | 유형 1이 비교할 최근 이력의 길이(분) |
+| `market.window-threshold-percent` | `1.00` | 유형 1 임계값(%) |
+| `market.prev-close-field` | `PREV_CLOSE_PLACEHOLDER` | 유형 2가 원문에서 읽을 전일 종가 필드(점으로 중첩 경로). **임시값입니다. 실제 응답을 보고 확정해야 하며, 그 전에는 유형 2가 감지하지 않습니다.** |
+| `market.prev-close-threshold-percent` | `3.00` | 유형 2 임계값(%) |
+
+이전 키 `market.move-threshold-percent`는 없어졌습니다. 마이그레이션(`services/market/src/main/resources/db/migration/`)은 서비스 기동 때 Flyway가 적용하며, 단위 테스트는 저장소를 대역으로 쓰므로 SQL은 로컬 Postgres에서 따로 확인해야 합니다.
 
 ## 브리핑 서비스 (Python)
 
@@ -117,7 +128,7 @@ python3 scripts/load_config.py --only collector
 
 | 대상 | 명령 | 개수 |
 |---|---|---|
-| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 309 (실서버 확인·실험용 2개는 건너뜀) |
+| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 341 (실서버 확인·실험용 2개는 건너뜀) |
 | Python (브리핑) | `services/briefing/.venv/bin/python -m pytest services/briefing` | 28 |
 | Python (설정 로더, 가설 검증 도구) | `services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests` | 44 |
 
