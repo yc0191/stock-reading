@@ -15,6 +15,8 @@ import org.springframework.context.annotation.Configuration;
 
 import dev.stockreading.collector.disclosure.DartProperties;
 import dev.stockreading.collector.disclosure.DisclosurePort;
+import dev.stockreading.collector.insight.InsightProperties;
+import dev.stockreading.collector.insight.InsightSourcePort;
 import dev.stockreading.collector.marketdata.BrokerProperties;
 import dev.stockreading.collector.marketdata.MarketDataPort;
 import dev.stockreading.collector.news.NewsCollector;
@@ -27,7 +29,8 @@ import tools.jackson.databind.json.JsonMapper;
 class DataSourceWiringTest {
 
     @Configuration
-    @EnableConfigurationProperties({BrokerProperties.class, NewsSearchProperties.class, DartProperties.class})
+    @EnableConfigurationProperties({BrokerProperties.class, NewsSearchProperties.class, DartProperties.class,
+            InsightProperties.class})
     @ComponentScan(basePackages = {
             "dev.stockreading.collector.marketdata",
             "dev.stockreading.collector.news",
@@ -58,6 +61,7 @@ class DataSourceWiringTest {
             assertThat(context).hasNotFailed();
             assertThat(context).hasSingleBean(MarketDataPort.class);
             assertThat(context.getBean(MarketDataPort.class).sourceName()).isEqualTo("simulator");
+            assertThat(context).doesNotHaveBean(InsightSourcePort.class);
         });
     }
 
@@ -67,6 +71,12 @@ class DataSourceWiringTest {
             assertThat(context).hasNotFailed();
             assertThat(context).hasSingleBean(MarketDataPort.class);
             assertThat(context.getBean(MarketDataPort.class).sourceName()).isEqualTo("broker");
+            assertThat(context).hasSingleBean(InsightSourcePort.class);
+            InsightProperties insight = context.getBean(InsightProperties.class);
+            assertThat(insight.schedule().enabled()).isFalse();
+            assertThat(insight.continents()).containsExactly("C", "S", "E");
+            assertThat(insight.dailyMarketClass()).isEqualTo("0");
+            assertThat(insight.dailyCount()).isEqualTo(30);
         });
     }
 
