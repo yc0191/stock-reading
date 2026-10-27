@@ -76,6 +76,18 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 
 키 값(`*_KEY`, `*_SECRET`, `DART_API_KEY`)은 아래 Parameter Store에서 가져옵니다. 주소와 헤더 이름은 비밀이 아니지만 코드에 두지 않고 `.env`에 직접 적습니다.
 
+### 시세 API 연동 확인
+
+시세는 조회만 씁니다(ADR-007). `.env`에는 다음을 둡니다.
+
+- `BROKER_BASE_URL`: 시세 제공자가 안내한 운영 주소
+- `BROKER_APP_KEY`, `BROKER_APP_SECRET`: Parameter Store에서 가져옵니다.
+- `COLLECTOR_MARKET_DATA_SOURCE=broker`
+
+실제 서버 확인용 수동 테스트: `BrokerLiveProbeTest`는 평소 건너뛰며 `BROKER_PROBE=1`일 때만 토큰 1회와 종목별 현재가를 호출합니다. 요약은 `BROKER_PROBE_OUT`, 응답 원문은 `BROKER_PROBE_RAW_DIR`에 쓰고 키와 토큰 값은 남기지 않습니다. 종목은 `BROKER_PROBE_SYMBOLS`(쉼표 구분)로 지정하며 코드에는 두지 않습니다. 실제 시세 응답은 저장소에 올리지 않으므로 `BROKER_PROBE_RAW_DIR`은 `data/`처럼 gitignore 대상 경로로 지정합니다. 실제 운영 서버를 호출하므로 필요할 때 최소한으로 실행합니다.
+
+호출 속도 실험용 `BrokerRateProbeTest`는 `BROKER_RATE_PROBE=1`일 때만 한 종목의 현재가를 `BROKER_RATE_PROBE_RATES`(초당 호출 수, 쉼표 구분, 기본 `1,2,3`)로 `BROKER_RATE_PROBE_PHASE_SECONDS`(기본 30)초씩 단계별로 올리며 호출합니다. 정상 응답의 `processCode`를 `BROKER_RATE_PROBE_OK_CODE`로 받아, 이와 다른 응답이 하나라도 나오면 즉시 멈추고, 단계별 횟수·지연과 처음 이상 응답의 헤더만 `BROKER_PROBE_OUT`에 씁니다.
+
 ## 설정 값 가져오기 (Parameter Store, 선택)
 
 메일 설정(SMTP 호스트·포트·계정, 발신·수신 주소) 6개를 AWS Systems Manager Parameter Store(시드니, `ap-southeast-2`)에 두고 `.env`로 가져옵니다. 수집기의 키 5개(`/stock-reading/dev/collector/` 아래)도 같은 방식으로 가져오며, 이 그룹은 선택이라 없어도 메일 설정 반영은 막지 않습니다. 서비스는 계속 환경변수만 읽습니다([ADR-015](adr/015-parameter-store.md)).
@@ -98,7 +110,7 @@ python3 scripts/load_config.py --only collector
 
 | 대상 | 명령 | 개수 |
 |---|---|---|
-| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 252 |
+| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 260 (실서버 확인·실험용 2개는 건너뜀) |
 | Python (브리핑) | `services/briefing/.venv/bin/python -m pytest services/briefing` | 26 |
 | Python (설정 로더, 가설 검증 도구) | `services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests` | 44 |
 
