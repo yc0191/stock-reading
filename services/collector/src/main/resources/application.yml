@@ -24,6 +24,17 @@ collector:
     enabled: ${COLLECTOR_SCHEDULE_ENABLED:false}
     # 뉴스 수집 주기(15분)
     news-interval-ms: 900000
+  insight:
+    schedule:
+      # 꺼 두면 마감 후 tick 을 발행하지 않는다. 휴장일은 판정하지 않는다.
+      enabled: ${COLLECTOR_INSIGHT_SCHEDULE_ENABLED:false}
+      # 한국 시간 기준 cron(초 분 시 일 월 요일)
+      cron: ${COLLECTOR_INSIGHT_CRON:0 30 16 * * MON-FRI}
+    # 일봉 조회의 시장구분과 조회 건수
+    daily-market-class: "0"
+    daily-count: 30
+    # 세계지수 대륙구분: S(아시아), C(아메리카), E(유럽). 대륙마다 한 번씩 조회한다.
+    continents: C,S,E
   market-data:
     # simulator | broker
     source: ${COLLECTOR_MARKET_DATA_SOURCE:simulator}

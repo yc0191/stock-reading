@@ -148,4 +148,70 @@ class BrokerClient {
     private static boolean isBlank(String value) {
         return value == null || value.isBlank();
     }
+
+    // 아래는 마감 후 조회용이다. 응답을 파싱한 결과가 아니라 본문 원문(trim 만)을 돌려준다.
+    // 재직렬화하면 숫자 표기와 공백이 바뀌어 원문 보존 원칙을 어기기 때문이다.
+    String dailyPriceRaw(String symbol, String marketClass, int count) {
+        ObjectNode body = mapper.createObjectNode();
+        body.put("info_ccd", "1");
+        body.put("mkt_clsf", marketClass);
+        body.put("chrt_clsf", "D");
+        body.put("minute_tck_indx", "1");
+        body.put("is_cd", symbol);
+        body.put("inq_clsf", "2");
+        body.put("inq_cnt", String.valueOf(count));
+        return postRaw("/api/v1/ivs11560", body);
+    }
+
+    String worldIndexRaw(String continent) {
+        ObjectNode body = mapper.createObjectNode();
+        body.put("lnd_clsf", continent);
+        return postRaw("/api/v1/iva60140", body);
+    }
+
+    String exchangeRateSummaryRaw() {
+        return postRaw("/api/v1/iva60190", mapper.createObjectNode());
+    }
+
+    String marketSummaryRaw() {
+        return postRaw("/api/v1/ivsa0070", mapper.createObjectNode());
+    }
+
+    // post() 와 같은 요청 형식이며, 성공 여부만 확인하고 응답 본문은 그대로 돌려준다.
+    private String postRaw(String path, ObjectNode dataBody) {
+        if (isBlank(properties.baseUrl()) || isBlank(properties.appKey()) || isBlank(properties.appSecret())) {
+            throw new BrokerApiException("BROKER_BASE_URL / BROKER_APP_KEY / BROKER_APP_SECRET 이 설정되지 않았습니다");
+        }
+        ObjectNode request = mapper.createObjectNode();
+        ObjectNode header = request.putObject("dataHeader");
+        header.put("ipAddr", HEADER_IP);
+        header.put("macAddr", HEADER_MAC);
+        request.set("dataBody", dataBody);
+
+        HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(properties.baseUrl() + path))
+                .timeout(Duration.ofSeconds(properties.timeoutSeconds()))
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + token())
+                .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(request), StandardCharsets.UTF_8))
+                .build();
+        try {
+            HttpResponse<String> response = http.send(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            JsonNode responseHeader = mapper.readTree(response.body()).path("dataHeader");
+            if (response.statusCode() != 200 || !RESULT_OK.equals(responseHeader.path("resultCode").asString(""))) {
+                // 서버 문구는 외부 원문이라 남기지 않고 원인 구분용 코드만 남긴다.
+                throw new BrokerApiException("시세 API 오류 http=" + response.statusCode()
+                        + " processCode=" + safeCode(responseHeader.path("processCode").asString("")));
+            }
+            return response.body().trim();
+        } catch (tools.jackson.core.JacksonException e) {
+            // 파싱 예외 메시지에 응답 일부가 들어갈 수 있어 종류만 남긴다.
+            throw new BrokerApiException("시세 API 응답 형식 오류");
+        } catch (IOException e) {
+            // 원인 예외 메시지에 요청 정보가 들어갈 수 있어 연결하지 않는다.
+            throw new BrokerApiException("시세 API 호출 실패: " + e.getClass().getSimpleName());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BrokerApiException("시세 API 호출 중단", e);
+        }
+    }
 }
