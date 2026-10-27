@@ -56,6 +56,19 @@ class NewsTextTest {
     }
 
     @Test
+    void urlKeyTreatsLeadingWwwAsTheSameHost() {
+        assertThat(NewsText.urlKey("https://www.news.example.com/a/b?id=1")).isEqualTo(NewsText.urlKey("https://news.example.com/a/b?id=1"));
+        assertThat(NewsText.urlKey("http://WWW.News.Example.com/a/b/")).isEqualTo(NewsText.urlKey("https://news.example.com/a/b"));
+    }
+
+    @Test
+    void urlKeyKeepsWwwThatIsNotTheLeadingLabelOrTheWholeDomain() {
+        assertThat(NewsText.urlKey("https://news.www.example.com/a")).isNotEqualTo(NewsText.urlKey("https://news.example.com/a"));
+        assertThat(NewsText.urlKey("https://awww.example.com/a")).isNotEqualTo(NewsText.urlKey("https://a.example.com/a"));
+        assertThat(NewsText.urlKey("https://www.com/a")).isEqualTo("www.com/a");
+    }
+
+    @Test
     void urlKeyKeepsRealQueryDifferences() {
         assertThat(NewsText.urlKey("https://n.example.com/a?id=1")).isNotEqualTo(NewsText.urlKey("https://n.example.com/a?id=2"));
     }

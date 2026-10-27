@@ -62,11 +62,15 @@ final class NewsText {
         return NOT_LETTER_OR_DIGIT.matcher(withoutPrefix).replaceAll("").toLowerCase(Locale.ROOT);
     }
 
-    /** 호스트+경로+쿼리로 비교한다. 스킴, 추적 파라미터(utm_*), 조각(#), 끝의 /는 무시한다. */
+    /** 호스트+경로+쿼리로 비교한다. 스킴, 앞의 www., 추적 파라미터(utm_*), 조각(#), 끝의 /는 무시한다. */
     static String urlKey(String url) {
         try {
             URI uri = new URI(url.trim());
             String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
+            // www. 유무만 다른 같은 기사가 다른 키가 되지 않게 한다. www.com 처럼 뒤에 점이 없으면 도메인 자체라 남긴다.
+            if (host.startsWith("www.") && host.indexOf('.', 4) > 0) {
+                host = host.substring(4);
+            }
             String path = uri.getRawPath() == null ? "" : uri.getRawPath();
             if (path.length() > 1 && path.endsWith("/")) {
                 path = path.substring(0, path.length() - 1);

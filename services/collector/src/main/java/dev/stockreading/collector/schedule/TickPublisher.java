@@ -6,6 +6,7 @@ import java.time.temporal.ChronoUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -16,11 +17,16 @@ import dev.stockreading.collector.event.EventFactory;
 import dev.stockreading.collector.event.TickPayload;
 import tools.jackson.databind.ObjectMapper;
 
-/** 타이머는 한 곳뿐이다(ADR-012): 작업 시각이 되면 schedule.tick만 발행한다. */
+/**
+ * 타이머는 한 곳뿐이다(ADR-012): 작업 시각이 되면 schedule.tick만 발행한다.
+ * collector.schedule.enabled 가 true 일 때만 빈이 만들어진다(기본 꺼짐).
+ */
 @Component
+@ConditionalOnProperty(name = "collector.schedule.enabled", havingValue = "true")
 class TickPublisher {
 
     static final String JOB_COLLECT = "collect";
+    static final String JOB_COLLECT_NEWS = "collect-news";
     private static final Logger log = LoggerFactory.getLogger(TickPublisher.class);
 
     private final KafkaTemplate<String, String> kafka;
@@ -35,15 +41,24 @@ class TickPublisher {
 
     @Scheduled(fixedRateString = "${collector.tick-interval-ms}")
     void publishCollectTick() {
+        publishTick(JOB_COLLECT);
+    }
+
+    @Scheduled(fixedRateString = "${collector.schedule.news-interval-ms}")
+    void publishCollectNewsTick() {
+        publishTick(JOB_COLLECT_NEWS);
+    }
+
+    private void publishTick(String jobType) {
         OffsetDateTime scheduledFor = OffsetDateTime.now(clock).truncatedTo(ChronoUnit.SECONDS);
         String scheduledForText = EventFactory.format(scheduledFor);
         Envelope<TickPayload> tick = EventFactory.create(
                 clock,
                 "schedule.tick",
                 scheduledFor,
-                JOB_COLLECT + "-" + scheduledForText,
-                new TickPayload(JOB_COLLECT, scheduledForText));
-        kafka.send(Topics.SCHEDULE_TICK, JOB_COLLECT, mapper.writeValueAsString(tick));
-        log.info("published schedule.tick jobType={} scheduledFor={}", JOB_COLLECT, scheduledForText);
+                jobType + "-" + scheduledForText,
+                new TickPayload(jobType, scheduledForText));
+        kafka.send(Topics.SCHEDULE_TICK, jobType, mapper.writeValueAsString(tick));
+        log.info("published schedule.tick jobType={} scheduledFor={}", jobType, scheduledForText);
     }
 }

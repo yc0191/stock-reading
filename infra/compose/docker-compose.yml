@@ -43,6 +43,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
       MARKET_DB_USER: ${MARKET_DB_USER}
       MARKET_DB_PASSWORD: ${MARKET_DB_PASSWORD}
+      NEWS_DB_USER: ${NEWS_DB_USER}
+      NEWS_DB_PASSWORD: ${NEWS_DB_PASSWORD}
     volumes:
       - pg-data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro

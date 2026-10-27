@@ -19,6 +19,11 @@ collector:
   # 가짜 종목 코드만 쓴다. 실제 종목은 커밋하지 않는다.
   symbols: TEST01,TEST02,TEST03
   tick-interval-ms: 30000
+  schedule:
+    # 꺼 두면 타이머가 tick 을 발행하지 않는다. 로컬에서는 scripts/publish-tick.sh 로 수동 발행한다.
+    enabled: ${COLLECTOR_SCHEDULE_ENABLED:false}
+    # 뉴스 수집 주기(15분)
+    news-interval-ms: 900000
   market-data:
     # simulator | broker
     source: ${COLLECTOR_MARKET_DATA_SOURCE:simulator}
@@ -39,6 +44,10 @@ collector:
     timeout-seconds: 10
     # "검색어=종목코드,종목코드;검색어2=*" 형식. 관심 종목이 드러나므로 값은 환경변수로만 준다.
     queries: ${NEWS_SEARCH_QUERIES:}
+    # 하루(한국 시간) 검색 API 호출 상한. 제공자 한도보다 조금 낮게 둔다. 0 이하이면 시작 단계에서 실패한다.
+    daily-call-limit: ${NEWS_SEARCH_DAILY_CALL_LIMIT:19500}
+    # 검색어를 연달아 호출할 때 호출 사이의 대기(밀리초). 0이면 기다리지 않는다.
+    call-interval-ms: ${NEWS_SEARCH_CALL_INTERVAL_MS:60}
   dart:
     base-url: https://opendart.fss.or.kr/api
     # 비밀: 환경변수로만 받는다(Parameter Store -> .env).
