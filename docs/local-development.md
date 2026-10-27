@@ -83,7 +83,7 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 | `BROKER_BASE_URL` / `BROKER_APP_KEY` / `BROKER_APP_SECRET` | 시세 제공자의 주소와 키. `broker`일 때 필요 |
 | `COLLECTOR_TICK_INTERVAL_MS` | `schedule.tick`(수집) 발행 간격(밀리초, 기본 1000). 타이머(`COLLECTOR_SCHEDULE_ENABLED=true`)가 켜져 있을 때만 쓰입니다. `scheduledFor`가 초 단위라 1000보다 작게 두면 같은 초의 tick이 중복으로 버려집니다 |
 | `COLLECTOR_MAX_TICK_AGE_MS` | 현재보다 이만큼 이상 오래된 tick은 조회하지 않고 종목마다 `TICK_SKIPPED` 실패 이벤트로 기록합니다(기본 3000) |
-| `BROKER_MAX_CALLS_PER_SECOND` | 초당 시세 호출 상한(기본 10). 종목 수가 이보다 많으면 시작할 때 경고하고, 넘친 종목은 그 tick에서 호출하지 않고 `TICK_SKIPPED` 실패 이벤트로 기록합니다. 상한 때문임은 `exceptionType=RateLimited`로 구분하며, 나중에 계약에 정식 실패 종류가 생기면 바꿀 수 있습니다 |
+| `BROKER_MAX_CALLS_PER_SECOND` | 초당 시세 호출 상한(기본 10). 종목 수가 이보다 많으면 시작할 때 경고하고, 넘친 종목은 그 tick에서 호출하지 않고 `TICK_SKIPPED` 실패 이벤트로 기록합니다. 상한 때문임은 `exceptionType=RateLimited`로 구분하며, 나중에 계약에 정식 실패 종류가 생기면 바꿀 수 있습니다. **종목 수와 같게 두면 오래 돌 때 일부 호출을 놓치고 처리도 느려지므로 종목 수의 1.2배 이상으로 두세요**([측정 기록](test-history/S03-quote-fixed-load/results.md), 가짜 서버로 종목 10~50개를 쟀을 때) |
 | `NEWS_SEARCH_BASE_URL` / `NEWS_SEARCH_CLIENT_ID` / `NEWS_SEARCH_CLIENT_SECRET` | 뉴스 검색 제공자의 주소와 키 |
 | `NEWS_SEARCH_ID_HEADER` / `NEWS_SEARCH_SECRET_HEADER` | 제공자가 정한 인증 헤더 이름 |
 | `NEWS_SEARCH_QUERIES` | `검색어=종목코드,종목코드;검색어2=*` 형식. 관심 종목이 드러나므로 `.env`에만 둡니다 |
@@ -128,7 +128,7 @@ python3 scripts/load_config.py --only collector
 
 | 대상 | 명령 | 개수 |
 |---|---|---|
-| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 343 (실서버 확인·실험용 2개는 건너뜀) |
+| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 344 (실서버 확인·실험용 2개와 부하 시험 1개는 건너뜀) |
 | Python (브리핑) | `services/briefing/.venv/bin/python -m pytest services/briefing` | 28 |
 | Python (설정 로더, 가설 검증 도구) | `services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests` | 44 |
 
@@ -136,7 +136,7 @@ python3 scripts/load_config.py --only collector
 
 ## 실행 기록 (테스트 기록)
 
-여러 검색어를 반복 수집하는 실행의 사양과 결과는 [`docs/test-history/`](test-history/README.md)에 남깁니다. 고정 입력 시험에는 가짜 검색 서버 `scripts/fake-news-search.py`를 씁니다.
+여러 검색어를 반복 수집하는 실행의 사양과 결과는 [`docs/test-history/`](test-history/README.md)에 남깁니다. 고정 입력 시험에는 가짜 검색 서버 `scripts/fake-news-search.py`를 씁니다. 시세 조회의 종목 수별 부하는 `QuoteFixedLoadTest`(`QUOTE_LOAD=1`일 때만 실행, 실행 방법은 [S03 사양](test-history/S03-quote-fixed-load/scenario.md))로 쟀습니다.
 
 ## 보안
 
