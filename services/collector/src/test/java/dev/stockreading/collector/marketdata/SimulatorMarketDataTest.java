@@ -16,7 +16,7 @@ class SimulatorMarketDataTest {
 
     @Test
     void returnsOneQuotePerSymbolInOrder() {
-        var quotes = new SimulatorMarketData(CLOCK).fetch(SYMBOLS);
+        var quotes = new SimulatorMarketData(CLOCK).fetch(SYMBOLS).quotes();
 
         assertThat(quotes).extracting(PriceQuote::symbol).containsExactlyElementsOf(SYMBOLS);
     }
@@ -27,7 +27,7 @@ class SimulatorMarketDataTest {
         long previous = SimulatorMarketData.START_PRICE;
 
         for (int i = 0; i < 500; i++) {
-            long price = simulator.fetch(List.of("TEST01")).get(0).price();
+            long price = simulator.fetch(List.of("TEST01")).quotes().get(0).price();
             double changePercent = Math.abs(price - previous) * 100.0 / previous;
             // 원 단위 반올림을 허용하려고 +0.01을 더한다.
             assertThat(changePercent).isLessThanOrEqualTo(SimulatorMarketData.MAX_STEP_PERCENT + 0.01);
@@ -42,7 +42,7 @@ class SimulatorMarketDataTest {
         var second = new SimulatorMarketData(CLOCK);
 
         for (int i = 0; i < 20; i++) {
-            assertThat(first.fetch(SYMBOLS)).isEqualTo(second.fetch(SYMBOLS));
+            assertThat(first.fetch(SYMBOLS).quotes()).isEqualTo(second.fetch(SYMBOLS).quotes());
         }
     }
 }
