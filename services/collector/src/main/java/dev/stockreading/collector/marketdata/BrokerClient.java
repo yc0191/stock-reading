@@ -5,6 +5,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
@@ -13,6 +14,7 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.springframework.stereotype.Component;
 
@@ -31,14 +33,25 @@ class BrokerClient {
     private static final DateTimeFormatter PROCESS_TIME = DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS");
     // 만료 직전에 보낸 요청이 실패하지 않도록 이 시간만큼 일찍 재발급한다.
     private static final Duration TOKEN_MARGIN = Duration.ofMinutes(5);
+    // 발급이 실패한 직후에 락을 기다리던 호출들이 같은 요청을 줄줄이 다시 보내지 않도록 이 시간 동안은 직전 실패를 그대로 돌려준다.
+    private static final Duration TOKEN_FAILURE_COOLDOWN = Duration.ofMillis(500);
+    private static final String MASK = "***";
+
+    /** 토큰은 메모리에만 두고 이 값 하나로 교체한다. 읽는 쪽은 락 없이 읽는다. */
+    private record Token(String value, Instant issuedAt, Instant refreshAt, Instant expiresAt) {
+    }
+
+    private record TokenFailure(Instant at, BrokerApiException error) {
+    }
 
     private final BrokerProperties properties;
     private final ObjectMapper mapper;
     private final Clock clock;
     private final HttpClient http;
+    private final ReentrantLock issueLock = new ReentrantLock();
 
-    private String accessToken;
-    private Instant tokenExpiresAt = Instant.MIN;
+    private volatile Token token;
+    private volatile TokenFailure lastTokenFailure;
 
     BrokerClient(BrokerProperties properties, ObjectMapper mapper, Clock clock) {
         this.properties = properties;
@@ -52,36 +65,89 @@ class BrokerClient {
         ObjectNode body = mapper.createObjectNode();
         body.put("excg_clsf", "0");
         body.put("shrt_cd", symbol);
-        JsonNode response = post("/api/v1/ivu10140", body, true);
+        Reply reply = post("/api/v1/ivu10140", body, true);
 
-        JsonNode data = response.path("dataBody");
-        long price = parsePrice(data.path("now_prc").asString(""), symbol, response.path("dataHeader"));
-        return new PriceQuote(symbol, price, processedAt(response.path("dataHeader")));
+        JsonNode data = reply.json().path("dataBody");
+        JsonNode header = reply.json().path("dataHeader");
+        long price = parsePrice(data.path("now_prc").asString(""), symbol, header, reply);
+        // 원문은 trim 외에 가공하지 않는다. 토큰 값만 예외로 가린다.
+        return new PriceQuote(symbol, price, processedAt(header), redact(reply.raw(), false));
     }
 
-    private synchronized String token() {
-        if (accessToken != null && clock.instant().isBefore(tokenExpiresAt)) {
-            return accessToken;
+    /** 실패 시점의 토큰 상태. 토큰 값은 돌려주지 않고, 아직 발급한 적이 없으면 null 이다. */
+    record TokenState(long ageMs, long remainingMs) {
+    }
+
+    TokenState tokenState() {
+        Token current = token;
+        if (current == null) {
+            return null;
         }
+        Instant now = clock.instant();
+        return new TokenState(Duration.between(current.issuedAt(), now).toMillis(),
+                Duration.between(now, current.expiresAt()).toMillis());
+    }
+
+    private String token() {
+        Token current = token;
+        if (isFresh(current)) {
+            return current.value();
+        }
+        issueLock.lock();
+        try {
+            current = token;
+            if (isFresh(current)) {
+                return current.value();
+            }
+            TokenFailure failure = lastTokenFailure;
+            if (failure != null && clock.instant().isBefore(failure.at().plus(TOKEN_FAILURE_COOLDOWN))) {
+                throw failure.error();
+            }
+            try {
+                current = issueToken();
+            } catch (BrokerApiException e) {
+                BrokerApiException asTokenFailure = new BrokerApiException(FailureType.TOKEN_ISSUE_FAILED, e.getMessage(),
+                        e.httpStatus(), e.responseCode(), e.exceptionType(), e.responseRaw());
+                lastTokenFailure = new TokenFailure(clock.instant(), asTokenFailure);
+                throw asTokenFailure;
+            }
+            lastTokenFailure = null;
+            token = current;
+            return current.value();
+        } finally {
+            issueLock.unlock();
+        }
+    }
+
+    private boolean isFresh(Token current) {
+        return current != null && clock.instant().isBefore(current.refreshAt());
+    }
+
+    private Token issueToken() {
         ObjectNode body = mapper.createObjectNode();
         body.put("appKey", properties.appKey());
         body.put("appSecret", properties.appSecret());
         body.put("grantType", "client_credentials");
-        JsonNode data = post("/oauth2/token", body, false).path("dataBody");
+        JsonNode data = post("/oauth2/token", body, false).json().path("dataBody");
 
-        String token = data.path("access_token").asString("");
+        String value = data.path("access_token").asString("");
         long expiresIn = data.path("expires_in").asLong(0);
-        if (token.isBlank() || expiresIn <= 0) {
-            throw new BrokerApiException("토큰 응답이 올바르지 않습니다");
+        if (value.isBlank() || expiresIn <= 0) {
+            // 토큰 응답 원문은 어디에도 싣지 않는다.
+            throw new BrokerApiException(FailureType.TOKEN_ISSUE_FAILED, "토큰 응답이 올바르지 않습니다");
         }
-        accessToken = token;
-        tokenExpiresAt = clock.instant().plusSeconds(expiresIn).minus(TOKEN_MARGIN);
-        return accessToken;
+        Instant now = clock.instant();
+        Instant expiresAt = now.plusSeconds(expiresIn);
+        return new Token(value, now, expiresAt.minus(TOKEN_MARGIN), expiresAt);
     }
 
-    private JsonNode post(String path, ObjectNode dataBody, boolean authorized) {
+    private record Reply(JsonNode json, String raw, int status) {
+    }
+
+    private Reply post(String path, ObjectNode dataBody, boolean authorized) {
         if (isBlank(properties.baseUrl()) || isBlank(properties.appKey()) || isBlank(properties.appSecret())) {
-            throw new BrokerApiException("BROKER_BASE_URL / BROKER_APP_KEY / BROKER_APP_SECRET 이 설정되지 않았습니다");
+            throw new BrokerApiException(FailureType.TOKEN_ISSUE_FAILED,
+                    "BROKER_BASE_URL / BROKER_APP_KEY / BROKER_APP_SECRET 이 설정되지 않았습니다");
         }
         ObjectNode request = mapper.createObjectNode();
         ObjectNode header = request.putObject("dataHeader");
@@ -97,42 +163,89 @@ class BrokerClient {
         }
         HttpRequest httpRequest = builder.POST(HttpRequest.BodyPublishers.ofString(
                 mapper.writeValueAsString(request), StandardCharsets.UTF_8)).build();
+        HttpResponse<String> response;
         try {
-            HttpResponse<String> response = http.send(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            JsonNode json = mapper.readTree(response.body());
-            JsonNode responseHeader = json.path("dataHeader");
-            if (response.statusCode() != 200 || !RESULT_OK.equals(responseHeader.path("resultCode").asString(""))) {
-                // 서버 문구는 외부 원문이라 남기지 않고 원인 구분용 코드만 남긴다.
-                throw new BrokerApiException("시세 API 오류 http=" + response.statusCode()
-                        + " processCode=" + safeCode(responseHeader.path("processCode").asString("")));
-            }
-            return json;
+            response = http.send(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         } catch (IOException e) {
-            // 원인 예외 메시지에 요청 정보가 들어갈 수 있어 연결하지 않는다.
-            throw new BrokerApiException("시세 API 호출 실패: " + e.getClass().getSimpleName());
+            // 원인 예외 메시지에 요청 정보가 들어갈 수 있어 연결하지 않고 종류만 남긴다.
+            FailureType type = e instanceof HttpTimeoutException ? FailureType.TIMEOUT : FailureType.CONNECTION_FAILED;
+            throw new BrokerApiException(type, "시세 API 호출 실패: " + e.getClass().getSimpleName(),
+                    null, null, e.getClass().getSimpleName(), null);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new BrokerApiException("시세 API 호출 중단", e);
+            throw new BrokerApiException(FailureType.CONNECTION_FAILED, "시세 API 호출 중단",
+                    null, null, e.getClass().getSimpleName(), null);
         }
-    }
 
-    private static long parsePrice(String raw, String symbol, JsonNode header) {
+        int status = response.statusCode();
+        String raw = response.body() == null ? "" : response.body().trim();
+        JsonNode json;
         try {
-            long price = Long.parseLong(raw.trim());
-            if (price <= 0) {
-                throw new BrokerApiException("현재가가 0 이하입니다 symbol=" + symbol);
-            }
-            return price;
-        } catch (NumberFormatException e) {
-            // 없는 종목 등은 HTTP 200, resultCode 200 으로 오고 본문만 비어 있다. 서버 문구는 외부 원문이라 남기지 않고 원인 구분용 코드만 남긴다.
-            throw new BrokerApiException("현재가를 읽을 수 없습니다 symbol=" + symbol
-                    + " processCode=" + safeCode(header.path("processCode").asString("")));
+            json = mapper.readTree(raw);
+        } catch (RuntimeException e) {
+            throw new BrokerApiException(status != 200 ? FailureType.HTTP_ERROR : FailureType.RESULT_CODE_FAILED,
+                    "시세 API 응답을 해석할 수 없습니다 http=" + status, status, null,
+                    e.getClass().getSimpleName(), redact(raw, true));
         }
+        JsonNode responseHeader = json.path("dataHeader");
+        if (status != 200 || !RESULT_OK.equals(responseHeader.path("resultCode").asString(""))) {
+            // 서버 문구는 외부 원문이라 메시지와 로그에 남기지 않고 원인 구분용 코드만 남긴다.
+            String code = safeCode(responseHeader.path("processCode").asString(""));
+            throw new BrokerApiException(status != 200 ? FailureType.HTTP_ERROR : FailureType.RESULT_CODE_FAILED,
+                    "시세 API 오류 http=" + status + " processCode=" + code,
+                    status, code.isEmpty() ? null : code, null, redact(raw, true));
+        }
+        return new Reply(json, raw, status);
     }
 
-    // 외부 응답의 코드는 짧은 영숫자일 때만 로그에 남긴다.
+    private long parsePrice(String raw, String symbol, JsonNode header, Reply reply) {
+        String code = safeCode(header.path("processCode").asString(""));
+        String responseCode = code.isEmpty() ? null : code;
+        if (raw.isBlank()) {
+            // 없는 종목 등은 HTTP 200, resultCode 200 으로 오고 본문만 비어 있다.
+            throw new BrokerApiException(FailureType.EMPTY_PRICE,
+                    "현재가를 읽을 수 없습니다 symbol=" + symbol + " processCode=" + code,
+                    reply.status(), responseCode, null, redact(reply.raw(), true));
+        }
+        long price;
+        try {
+            price = Long.parseLong(raw.trim());
+        } catch (NumberFormatException e) {
+            throw new BrokerApiException(FailureType.PRICE_PARSE_FAILED,
+                    "현재가를 읽을 수 없습니다 symbol=" + symbol + " processCode=" + code,
+                    reply.status(), responseCode, e.getClass().getSimpleName(), redact(reply.raw(), true));
+        }
+        if (price <= 0) {
+            throw new BrokerApiException(FailureType.PRICE_PARSE_FAILED, "현재가가 0 이하입니다 symbol=" + symbol,
+                    reply.status(), responseCode, null, redact(reply.raw(), true));
+        }
+        return price;
+    }
+
+    // 외부 응답의 코드는 짧은 영숫자일 때만 남기고, 비어 있으면 빈 문자열이다.
     private static String safeCode(String code) {
+        if (code.isEmpty()) {
+            return "";
+        }
         return code.matches("[A-Za-z0-9]{1,8}") ? code : "invalid";
+    }
+
+    // 접근토큰은 항상, 키와 시크릿은 실패 원문에서만 가린다(오류 페이지가 요청을 되돌려 줄 수 있다).
+    private String redact(String raw, boolean includeAppCredentials) {
+        String result = raw;
+        Token current = token;
+        if (current != null) {
+            result = mask(result, current.value());
+        }
+        if (includeAppCredentials) {
+            result = mask(result, properties.appKey());
+            result = mask(result, properties.appSecret());
+        }
+        return result;
+    }
+
+    private static String mask(String text, String secret) {
+        return isBlank(secret) ? text : text.replace(secret, MASK);
     }
 
     private OffsetDateTime processedAt(JsonNode header) {

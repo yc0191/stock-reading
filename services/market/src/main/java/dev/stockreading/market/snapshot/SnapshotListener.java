@@ -1,6 +1,5 @@
 package dev.stockreading.market.snapshot;
 
-import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -18,12 +17,15 @@ class SnapshotListener {
     private static final Logger log = LoggerFactory.getLogger(SnapshotListener.class);
 
     private final PriceSnapshotRepository repository;
-    private final MovePublisher movePublisher;
+    private final PricePartitions partitions;
+    private final MoveTracker moveTracker;
     private final ObjectMapper mapper;
 
-    SnapshotListener(PriceSnapshotRepository repository, MovePublisher movePublisher, ObjectMapper mapper) {
+    SnapshotListener(PriceSnapshotRepository repository, PricePartitions partitions,
+            MoveTracker moveTracker, ObjectMapper mapper) {
         this.repository = repository;
-        this.movePublisher = movePublisher;
+        this.partitions = partitions;
+        this.moveTracker = moveTracker;
         this.mapper = mapper;
     }
 
@@ -33,22 +35,16 @@ class SnapshotListener {
         SnapshotEnvelope.SnapshotPayload payload = event.payload();
         OffsetDateTime asOf = OffsetDateTime.parse(payload.asOf());
 
+        partitions.ensure(asOf);
         boolean inserted = repository.insertIfAbsent(
-                UUID.fromString(event.eventId()), payload.symbol(), asOf, payload.price());
+                UUID.fromString(event.eventId()), payload.symbol(), asOf, payload.price(),
+                RawJson.toJsonb(mapper, payload.raw()));
         if (!inserted) {
             log.info("duplicate snapshot ignored eventId={}", event.eventId());
             return;
         }
 
-        repository.findPreviousPrice(payload.symbol(), asOf).ifPresentOrElse(
-                previous -> {
-                    BigDecimal change = ChangeRate.percent(previous, payload.price());
-                    log.info("{} price={} change={}% corr={}",
-                            payload.symbol(), payload.price(), change, event.correlationId());
-                    movePublisher.publishIfSignificant(
-                            payload.symbol(), previous, payload.price(), change, asOf, event.correlationId());
-                },
-                () -> log.info("{} first snapshot price={} corr={}",
-                        payload.symbol(), payload.price(), event.correlationId()));
+        log.info("{} price={} corr={}", payload.symbol(), payload.price(), event.correlationId());
+        moveTracker.onSnapshot(payload.symbol(), asOf, payload.price(), payload.raw(), event.correlationId());
     }
 }

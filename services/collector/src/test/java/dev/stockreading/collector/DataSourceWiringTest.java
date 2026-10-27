@@ -27,7 +27,7 @@ import tools.jackson.databind.json.JsonMapper;
 class DataSourceWiringTest {
 
     @Configuration
-    @EnableConfigurationProperties({BrokerProperties.class, NewsSearchProperties.class, DartProperties.class})
+    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, NewsSearchProperties.class, DartProperties.class})
     @ComponentScan(basePackages = {
             "dev.stockreading.collector.marketdata",
             "dev.stockreading.collector.news",
@@ -67,6 +67,15 @@ class DataSourceWiringTest {
             assertThat(context).hasNotFailed();
             assertThat(context).hasSingleBean(MarketDataPort.class);
             assertThat(context.getBean(MarketDataPort.class).sourceName()).isEqualTo("broker");
+        });
+    }
+
+    @Test
+    void collectionDefaultsAreOneSecondTickThreeSecondAgeAndTenCallsPerSecond() {
+        runner().run(context -> {
+            assertThat(context.getBean(CollectorProperties.class).tickIntervalMs()).isEqualTo(1_000);
+            assertThat(context.getBean(CollectorProperties.class).maxTickAgeMs()).isEqualTo(3_000);
+            assertThat(context.getBean(BrokerProperties.class).maxCallsPerSecond()).isEqualTo(10);
         });
     }
 

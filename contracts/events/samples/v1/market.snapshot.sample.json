@@ -9,6 +9,7 @@
     "symbol": "TEST01",
     "price": 10250,
     "asOf": "2026-10-20T16:00:01+09:00",
-    "source": "simulator"
+    "source": "simulator",
+    "raw": "{\"example\":\"fake-response\",\"price\":\"10250\"}"
   }
 }
