@@ -15,6 +15,7 @@ public class Topics {
     public static final String MARKET_SNAPSHOT = "market.snapshot";
     public static final String MARKET_SNAPSHOT_FAILED = "market.snapshot.failed";
     public static final String MARKET_MOVE = "market.move";
+    public static final String MARKET_INSIGHT = "market.insight";
     public static final int PARTITIONS = 3;
 
     @Bean
@@ -30,5 +31,10 @@ public class Topics {
     @Bean
     NewTopic marketMoveTopic() {
         return TopicBuilder.name(MARKET_MOVE).partitions(PARTITIONS).replicas(1).build();
+    }
+
+    @Bean
+    NewTopic marketInsightTopic() {
+        return TopicBuilder.name(MARKET_INSIGHT).partitions(PARTITIONS).replicas(1).build();
     }
 }

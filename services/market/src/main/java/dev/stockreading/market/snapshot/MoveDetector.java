@@ -35,7 +35,7 @@ class MoveDetector {
 
     /**
      * 최근 N분 이력의 가장 오래된 스냅샷을 기준으로 삼는다. 변동 시각은 기준 이후 스냅샷 중
-     * 기준 대비 변동률이 임계값 미만이던 가장 최근 것의 시각이고, 그런 스냅샷이 없으면 기준의 시각이다(ADR-019).
+     * 기준 대비 변동률이 임계값 미만이던 가장 최근 것의 시각이고, 그런 스냅샷이 없으면 기준의 시각이다(ADR-020).
      */
     private Evaluation evaluateWindow(String symbol, OffsetDateTime asOf, long price) {
         BigDecimal threshold = properties.windowThresholdPercent();
