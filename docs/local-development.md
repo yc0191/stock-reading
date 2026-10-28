@@ -21,6 +21,7 @@ docker compose -f infra/compose/docker-compose.yml --env-file .env up -d
 # 서비스 실행 (저장소 루트에서). 시작 순서는 상관없음(토픽을 각 서비스가 선언함)
 java -jar services/collector/build/libs/collector-0.0.1-SNAPSHOT.jar
 java -jar services/market/build/libs/market-0.0.1-SNAPSHOT.jar
+java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 # 브리핑, 발송기는 아래 참고
 ```
 
@@ -39,19 +40,79 @@ java -jar services/market/build/libs/market-0.0.1-SNAPSHOT.jar
 
 ## 브리핑 서비스 (Python)
 
-규칙 기반이며 LLM을 쓰지 않습니다. 샘플 뉴스(파일)에서 근거 후보를 고르고, **변동 시각 이후에 나온 뉴스와 24시간보다 오래된 뉴스는 쓰지 않습니다**(테스트로 검증). 원인을 단정하지 않고 "근거 후보"를 나열합니다.
+`market.move` 한 건마다 근거를 모아 리포트를 만들고 `briefing.generated`로 발행합니다.
+
+1. 그 변동에 쓸 수 있는 뉴스 수집 완료(`collection.completed`)를 기다립니다. 쓸 수 있는 완료는 `jobType`이 `collect-news`이고, `startedAt`이 변동 시각 T + Δ 이후이며, 그 종목과 `*`가 `incompleteSymbols`에 없는 것입니다. 변동보다 먼저 도착한 최근 완료도 메모리에 보관했다가 확인합니다.
+2. 시세처리기에 시세 이력(`market.history.requested`, T - 5분 ~ T + Δ)을, news 서비스에 기사(`news.articles.requested`, T - 24시간 ~ T + Δ, 양끝 포함)를 요청합니다. 응답이 제한 시간 안에 없으면 새 순번(`seq`)으로 다시 요청합니다.
+3. 기사는 일정 간격으로 다시 요청해, 연속 두 번 같은 기사 목록(순서 무시)이 오면 안정된 것으로 봅니다. 시세와 기사를 모두 받아야 다음으로 넘어갑니다.
+4. 발행 시각이 T - 24시간 ~ T + Δ 안인 기사만 근거로 씁니다. 범위 밖 기사는 버리고 경고 로그를 남깁니다(테스트로 검증).
+5. LLM이 근거 기사를 `articleId`로 인용한 문장을 만들고, 코드가 형식과 인용 번호를 검증합니다. 머리말과 "투자 조언이 아님" 문구는 코드가 넣습니다. `generatedBy`는 `llm`입니다. LLM 키가 없으면 기사를 나열하는 규칙 기반 리포트를 만들고 `generatedBy`는 `rule-based`입니다.
+
+같은 종목의 변동이 여러 번 와도 이벤트마다 리포트를 만듭니다. 같은 `eventId`는 한 번만 처리합니다.
+
+### 설정
+
+근거 조회 설정(Δ, 응답 제한 시간, 재시도 횟수, 재확인 간격, 대기 상한 등)은 `services/briefing/src/briefing/config.py`의 `CoreSettings` 기본값이며 환경변수로 바꿀 수 없습니다. 값과 뜻은 그 파일에 있습니다.
+
+환경변수(`.env`)는 다음과 같습니다.
+
+| 환경변수 | 기본값 | 설명 |
+|---|---|---|
+| `KAFKA_BOOTSTRAP` | `localhost:9092` | Kafka 주소 |
+| `ANTHROPIC_API_KEY` | 없음 | LLM 키. 비어 있거나 자리표시 값(`change-me`)이면 시작할 때 경고를 남기고 규칙 기반 리포트를 만듭니다. 아래 Parameter Store의 `briefing` 그룹에서 가져옵니다 |
+| `BRIEFING_LLM_MODEL` | `claude-sonnet-5-5` | 리포트를 쓰는 모델 |
+| `POSTGRES_DB` | `stock` | 실패 기록 DB 이름(주소는 `localhost:5432`) |
+| `BRIEFING_DB_USER` / `BRIEFING_DB_PASSWORD` | `briefing_svc` / 없음 | 브리핑 전용 DB 계정. 비밀번호는 `.env`에만 둡니다 |
+
+### 리포트를 못 만든 변동 기록
+
+리포트를 만들지 못하면 `briefing` 스키마의 `briefing.failed_jobs` 테이블에 한 줄을 남깁니다: `job_id`(변동 이벤트의 `eventId`, 같은 값은 한 번만), 종목, 사유, 짧은 설명(500자까지), 시도 횟수, 기록 시각. 기사 내용과 개인 정보는 저장하지 않습니다.
+
+| 사유 | 뜻 |
+|---|---|
+| `collection_not_covered` | 쓸 수 있는 수집 완료를 대기 상한 안에 받지 못함 |
+| `market_no_response` | 시세 이력 응답을 총 시도 횟수 안에 받지 못함 |
+| `news_no_response` | 기사 응답을 총 시도 횟수 안에 받지 못함 |
+| `news_unstable` | 최대 라운드 수 안에 기사 목록이 안정되지 않음 |
+| `llm_error` | LLM 출력이 3번 모두 형식·인용 검증을 통과하지 못하거나 호출이 실패함 |
+
+기록 자체가 실패하면 짧은 간격으로 3번까지 시도하고, 그래도 안 되면 `job_id`, 종목, 사유만 ERROR 로그에 남기고 넘어갑니다.
+
+### DB 준비와 다시 만들기
+
+브리핑 전용 계정과 `briefing` 스키마는 `infra/compose/postgres/init/03-roles-briefing.sql`이 만듭니다. 테이블은 마이그레이션 도구 없이 브리핑이 시작할 때 `CREATE TABLE IF NOT EXISTS`로 만듭니다. DB에 연결할 수 없으면 브리핑은 시작하지 않습니다.
+
+- 초기화 스크립트는 DB 볼륨을 처음 만들 때만 실행됩니다. `.env`에 `BRIEFING_DB_USER`, `BRIEFING_DB_PASSWORD`를 넣고, 이미 볼륨이 있으면 볼륨을 지우고 다시 띄워야 브리핑 계정이 생깁니다. 비어 있으면 초기화 스크립트가 실패합니다.
+- 테이블 모양이 바뀌면 `CREATE TABLE IF NOT EXISTS`는 기존 테이블을 고치지 않습니다. 배포 전까지는 DB를 지워도 되는 전제이므로 로컬 DB를 지우고 다시 만듭니다.
+
+```bash
+# 로컬 DB를 지우고 다시 만든다 (모든 서비스의 DB 데이터가 사라진다)
+docker compose -f infra/compose/docker-compose.yml --env-file .env down -v
+docker compose -f infra/compose/docker-compose.yml --env-file .env up -d
+```
+
+### 실행
 
 ```bash
 # 최초 1회: 프로젝트 전용 가상환경 (시스템 파이썬은 건드리지 않음)
 python3 -m venv services/briefing/.venv
 services/briefing/.venv/bin/python -m pip install -r services/briefing/requirements.txt
+# 의존성이 바뀌면(예: DB 드라이버, LLM SDK 추가) 위 pip install 을 다시 실행한다
 
-# 테스트
+# 테스트 (실제 Kafka·DB·LLM을 호출하지 않음)
 services/briefing/.venv/bin/python -m pytest services/briefing
 
-# 실행 (저장소 루트에서)
+# 실행 (저장소 루트에서). 브리핑은 .env 파일을 읽지 않고 환경변수만 읽으므로 필요한 키만 넘긴다
+# (.env 전체를 셸로 읽으면 ';'가 들어간 값이 명령으로 해석될 수 있다)
+export $(grep -E '^(KAFKA_BOOTSTRAP|ANTHROPIC_API_KEY|BRIEFING_LLM_MODEL|POSTGRES_DB|BRIEFING_DB_USER|BRIEFING_DB_PASSWORD)=' .env | xargs)
 PYTHONPATH=services/briefing/src services/briefing/.venv/bin/python -m briefing.main
 ```
+
+브리핑은 시작할 때 자기가 쓰는 토픽을 선언합니다(목록과 파티션 수는 [ADR-010](adr/010-event-format.md)). `Ctrl+C`(또는 종료 신호)를 받으면 처리 중인 루프를 멈추고 끝납니다.
+
+변동 알림(`market.move`)은 읽는 즉시 읽은 위치(오프셋)를 확정합니다. 진행 중인 작업은 메모리에만 있으므로 **브리핑이 재시작되면 처리 중이던 변동은 리포트도 실패 기록도 남지 않고 사라집니다.**
+
+흐름을 사람이 직접 확인할 때는 `scripts/manual-briefing-move.sh [종목]`을 씁니다. 로컬 Kafka에 가짜 `market.move`와 그 변동에 쓸 수 있는 `collection.completed`를 한 건씩 넣고, 브리핑이 낸 요청과 `briefing.generated`를 보여 줍니다. 미리 인프라, 브리핑, 시세처리기, news 서비스를 띄워 둡니다.
 
 ## 이메일 발송기 (`notifier`)
 
@@ -75,7 +136,7 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 
 ## 수집기의 외부 데이터 설정 (`collector`)
 
-수집기에는 공시, 시세, 뉴스 검색 클라이언트가 있습니다. 기본은 가짜 데이터(시뮬레이터)이며, 시세는 `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 외부 API를 씁니다. 공시와 뉴스는 아직 클라이언트까지만 구현되어 있고 이벤트로 발행하지 않습니다.
+수집기에는 공시, 시세, 뉴스 검색 클라이언트가 있습니다. 시세 기본은 가짜 데이터(시뮬레이터)이며, `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 외부 API를 씁니다. 뉴스는 `collect-news` tick마다 검색해 기사마다 `news.collected`를 발행하고, 기사 전송이 모두 확정된 뒤 `collection.completed`를 한 건 발행합니다([ADR-010](adr/010-event-format.md), [ADR-017](adr/017-news-collection-and-storage.md)). 공시는 아직 조회 클라이언트까지만 구현되어 있고 이벤트로 발행하지 않습니다.
 
 | 설정 | 설명 |
 |---|---|
@@ -126,7 +187,7 @@ python3 scripts/live_probe.py --profile <AWS 프로필> --base-url <시세 제�
 
 ## 설정 값 가져오기 (Parameter Store, 선택)
 
-메일 설정(SMTP 호스트·포트·계정, 발신·수신 주소) 6개를 AWS Systems Manager Parameter Store(시드니, `ap-southeast-2`)에 두고 `.env`로 가져옵니다. 수집기의 키 5개(`/stock-reading/dev/collector/` 아래)도 같은 방식으로 가져오며, 이 그룹은 선택이라 없어도 메일 설정 반영은 막지 않습니다. 서비스는 계속 환경변수만 읽습니다([ADR-015](adr/015-parameter-store.md)).
+메일 설정(SMTP 호스트·포트·계정, 발신·수신 주소) 6개를 AWS Systems Manager Parameter Store(시드니, `ap-southeast-2`)에 두고 `.env`로 가져옵니다. 수집기의 키 5개(`/stock-reading/dev/collector/` 아래)와 브리핑의 LLM 키(`/stock-reading/dev/briefing/anthropic-api-key` → `ANTHROPIC_API_KEY`)도 같은 방식으로 가져옵니다. 두 그룹은 선택이라 없어도 메일 설정 반영은 막지 않으며, LLM 키가 없으면 브리핑은 규칙 기반 리포트를 만듭니다. 서비스는 계속 환경변수만 읽습니다([ADR-015](adr/015-parameter-store.md)).
 
 ```bash
 # 읽을 값 확인 (파일은 쓰지 않고 키 이름만 출력)
@@ -137,6 +198,8 @@ python3 scripts/load_config.py
 python3 scripts/load_config.py --only collector
 # .env 가 Parameter Store 와 같은지 비교 (파일은 쓰지 않고 값도 출력하지 않음)
 python3 scripts/load_config.py --only collector --check
+# 브리핑의 LLM 키만 가져오기
+python3 scripts/load_config.py --only briefing
 ```
 
 - `--check`는 이름별로 `같음`, `다름`, `없음`과 양쪽 길이만 보여 주고, 어긋남이 있으면 종료 코드 1을 돌려줍니다. 로더가 관리하지 않는 앱키·시크릿 이름이 `.env`에 남아 있으면 경고합니다. `.env`는 복사본이라 원본과 어긋날 수 있으니 실서버를 호출하기 전에 확인합니다.
@@ -150,9 +213,9 @@ python3 scripts/load_config.py --only collector --check
 
 | 대상 | 명령 | 개수 |
 |---|---|---|
-| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 427 (실서버 확인·실험용 4개, 부하 시험 1개, 시세처리기 DB 통합 6개는 건너뜀) |
-| Python (브리핑) | `services/briefing/.venv/bin/python -m pytest services/briefing` | 58 |
-| Python (설정 로더, 가설 검증 도구) | `services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests` | 64 |
+| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 447 (실서버 확인·실험용 4개, 부하 시험 1개, 시세처리기 DB 통합 6개는 건너뜀) |
+| Python (브리핑) | `services/briefing/.venv/bin/python -m pytest services/briefing` | 147 |
+| Python (설정 로더, 가설 검증 도구) | `services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests` | 71 |
 
 `--no-build-cache`가 필요한 이유: 빌드 캐시가 켜져 있으면 입력이 같을 때 테스트를 실행하지 않고 이전 결과를 복원합니다.
 
@@ -172,6 +235,18 @@ docker rm -f market-it-pg
 ## 실행 기록 (테스트 기록)
 
 여러 검색어를 반복 수집하는 실행의 사양과 결과는 [`docs/test-history/`](test-history/README.md)에 남깁니다. 고정 입력 시험에는 가짜 검색 서버 `scripts/fake-news-search.py`를 씁니다. 시세 조회의 종목 수별 부하는 `QuoteFixedLoadTest`(`QUOTE_LOAD=1`일 때만 실행, 실행 방법은 [S03 사양](test-history/S03-quote-fixed-load/scenario.md))로 쟀습니다.
+
+## 배포 전에 정할 것
+
+지금은 로컬 실행을 전제로 미뤄 둔 결정입니다. 배포 전에 정합니다.
+
+- **브리핑 DB 마이그레이션 방식:** 실패 기록 테이블은 마이그레이션 도구 없이 시작할 때 `CREATE TABLE IF NOT EXISTS`로 만들고, 모양이 바뀌면 로컬 DB를 지우고 다시 만듭니다. 데이터를 지울 수 없게 되기 전에 Java 서비스처럼 버전 관리되는 마이그레이션을 쓸지, Python 쪽 도구를 쓸지 정합니다.
+- **변동 알림의 읽은 위치를 언제 확정할지:** 지금은 `market.move`를 읽는 즉시 확정해, 브리핑이 재시작되면 처리 중이던 변동이 기록 없이 사라집니다. 처리를 끝낸 뒤 확정하도록 바꿀지(재시작 후 다시 처리하므로 중복 리포트를 막는 방법도 함께 필요) 정합니다.
+- **같은 종목의 중복 변동 리포트를 줄이는 방식:** 지금은 같은 종목의 변동이 짧은 간격으로 여러 번 와도 이벤트마다 리포트를 만듭니다. 묶어서 한 번만 보낼지, 일정 시간 안의 변동은 건너뛸지 정합니다.
+
+## 후속
+
+- **외부 접속을 받는 기능:** 브리핑의 Kafka 수신·발행은 "시작"과 "멈추기"로 부를 수 있게 나뉘어 있어 다른 프로그램(예: 어드민 화면)이 같은 실행부를 부를 수 있습니다. 어드민 화면이나 웹 서버는 아직 없습니다. 이런 화면처럼 외부 접속을 받는 기능을 만들 때는 [ADR-007](adr/007-outbound-only.md)(외부 접속을 받지 않는다)을 먼저 갱신하고, 접속 경로와 인증 방식을 정해야 합니다.
 
 ## 보안
 

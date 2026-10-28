@@ -3,7 +3,7 @@
 관심 ETF의 가격이 움직인 **이유**를 근거와 함께 정리해 이메일로 알려 주는 주식 비서입니다.
 Kafka 기반 이벤트 구동 MSA와 RAG를 직접 구현하며 배우는 프로젝트입니다.
 
-> **상태:** MVP. 가짜 데이터로 수집 → 변동 감지 → 브리핑 → 이메일까지 로컬에서 동작합니다.
+> **상태:** MVP. 수집 → 변동 감지 → 근거 조회 → 브리핑 → 이메일 흐름을 서비스별 단위 테스트로 검증했습니다. 근거 조회와 LLM 브리핑이 실제 Kafka·PostgreSQL에서 끝까지 흐르는지는 아직 확인하지 않았습니다.
 > 투자 조언이 아니며, 어떤 매매도 자동으로 수행하지 않습니다.
 
 ## 무엇을 해결하나
@@ -20,29 +20,43 @@ flowchart LR
 
     C["수집기<br/>Java · Spring Boot"]:::svc
     M["시세처리기<br/>Java · Spring Boot"]:::svc
+    NW["news<br/>Java · Spring Boot"]:::svc
     B["브리핑<br/>Python"]:::svc
     N["발송기<br/>Java · Spring Boot"]:::svc
-    DB[("PostgreSQL")]:::ext
+    DB[("PostgreSQL<br/>서비스별 스키마")]:::ext
+    LLM(["LLM (Claude API)"]):::ext
     MAIL(["이메일 (AWS SES)"]):::ext
 
-    C -->|publish| S1[["market.snapshot"]]:::topic
-    C -->|"조회 실패·건너뜀"| S0[["market.snapshot.failed"]]:::topic
+    C -->|"시세"| S1[["market.snapshot<br/>market.snapshot.failed"]]:::topic
+    C -->|"장 마감 후 조회"| SI[["market.insight"]]:::topic
+    C -->|"기사"| SN[["news.collected"]]:::topic
+    C -->|"뉴스 수집 끝"| SC[["collection.completed"]]:::topic
     S1 --> M
-    S0 --> M
-    M --> DB
-    M -->|"변동률 ≥ 임계값"| S2[["market.move"]]:::topic
+    SI --> M
+    SN --> NW
+    M -->|"급변동"| S2[["market.move"]]:::topic
     S2 --> B
+    SC --> B
+    B <-->|"시세 이력 요청·응답"| SH[["market.history.*"]]:::topic
+    SH <--> M
+    B <-->|"기사 요청·응답"| SA[["news.articles.*"]]:::topic
+    SA <--> NW
+    B -.->|"리포트 문장"| LLM
     B -->|publish| S3[["briefing.generated"]]:::topic
     S3 --> N
     N --> MAIL
+    M --> DB
+    NW --> DB
+    B -->|"리포트를 못 만든 변동"| DB
 ```
 
-서비스는 Kafka 이벤트로만 통신합니다. 수집은 `schedule.tick` 이벤트로 시작합니다.
+서비스는 Kafka 이벤트로만 통신합니다. 수집은 `schedule.tick` 이벤트로 시작합니다. 브리핑은 변동 한 건마다 그 변동 이후에 시작한 뉴스 수집이 끝나기를 기다린 뒤, 시세처리기와 news 서비스에 시세 이력과 기사를 요청해 근거를 모읍니다. 끝내 근거를 받지 못하거나 리포트를 만들지 못하면 리포트 없이 이유를 DB에 남깁니다.
 
 ## 설계 원칙
 
 - **서비스 간 계약은 JSON Schema 파일**로 두고, v1 샘플로 재현 가능성을 검증합니다 ([ADR-010](docs/adr/010-event-format.md))
-- **인과 순서를 지킵니다.** 변동 시각 이후에 나온 뉴스는 원인 근거로 쓰지 않습니다. 테스트로 검증합니다.
+- **근거의 시간 범위를 지킵니다.** 변동 시각 24시간 전부터 변동 시각 + Δ(시작값 5분)까지 발행된 기사만 근거로 쓰고, 범위 밖 기사는 버립니다. Δ는 변동 직후에 나온 보도를 담기 위한 여유입니다. 테스트로 검증합니다.
+- **LLM은 문장만 씁니다.** 변동률 계산, 인용한 기사가 준 목록에 있는지 검증, 머리말과 "투자 조언이 아님" 문구는 코드가 맡습니다. 원인을 단정하지 않고, 근거가 부족하면 부족하다고 씁니다. LLM 키가 없으면 규칙 기반 리포트를 만듭니다.
 - **안전한 기본값.** 발송기는 드라이런이 기본이고, 시간당 한도·중복 방지·주소 마스킹을 둡니다 ([ADR-014](docs/adr/014-notifier-safety-rules.md))
 - **토픽은 서비스가 선언**하고 브로커 자동 생성은 끕니다. 시작 순서와 무관하게 동작합니다 ([ADR-013](docs/adr/013-topic-declaration.md))
 - **비밀과 개인정보는 저장소에 두지 않습니다.** 설정은 AWS Parameter Store에서 가져옵니다 ([ADR-015](docs/adr/015-parameter-store.md))
@@ -54,13 +68,14 @@ flowchart LR
 | 서비스 | Java 21 · Spring Boot, 브리핑은 Python |
 | 메시징 | Apache Kafka (KRaft) |
 | 저장소 | PostgreSQL (pgvector 예정) |
+| 리포트 작성 | Claude API (키가 없으면 규칙 기반) |
 | 알림 | AWS SES |
 | 빌드 | Gradle 멀티 모듈 |
 
 ## 로드맵
 
-- [x] 로컬 end-to-end MVP (가짜 데이터)
 - [ ] 실제 시세·뉴스·공시 연동
+- [ ] 근거 조회와 LLM 브리핑 (단위 테스트까지 구현, 실제 환경에서 끝까지 흐르는지는 미확인)
 - [ ] RAG 기반 근거 검색
 - [ ] 개인화 서비스
 - [ ] 클라우드 배포와 CI/CD
