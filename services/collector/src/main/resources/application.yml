@@ -66,6 +66,10 @@ collector:
     daily-call-limit: ${NEWS_SEARCH_DAILY_CALL_LIMIT:19500}
     # 검색어를 연달아 호출할 때 호출 사이의 대기(밀리초). 0이면 기다리지 않는다.
     call-interval-ms: ${NEWS_SEARCH_CALL_INTERVAL_MS:60}
+  holdings:
+    # "ETF코드=티커,티커;ETF코드2=티커" 형식. 보유 ETF와 상위 종목이 드러나므로 값은 환경변수로만 준다.
+    # 형식이 틀리면 시작 단계에서 실패하고, 비어 있으면 보유 종목이 없는 것으로 본다.
+    us-by-etf: ${ETF_US_HOLDINGS:}
   dart:
     base-url: https://opendart.fss.or.kr/api
     # 비밀: 환경변수로만 받는다(Parameter Store -> .env).
