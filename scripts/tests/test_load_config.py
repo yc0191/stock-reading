@@ -281,3 +281,85 @@ def test_check_fails_and_warns_when_an_unmanaged_old_name_is_present(tmp_path, c
     out = capsys.readouterr().out
     assert code == 1
     assert "OLD_APP_KEY" in out and "stale" not in out
+
+
+def briefing_param(short, value):
+    return {"Name": lc.BRIEFING_PREFIX + short, "Value": value}
+
+
+def group_run(paths, groups):
+    """경로별로 다른 파라미터를 돌려주는 가짜 AWS CLI. 부른 경로를 paths에 남긴다."""
+    def run(cmd, **kwargs):
+        path = cmd[cmd.index("--path") + 1]
+        paths.append(path)
+        return subprocess.CompletedProcess(cmd, 0, json.dumps({"Parameters": groups.get(path, [])}), "")
+    return run
+
+
+def test_briefing_parameter_maps_to_the_env_name_the_briefing_reads():
+    updates, ignored = lc.to_env_updates([briefing_param("anthropic-api-key", "v-key")],
+                                         lc.BRIEFING_PREFIX, lc.BRIEFING_ENV_NAMES)
+    assert updates == {"ANTHROPIC_API_KEY": "v-key"}
+    assert ignored == []
+    assert lc.BRIEFING_PREFIX == "/stock-reading/dev/briefing/"
+
+
+def test_main_loads_briefing_key_without_printing_it(tmp_path, capsys):
+    env = tmp_path / ".env"
+    paths = []
+    run = group_run(paths, {"/stock-reading/dev/notifier": full_parameters(),
+                            "/stock-reading/dev/briefing": [briefing_param("anthropic-api-key", "secret-llm-key")]})
+
+    assert lc.main(["--env-file", str(env)], run=run) == 0
+    assert paths == ["/stock-reading/dev/notifier", "/stock-reading/dev/collector", "/stock-reading/dev/briefing"]
+    assert "ANTHROPIC_API_KEY=secret-llm-key" in env.read_text()
+    assert "secret-llm-key" not in capsys.readouterr().out
+
+
+def test_main_still_works_without_briefing_key(tmp_path, capsys):
+    env = tmp_path / ".env"
+    run = group_run([], {"/stock-reading/dev/notifier": full_parameters()})
+
+    assert lc.main(["--env-file", str(env)], run=run) == 0
+    assert "ANTHROPIC_API_KEY" not in env.read_text()
+    assert "briefing/anthropic-api-key 가 없어 ANTHROPIC_API_KEY 은 반영하지 않습니다" in capsys.readouterr().out
+
+
+def test_only_briefing_skips_other_groups(tmp_path):
+    env = tmp_path / ".env"
+    paths = []
+    run = group_run(paths, {"/stock-reading/dev/briefing": [briefing_param("anthropic-api-key", "secret-llm-key")]})
+
+    assert lc.main(["--env-file", str(env), "--only", "briefing"], run=run) == 0
+    assert paths == ["/stock-reading/dev/briefing"]
+    assert env.read_text() == "ANTHROPIC_API_KEY=secret-llm-key\n"
+
+
+def test_briefing_key_is_not_flagged_as_an_unmanaged_old_name():
+    text = "ANTHROPIC_API_KEY=v\nBROKER_APP_KEY=v\n"
+    assert lc.unmapped_credential_names(text, {"BROKER_APP_KEY": "v"}) == []
+
+
+def test_check_with_matching_briefing_key_reports_no_mismatch_or_warning(tmp_path, capsys):
+    env = tmp_path / ".env"
+    env.write_text("ANTHROPIC_API_KEY=same-llm-key\n")
+
+    code = lc.main(["--env-file", str(env), "--only", "briefing", "--check"],
+                   run=fake_run([briefing_param("anthropic-api-key", "same-llm-key")]))
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "ANTHROPIC_API_KEY: 같음" in out
+    assert "경고" not in out and "same-llm-key" not in out
+
+
+def test_check_for_collector_does_not_warn_about_the_briefing_key(tmp_path, capsys):
+    env = tmp_path / ".env"
+    env.write_text("BROKER_APP_KEY=same-value\nANTHROPIC_API_KEY=other-llm-key\n")
+
+    code = lc.main(["--env-file", str(env), "--only", "collector", "--check"],
+                   run=fake_run([broker_key_param("same-value")]))
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "ANTHROPIC_API_KEY" not in out and "other-llm-key" not in out

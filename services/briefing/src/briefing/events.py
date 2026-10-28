@@ -8,6 +8,7 @@ from typing import Any
 
 HISTORY_REQUESTED_TOPIC = "market.history.requested"
 ARTICLES_REQUESTED_TOPIC = "news.articles.requested"
+BRIEFING_GENERATED_TOPIC = "briefing.generated"
 
 
 @dataclass(frozen=True)
