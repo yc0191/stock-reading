@@ -150,8 +150,8 @@ python3 scripts/load_config.py --only collector --check
 
 | 대상 | 명령 | 개수 |
 |---|---|---|
-| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 402 (실서버 확인·실험용 4개, 부하 시험 1개, 시세처리기 DB 통합 6개는 건너뜀) |
-| Python (브리핑) | `services/briefing/.venv/bin/python -m pytest services/briefing` | 28 |
+| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 427 (실서버 확인·실험용 4개, 부하 시험 1개, 시세처리기 DB 통합 6개는 건너뜀) |
+| Python (브리핑) | `services/briefing/.venv/bin/python -m pytest services/briefing` | 58 |
 | Python (설정 로더, 가설 검증 도구) | `services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests` | 64 |
 
 `--no-build-cache`가 필요한 이유: 빌드 캐시가 켜져 있으면 입력이 같을 때 테스트를 실행하지 않고 이전 결과를 복원합니다.
