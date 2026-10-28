@@ -44,10 +44,12 @@ class TopicsConfigTest {
                             .containsEntry(Topics.MARKET_SNAPSHOT, 3)
                             .containsEntry(Topics.MARKET_SNAPSHOT_FAILED, 3)
                             .containsEntry(Topics.NEWS_COLLECTED, 3)
-                            .containsEntry(Topics.MARKET_INSIGHT, 3);
+                            .containsEntry(Topics.MARKET_INSIGHT, 3)
+                            .containsEntry(Topics.COLLECTION_COMPLETED, 1);
                     assertThat(Topics.MARKET_SNAPSHOT_FAILED).isEqualTo("market.snapshot.failed");
                     assertThat(Topics.NEWS_COLLECTED).isEqualTo("news.collected");
                     assertThat(Topics.MARKET_INSIGHT).isEqualTo("market.insight");
+                    assertThat(Topics.COLLECTION_COMPLETED).isEqualTo("collection.completed");
                 });
     }
 }

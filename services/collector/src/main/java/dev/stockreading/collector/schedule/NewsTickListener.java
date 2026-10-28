@@ -49,6 +49,6 @@ class NewsTickListener {
             processedTicks.add(dedupeKey);
         }
 
-        publisher.publishCollected(tick.correlationId());
+        publisher.publishCollected(tick.correlationId(), tick.payload().scheduledFor());
     }
 }
