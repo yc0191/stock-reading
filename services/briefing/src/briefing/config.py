@@ -23,4 +23,12 @@ class CoreSettings:
     remembered_jobs: int = 10000
 
 
+@dataclass(frozen=True)
+class StoreSettings:
+    # 실패 기록 저장은 수신 루프 안에서 불리므로, 다시 시도해도 루프가 오래 멈추지 않게 간격을 짧게 둔다.
+    record_attempts: int = 3
+    record_retry_interval: timedelta = timedelta(milliseconds=500)
+
+
 DEFAULT_SETTINGS = CoreSettings()
+DEFAULT_STORE_SETTINGS = StoreSettings()
