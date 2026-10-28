@@ -27,5 +27,10 @@ spring:
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
 market:
-  # 직전 스냅샷 대비 변동의 절댓값이 이 값(%) 이상이면 "변동"으로 본다.
-  move-threshold-percent: 1.00
+  # 유형 1(window): 최근 window-minutes분 이력의 가장 오래된 스냅샷 대비 변동의 절댓값이 이 값(%) 이상이면 "변동"으로 본다.
+  window-minutes: 5
+  window-threshold-percent: 1.00
+  # 유형 2(prevClose): 응답 원문(raw)의 전일 종가 필드 대비 변동의 절댓값이 이 값(%) 이상이면 "변동"으로 본다.
+  # prev-close-field는 시세 응답의 전일 종가 항목이다. 실제 응답 샘플 2개에서 현재가와 이 항목으로 계산한 등락률이 응답의 등락률과 같음을 확인했다.
+  prev-close-field: ${MARKET_PREV_CLOSE_FIELD:bdy_cls_prc}
+  prev-close-threshold-percent: 3.00

@@ -13,6 +13,7 @@ import org.springframework.kafka.config.TopicBuilder;
 public class Topics {
 
     public static final String MARKET_SNAPSHOT = "market.snapshot";
+    public static final String MARKET_SNAPSHOT_FAILED = "market.snapshot.failed";
     public static final String MARKET_MOVE = "market.move";
     public static final String MARKET_INSIGHT = "market.insight";
     public static final int PARTITIONS = 3;
@@ -20,6 +21,11 @@ public class Topics {
     @Bean
     NewTopic marketSnapshotTopic() {
         return TopicBuilder.name(MARKET_SNAPSHOT).partitions(PARTITIONS).replicas(1).build();
+    }
+
+    @Bean
+    NewTopic marketSnapshotFailedTopic() {
+        return TopicBuilder.name(MARKET_SNAPSHOT_FAILED).partitions(PARTITIONS).replicas(1).build();
     }
 
     @Bean

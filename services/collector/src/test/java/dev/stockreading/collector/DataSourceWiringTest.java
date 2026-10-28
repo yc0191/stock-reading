@@ -29,7 +29,7 @@ import tools.jackson.databind.json.JsonMapper;
 class DataSourceWiringTest {
 
     @Configuration
-    @EnableConfigurationProperties({BrokerProperties.class, NewsSearchProperties.class, DartProperties.class,
+    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, NewsSearchProperties.class, DartProperties.class,
             InsightProperties.class})
     @ComponentScan(basePackages = {
             "dev.stockreading.collector.marketdata",
@@ -77,6 +77,15 @@ class DataSourceWiringTest {
             assertThat(insight.continents()).containsExactly("C", "S", "E");
             assertThat(insight.dailyMarketClass()).isEqualTo("0");
             assertThat(insight.dailyCount()).isEqualTo(30);
+        });
+    }
+
+    @Test
+    void collectionDefaultsAreOneSecondTickThreeSecondAgeAndTenCallsPerSecond() {
+        runner().run(context -> {
+            assertThat(context.getBean(CollectorProperties.class).tickIntervalMs()).isEqualTo(1_000);
+            assertThat(context.getBean(CollectorProperties.class).maxTickAgeMs()).isEqualTo(3_000);
+            assertThat(context.getBean(BrokerProperties.class).maxCallsPerSecond()).isEqualTo(10);
         });
     }
 

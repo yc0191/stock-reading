@@ -1,11 +1,8 @@
 package dev.stockreading.market.snapshot;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import java.io.IOException;
@@ -17,14 +14,11 @@ import java.time.ZoneId;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.kafka.core.KafkaTemplate;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
-import dev.stockreading.market.MarketProperties;
 import dev.stockreading.market.event.MovePayload;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -42,34 +36,18 @@ class MovePublisherTest {
     @BeforeEach
     void setUp() {
         kafka = mock(KafkaTemplate.class);
-        publisher = new MovePublisher(kafka, mapper, new MarketProperties(new BigDecimal("1.00")), CLOCK);
+        publisher = new MovePublisher(kafka, mapper, CLOCK);
     }
 
-    @ParameterizedTest(name = "change {0}% with threshold 1.00% -> published={1}")
-    @CsvSource({
-            "0.00,  false",
-            "0.99,  false",
-            "-0.99, false",
-            "1.00,  true",
-            "-1.00, true",
-            "1.50,  true",
-            "-2.37, true"
-    })
-    void publishesOnlyWhenTheAbsoluteChangeReachesTheThreshold(String change, boolean expected) {
-        boolean published = publisher.publishIfSignificant(
-                "TEST01", 10_000, 10_150, new BigDecimal(change), AS_OF, "corr-1");
-
-        assertThat(published).isEqualTo(expected);
-        if (expected) {
-            verify(kafka, times(1)).send(eq("market.move"), eq("TEST01"), anyString());
-        } else {
-            verify(kafka, never()).send(anyString(), anyString(), anyString());
-        }
+    private static Detection detection(DetectionType type, long previous, long price, String change, OffsetDateTime startedAt) {
+        return new Detection(type, previous, price, new BigDecimal(change), new BigDecimal("1.00"), startedAt);
     }
 
     @Test
     void publishedEventMatchesTheContractAndKeepsTheCorrelationId() throws IOException {
-        publisher.publishIfSignificant("TEST02", 10_000, 9_850, new BigDecimal("-1.50"), AS_OF, "collect-2026-10-20T16:00:00+09:00");
+        OffsetDateTime startedAt = OffsetDateTime.parse("2026-10-20T15:58:00+09:00");
+        publisher.publish("TEST02", detection(DetectionType.WINDOW, 10_000, 9_850, "-1.50", startedAt),
+                startedAt, AS_OF, "collect-2026-10-20T16:00:00+09:00");
 
         ArgumentCaptor<String> json = ArgumentCaptor.forClass(String.class);
         verify(kafka).send(eq("market.move"), eq("TEST02"), json.capture());
@@ -82,6 +60,38 @@ class MovePublisherTest {
         assertThat(event.payload().changePercent()).isEqualByComparingTo("-1.50");
         assertThat(event.payload().previousPrice()).isEqualTo(10_000L);
         assertThat(event.payload().price()).isEqualTo(9_850L);
+    }
+
+    @Test
+    void windowEventCarriesTheDetectionTypeAndTheMoveStartAsAsOf() throws IOException {
+        OffsetDateTime startedAt = OffsetDateTime.parse("2026-10-20T15:58:00+09:00");
+        publisher.publish("TEST02", detection(DetectionType.WINDOW, 10_000, 10_150, "1.50", startedAt), startedAt, AS_OF, "corr-1");
+
+        MovePayload payload = publishedPayload("TEST02");
+
+        assertThat(payload.detectionType()).isEqualTo("window");
+        assertThat(payload.moveStartedAt()).isEqualTo("2026-10-20T15:58:00+09:00");
+        assertThat(payload.asOf()).isEqualTo("2026-10-20T15:58:00+09:00");
+        assertThat(payload.thresholdPercent()).isEqualByComparingTo("1.00");
+    }
+
+    @Test
+    void prevCloseEventCarriesTheDetectionTypeAndTheFirstCrossingTime() throws IOException {
+        OffsetDateTime crossedAt = OffsetDateTime.parse("2026-10-20T09:30:00+09:00");
+        publisher.publish("TEST03", detection(DetectionType.PREV_CLOSE, 10_000, 10_400, "4.00", crossedAt), crossedAt, AS_OF, "corr-1");
+
+        MovePayload payload = publishedPayload("TEST03");
+
+        assertThat(payload.detectionType()).isEqualTo("prevClose");
+        assertThat(payload.moveStartedAt()).isEqualTo("2026-10-20T09:30:00+09:00");
+        assertThat(payload.asOf()).isEqualTo("2026-10-20T09:30:00+09:00");
+    }
+
+    private MovePayload publishedPayload(String symbol) throws IOException {
+        ArgumentCaptor<String> json = ArgumentCaptor.forClass(String.class);
+        verify(kafka).send(eq("market.move"), eq(symbol), json.capture());
+        assertThat(ContractSchemas.validate("market.move.v1.schema.json", json.getValue())).isEmpty();
+        return mapper.readValue(json.getValue(), MoveEvent.class).payload();
     }
 
     @Test

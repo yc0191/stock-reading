@@ -18,7 +18,10 @@ spring:
 collector:
   # 가짜 종목 코드만 쓴다. 실제 종목은 커밋하지 않는다.
   symbols: TEST01,TEST02,TEST03
-  tick-interval-ms: 30000
+  # 1초 미만이면 scheduledFor(초 단위)가 겹쳐 중복 tick 으로 버려진다.
+  tick-interval-ms: ${COLLECTOR_TICK_INTERVAL_MS:1000}
+  # 이 시간 이상 밀린 tick 은 조회하지 않고 건너뜀으로 기록한다.
+  max-tick-age-ms: ${COLLECTOR_MAX_TICK_AGE_MS:3000}
   schedule:
     # 꺼 두면 타이머가 tick 을 발행하지 않는다. 로컬에서는 scripts/publish-tick.sh 로 수동 발행한다.
     enabled: ${COLLECTOR_SCHEDULE_ENABLED:false}
@@ -44,6 +47,10 @@ collector:
     app-key: ${BROKER_APP_KEY:}
     app-secret: ${BROKER_APP_SECRET:}
     timeout-seconds: 10
+    # 초당 시세 호출 상한. 종목 수가 이보다 많으면 시작할 때 경고하고, 넘친 종목은 건너뜀으로 기록한다.
+    # 종목 수와 같게 두면 오래 돌 때 일부 호출을 놓치므로 종목 수의 1.2배 이상으로 둔다(docs/test-history/S03).
+    # 실제 서버가 5분 버틴 가장 높은 속도는 초당 12회였으므로 그 아래로 둔다(docs/test-history/S04).
+    max-calls-per-second: ${BROKER_MAX_CALLS_PER_SECOND:10}
   news-search:
     base-url: ${NEWS_SEARCH_BASE_URL:}
     client-id: ${NEWS_SEARCH_CLIENT_ID:}

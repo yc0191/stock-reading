@@ -11,6 +11,8 @@
     "price": 9850,
     "changePercent": -1.5,
     "thresholdPercent": 1.0,
-    "asOf": "2026-10-20T16:00:31+09:00"
+    "asOf": "2026-10-20T16:00:31+09:00",
+    "detectionType": "window",
+    "moveStartedAt": "2026-10-20T16:00:31+09:00"
   }
 }

@@ -1,9 +1,13 @@
 package dev.stockreading.market.snapshot;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -11,13 +15,13 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
-import java.math.BigDecimal;
 import java.time.OffsetDateTime;
-import java.util.Optional;
 import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 import tools.jackson.databind.json.JsonMapper;
 
@@ -28,57 +32,82 @@ class SnapshotListenerTest {
     private static final String CORRELATION_ID = "collect-2026-10-20T16:00:00+09:00";
 
     private PriceSnapshotRepository repository;
-    private MovePublisher movePublisher;
+    private PricePartitions partitions;
+    private MoveTracker moveTracker;
     private SnapshotListener listener;
 
     @BeforeEach
     void setUp() {
         repository = mock(PriceSnapshotRepository.class);
-        movePublisher = mock(MovePublisher.class);
-        listener = new SnapshotListener(repository, movePublisher, JsonMapper.builder().build());
+        partitions = mock(PricePartitions.class);
+        moveTracker = mock(MoveTracker.class);
+        listener = new SnapshotListener(repository, partitions, moveTracker, JsonMapper.builder().build());
     }
 
     @Test
-    void storesTheSnapshotAndLooksUpThePreviousPrice() throws IOException {
-        when(repository.insertIfAbsent(eq(EVENT_ID), eq("TEST01"), any(OffsetDateTime.class), eq(10_250L))).thenReturn(true);
-        when(repository.findPreviousPrice(eq("TEST01"), any(OffsetDateTime.class))).thenReturn(Optional.of(10_000L));
+    void storesTheSnapshotAndHandsItToTheMoveTracker() throws IOException {
+        when(repository.insertIfAbsent(eq(EVENT_ID), eq("TEST01"), any(OffsetDateTime.class), eq(10_250L), any())).thenReturn(true);
 
         listener.onSnapshot(ContractSchemas.sample("market.snapshot.sample.json"));
 
-        verify(repository).insertIfAbsent(EVENT_ID, "TEST01", AS_OF, 10_250L);
-        verify(repository).findPreviousPrice("TEST01", AS_OF);
-    }
-
-    @Test
-    void forwardsTheComputedChangeAndTheCorrelationIdToTheMovePublisher() throws IOException {
-        when(repository.insertIfAbsent(any(UUID.class), anyString(), any(OffsetDateTime.class), anyLong())).thenReturn(true);
-        when(repository.findPreviousPrice(anyString(), any(OffsetDateTime.class))).thenReturn(Optional.of(10_000L));
-
-        listener.onSnapshot(ContractSchemas.sample("market.snapshot.sample.json"));
-
-        // 10000 -> 10250은 +2.50%이며, 상관관계 ID가 파이프라인을 따라 이어져야 한다.
-        verify(movePublisher).publishIfSignificant(
-                "TEST01", 10_000L, 10_250L, new BigDecimal("2.50"), AS_OF, CORRELATION_ID);
+        verify(repository).insertIfAbsent(eq(EVENT_ID), eq("TEST01"), eq(AS_OF), eq(10_250L), any());
+        // 상관관계 ID가 파이프라인을 따라 이어져야 하고, 원문은 전일 종가를 읽을 수 있게 그대로 넘긴다.
+        verify(moveTracker).onSnapshot(
+                eq("TEST01"), eq(AS_OF), eq(10_250L), eq("{\"example\":\"fake-response\",\"price\":\"10250\"}"), eq(CORRELATION_ID));
     }
 
     @Test
     void redeliveredEventIsIgnoredWithoutFurtherWork() throws IOException {
-        when(repository.insertIfAbsent(any(UUID.class), anyString(), any(OffsetDateTime.class), anyLong())).thenReturn(false);
+        when(repository.insertIfAbsent(any(UUID.class), anyString(), any(OffsetDateTime.class), anyLong(), any())).thenReturn(false);
 
         listener.onSnapshot(ContractSchemas.sample("market.snapshot.sample.json"));
 
-        verify(repository, never()).findPreviousPrice(anyString(), any(OffsetDateTime.class));
-        verifyNoInteractions(movePublisher);
+        verifyNoInteractions(moveTracker);
     }
 
     @Test
-    void firstSnapshotOfAnInstrumentHasNoChangeToPublish() throws IOException {
-        when(repository.insertIfAbsent(any(UUID.class), anyString(), any(OffsetDateTime.class), anyLong())).thenReturn(true);
-        when(repository.findPreviousPrice(anyString(), any(OffsetDateTime.class))).thenReturn(Optional.empty());
+    void ensuresThePartitionOfTheEventDayBeforeStoring() throws IOException {
+        when(repository.insertIfAbsent(any(UUID.class), anyString(), any(OffsetDateTime.class), anyLong(), any())).thenReturn(false);
 
         listener.onSnapshot(ContractSchemas.sample("market.snapshot.sample.json"));
 
-        verify(repository).findPreviousPrice("TEST01", AS_OF);
-        verifyNoInteractions(movePublisher);
+        InOrder order = inOrder(partitions, repository);
+        order.verify(partitions).ensure(AS_OF);
+        order.verify(repository).insertIfAbsent(eq(EVENT_ID), eq("TEST01"), eq(AS_OF), eq(10_250L), any());
+    }
+
+    @Test
+    void doesNotStoreWhenThePartitionCannotBeEnsured() throws IOException {
+        doThrow(new IllegalStateException("ddl failed")).when(partitions).ensure(any(OffsetDateTime.class));
+
+        assertThatThrownBy(() -> listener.onSnapshot(ContractSchemas.sample("market.snapshot.sample.json")))
+                .isInstanceOf(IllegalStateException.class);
+
+        verify(repository, never()).insertIfAbsent(any(UUID.class), anyString(), any(OffsetDateTime.class), anyLong(), any());
+    }
+
+    @Test
+    void passesTheRawResponseAsJsonForStorage() throws IOException {
+        when(repository.insertIfAbsent(any(UUID.class), anyString(), any(OffsetDateTime.class), anyLong(), any())).thenReturn(false);
+        String message = ContractSchemas.sample("market.snapshot.sample.json");
+
+        listener.onSnapshot(message);
+
+        ArgumentCaptor<String> raw = ArgumentCaptor.forClass(String.class);
+        verify(repository).insertIfAbsent(any(UUID.class), anyString(), any(OffsetDateTime.class), anyLong(), raw.capture());
+        assertThat(raw.getValue()).isNotBlank();
+        assertThat(JsonMapper.builder().build().readTree(raw.getValue()).isObject()).isTrue();
+    }
+
+    @Test
+    void snapshotFromOlderProducersWithoutRawIsStillStored() throws IOException {
+        when(repository.insertIfAbsent(any(UUID.class), anyString(), any(OffsetDateTime.class), anyLong(), any())).thenReturn(true);
+        String withoutRaw = ContractSchemas.sample("market.snapshot.sample.json")
+                .replaceAll(",\\s*\"raw\": \"(\\\\.|[^\"\\\\])*\"", "");
+        assertThat(withoutRaw).doesNotContain("\"raw\"");
+
+        listener.onSnapshot(withoutRaw);
+
+        verify(repository).insertIfAbsent(EVENT_ID, "TEST01", AS_OF, 10_250L, null);
     }
 }

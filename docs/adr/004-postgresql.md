@@ -32,3 +32,4 @@ MySQL, MongoDB, OpenSearch/Elasticsearch, TimescaleDB, DynamoDB/Cassandra
 
 ## 구현 메모
 - 서비스 전용 계정·스키마는 `infra/compose/postgres/init/01-roles.sql`이 최초 기동 때 만든다(`\getenv`로 환경변수를 읽어 비밀번호를 SQL 텍스트에 넣지 않음).
+- 시세 테이블은 날짜별 파티션이다: [ADR-019](019-quote-storage.md).

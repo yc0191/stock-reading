@@ -27,6 +27,7 @@ import dev.stockreading.collector.CollectorProperties;
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.ContractSchemas;
 import dev.stockreading.collector.marketdata.BrokerApiException;
+import dev.stockreading.collector.marketdata.FailureType;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -59,7 +60,7 @@ class InsightTickListenerTest {
     private InsightTickListener listener(List<String> symbols, List<String> continents) {
         var properties = new InsightProperties(new InsightProperties.Schedule(false, "0 30 16 * * MON-FRI"), "0", 30, continents);
         var publisher = new InsightPublisher(
-                source, new CollectorProperties(symbols, 30000), properties, kafka, mapper, CLOCK);
+                source, new CollectorProperties(symbols, 30000, 3_000), properties, kafka, mapper, CLOCK);
         return new InsightTickListener(publisher, mapper);
     }
 
@@ -121,9 +122,9 @@ class InsightTickListenerTest {
 
     @Test
     void oneFailingApiDoesNotStopTheOthers() throws IOException {
-        when(source.dailyPrice("TEST01")).thenThrow(new BrokerApiException("시세 API 오류 http=500 processCode=E777"));
+        when(source.dailyPrice("TEST01")).thenThrow(new BrokerApiException(FailureType.HTTP_ERROR, "시세 API 오류 http=500 processCode=E777"));
         when(source.worldIndex("C")).thenThrow(new IllegalStateException("서버 문구가 섞인 예외"));
-        when(source.exchangeRateSummary()).thenThrow(new BrokerApiException("시세 API 호출 실패: IOException"));
+        when(source.exchangeRateSummary()).thenThrow(new BrokerApiException(FailureType.CONNECTION_FAILED, "시세 API 호출 실패: IOException"));
 
         assertThatCode(() -> listener.onTick(tick("2026-10-20T16:30:00+09:00"))).doesNotThrowAnyException();
 

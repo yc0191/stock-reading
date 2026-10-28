@@ -71,6 +71,39 @@ def merge_env(text, updates):
     return "\n".join(lines) + "\n"
 
 
+def parse_env(text):
+    """주석과 빈 줄을 뺀 NAME=값 줄을 사전으로 읽는다. 값은 따옴표를 벗기지 않고 그대로 둔다."""
+    values = {}
+    for line in text.splitlines():
+        if "=" not in line or line.lstrip().startswith("#"):
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value
+    return values
+
+
+def compare_env(text, updates):
+    """Parameter Store 값(updates)과 .env 값을 이름별로 비교한다. 값은 돌려주지 않고 상태와 길이만 돌려준다."""
+    local = parse_env(text)
+    rows = []
+    for name in sorted(updates):
+        remote_value = updates[name]
+        if name not in local:
+            status = "없음"
+        elif local[name] == remote_value:
+            status = "같음"
+        else:
+            status = "다름"
+        rows.append((name, status, len(local[name]) if name in local else None, len(remote_value)))
+    return rows
+
+
+def unmapped_credential_names(text, updates):
+    """매핑되지 않은 앱키·시크릿 이름을 찾는다. 옛 이름이 남아 낡은 값을 쓰는 일을 알아채기 위해서다."""
+    return sorted(name for name in parse_env(text)
+                  if ("APP_KEY" in name or "APP_SECRET" in name) and name not in updates)
+
+
 def fetch_parameters(profile, region, run=subprocess.run, prefix=PREFIX):
     command = ["aws", "ssm", "get-parameters-by-path", "--path", prefix.rstrip("/"), "--with-decryption",
                "--output", "json", "--region", region]
@@ -100,6 +133,9 @@ def main(argv=None, run=subprocess.run):
     # 뉴스 검증처럼 한 그룹의 키만 필요할 때, 다른 그룹의 비밀이 .env 에 들어오지 않게 한다.
     parser.add_argument("--only", choices=["notifier", "collector"], help="한 그룹만 가져온다. 없으면 둘 다 가져온다")
     parser.add_argument("--dry-run", action="store_true", help="파일을 쓰지 않고 반영될 키 이름만 보여 준다")
+    # .env 는 복사본이라 Parameter Store 와 어긋날 수 있다. 실서버를 호출하기 전에 값을 출력하지 않고 비교한다.
+    parser.add_argument("--check", action="store_true",
+                        help="파일을 쓰지 않고 .env 와 Parameter Store 를 이름별로 비교한다(값은 출력하지 않음)")
     args = parser.parse_args(argv)
 
     updates = {}
@@ -129,6 +165,20 @@ def main(argv=None, run=subprocess.run):
         for short, env_name in COLLECTOR_ENV_NAMES.items():
             if env_name not in collector_updates:
                 print(f"참고: collector/{short} 가 없어 {env_name} 은 반영하지 않습니다")
+
+    if args.check:
+        text = open(args.env_file, encoding="utf-8").read() if os.path.exists(args.env_file) else ""
+        mismatched = False
+        for name, status, local_length, remote_length in compare_env(text, updates):
+            if status != "같음":
+                mismatched = True
+            local_text = "-" if local_length is None else f"{local_length}자"
+            print(f"{name}: {status} (.env {local_text} / Parameter Store {remote_length}자)")
+        for name in unmapped_credential_names(text, updates):
+            mismatched = True
+            print(f"경고: {name} 은 로더가 관리하지 않는 이름입니다. 낡은 값이면 지우거나 갱신하세요")
+        print("확인 결과:", "어긋남이 있습니다" if mismatched else "모두 같습니다")
+        return 1 if mismatched else 0
 
     print("반영할 키:", ", ".join(sorted(updates)))
     if args.dry_run:
