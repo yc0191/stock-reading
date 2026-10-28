@@ -1,0 +1,18 @@
+{
+  "eventId": "3f6b2c1e-8d4a-4b7f-9e2c-1a5d7f9b3c20",
+  "eventType": "filing.collected",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T20:30:28Z",
+  "producedAt": "2026-10-21T05:45:01.120+09:00",
+  "correlationId": "collect-filings-2026-10-21T05:45:00+09:00",
+  "payload": {
+    "tickers": ["TESTA"],
+    "cik": "0000000001",
+    "accessionNumber": "0000000001-26-000001",
+    "form": "8-K",
+    "items": ["2.02", "9.01"],
+    "acceptedAt": "2026-10-20T20:30:28Z",
+    "filingDate": "2026-10-20",
+    "url": "https://www.sec.gov/Archives/edgar/data/1/000000000126000001/test-8k.htm"
+  }
+}

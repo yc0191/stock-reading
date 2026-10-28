@@ -16,7 +16,7 @@
       "type": "object",
       "required": ["jobType", "scheduledFor"],
       "properties": {
-        "jobType": { "type": "string", "minLength": 1, "description": "알려진 값: collect, collect-news, collect-post-close(장 마감 후 일봉·세계지수·환율종합·시장종합 조회)" },
+        "jobType": { "type": "string", "minLength": 1, "description": "알려진 값: collect, collect-news, collect-post-close(장 마감 후 일봉·세계지수·환율종합·시장종합 조회), collect-filings(보유 미국 종목의 SEC EDGAR 공시 수집)" },
         "scheduledFor": { "type": "string", "format": "date-time", "description": "작업이 실행되어야 했던 논리적 시각. 늦게 발행돼도 그대로 유지한다." }
       }
     }

@@ -27,6 +27,7 @@ class TickPublisher {
 
     static final String JOB_COLLECT = "collect";
     static final String JOB_COLLECT_NEWS = "collect-news";
+    static final String JOB_COLLECT_FILINGS = "collect-filings";
     private static final Logger log = LoggerFactory.getLogger(TickPublisher.class);
 
     private final KafkaTemplate<String, String> kafka;
@@ -47,6 +48,11 @@ class TickPublisher {
     @Scheduled(fixedRateString = "${collector.schedule.news-interval-ms}")
     void publishCollectNewsTick() {
         publishTick(JOB_COLLECT_NEWS);
+    }
+
+    @Scheduled(fixedRateString = "${collector.schedule.filings-interval-ms}")
+    void publishCollectFilingsTick() {
+        publishTick(JOB_COLLECT_FILINGS);
     }
 
     private void publishTick(String jobType) {

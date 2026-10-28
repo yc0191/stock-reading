@@ -41,6 +41,18 @@ class TickPublisherTest {
     }
 
     @Test
+    void filingsTickIsKeyedByJobTypeAndMatchesTheContract() throws IOException {
+        new TickPublisher(kafka, mapper, CLOCK).publishCollectFilingsTick();
+
+        ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
+        verify(kafka).send(eq(Topics.SCHEDULE_TICK), eq("collect-filings"), value.capture());
+        assertThat(ContractSchemas.validate("schedule.tick.v1.schema.json", value.getValue())).isEmpty();
+        assertThat(value.getValue())
+                .contains("\"jobType\":\"collect-filings\"")
+                .contains("\"correlationId\":\"collect-filings-2026-10-20T16:00:00+09:00\"");
+    }
+
+    @Test
     void collectTickKeepsItsFormat() {
         new TickPublisher(kafka, mapper, CLOCK).publishCollectTick();
 
