@@ -57,6 +57,35 @@ def test_classify_tells_the_three_endings_apart():
     assert lp.classify("") == lp.OUTCOME_TOKEN_REJECTED
 
 
+SMOKE_OK = "call price: OK ok 40ms\ncall market-summary: OK len=900 50ms\ncall daily-price: OK len=800 60ms\ntoken: reused=true ageMs=120\n"
+
+
+def test_classify_smoke_tells_the_three_endings_apart():
+    assert lp.classify_smoke(SMOKE_OK) == lp.OUTCOME_OK
+    assert lp.classify_smoke(SMOKE_OK + "call daily-price: FAIL type=HTTP_ERROR http=500 code=E777\n") == lp.OUTCOME_ABNORMAL
+    assert lp.classify_smoke("call price: FAIL type=TOKEN_ISSUE_FAILED http=500 code=E021\n") == lp.OUTCOME_TOKEN_REJECTED
+    assert lp.classify_smoke("") == lp.OUTCOME_TOKEN_REJECTED
+
+
+def test_smoke_probe_runs_its_own_test_class_without_an_ok_code(tmp_path):
+    runner = FakeRunner(SMOKE_OK)
+    argv = ["--root", str(tmp_path), "--base-url", "https://example.invalid", "--symbols", "TEST01", "--probe", "smoke"]
+
+    assert lp.main(argv, run=runner, now=NOW, base_env={"JAVA_HOME_21": "/jdk"}) == 0
+
+    command, env = runner.gradle_calls[0]
+    assert "*BrokerClientLiveSmokeTest" in command and env["BROKER_SMOKE"] == "1" and env[lp.GUARD_ENV] == "1"
+    assert marker(tmp_path)["outcome"] == lp.OUTCOME_OK
+
+
+def test_rate_probe_without_an_ok_code_stops_early(tmp_path):
+    runner = FakeRunner(OK_OUTPUT)
+    argv = ["--root", str(tmp_path), "--base-url", "https://example.invalid", "--symbols", "TEST01"]
+
+    assert lp.main(argv, run=runner, now=NOW, base_env={"JAVA_HOME_21": "/jdk"}) == 2
+    assert runner.gradle_calls == []
+
+
 def test_credentials_come_from_the_store_and_only_the_two_broker_values():
     credentials = lp.credentials_from_store(None, "r", FakeRunner(""))
     assert credentials == {"BROKER_APP_KEY": KEY_VALUE, "BROKER_APP_SECRET": SECRET_VALUE}

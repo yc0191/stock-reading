@@ -18,11 +18,21 @@ GUARD_ENV = "LIVE_PROBE_GUARD"
 MARKER_NAME = ".live-probe-last.json"
 DEFAULT_COOLDOWN_MINUTES = 10
 TEST_CLASS = "BrokerRateProbeTest"
+SMOKE_TEST_CLASS = "BrokerClientLiveSmokeTest"
 
 OUTCOME_OK = "ok"
 OUTCOME_TOKEN_REJECTED = "token_rejected"
 OUTCOME_ABNORMAL = "abnormal"
 OUTCOME_TEXT = {OUTCOME_OK: "정상 종료", OUTCOME_TOKEN_REJECTED: "토큰 거절", OUTCOME_ABNORMAL: "이상 응답으로 중단"}
+
+
+def classify_smoke(output_text):
+    """연동 확인 시험의 결과. 토큰 때문에 실패했으면 거절, 그 밖의 호출 실패는 이상 응답이다."""
+    if "type=TOKEN_ISSUE_FAILED" in output_text or not output_text.strip():
+        return OUTCOME_TOKEN_REJECTED
+    if ": FAIL" in output_text:
+        return OUTCOME_ABNORMAL
+    return OUTCOME_OK
 
 
 def classify(output_text):
@@ -74,9 +84,9 @@ def credentials_from_store(profile, region, run):
     return wanted
 
 
-def build_command(root):
+def build_command(root, test_class=TEST_CLASS):
     return [os.path.join(root, "gradlew"), "-p", root, ":services:collector:cleanTest", ":services:collector:test",
-            "--tests", f"*{TEST_CLASS}", "--no-build-cache"]
+            "--tests", f"*{test_class}", "--no-build-cache"]
 
 
 def build_env(base_env, credentials, args, out_path):
@@ -93,6 +103,8 @@ def build_env(base_env, credentials, args, out_path):
         "BROKER_RATE_PROBE_RATES": args.rates,
         "BROKER_RATE_PROBE_PHASE_SECONDS": str(args.phase_seconds),
     })
+    if args.probe == "smoke":
+        env["BROKER_SMOKE"] = "1"
     return env
 
 
@@ -102,7 +114,9 @@ def main(argv=None, run=subprocess.run, now=None, base_env=None):
     parser.add_argument("--region", default=lc.DEFAULT_REGION)
     parser.add_argument("--base-url", default=os.environ.get("BROKER_BASE_URL", ""), help="시세 제공자 운영 주소")
     parser.add_argument("--symbols", required=True, help="시험할 종목(쉼표 구분, 첫 종목만 씀). 저장소에 적지 않는다")
-    parser.add_argument("--ok-code", required=True, help="정상 응답의 processCode")
+    parser.add_argument("--probe", choices=["rate", "smoke"], default="rate",
+                        help="rate: 호출 속도 시험, smoke: 합쳐진 BrokerClient 연동 확인(토큰 1회, 호출 3회)")
+    parser.add_argument("--ok-code", default="", help="정상 응답의 processCode(rate 에서 필요)")
     parser.add_argument("--rates", default="1,2,3", help="초당 호출 수(쉼표 구분)")
     parser.add_argument("--phase-seconds", type=int, default=30, help="단계 시간(초)")
     parser.add_argument("--out", help="결과 파일. 기본은 data/ 아래")
@@ -113,6 +127,9 @@ def main(argv=None, run=subprocess.run, now=None, base_env=None):
 
     if not args.base_url:
         print("중단: --base-url 또는 BROKER_BASE_URL 이 필요합니다")
+        return 2
+    if args.probe == "rate" and not args.ok_code:
+        print("중단: rate 시험에는 --ok-code 가 필요합니다")
         return 2
     env_source = os.environ if base_env is None else base_env
     if not env_source.get("JAVA_HOME_21"):
@@ -133,13 +150,14 @@ def main(argv=None, run=subprocess.run, now=None, base_env=None):
         print("중단:", error)
         return 1
 
-    out_path = args.out or os.path.join(args.root, "data", f"rate-probe-{now.strftime('%Y%m%d-%H%M%S')}.txt")
+    out_path = args.out or os.path.join(args.root, "data", f"{args.probe}-probe-{now.strftime('%Y%m%d-%H%M%S')}.txt")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    result = run(build_command(args.root), env=build_env(env_source, credentials, args, out_path),
+    test_class = SMOKE_TEST_CLASS if args.probe == "smoke" else TEST_CLASS
+    result = run(build_command(args.root, test_class), env=build_env(env_source, credentials, args, out_path),
                  capture_output=True, text=True)
 
     output = open(out_path, encoding="utf-8").read() if os.path.exists(out_path) else ""
-    outcome = classify(output)
+    outcome = classify_smoke(output) if args.probe == "smoke" else classify(output)
     # 쉬는 시간은 호출이 끝난 시각부터 센다. 몇 분짜리 시험의 시작 시각으로 적으면 쉬는 시간이 그만큼 줄어든다.
     write_marker(marker_path, outcome, injected_now or datetime.now(timezone.utc))
     print(output.rstrip() or "(결과 파일이 비어 있습니다)")
