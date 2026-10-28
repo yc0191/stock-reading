@@ -63,7 +63,7 @@ class ArticlesRequestListener {
         for (ArticleQueryRepository.StoredArticle row : rows.subList(0, Math.min(rows.size(), limit))) {
             ArticlesPayload.Article article = new ArticlesPayload.Article(
                     row.articleKey(), row.title(), row.summary(),
-                    EventFactory.format(row.publishedAt()), row.publisher(), row.url());
+                    EventFactory.formatKst(row.publishedAt()), row.publisher(), row.url());
             int size = mapper.writeValueAsBytes(article).length + 1;
             if (usedBytes + size > MAX_ARTICLES_BYTES) {
                 truncated = true;

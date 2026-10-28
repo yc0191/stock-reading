@@ -53,6 +53,21 @@ class ArticlesRequestListenerTest {
     }
 
     @Test
+    void writesUtcPublishedAtAsKstWithSeconds() throws IOException {
+        OffsetDateTime utc = OffsetDateTime.parse("2026-10-20T07:02:00Z");
+        when(repository.findByRange(eq("TEST01"), eq(SINCE), eq(UNTIL), anyInt()))
+                .thenReturn(List.of(new ArticleQueryRepository.StoredArticle(
+                        String.format("%064d", 0), "제목", "요약", "news.example.com",
+                        "https://news.example.com/articles/0", utc)));
+
+        listener.onRequest(ContractSchemas.sample("news.articles.requested.sample.json"));
+
+        ArgumentCaptor<List<ArticlesPayload.Article>> articles = ArgumentCaptor.captor();
+        verify(publisher).publish(eq(JOB_ID), eq(1), eq("TEST01"), articles.capture(), eq(false), eq(CORRELATION_ID));
+        assertThat(articles.getValue().get(0).publishedAt()).isEqualTo("2026-10-20T16:02:00+09:00");
+    }
+
+    @Test
     void respondsWithEveryRowInTheRequestedRangeNewestFirstAndEchoesTheIdentifiers() throws IOException {
         when(repository.findByRange(eq("TEST01"), eq(SINCE), eq(UNTIL), anyInt())).thenReturn(rows(3, "요약"));
 

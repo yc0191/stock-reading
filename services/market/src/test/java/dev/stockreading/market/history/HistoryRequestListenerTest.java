@@ -61,6 +61,19 @@ class HistoryRequestListenerTest {
     }
 
     @Test
+    void writesUtcRowsAsKstWithSeconds() throws IOException {
+        OffsetDateTime utc = OffsetDateTime.parse("2026-10-20T06:55:00Z");
+        when(repository.findBetweenInclusive(eq("TEST01"), eq(SINCE), eq(UNTIL), anyInt()))
+                .thenReturn(List.of(new PriceHistoryRepository.StoredPoint(utc, 10_000L)));
+
+        listener.onRequest(ContractSchemas.sample("market.history.requested.sample.json"));
+
+        ArgumentCaptor<List<HistoryPayload.Point>> points = ArgumentCaptor.captor();
+        verify(publisher).publish(eq(JOB_ID), eq(1), eq("TEST01"), points.capture(), eq(false), eq(CORRELATION_ID));
+        assertThat(points.getValue().get(0).asOf()).isEqualTo("2026-10-20T15:55:00+09:00");
+    }
+
+    @Test
     void zeroRowsIsStillAnswered() throws IOException {
         when(repository.findBetweenInclusive(anyString(), any(), any(), anyInt())).thenReturn(List.of());
 

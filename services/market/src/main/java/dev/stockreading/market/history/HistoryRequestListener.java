@@ -53,7 +53,7 @@ class HistoryRequestListener {
         boolean truncated = rows.size() > limit;
         List<HistoryPayload.Point> points = rows.stream()
                 .limit(limit)
-                .map(row -> new HistoryPayload.Point(EventFactory.format(row.asOf()), row.price()))
+                .map(row -> new HistoryPayload.Point(EventFactory.formatKst(row.asOf()), row.price()))
                 .toList();
 
         publisher.publish(request.jobId(), request.seq(), request.symbol(), points, truncated, event.correlationId());
