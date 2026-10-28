@@ -26,14 +26,14 @@ class BrokerMarketData implements MarketDataPort {
     private static final Logger log = LoggerFactory.getLogger(BrokerMarketData.class);
 
     private final BrokerClient client;
-    private final CallRateLimiter limiter;
+    private final CallRateLimit limiter;
     private final int maxCallsPerSecond;
     private final AtomicInteger inFlight = new AtomicInteger();
 
-    BrokerMarketData(BrokerClient client, CollectorProperties collector, BrokerProperties broker) {
+    BrokerMarketData(BrokerClient client, CollectorProperties collector, BrokerProperties broker, CallRateLimit limiter) {
         this.client = client;
         this.maxCallsPerSecond = broker.maxCallsPerSecond();
-        this.limiter = new CallRateLimiter(maxCallsPerSecond, Duration.ofSeconds(1), System::nanoTime);
+        this.limiter = limiter;
         int symbolCount = collector.symbols() == null ? 0 : collector.symbols().size();
         if (symbolCount > maxCallsPerSecond) {
             log.warn("symbols={} exceed max calls per second={}; the excess symbols are recorded as skipped every tick",

@@ -31,8 +31,8 @@ class BrokerPropertiesBindingTest {
     @Test
     void zeroOrNegativeMaxCallsPerSecondFallsBackToTheDefault() {
         runner().withPropertyValues("BROKER_MAX_CALLS_PER_SECOND=0").run(context ->
-                assertThat(context.getBean(BrokerProperties.class).maxCallsPerSecond()).isEqualTo(15));
+                assertThat(context.getBean(BrokerProperties.class).maxCallsPerSecond()).isEqualTo(10));
         runner().withPropertyValues("BROKER_MAX_CALLS_PER_SECOND=-3").run(context ->
-                assertThat(context.getBean(BrokerProperties.class).maxCallsPerSecond()).isEqualTo(15));
+                assertThat(context.getBean(BrokerProperties.class).maxCallsPerSecond()).isEqualTo(10));
     }
 }

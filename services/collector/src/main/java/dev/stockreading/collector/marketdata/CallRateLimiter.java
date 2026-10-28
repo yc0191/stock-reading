@@ -7,12 +7,16 @@ import java.util.function.LongSupplier;
 /**
  * 슬라이딩 윈도우 호출 상한. 락은 장부를 고치는 짧은 구간에만 잡고, 기다리는 동안에는 잡지 않는다.
  */
-final class CallRateLimiter {
+final class CallRateLimiter implements CallRateLimit {
 
     private final int maxCalls;
     private final long windowNanos;
     private final LongSupplier nanoClock;
     private final ArrayDeque<Long> calls = new ArrayDeque<>();
+
+    static CallRateLimiter perSecond(int maxCalls) {
+        return new CallRateLimiter(maxCalls, Duration.ofSeconds(1), System::nanoTime);
+    }
 
     CallRateLimiter(int maxCalls, Duration window, LongSupplier nanoClock) {
         this.maxCalls = maxCalls;
@@ -20,8 +24,8 @@ final class CallRateLimiter {
         this.nanoClock = nanoClock;
     }
 
-    /** 자리가 나길 maxWait 안에서만 기다린다. 얻지 못하면 false 이고 호출하면 안 된다. */
-    boolean tryAcquire(Duration maxWait) {
+    @Override
+    public boolean tryAcquire(Duration maxWait) {
         long deadline = nanoClock.getAsLong() + maxWait.toNanos();
         while (true) {
             long waitNanos;

@@ -197,7 +197,7 @@ class BrokerClientRawAndTokenTest {
             server = new FakeBrokerServer();
             var broker = new BrokerProperties(server.baseUrl(), KEY, SECRET, 5, 10);
             var marketData = new BrokerMarketData(new BrokerClient(broker, JsonMapper.builder().build(), CLOCK),
-                    new CollectorProperties(List.of("TEST01"), 1_000, 3_000), broker);
+                    new CollectorProperties(List.of("TEST01"), 1_000, 3_000), broker, CallRateLimiter.perSecond(10));
             marketData.fetch(List.of("TEST01"));
             server.priceStatus = 500;
             server.priceBody = "{\"dataHeader\":{\"resultCode\":\"9000\",\"processCode\":\"bad code!\","

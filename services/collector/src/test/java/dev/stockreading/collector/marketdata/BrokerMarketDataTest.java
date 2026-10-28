@@ -33,7 +33,8 @@ class BrokerMarketDataTest {
         server = new FakeBrokerServer();
         var broker = new BrokerProperties(server.baseUrl(), KEY, SECRET, timeoutSeconds, maxCalls);
         var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK);
-        return new BrokerMarketData(client, new CollectorProperties(symbols, 1_000, 3_000), broker);
+        return new BrokerMarketData(client, new CollectorProperties(symbols, 1_000, 3_000), broker,
+                CallRateLimiter.perSecond(maxCalls));
     }
 
     @Test
@@ -85,6 +86,21 @@ class BrokerMarketDataTest {
             assertThat(failure.exceptionType()).isEqualTo(BrokerMarketData.RATE_LIMITED);
         });
         assertThat(server.priceCalls).hasValue(2);
+    }
+
+    @Test
+    void aSwappedInLimitDecidesWhetherTheProviderIsCalled() throws IOException {
+        server = new FakeBrokerServer();
+        var broker = new BrokerProperties(server.baseUrl(), KEY, SECRET, 5, 10);
+        var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK);
+        CallRateLimit denyAll = maxWait -> false;
+        var marketData = new BrokerMarketData(client, new CollectorProperties(List.of("TEST01"), 1_000, 3_000), broker, denyAll);
+
+        FetchResult result = marketData.fetch(List.of("TEST01"));
+
+        assertThat(result.quotes()).isEmpty();
+        assertThat(result.failures()).extracting(QuoteFailure::exceptionType).containsOnly(BrokerMarketData.RATE_LIMITED);
+        assertThat(server.priceCalls).hasValue(0);
     }
 
     @Test
