@@ -28,11 +28,15 @@ import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 // 현재가 조회의 호출 한도를 알아보는 수동 도구다. BROKER_RATE_PROBE=1 일 때만 동작한다.
+// 키를 .env 같은 사본에서 가져와 틀린 값으로 서버를 반복 호출한 일이 있어, scripts/live_probe.py 가 켜 주는 LIVE_PROBE_GUARD 가
+// 있을 때만 실행한다. 그 도구가 Parameter Store 에서 키를 읽고 직전 거절 기록을 확인한다.
 // 실제 운영 서버를 호출하므로 속도를 낮은 값부터 천천히 올리고, 정상이 아닌 응답이 한 번이라도 나오면 바로 멈춘다.
 // 정상 응답의 processCode 는 BROKER_RATE_PROBE_OK_CODE 로 받는다(코드에 값을 두지 않는다).
 // 속도는 BROKER_RATE_PROBE_RATES(쉼표 구분, 기본 1,2,3), 단계 시간은 BROKER_RATE_PROBE_PHASE_SECONDS(기본 30)로 바꾼다.
 // 토큰은 한 번만 발급해 재사용한다. 시세 값은 기록하지 않고 단계별 횟수·지연·처음 이상 응답의 헤더만 BROKER_PROBE_OUT 에 쓴다.
 @EnabledIfEnvironmentVariable(named = "BROKER_RATE_PROBE", matches = "1")
+@EnabledIfEnvironmentVariable(named = "LIVE_PROBE_GUARD", matches = "1",
+        disabledReason = "scripts/live_probe.py 로만 실행한다(키는 Parameter Store 에서 읽고 직전 거절 기록을 확인함)")
 class BrokerRateProbeTest {
 
     private static final long REST_MILLIS = 30_000;
@@ -127,7 +131,7 @@ class BrokerRateProbeTest {
                     long millis = (System.nanoTime() - start) / 1_000_000;
                     Outcome outcome;
                     if (error != null) {
-                        outcome = new Outcome(-1, "", "", millis, error.getClass().getSimpleName());
+                        outcome = new Outcome(-1, "", "", millis, describe(error));
                     } else {
                         // 시세 값이 섞이지 않도록 응답 본문에서 헤더만 꺼낸다.
                         JsonNode header = mapper.readTree(response.body()).path("dataHeader");
@@ -173,6 +177,27 @@ class BrokerRateProbeTest {
             builder.header("Authorization", "Bearer " + token);
         }
         return builder.build();
+    }
+
+    // 응답을 받지 못했을 때 서버가 끊었는지, 이 컴퓨터의 연결 문제인지 가리려고 원인 사슬의 종류와 가장 안쪽 메시지를 남긴다.
+    // 요청 헤더(토큰)는 예외 메시지에 들어가지 않는다.
+    private static String describe(Throwable error) {
+        StringBuilder chain = new StringBuilder();
+        Throwable cause = error;
+        Throwable innermost = error;
+        for (int depth = 0; cause != null && depth < 6; depth++) {
+            if (depth > 0) {
+                chain.append(" <- ");
+            }
+            chain.append(cause.getClass().getSimpleName());
+            innermost = cause;
+            cause = cause.getCause() == cause ? null : cause.getCause();
+        }
+        String message = innermost.getMessage();
+        if (message != null && !message.isBlank()) {
+            chain.append(" | ").append(message.length() > 120 ? message.substring(0, 120) : message);
+        }
+        return chain.toString();
     }
 
     private synchronized void log(String line) {

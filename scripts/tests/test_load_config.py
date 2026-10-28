@@ -217,3 +217,67 @@ def test_only_notifier_skips_collector_group(tmp_path):
     assert lc.main(["--env-file", str(env), "--only", "notifier"], run=run) == 0
     assert paths == ["/stock-reading/dev/notifier"]
     assert "SMTP_HOST=v-smtp-host" in env.read_text()
+
+
+def broker_key_param(value):
+    # 제공자 이름이 시험 코드에 새로 드러나지 않게, 기존 매핑에서 앱키 파라미터 이름을 거꾸로 찾는다.
+    short = next(short for short, env in lc.COLLECTOR_ENV_NAMES.items() if env == "BROKER_APP_KEY")
+    return collector_param(short, value)
+
+
+def test_compare_reports_same_different_and_missing_without_returning_values():
+    updates = {"BROKER_APP_KEY": "remote-value", "BROKER_APP_SECRET": "same-secret", "DART_API_KEY": "only-remote"}
+    text = "BROKER_APP_KEY=remote-valueX\nBROKER_APP_SECRET=same-secret\n"
+
+    rows = lc.compare_env(text, updates)
+
+    assert rows == [
+        ("BROKER_APP_KEY", "다름", len("remote-valueX"), len("remote-value")),
+        ("BROKER_APP_SECRET", "같음", len("same-secret"), len("same-secret")),
+        ("DART_API_KEY", "없음", None, len("only-remote")),
+    ]
+
+
+def test_unmapped_credential_names_flags_old_names_but_not_mapped_ones():
+    updates = {"BROKER_APP_KEY": "v", "BROKER_APP_SECRET": "v"}
+    text = "BROKER_APP_KEY=v\nOLD_APP_KEY=stale\nOLD_APP_SECRET=stale\nSMTP_HOST=h\n# COMMENTED_APP_KEY=x\n"
+
+    assert lc.unmapped_credential_names(text, updates) == ["OLD_APP_KEY", "OLD_APP_SECRET"]
+
+
+def test_check_prints_status_but_never_the_values_and_writes_nothing(tmp_path, capsys):
+    env = tmp_path / ".env"
+    env.write_text("BROKER_APP_KEY=stale-secret-value\n")
+    before = env.read_text()
+
+    code = lc.main(["--env-file", str(env), "--only", "collector", "--check"],
+                   run=fake_run([broker_key_param("fresh-secret-value")]))
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "BROKER_APP_KEY: 다름" in out
+    assert "stale-secret-value" not in out and "fresh-secret-value" not in out
+    assert env.read_text() == before
+
+
+def test_check_returns_zero_when_everything_matches(tmp_path, capsys):
+    env = tmp_path / ".env"
+    env.write_text("BROKER_APP_KEY=same-value\n")
+
+    code = lc.main(["--env-file", str(env), "--only", "collector", "--check"],
+                   run=fake_run([broker_key_param("same-value")]))
+
+    assert code == 0
+    assert "모두 같습니다" in capsys.readouterr().out
+
+
+def test_check_fails_and_warns_when_an_unmanaged_old_name_is_present(tmp_path, capsys):
+    env = tmp_path / ".env"
+    env.write_text("BROKER_APP_KEY=same-value\nOLD_APP_KEY=stale\n")
+
+    code = lc.main(["--env-file", str(env), "--only", "collector", "--check"],
+                   run=fake_run([broker_key_param("same-value")]))
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "OLD_APP_KEY" in out and "stale" not in out
