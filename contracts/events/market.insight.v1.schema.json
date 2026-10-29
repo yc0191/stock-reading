@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://stock-reading.local/contracts/market.insight.v1",
   "title": "market.insight v1",
-  "description": "장 마감 후 조회한 API 응답 한 건의 원문. 일봉·세계지수·환율종합·시장종합·해외 일봉을 같은 이벤트로 싣고 payload.apiType으로 구분한다. 응답 내부는 해석하지 않는 불투명 JSON이다. 메시지 키는 \"<apiType>:<target>\"이고 target이 없으면 apiType만 쓴다. 보유 종목·수량 같은 개인정보를 절대 담지 않는다. 임시 봉투 형식(ADR-010 초안).",
+  "description": "장 마감 후·장 시작 전에 조회한 API 응답 한 건의 원문. 일봉·세계지수·환율종합·시장종합·해외 일봉을 같은 이벤트로 싣고 payload.apiType으로 구분한다. 응답 내부는 해석하지 않는 불투명 JSON이다. 메시지 키는 \"<apiType>:<target>\"이고 target이 없으면 apiType만 쓴다. 보유 종목·수량 같은 개인정보를 절대 담지 않는다. 임시 봉투 형식(ADR-010 초안).",
   "type": "object",
   "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
   "properties": {

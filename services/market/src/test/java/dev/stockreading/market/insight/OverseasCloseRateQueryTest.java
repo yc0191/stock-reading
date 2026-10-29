@@ -21,7 +21,7 @@ import tools.jackson.databind.json.JsonMapper;
 class OverseasCloseRateQueryTest {
 
     private static final String TICKER = "TESTA";
-    // 수집은 한국 16:30(UTC 07:30)에 한다.
+    // 행을 받은 시각(테스트 값). 실제 수집은 평일 장 시작 전 한 번이다.
     private static final OffsetDateTime FETCHED_1021 = OffsetDateTime.parse("2026-10-21T07:30:00Z");
     private static final OffsetDateTime FETCHED_1022 = OffsetDateTime.parse("2026-10-22T07:30:00Z");
     private static final OffsetDateTime FETCHED_1023 = OffsetDateTime.parse("2026-10-23T07:30:00Z");
@@ -119,6 +119,17 @@ class OverseasCloseRateQueryTest {
         assertThat(query.find(TICKER, FETCHED_1021)).isEmpty();
         verify(repository).recentOverseasDailyPrices(TICKER, OverseasCloseRateQuery.ROWS_TO_READ);
         assertThat(OverseasCloseRateQuery.ROWS_TO_READ).isEqualTo(10);
+    }
+
+    @Test
+    void classShareWrittenWithADotIsLookedUpWithTheStoredDash() {
+        when(repository.recentOverseasDailyPrices(eq("TESTB-X"), anyInt())).thenReturn(List.of(
+                new OverseasDailyRow(response(" 9.99", "20261020:  1.25"), FETCHED_1021)));
+
+        OverseasCloseRate rate = query.find("testb.x", OffsetDateTime.parse("2026-10-21T08:00:00Z")).orElseThrow();
+
+        assertThat(rate.ticker()).isEqualTo("TESTB-X");
+        verify(repository).recentOverseasDailyPrices("TESTB-X", OverseasCloseRateQuery.ROWS_TO_READ);
     }
 
     private void rows(OverseasDailyRow... rows) {

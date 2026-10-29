@@ -198,29 +198,19 @@ class InsightTickListenerTest {
     }
 
     @Test
-    void overseasDailyPricesComeAfterTheExistingResponsesWithTickerTargets() throws IOException {
+    void postCloseTickNoLongerQueriesOverseasDailyPrices() throws IOException {
+        // 해외 일봉은 장 시작 전 tick 에서만 받는다. 국내 장 마감 무렵에는 미국 장이 열리지 않아 같은 값을 다시 받게 된다.
         when(holdings.allTickers()).thenReturn(List.of("TESTA", "TESTB.X"));
-        when(exchanges.exchanges("TESTB.X")).thenReturn(List.of("OTC", "NYSE"));
 
         listener.onTick(tick("2026-10-20T16:30:00+09:00"));
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
-        verify(kafka, times(8)).send(eq(Topics.MARKET_INSIGHT), key.capture(), value.capture());
+        verify(kafka, times(6)).send(eq(Topics.MARKET_INSIGHT), key.capture(), anyString());
         assertThat(key.getAllValues()).containsExactly(
                 "daily-price:TEST01", "daily-price:TEST02", "world-index:C", "world-index:S",
-                "exchange-rate-summary", "market-summary",
-                "overseas-daily-price:TESTA", "overseas-daily-price:TESTB.X");
-        verify(source).overseasDailyPrice("NAS", "TESTA");
-        verify(source).overseasDailyPrice("NYS", "TESTB.X");
-        for (String json : value.getAllValues()) {
-            assertThat(ContractSchemas.validate(SCHEMA, json)).isEmpty();
-        }
-        JsonNode overseas = mapper.readTree(value.getAllValues().get(6));
-        assertThat(overseas.path("payload").path("apiType").asString()).isEqualTo("overseas-daily-price");
-        assertThat(overseas.path("payload").path("target").asString()).isEqualTo("TESTA");
-        // 바깥 공백만 제거되고 안쪽은 그대로다.
-        assertThat(overseas.path("payload").path("response").asString()).isEqualTo(RAW);
+                "exchange-rate-summary", "market-summary");
+        verify(source, never()).overseasDailyPrice(anyString(), anyString());
+        verify(exchanges, never()).exchanges(anyString());
     }
 
     @Test
@@ -228,7 +218,7 @@ class InsightTickListenerTest {
         when(holdings.allTickers()).thenReturn(List.of("TESTA", "TESTB", "TESTC"));
         listener = listener(List.of(), List.of(), 2);
 
-        listener.onTick(tick("2026-10-20T16:30:00+09:00"));
+        listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"));
 
         verify(source).overseasDailyPrice("NAS", "TESTA");
         verify(source).overseasDailyPrice("NAS", "TESTB");
@@ -248,14 +238,12 @@ class InsightTickListenerTest {
         when(source.overseasDailyPrice("NAS", "TESTD"))
                 .thenThrow(new BrokerApiException(FailureType.HTTP_ERROR, "시세 API 오류 http=500 processCode=E777"));
 
-        assertThatCode(() -> listener.onTick(tick("2026-10-20T16:30:00+09:00"))).doesNotThrowAnyException();
+        assertThatCode(() -> listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"))).doesNotThrowAnyException();
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
-        verify(kafka, times(7)).send(eq(Topics.MARKET_INSIGHT), key.capture(), anyString());
-        // 기존 장 마감 후 조회 6건은 모두 나가고, 해외 일봉은 실패하지 않은 마지막 종목만 나간다.
-        assertThat(key.getAllValues()).containsExactly(
-                "daily-price:TEST01", "daily-price:TEST02", "world-index:C", "world-index:S",
-                "exchange-rate-summary", "market-summary", "overseas-daily-price:TESTE");
+        verify(kafka, times(2)).send(eq(Topics.MARKET_INSIGHT), key.capture(), anyString());
+        // 세계지수는 그대로 나가고, 해외 일봉은 실패하지 않은 마지막 종목만 나간다.
+        assertThat(key.getAllValues()).containsExactly("world-index:C", "overseas-daily-price:TESTE");
         List<String> messages = messages();
         assertThat(messages).anyMatch(m -> m.contains("position=1 reason=EXCHANGE_LOOKUP_FAILED"));
         assertThat(messages).anyMatch(m -> m.contains("position=2 reason=EXCHANGE_UNKNOWN"));
@@ -274,7 +262,7 @@ class InsightTickListenerTest {
         when(source.overseasDailyPrice("NAS", "TESTA")).thenReturn("  ");
         listener = listener(List.of(), List.of());
 
-        listener.onTick(tick("2026-10-20T16:30:00+09:00"));
+        listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"));
 
         verify(kafka, never()).send(anyString(), eq("overseas-daily-price:TESTA"), anyString());
         assertThat(messages()).anyMatch(m -> m.contains("position=1 reason=EMPTY_RESPONSE"));

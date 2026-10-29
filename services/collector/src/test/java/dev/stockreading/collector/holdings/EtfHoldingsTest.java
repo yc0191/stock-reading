@@ -22,10 +22,17 @@ class EtfHoldingsTest {
     }
 
     @Test
-    void acceptsClassSuffixWithDotOrDashAndDigitsInTickers() {
+    void acceptsClassSuffixWithDotOrDashAndGivesItBackWithADash() {
         List<EtfHoldings> holdings = EtfHoldings.parseValidated("TEST01=FAKE.A,FAKE-B,F4KE,A");
 
-        assertThat(holdings.get(0).tickers()).containsExactly("FAKE.A", "FAKE-B", "F4KE", "A");
+        assertThat(holdings.get(0).tickers()).containsExactly("FAKE-A", "FAKE-B", "F4KE", "A");
+    }
+
+    @Test
+    void sameClassShareWrittenWithDotAndDashIsKeptOnceInAnEtf() {
+        List<EtfHoldings> holdings = EtfHoldings.parseValidated("TEST01=FAKE.B,FAKE-B");
+
+        assertThat(holdings.get(0).tickers()).containsExactly("FAKE-B");
     }
 
     @Test

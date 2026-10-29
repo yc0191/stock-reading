@@ -40,6 +40,15 @@ class FilingQueryTest {
     }
 
     @Test
+    void classShareWrittenWithADotIsLookedUpWithTheStoredDash() {
+        OffsetDateTime from = AS_OF.minusHours(24);
+
+        query.find(" testb.x ", from, AS_OF, AS_OF);
+
+        verify(repository).findByTicker("TESTB-X", from, AS_OF);
+    }
+
+    @Test
     void periodEndingBeforeTheReferenceTimeKeepsItsEnd() {
         OffsetDateTime from = AS_OF.minusHours(48);
         OffsetDateTime to = AS_OF.minusHours(24);

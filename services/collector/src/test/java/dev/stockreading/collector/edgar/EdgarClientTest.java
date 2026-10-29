@@ -10,6 +10,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -230,5 +231,84 @@ class EdgarClientTest {
         } finally {
             root.detachAppender(appender);
         }
+    }
+
+    @Test
+    void exchangeComesFromTheTickerMapAndMissingExchangeIsEmpty() throws Exception {
+        EdgarClient client = client(FakeEdgarServer.USER_AGENT);
+
+        assertThat(client.exchangesOf("TESTA")).containsExactly("Nasdaq");
+        assertThat(client.exchangesOf("TESTB.C")).containsExactly("NYSE");
+        assertThat(client.exchangesOf("TESTD")).isEmpty();
+        // 거래소를 알려고 회사 이력(submissions)을 따로 받지 않는다.
+        assertThat(server.submissionsCalls.get()).isZero();
+        assertThat(server.tickerMapCalls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void failedTickerMapIsNotRetriedForEveryTickerRightAway() throws Exception {
+        AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-10-21T00:00:00Z"));
+        EdgarClient client = client(FakeEdgarServer.USER_AGENT, now);
+        server.tickerMapStatus = 503;
+
+        for (String ticker : List.of("TESTA", "TESTB", "TESTD")) {
+            assertThatThrownBy(() -> client.exchangesOf(ticker))
+                    .isInstanceOfSatisfying(EdgarApiException.class,
+                            e -> assertThat(e.failure()).isEqualTo(EdgarFailure.SERVER_ERROR));
+        }
+        assertThat(server.tickerMapCalls.get()).isEqualTo(1);
+
+        // 기다린 뒤에는 다시 받는다.
+        server.tickerMapStatus = 200;
+        now.set(now.get().plus(EdgarClient.TICKER_MAP_RETRY_AFTER));
+        assertThat(client.cikOf("TESTA")).isEqualTo("0000000001");
+        assertThat(server.tickerMapCalls.get()).isEqualTo(2);
+    }
+
+    @Test
+    void previousTickerMapIsKeptWhenADailyRefreshFails() throws Exception {
+        AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-10-21T00:00:00Z"));
+        EdgarClient client = client(FakeEdgarServer.USER_AGENT, now);
+        assertThat(client.exchangesOf("TESTA")).containsExactly("Nasdaq");
+
+        server.tickerMapStatus = 403;
+        now.set(now.get().plus(EdgarClient.TICKER_MAP_TTL).plusSeconds(1));
+
+        assertThat(client.exchangesOf("TESTA")).containsExactly("Nasdaq");
+        assertThat(client.cikOf("TESTB")).isEqualTo("0000000002");
+        assertThat(server.tickerMapCalls.get()).isEqualTo(2);
+    }
+
+    @Test
+    void tickerMapWithoutTheExpectedColumnsIsInvalid() throws Exception {
+        EdgarClient client = client(FakeEdgarServer.USER_AGENT);
+        server.tickerMapBody = "{\"0\":{\"cik_str\":1,\"ticker\":\"TESTA\",\"title\":\"Test A Corp\"}}";
+
+        assertThatThrownBy(() -> client.cikOf("TESTA"))
+                .isInstanceOfSatisfying(EdgarApiException.class,
+                        e -> assertThat(e.failure()).isEqualTo(EdgarFailure.INVALID_RESPONSE));
+    }
+
+    private EdgarClient client(String userAgent, AtomicReference<Instant> now) throws Exception {
+        server = new FakeEdgarServer();
+        EdgarProperties properties = server.properties(userAgent);
+        Clock clock = new Clock() {
+            @Override
+            public ZoneId getZone() {
+                return ZoneOffset.UTC;
+            }
+
+            @Override
+            public Clock withZone(ZoneId zone) {
+                return this;
+            }
+
+            @Override
+            public Instant instant() {
+                return now.get();
+            }
+        };
+        return new EdgarClient(properties, JsonMapper.builder().build(), clock,
+                EdgarCallSpacing.perSecond(properties.maxCallsPerSecond()));
     }
 }

@@ -7,7 +7,7 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /** ETF 한 종목과 그 ETF가 담은 미국 상위 종목 티커 목록. 티커 순서는 설정에 적힌 순서다. */
-public record EtfHoldings(String etfCode, List<String> tickers) {
+record EtfHoldings(String etfCode, List<String> tickers) {
 
     // 이벤트 계약의 종목코드 형식과 같다. 다른 형식의 ETF 코드는 뒤 단계에서 조용히 버려지므로 설정 단계에서 막는다.
     private static final Pattern ETF_CODE = Pattern.compile("[0-9A-Z]{6}");
@@ -23,11 +23,11 @@ public record EtfHoldings(String etfCode, List<String> tickers) {
     /**
      * "ETF코드=티커,티커;ETF코드2=티커" 형식을 읽는다. 비어 있으면 빈 목록이고, 잘못된 항목이 하나라도 있으면
      * IllegalArgumentException 으로 실패한다. 공백뿐인 항목(끝의 ";" 포함)은 무시한다.
-     * 같은 ETF 코드가 두 번 나오면 실패하고, 한 ETF 안의 같은 티커는 한 번만 남긴다.
+     * 같은 ETF 코드가 두 번 나오면 실패하고, 한 ETF 안의 같은 티커는 한 번만 남긴다. 종류 구분은 "-" 로 맞춰 돌려준다.
      * 보유 종목이 드러나지 않도록 메시지에는 코드와 티커 원문을 넣지 않고, 세미콜론으로 나눈 설정의
      * 몇 번째 항목인지와 오류 종류만 적는다.
      */
-    public static List<EtfHoldings> parseValidated(String spec) {
+    static List<EtfHoldings> parseValidated(String spec) {
         List<EtfHoldings> result = new ArrayList<>();
         if (spec == null || spec.isBlank()) {
             return result;
@@ -63,7 +63,9 @@ public record EtfHoldings(String etfCode, List<String> tickers) {
                     throw formatError(position,
                             "티커 형식 오류가 있습니다(영문 대문자·숫자 1~6자, 종류 구분은 . 또는 - 뒤 1~2자)");
                 }
-                tickers.add(trimmed);
+                // 종류 구분 표기는 SEC 와 같은 "-" 로 맞춘다. 두 표기가 섞이면 같은 종목이 두 번 조회·저장된다.
+                // 시세 제공자가 종류 구분 표기를 어떻게 받는지는 아직 확인하지 않았다.
+                tickers.add(trimmed.replace('.', '-'));
             }
             if (tickers.isEmpty()) {
                 throw structureError(position);

@@ -35,6 +35,14 @@ class ConfiguredHoldingsTest {
     }
 
     @Test
+    void sameClassShareWrittenDifferentlyInTwoEtfsIsQueriedOnce() {
+        // 한 ETF 에는 ".", 다른 ETF 에는 "-" 로 적어도 같은 종목으로 한 번만 조회한다.
+        HoldingsPort port = holdings("TEST01=FAKE.B,FAKEA;TEST02=FAKE-B");
+
+        assertThat(port.allTickers()).containsExactly("FAKE-B", "FAKEA");
+    }
+
+    @Test
     void blankSettingMeansNoHoldings() {
         HoldingsPort port = holdings("");
 

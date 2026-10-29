@@ -19,10 +19,13 @@ final class FakeEdgarServer implements AutoCloseable {
 
     static final String USER_AGENT = "TestCompany test-contact@example.com";
 
+    // SEC 티커·거래소 매핑 파일과 같은 모양. 거래소가 없는(null) 회사도 넣는다.
     static final String TICKER_MAP = """
-            {"0":{"cik_str":1,"ticker":"TESTA","title":"Test A Corp"},
-             "1":{"cik_str":2,"ticker":"TESTB-C","title":"Test B Corp"},
-             "2":{"cik_str":2,"ticker":"TESTB","title":"Test B Corp"}}""";
+            {"fields":["cik","name","ticker","exchange"],
+             "data":[[1,"Test A Corp","TESTA","Nasdaq"],
+                     [2,"Test B Corp","TESTB-C","NYSE"],
+                     [2,"Test B Corp","TESTB","NYSE"],
+                     [3,"Test D Corp","TESTD",null]]}""";
 
     // 8-K(항목 둘), 6-K(항목 없음), 10-Q, 주 문서가 빈 8-K/A, 접수 시각이 깨진 행.
     static final String SUBMISSIONS = """
@@ -53,7 +56,7 @@ final class FakeEdgarServer implements AutoCloseable {
 
     FakeEdgarServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/files/company_tickers.json", exchange -> {
+        server.createContext("/files/company_tickers_exchange.json", exchange -> {
             tickerMapCalls.incrementAndGet();
             userAgents.add(exchange.getRequestHeaders().getFirst("User-Agent"));
             respond(exchange, tickerMapStatus, tickerMapBody);
@@ -72,7 +75,7 @@ final class FakeEdgarServer implements AutoCloseable {
     }
 
     EdgarProperties properties(String userAgent) {
-        return new EdgarProperties(baseUrl(), baseUrl() + "/files/company_tickers.json",
+        return new EdgarProperties(baseUrl(), baseUrl() + "/files/company_tickers_exchange.json",
                 "https://www.sec.gov/Archives/edgar/data", userAgent, 5, 10, "8-K,8-K/A,6-K", 72);
     }
 

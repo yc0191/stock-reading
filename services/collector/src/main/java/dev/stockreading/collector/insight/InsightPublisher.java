@@ -24,9 +24,9 @@ import dev.stockreading.collector.marketdata.BrokerApiException;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * 일봉(종목별), 세계지수(대륙별), 환율종합, 시장종합, 해외 일봉(보유 미국 종목별) 순으로 한 번씩 조회해 응답마다
- * market.insight 한 건을 발행한다. 한 건이 실패해도 나머지는 계속한다. 메시지 키는 "<apiType>:<target>"이고
- * target 이 없으면 apiType 이다. 장 시작 전에는 직전 미국 장 결과만 받는다(publishPreOpen).
+ * 장 마감 후에는 일봉(종목별), 세계지수(대륙별), 환율종합, 시장종합을, 장 시작 전에는 세계지수 아메리카와
+ * 해외 일봉(보유 미국 종목별)을 한 번씩 조회해 응답마다 market.insight 한 건을 발행한다. 한 건이 실패해도
+ * 나머지는 계속한다. 메시지 키는 "<apiType>:<target>"이고 target 이 없으면 apiType 이다.
  */
 @Component
 @ConditionalOnProperty(name = "collector.market-data.source", havingValue = "broker")
@@ -106,7 +106,7 @@ class InsightPublisher {
             failed++;
         }
         log.info("sent {} market.insight events corr={} failed={}", published, correlationId, failed);
-        publishOverseas(correlationId, scheduledFor);
+        // 해외 일봉은 장 시작 전에만 받는다. 국내 장 마감 무렵에는 미국 장이 열리지 않아 같은 값을 다시 받게 된다.
     }
 
     /** 장 시작 전 조회: 세계지수 아메리카와 보유 미국 종목 해외 일봉. 이벤트와 키는 장 마감 후 조회와 같다. */
@@ -118,7 +118,7 @@ class InsightPublisher {
         publishOverseas(correlationId, scheduledFor);
     }
 
-    // 종목 수만큼 상한 장치를 기다리며 차례로 호출하므로 기존 조회가 늦어지지 않게 맨 뒤에 둔다.
+    // 종목 수만큼 상한 장치를 기다리며 차례로 호출하므로 세계지수 조회가 늦어지지 않게 맨 뒤에 둔다.
     // 티커는 보유 종목이 드러나므로 로그에는 순번과 실패 종류, 개수만 남긴다.
     private void publishOverseas(String correlationId, String scheduledFor) {
         List<String> tickers = holdings.allTickers();

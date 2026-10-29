@@ -82,7 +82,7 @@ collector:
     us-by-etf: ${ETF_US_HOLDINGS:}
   edgar:
     base-url: https://data.sec.gov
-    ticker-map-url: https://www.sec.gov/files/company_tickers.json
+    ticker-map-url: https://www.sec.gov/files/company_tickers_exchange.json
     archives-base-url: https://www.sec.gov/Archives/edgar/data
     # SEC 가 요구하는 "회사명 연락이메일". 연락 이메일은 개인 정보라서 값은 환경변수로만 준다. 비어 있으면 호출하지 않는다.
     user-agent: ${EDGAR_USER_AGENT:}

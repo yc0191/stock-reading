@@ -2,6 +2,7 @@ package dev.stockreading.news.filing;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 
 import org.springframework.stereotype.Component;
@@ -36,12 +37,14 @@ public class FilingQuery {
             throw new IllegalArgumentException("from must not be after to");
         }
 
+        // 수집기는 종류 구분을 "-" 로 맞춰 저장하므로 "." 로 찾아도 같은 종목을 찾게 한다.
+        String normalized = ticker.trim().toUpperCase(Locale.ROOT).replace('.', '-');
         OffsetDateTime upper = to.isAfter(asOf) ? asOf : to;
         if (from.isAfter(upper)) {
             return List.of();
         }
         // 저장소가 상한을 지키더라도 기준 시각 규칙은 여기서 한 번 더 확인한다. 어기면 조용히 잘못된 근거가 나간다.
-        return repository.findByTicker(ticker, from, upper).stream()
+        return repository.findByTicker(normalized, from, upper).stream()
                 .filter(filing -> !filing.acceptedAt().isAfter(asOf))
                 .toList();
     }

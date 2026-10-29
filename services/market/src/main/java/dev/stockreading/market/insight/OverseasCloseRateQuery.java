@@ -7,6 +7,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -56,13 +57,15 @@ public class OverseasCloseRateQuery {
         Objects.requireNonNull(ticker, "ticker");
         Objects.requireNonNull(asOf, "asOf");
 
-        List<OverseasDailyRow> rows = repository.recentOverseasDailyPrices(ticker, ROWS_TO_READ);
+        // 수집기는 종류 구분을 "-" 로 맞춰 저장하므로 "." 로 찾아도 같은 종목을 찾게 한다.
+        String normalized = ticker.trim().toUpperCase(Locale.ROOT).replace('.', '-');
+        List<OverseasDailyRow> rows = repository.recentOverseasDailyPrices(normalized, ROWS_TO_READ);
         OverseasCloseRate best = null;
         for (int i = 0; i < rows.size(); i++) {
             OverseasDailyRow row = rows.get(i);
             JsonNode records = readRecords(row.response(), i);
             for (JsonNode record : records) {
-                OverseasCloseRate candidate = candidate(ticker, record, row.fetchedAt());
+                OverseasCloseRate candidate = candidate(normalized, record, row.fetchedAt());
                 if (candidate == null || candidate.closeAt().isAfter(asOf)
                         || candidate.closeAt().isAfter(row.fetchedAt())) {
                     continue;

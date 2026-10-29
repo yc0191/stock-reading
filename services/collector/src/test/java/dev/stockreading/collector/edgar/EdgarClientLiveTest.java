@@ -16,7 +16,7 @@ class EdgarClientLiveTest {
 
     @Test
     void realSubmissionsMatchTheParsedShape() {
-        var properties = new EdgarProperties("https://data.sec.gov", "https://www.sec.gov/files/company_tickers.json",
+        var properties = new EdgarProperties("https://data.sec.gov", "https://www.sec.gov/files/company_tickers_exchange.json",
                 "https://www.sec.gov/Archives/edgar/data", System.getenv("EDGAR_USER_AGENT"), 10, 10,
                 "8-K,8-K/A,6-K", 72);
         var client = new EdgarClient(properties, JsonMapper.builder().build(), Clock.systemUTC(),
