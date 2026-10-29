@@ -46,6 +46,10 @@ OPTIONAL_GROUPS = (
     ("briefing", BRIEFING_PREFIX, BRIEFING_ENV_NAMES),
 )
 
+# --only로 한 그룹만 확인해도 다른 그룹이 관리하는 이름을 낡은 이름으로 오인하지 않도록 전체 목록과 비교한다.
+MANAGED_ENV_NAMES = frozenset(ENV_NAMES.values()).union(
+    *(env_names.values() for _, _, env_names in OPTIONAL_GROUPS))
+
 
 def to_env_updates(parameters, prefix=PREFIX, env_names=ENV_NAMES):
     """파라미터 목록을 (환경변수 값 사전, 무시한 이름 목록)으로 바꾼다."""
@@ -113,7 +117,8 @@ def compare_env(text, updates):
 def unmapped_credential_names(text, updates):
     """매핑되지 않은 앱키·시크릿 이름을 찾는다. 옛 이름이 남아 낡은 값을 쓰는 일을 알아채기 위해서다."""
     return sorted(name for name in parse_env(text)
-                  if ("APP_KEY" in name or "APP_SECRET" in name) and name not in updates)
+                  if ("APP_KEY" in name or "APP_SECRET" in name)
+                  and name not in updates and name not in MANAGED_ENV_NAMES)
 
 
 def fetch_parameters(profile, region, run=subprocess.run, prefix=PREFIX):

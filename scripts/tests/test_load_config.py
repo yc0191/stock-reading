@@ -353,6 +353,18 @@ def test_check_with_matching_briefing_key_reports_no_mismatch_or_warning(tmp_pat
     assert "경고" not in out and "same-llm-key" not in out
 
 
+def test_check_for_one_group_does_not_flag_keys_managed_by_another_group(tmp_path, capsys):
+    env = tmp_path / ".env"
+    env.write_text("ANTHROPIC_API_KEY=same-llm-key\nBROKER_APP_KEY=broker-key\nBROKER_APP_SECRET=broker-secret\n")
+
+    code = lc.main(["--env-file", str(env), "--only", "briefing", "--check"],
+                   run=fake_run([briefing_param("anthropic-api-key", "same-llm-key")]))
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "경고" not in out and "모두 같습니다" in out
+
+
 def test_check_for_collector_does_not_warn_about_the_briefing_key(tmp_path, capsys):
     env = tmp_path / ".env"
     env.write_text("BROKER_APP_KEY=same-value\nANTHROPIC_API_KEY=other-llm-key\n")
