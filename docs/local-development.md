@@ -29,12 +29,14 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 
 시세처리기는 스냅샷마다 급변동을 감지해 `market.move`를 발행합니다. 유형 1(`window`)은 최근 N분 이력의 가장 오래된 스냅샷 대비, 유형 2(`prevClose`)는 응답 원문의 전일 종가 필드 대비 변동률이 임계값 이상일 때이며, 한 번 발행한 뒤에는 마지막 발행 가격에서 임계값만큼 더 움직일 때만 다시 발행합니다(상태는 `move_state` 테이블에 둡니다). 설정은 `services/market/src/main/resources/application.yml`의 `market.*`이고 환경변수로 덮어쓸 수 있습니다.
 
-| 설정 키 | 기본값 | 설명 |
-|---|---|---|
-| `market.window-minutes` | `5` | 유형 1이 비교할 최근 이력의 길이(분) |
-| `market.window-threshold-percent` | `1.00` | 유형 1 임계값(%) |
-| `market.prev-close-field` | `bdy_cls_prc` | 유형 2가 원문에서 읽을 전일 종가 필드(점으로 중첩 경로). 실제 응답 샘플로 확인한 이름입니다. 항목 이름이 바뀌면 `MARKET_PREV_CLOSE_FIELD` 환경변수로 바꿉니다. 값이 없거나 숫자가 아니면 유형 2는 그 스냅샷을 판단하지 않습니다 |
-| `market.prev-close-threshold-percent` | `3.00` | 유형 2 임계값(%) |
+기본값은 `application.yml`이 원본입니다.
+
+| 설정 키 | 설명 |
+|---|---|
+| `market.window-minutes` | 유형 1이 비교할 최근 이력의 길이(분) |
+| `market.window-threshold-percent` | 유형 1 임계값(%) |
+| `market.prev-close-field` | 유형 2가 원문에서 읽을 전일 종가 필드(점으로 중첩 경로). 환경변수 `MARKET_PREV_CLOSE_FIELD`로 넣습니다. 값이 없거나 숫자가 아니면 유형 2는 그 스냅샷을 판단하지 않습니다 |
+| `market.prev-close-threshold-percent` | 유형 2 임계값(%) |
 
 이전 키 `market.move-threshold-percent`는 없어졌습니다. 마이그레이션(`services/market/src/main/resources/db/migration/`)은 서비스 기동 때 Flyway가 적용하며, 단위 테스트는 저장소를 대역으로 쓰므로 SQL은 로컬 Postgres에서 따로 확인해야 합니다.
 
@@ -56,13 +58,15 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 
 환경변수(`.env`)는 다음과 같습니다.
 
-| 환경변수 | 기본값 | 설명 |
-|---|---|---|
-| `KAFKA_BOOTSTRAP` | `localhost:9092` | Kafka 주소 |
-| `ANTHROPIC_API_KEY` | 없음 | LLM 키. 비어 있거나 자리표시 값(`change-me`)이면 시작할 때 경고를 남기고 규칙 기반 리포트를 만듭니다. 아래 Parameter Store의 `briefing` 그룹에서 가져옵니다 |
-| `BRIEFING_LLM_MODEL` | `claude-sonnet-5-5` | 리포트를 쓰는 모델 |
-| `POSTGRES_DB` | `stock` | 실패 기록 DB 이름(주소는 `localhost:5432`) |
-| `BRIEFING_DB_USER` / `BRIEFING_DB_PASSWORD` | `briefing_svc` / 없음 | 브리핑 전용 DB 계정. 비밀번호는 `.env`에만 둡니다 |
+환경변수가 없을 때 쓰는 값은 `main.py`와 `report.py`가 원본입니다.
+
+| 환경변수 | 설명 |
+|---|---|
+| `KAFKA_BOOTSTRAP` | Kafka 주소 |
+| `ANTHROPIC_API_KEY` | LLM 키. 비어 있거나 자리표시 값(`change-me`)이면 시작할 때 경고를 남기고 규칙 기반 리포트를 만듭니다. 아래 Parameter Store의 `briefing` 그룹에서 가져옵니다 |
+| `BRIEFING_LLM_MODEL` | 리포트를 쓰는 모델 |
+| `POSTGRES_DB` | 실패 기록 DB 이름 |
+| `BRIEFING_DB_USER` / `BRIEFING_DB_PASSWORD` | 브리핑 전용 DB 계정. 비밀번호는 `.env`에만 둡니다 |
 
 ### 리포트를 못 만든 변동 기록
 
@@ -108,7 +112,7 @@ export $(grep -E '^(KAFKA_BOOTSTRAP|ANTHROPIC_API_KEY|BRIEFING_LLM_MODEL|POSTGRE
 PYTHONPATH=services/briefing/src services/briefing/.venv/bin/python -m briefing.main
 ```
 
-브리핑은 시작할 때 자기가 쓰는 토픽을 선언합니다(목록과 파티션 수는 [ADR-010](adr/010-event-format.md)). `Ctrl+C`(또는 종료 신호)를 받으면 처리 중인 루프를 멈추고 끝납니다.
+브리핑은 시작할 때 자기가 쓰는 토픽을 선언합니다(목록과 파티션 수는 `main.py`의 `TOPIC_PARTITIONS`). `Ctrl+C`(또는 종료 신호)를 받으면 처리 중인 루프를 멈추고 끝납니다.
 
 변동 알림(`market.move`)은 읽는 즉시 읽은 위치(오프셋)를 확정합니다. 진행 중인 작업은 메모리에만 있으므로 **브리핑이 재시작되면 처리 중이던 변동은 리포트도 실패 기록도 남지 않고 사라집니다.**
 
@@ -116,15 +120,15 @@ PYTHONPATH=services/briefing/src services/briefing/.venv/bin/python -m briefing.
 
 ## 이메일 발송기 (`notifier`)
 
-`briefing.generated` → 이메일. **기본은 드라이런**(로그만 남기고 아무것도 보내지 않음)이며, 켜려면 `.env`에 아래를 채웁니다.
+`briefing.generated` → 이메일. **기본은 드라이런**(로그만 남기고 아무것도 보내지 않음)이며, 켜려면 `.env`에 아래를 채웁니다. 기본값은 `application.yml`이 원본입니다.
 
 | 설정 | 설명 |
 |---|---|
-| `NOTIFIER_SEND_ENABLED` | `true`일 때만 실제 발송. 기본 `false` |
+| `NOTIFIER_SEND_ENABLED` | `true`일 때만 실제 발송 |
 | `NOTIFIER_SENDER` / `NOTIFIER_RECIPIENT` | 발신/수신 주소. **개인정보이므로 `.env`에만** 둡니다. SES 샌드박스에서는 둘 다 SES에서 인증된 주소여야 함 |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | SES 콘솔의 "SMTP settings"에서 만든 전용 자격증명 (포트 587, STARTTLS) |
-| `NOTIFIER_MAX_PER_HOUR` | 시간당 발송 한도(기본 6, 코드 기본값만 사용). 초과분은 보내지 않고 로그만 남김 |
-| `NOTIFIER_SUBJECT_PREFIX` | 제목 머리말(기본 `[시뮬레이션]`). 데이터가 가짜인 동안 진짜 투자 정보로 오해하지 않도록 |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | SES 콘솔의 "SMTP settings"에서 만든 전용 자격증명(STARTTLS) |
+| `NOTIFIER_MAX_PER_HOUR` | 시간당 발송 한도. 초과분은 보내지 않고 로그만 남김 |
+| `NOTIFIER_SUBJECT_PREFIX` | 제목 머리말. 데이터가 가짜인 동안 진짜 투자 정보로 오해하지 않도록 |
 
 안전 규칙(모두 테스트로 검증): 설정이 없으면 드라이런, 발송을 켰는데 주소/호스트가 비어 있으면 **시작 단계에서 실패**, 같은 브리핑은 한 번만 발송, 로그에는 주소를 **마스킹**해서만 출력.
 
@@ -136,22 +140,22 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 
 ## 수집기의 외부 데이터 설정 (`collector`)
 
-수집기에는 공시, 시세, 뉴스 검색 클라이언트가 있습니다. 시세 기본은 가짜 데이터(시뮬레이터)이며, `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 외부 API를 씁니다. 뉴스는 `collect-news` tick마다 검색해 기사마다 `news.collected`를 발행하고, 기사 전송이 모두 확정된 뒤 `collection.completed`를 한 건 발행합니다([ADR-010](adr/010-event-format.md)). 공시는 아직 조회 클라이언트까지만 구현되어 있고 이벤트로 발행하지 않습니다.
+수집기에는 공시, 시세, 뉴스 검색 클라이언트가 있습니다. 시세 기본은 가짜 데이터(시뮬레이터)이며, `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 외부 API를 씁니다. 뉴스는 `collect-news` tick마다 검색해 기사마다 `news.collected`를 발행하고, 기사 전송이 모두 확정된 뒤 `collection.completed`를 한 건 발행합니다([ADR-010](adr/010-event-format.md)). 공시는 아직 조회 클라이언트까지만 구현되어 있고 이벤트로 발행하지 않습니다. 기본값은 `application.yml`의 `collector.*`가 원본입니다.
 
 | 설정 | 설명 |
 |---|---|
-| `COLLECTOR_MARKET_DATA_SOURCE` | `simulator`(기본) 또는 `broker` |
+| `COLLECTOR_MARKET_DATA_SOURCE` | `simulator` 또는 `broker` |
 | `BROKER_BASE_URL` / `BROKER_APP_KEY` / `BROKER_APP_SECRET` | 시세 제공자의 주소와 키. `broker`일 때 필요 |
-| `COLLECTOR_TICK_INTERVAL_MS` | `schedule.tick`(수집) 발행 간격(밀리초, 기본 1000). 타이머(`COLLECTOR_SCHEDULE_ENABLED=true`)가 켜져 있을 때만 쓰입니다. `scheduledFor`가 초 단위라 1000보다 작게 두면 같은 초의 tick이 중복으로 버려집니다 |
-| `COLLECTOR_MAX_TICK_AGE_MS` | 현재보다 이만큼 이상 오래된 tick은 조회하지 않고 종목마다 `TICK_SKIPPED` 실패 이벤트로 기록합니다(기본 3000) |
-| `BROKER_MAX_CALLS_PER_SECOND` | 초당 시세 호출 상한(기본 10). 종목 수가 이보다 많으면 시작할 때 경고하고, 넘친 종목은 그 tick에서 호출하지 않고 `TICK_SKIPPED` 실패 이벤트로 기록합니다. 상한 때문임은 `exceptionType=RateLimited`로 구분하며, 나중에 계약에 정식 실패 종류가 생기면 바꿀 수 있습니다. **종목 수와 같게 두면 오래 돌 때 일부 호출을 놓치고 처리도 느려지므로 종목 수의 1.2배 이상으로 두세요**([측정 기록](test-history/S03-quote-fixed-load/results.md), 가짜 서버로 쟀을 때). 기본 10은 종목 8개까지 이 기준을 지킵니다(1.1배까지는 가짜 서버 시험에서 놓침이 없었지만 처리 시간이 길었습니다, [R012](test-history/S03-quote-fixed-load/results.md)). 값을 올릴 때는 실제 서버가 5분을 버틴 가장 높은 속도가 초당 12회이고 13회부터 걸렸다는 점을 넘지 않게 합니다([S04](test-history/S04-quote-real-api/results.md)). 제공자의 공식 한도는 앱 전체 초당 40회, API별 초당 20회입니다 |
+| `COLLECTOR_TICK_INTERVAL_MS` | `schedule.tick`(수집) 발행 간격(밀리초). 타이머(`COLLECTOR_SCHEDULE_ENABLED=true`)가 켜져 있을 때만 쓰입니다. `scheduledFor`가 초 단위라 1000보다 작게 두면 같은 초의 tick이 중복으로 버려집니다 |
+| `COLLECTOR_MAX_TICK_AGE_MS` | 현재보다 이만큼 이상 오래된 tick은 조회하지 않고 종목마다 `TICK_SKIPPED` 실패 이벤트로 기록합니다 |
+| `BROKER_MAX_CALLS_PER_SECOND` | 초당 시세 호출 상한. 종목 수가 이보다 많으면 시작할 때 경고하고, 넘친 종목은 그 tick에서 호출하지 않고 `TICK_SKIPPED` 실패 이벤트로 기록합니다. 상한 때문임은 `exceptionType=RateLimited`로 구분하며, 나중에 계약에 정식 실패 종류가 생기면 바꿀 수 있습니다. **종목 수와 같게 두면 오래 돌 때 일부 호출을 놓치고 처리도 느려지므로 종목 수의 1.2배 이상으로 두세요**([측정 기록](test-history/S03-quote-fixed-load/results.md), 가짜 서버로 쟀을 때. 1.1배까지는 가짜 서버 시험에서 놓침이 없었지만 처리 시간이 길었습니다, [R012](test-history/S03-quote-fixed-load/results.md)). 값을 올릴 때는 실제 서버가 5분을 버틴 가장 높은 속도가 초당 12회이고 13회부터 걸렸다는 점을 넘지 않게 합니다([S04](test-history/S04-quote-real-api/results.md)). 제공자의 공식 한도는 앱 전체 초당 40회, API별 초당 20회입니다 |
 | `NEWS_SEARCH_BASE_URL` / `NEWS_SEARCH_CLIENT_ID` / `NEWS_SEARCH_CLIENT_SECRET` | 뉴스 검색 제공자의 주소와 키 |
 | `NEWS_SEARCH_ID_HEADER` / `NEWS_SEARCH_SECRET_HEADER` | 제공자가 정한 인증 헤더 이름 |
 | `NEWS_SEARCH_QUERIES` | `검색어=종목코드,종목코드;검색어2=*` 형식. 관심 종목이 드러나므로 `.env`에만 둡니다 |
-| `NEWS_SEARCH_CALL_INTERVAL_MS` | 검색어를 연달아 호출할 때 호출 사이의 대기(밀리초, 기본 60). 0이면 기다리지 않으며, 짧으면 제공자가 429로 거절할 수 있습니다([측정 기록](test-history/S01-real-api/call-interval.md)) |
+| `NEWS_SEARCH_CALL_INTERVAL_MS` | 검색어를 연달아 호출할 때 호출 사이의 대기(밀리초). 0이면 기다리지 않으며, 짧으면 제공자가 429로 거절할 수 있습니다([측정 기록](test-history/S01-real-api/call-interval.md)) |
 | `DART_API_KEY` | 공시 API 키 |
-| `COLLECTOR_INSIGHT_SCHEDULE_ENABLED` | `true`일 때만 장 마감 후 조회 tick(`collect-post-close`)을 발행합니다(기본 `false`). 휴장일은 판정하지 않아 휴장일에도 발행됩니다 |
-| `COLLECTOR_INSIGHT_CRON` | 마감 후 조회 시각. 한국 시간 기준 cron(초 분 시 일 월 요일, 기본 `0 30 16 * * MON-FRI`) |
+| `COLLECTOR_INSIGHT_SCHEDULE_ENABLED` | `true`일 때만 장 마감 후 조회 tick(`collect-post-close`)을 발행합니다. 휴장일은 판정하지 않아 휴장일에도 발행됩니다 |
+| `COLLECTOR_INSIGHT_CRON` | 마감 후 조회 시각. 한국 시간 기준 cron(초 분 시 일 월 요일) |
 
 마감 후 조회(일봉, 세계지수, 환율종합, 시장종합)는 `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 동작하며, 응답 원문을 `market.insight` 이벤트로 발행합니다. 일봉의 시장구분과 조회 건수, 세계지수의 대륙 목록은 `application.yml`의 `collector.insight.*`에 기본값이 있습니다.
 

@@ -6,7 +6,7 @@
 
 | 경로 | 내용 |
 |---|---|
-| `services/collector`, `market`, `notifier` | Java 21 + Spring Boot 서비스 (Gradle 모듈) |
+| `services/collector`, `market`, `news`, `notifier` | Java 21 + Spring Boot 서비스 (Gradle 모듈) |
 | `services/briefing` | Python 서비스 (Gradle 모듈이 아니며 자체 venv 사용) |
 | `contracts/events/` | 서비스 간 이벤트 JSON Schema와 v1 샘플 |
 | `build-logic/` | 모든 서비스가 공유하는 Gradle 규약 플러그인 (루트 `build.gradle.kts`는 일부러 비어 있음) |
@@ -24,7 +24,7 @@
 
 ## 어기면 조용히 깨지는 설계 규칙
 
-- 원인 근거로 쓰는 뉴스는 변동 시각 24시간 전부터 변동 시각 + Δ(시작값 5분)까지 발행된 것뿐입니다. 범위 밖 뉴스는 버립니다.
+- 원인 근거로 쓰는 뉴스는 변동 시각 24시간 전부터 변동 시각 + Δ(`services/briefing/src/briefing/config.py`의 `CoreSettings.delta`)까지 발행된 것뿐입니다. 범위 밖 뉴스는 버립니다.
 - 발송기는 드라이런이 기본입니다. `NOTIFIER_SEND_ENABLED`는 사람이 직접 바꾸며, 로그의 주소는 마스킹합니다.
 - 토픽은 사용하는 서비스가 시작할 때 선언하고, 같은 토픽은 선언하는 모든 곳에서 파티션 수가 같아야 합니다. 어긋나면 일부 종목이 오류 없이 누락됩니다.
 - `schedule.tick`을 구독하는 리스너는 `jobType`마다 consumer group을 따로 둡니다. 이 토픽은 파티션이 1개라 같은 그룹이면 한쪽만 받아 tick이 오류 없이 누락됩니다.
