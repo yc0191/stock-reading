@@ -48,6 +48,19 @@ class MarketInsightContractTest {
     }
 
     @Test
+    void overseasDailyPriceNeedsAUsTickerTarget() throws IOException {
+        String overseas = sample().replace("\"daily-price\"", "\"overseas-daily-price\"");
+
+        assertThat(ContractSchemas.validate(SCHEMA, overseas.replace("\"TEST01\"", "\"TESTA\""))).isEmpty();
+        assertThat(ContractSchemas.validate(SCHEMA, overseas.replace("\"TEST01\"", "\"TESTB.X\""))).isEmpty();
+        assertThat(ContractSchemas.validate(SCHEMA, overseas.replace("\"TEST01\"", "\"TESTB-X\""))).isEmpty();
+        assertRejected(overseas.replace("\"TEST01\"", "\"testa\""));
+        assertRejected(overseas.replace("\"TEST01\"", "\"TESTABC\""));
+        assertRejected(overseas.replace("\"TEST01\"", "\"\""));
+        assertRejected(overseas.replace("\"target\": \"TEST01\"", "\"target\": null"));
+    }
+
+    @Test
     void unknownApiTypeIsRejected() throws IOException {
         assertRejected(sample().replace("\"daily-price\"", "\"order-history\""));
     }

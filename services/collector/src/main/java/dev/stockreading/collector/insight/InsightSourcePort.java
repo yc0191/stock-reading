@@ -8,6 +8,9 @@ public interface InsightSourcePort {
 
     String dailyPrice(String symbol);
 
+    /** 미국 종목의 일봉. exchangeCode 는 NAS, NYS, AMX 중 하나다. 앱 전체 호출 상한을 넘지 않게 기다리고, 자리를 얻지 못하면 실패한다. */
+    String overseasDailyPrice(String exchangeCode, String ticker);
+
     String worldIndex(String continent);
 
     String exchangeRateSummary();

@@ -15,6 +15,7 @@ public class Topics {
     public static final String NEWS_COLLECTED = "news.collected";
     public static final String NEWS_ARTICLES_REQUESTED = "news.articles.requested";
     public static final String NEWS_ARTICLES_RESPONDED = "news.articles.responded";
+    public static final String FILING_COLLECTED = "filing.collected";
     public static final int PARTITIONS = 3;
 
     @Bean
@@ -30,5 +31,11 @@ public class Topics {
     @Bean
     NewTopic newsArticlesRespondedTopic() {
         return TopicBuilder.name(NEWS_ARTICLES_RESPONDED).partitions(PARTITIONS).replicas(1).build();
+    }
+
+    // 생산자(collector)와 같은 파티션 수여야 한다.
+    @Bean
+    NewTopic filingCollectedTopic() {
+        return TopicBuilder.name(FILING_COLLECTED).partitions(PARTITIONS).replicas(1).build();
     }
 }

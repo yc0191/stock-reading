@@ -84,6 +84,32 @@ class BrokerClientRawTest {
     }
 
     @Test
+    void overseasDailyPriceSendsTheAgreedRequestAndKeepsTheBodyVerbatim() {
+        // 등락율 같은 값의 표기가 바뀌지 않아야 한다(안쪽 공백, 부호, 후행 0).
+        String inner = "{\"dataHeader\": " + OK_HEADER + ", \"dataBody\": {\"out2\": [{\"up_dwn_r_p2\": \" -1.20\"}]}}";
+        apiBody = " " + inner + "\n";
+
+        String raw = client.overseasDailyPriceRaw("NAS", "TESTA", 30);
+
+        assertThat(raw).isEqualTo(inner);
+        assertThat(requestBodies.get("/api/v1/gsc10060")).contains(
+                "\"krx_cd\":\"NAS\"", "\"is_cd\":\"TESTA\"", "\"chrt_clsf\":\"3\"", "\"rcrd_c\":\"30\"");
+        assertThat(authHeaders.get("/api/v1/gsc10060")).isEqualTo("Bearer tok-1");
+    }
+
+    @Test
+    void overseasDailyPriceErrorKeepsProcessCodeButNotServerMessage() {
+        apiStatus = 500;
+        apiBody = "{\"dataHeader\":{\"resultCode\":\"9000\",\"processCode\":\"E777\",\"processMessage\":\"테스트용 서버 오류 문구\"}}";
+
+        assertThatThrownBy(() -> client.overseasDailyPriceRaw("NYS", "TESTB", 30))
+                .isInstanceOf(BrokerApiException.class)
+                .hasMessageContaining("processCode=E777")
+                .hasMessageNotContaining("테스트용 서버 오류 문구")
+                .hasMessageNotContaining("TESTB");
+    }
+
+    @Test
     void worldIndexAndSummariesUseTheirOwnEndpoints() {
         apiBody = "{\"dataHeader\":" + OK_HEADER + ",\"dataBody\":{}}";
 

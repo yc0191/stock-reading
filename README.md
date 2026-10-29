@@ -28,12 +28,14 @@ flowchart LR
     MAIL(["이메일 (AWS SES)"]):::ext
 
     C -->|"시세"| S1[["market.snapshot<br/>market.snapshot.failed"]]:::topic
-    C -->|"장 마감 후 조회"| SI[["market.insight"]]:::topic
+    C -->|"장 마감 후·장 시작 전 조회"| SI[["market.insight"]]:::topic
     C -->|"기사"| SN[["news.collected"]]:::topic
     C -->|"뉴스 수집 끝"| SC[["collection.completed"]]:::topic
     S1 --> M
     SI --> M
     SN --> NW
+    C -->|"미국 종목 공시"| SF[["filing.collected"]]:::topic
+    SF --> NW
     M -->|"급변동"| S2[["market.move"]]:::topic
     S2 --> B
     SC --> B

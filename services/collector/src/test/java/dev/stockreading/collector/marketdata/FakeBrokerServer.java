@@ -19,6 +19,9 @@ final class FakeBrokerServer implements AutoCloseable {
 
     final AtomicInteger tokenCalls = new AtomicInteger();
     final AtomicInteger priceCalls = new AtomicInteger();
+    final AtomicInteger overseasCalls = new AtomicInteger();
+    // 국내 일봉, 세계지수, 환율종합, 시장종합 호출을 합쳐 센다.
+    final AtomicInteger insightCalls = new AtomicInteger();
     final AtomicInteger inFlight = new AtomicInteger();
     final AtomicInteger maxInFlight = new AtomicInteger();
     final List<String> authHeaders = new CopyOnWriteArrayList<>();
@@ -53,6 +56,16 @@ final class FakeBrokerServer implements AutoCloseable {
                 inFlight.decrementAndGet();
             }
         });
+        server.createContext("/api/v1/gsc10060", exchange -> {
+            overseasCalls.incrementAndGet();
+            reply(exchange, 200, "{\"dataHeader\":" + OK_HEADER + ",\"dataBody\":{\"out2\":[]}}");
+        });
+        for (String path : List.of("/api/v1/ivs11560", "/api/v1/iva60140", "/api/v1/iva60190", "/api/v1/ivsa0070")) {
+            server.createContext(path, exchange -> {
+                insightCalls.incrementAndGet();
+                reply(exchange, 200, "{\"dataHeader\":" + OK_HEADER + ",\"dataBody\":{}}");
+            });
+        }
         server.start();
     }
 

@@ -37,7 +37,8 @@ class InsightTickListener {
     void onTick(String message) {
         TickEnvelope tick = mapper.readValue(message, TickEnvelope.class);
         String jobType = tick.payload().jobType();
-        if (!PostCloseTickPublisher.JOB_COLLECT_POST_CLOSE.equals(jobType)) {
+        boolean postClose = PostCloseTickPublisher.JOB_COLLECT_POST_CLOSE.equals(jobType);
+        if (!postClose && !PreOpenTickPublisher.JOB_COLLECT_PRE_OPEN.equals(jobType)) {
             log.debug("ignoring tick with jobType={}", jobType);
             return;
         }
@@ -51,6 +52,10 @@ class InsightTickListener {
             processedTicks.add(dedupeKey);
         }
 
-        publisher.publishAll(tick.correlationId(), tick.payload().scheduledFor());
+        if (postClose) {
+            publisher.publishAll(tick.correlationId(), tick.payload().scheduledFor());
+        } else {
+            publisher.publishPreOpen(tick.correlationId(), tick.payload().scheduledFor());
+        }
     }
 }

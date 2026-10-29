@@ -12,7 +12,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 class TopicsConfigTest {
 
     @Test
-    void declaresCollectedAndArticleQueryTopicsWithThreePartitions() {
+    void declaresCollectedArticleQueryAndFilingTopicsWithThreePartitions() {
         new ApplicationContextRunner()
                 .withUserConfiguration(Topics.class)
                 .run(context -> {
@@ -20,7 +20,7 @@ class TopicsConfigTest {
                     Map<String, NewTopic> topics = context.getBeansOfType(NewTopic.class);
                     assertThat(topics.values()).extracting(NewTopic::name)
                             .containsExactlyInAnyOrder("news.collected", "news.articles.requested",
-                                    "news.articles.responded");
+                                    "news.articles.responded", "filing.collected");
                     assertThat(topics.values()).extracting(NewTopic::numPartitions).containsOnly(3);
                 });
     }

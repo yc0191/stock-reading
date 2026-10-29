@@ -65,6 +65,20 @@ class InsightListenerTest {
     }
 
     @Test
+    void overseasDailyPriceIsStoredInItsOwnTableWithTheTicker() throws IOException {
+        String sample = ContractSchemas.sample("market.insight.sample.json");
+        String message = sample.replace("\"daily-price\"", "\"overseas-daily-price\"")
+                .replace("\"target\": \"TEST01\"", "\"target\": \"TESTB.X\"");
+        String response = JsonMapper.builder().build().readTree(sample).at("/payload/response").asString();
+
+        listener.onInsight(message);
+
+        verify(repository).insertIfAbsent(ApiType.OVERSEAS_DAILY_PRICE, EVENT_ID, "TESTB.X", response, FETCHED_AT);
+        assertThat(ApiType.OVERSEAS_DAILY_PRICE.table()).isEqualTo("overseas_daily_price");
+        assertThat(ApiType.OVERSEAS_DAILY_PRICE.hasTarget()).isTrue();
+    }
+
+    @Test
     void unknownApiTypeFailsInsteadOfBeingDropped() throws IOException {
         String message = ContractSchemas.sample("market.insight.sample.json").replace("\"daily-price\"", "\"bond-yield\"");
 
