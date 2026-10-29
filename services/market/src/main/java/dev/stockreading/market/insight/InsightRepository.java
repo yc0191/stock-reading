@@ -1,6 +1,7 @@
 package dev.stockreading.market.insight;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -33,5 +34,20 @@ class InsightRepository {
             statement = statement.param("target", target);
         }
         return statement.update() == 1;
+    }
+
+    /** 해외 일봉 원문을 받은 시각이 늦은 순으로 limit 건 읽는다. 원문은 jsonb에서 텍스트로 꺼낸 그대로다. */
+    List<OverseasDailyRow> recentOverseasDailyPrices(String target, int limit) {
+        return jdbc.sql("""
+                        SELECT CAST(response AS text) AS response, fetched_at FROM overseas_daily_price
+                        WHERE target = :target
+                        ORDER BY fetched_at DESC, id DESC
+                        LIMIT :limit
+                        """)
+                .param("target", target)
+                .param("limit", limit)
+                .query((rs, rowNum) -> new OverseasDailyRow(
+                        rs.getString("response"), rs.getObject("fetched_at", OffsetDateTime.class)))
+                .list();
     }
 }

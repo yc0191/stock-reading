@@ -26,6 +26,8 @@ java -jar services/market/build/libs/market-0.0.1-SNAPSHOT.jar
 
 시세처리기(market)는 `market.snapshot`을 `price_snapshot`(`as_of` 기준 날짜별 파티션, 응답 원문은 jsonb `raw`)에, `market.snapshot.failed`를 `quote_failure`에 저장합니다. 파티션은 저장 직전에 없으면 만들며(Asia/Seoul 자정 경계), 테이블 구조와 근거는 [ADR-019](adr/019-quote-storage.md)입니다. 원문 보존 기간은 아직 정하지 않았습니다.
 
+뉴스 저장(news)은 `news.collected`와 함께 공시 이벤트 `filing.collected`를 별도 consumer group(`news-filings`)으로 구독해 `filing`(접수번호 유니크)과 `filing_ticker`에 저장합니다. 같은 공시가 다른 이벤트로 다시 오면 새로 연결된 티커만 더하고, 재시도 후에도 실패한 이벤트는 뉴스와 같은 `failed_event`에 남깁니다. 종목·기간 조회는 `FilingQuery`(티커, 시작·끝 시각, 기준 시각)이며 기준 시각보다 늦게 접수된 공시는 돌려주지 않습니다(같으면 포함). 해외 종목의 직전 미국 정규장 마감 등락률은 시세처리기의 `OverseasCloseRateQuery`(티커, 기준 시각)가 저장된 해외 일봉 원문에서 읽어 고른 일자와 등락율 원문(`up_dwn_r_p2`)을 돌려줍니다. 고르는 규칙은 [ADR-024](adr/024-edgar-filing-collection.md)입니다. 둘 다 아직 부르는 서비스는 없습니다.
+
 시세처리기는 스냅샷마다 급변동을 감지해 `market.move`를 발행합니다([ADR-020](adr/020-move-detection.md)). 유형 1(`window`)은 최근 N분 이력의 가장 오래된 스냅샷 대비, 유형 2(`prevClose`)는 응답 원문의 전일 종가 필드 대비 변동률이 임계값 이상일 때이며, 한 번 발행한 뒤에는 마지막 발행 가격에서 임계값만큼 더 움직일 때만 다시 발행합니다(상태는 `move_state` 테이블에 둡니다). 설정은 `services/market/src/main/resources/application.yml`의 `market.*`이고 환경변수로 덮어쓸 수 있습니다.
 
 | 설정 키 | 기본값 | 설명 |
@@ -153,7 +155,7 @@ python3 scripts/load_config.py --only collector --check
 
 | 대상 | 명령 | 개수 |
 |---|---|---|
-| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 509 (실서버 확인·실험용 5개, 부하 시험 1개, 시세처리기 DB 통합 7개는 건너뜀) |
+| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 538 (실서버 확인·실험용 5개, 부하 시험 1개, 시세처리기 DB 통합 8개, 뉴스 저장 DB 통합 4개는 건너뜀) |
 | Python (브리핑) | `services/briefing/.venv/bin/python -m pytest services/briefing` | 28 |
 | Python (설정 로더, 가설 검증 도구) | `services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests` | 64 |
 
@@ -171,6 +173,8 @@ MARKET_IT_DB_URL="jdbc:postgresql://127.0.0.1:$PORT/demo" MARKET_IT_DB_USER=post
   ./gradlew :services:market:cleanTest :services:market:test --tests '*IntegrationTest' --no-build-cache
 docker rm -f market-it-pg
 ```
+
+뉴스 저장의 DB 통합 테스트도 같은 방식이며 환경변수 이름만 `NEWS_IT_DB_URL`, `NEWS_IT_DB_USER`, `NEWS_IT_DB_PASSWORD`이고 대상은 `:services:news`입니다. 비어 있는 새 DB가 필요하므로 시세처리기와 같은 컨테이너를 이어 쓰지 말고 따로 띄웁니다.
 
 ## 실행 기록 (테스트 기록)
 

@@ -3,6 +3,7 @@ package dev.stockreading.market.insight;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -31,6 +32,7 @@ class InsightIntegrationTest {
     private static JdbcClient jdbc;
     private static InsightListener listener;
     private static FailedEventRecoverer recoverer;
+    private static OverseasCloseRateQuery closeRateQuery;
 
     @BeforeAll
     static void migrateAndWire() {
@@ -43,6 +45,7 @@ class InsightIntegrationTest {
 
         jdbc = JdbcClient.create(new DriverManagerDataSource(url, user, password));
         listener = new InsightListener(new InsightRepository(jdbc), JsonMapper.builder().build());
+        closeRateQuery = new OverseasCloseRateQuery(new InsightRepository(jdbc), JsonMapper.builder().build());
         recoverer = new FailedEventRecoverer(new FailedEventRepository(jdbc));
     }
 
@@ -93,6 +96,24 @@ class InsightIntegrationTest {
     }
 
     @Test
+    void closeRateIsReadFromTheStoredRawResponseOfTheTicker() throws IOException {
+        // 10/21 16:30(한국)에 받은 행: 맨 앞은 진행 중인 10/21 막대, 그 다음이 10/20 정규장 마감이다.
+        String first = "{\"dataBody\": {\"up_dwn_r_p2\": \"  9.99\", \"out2\": ["
+                + "{\"dt\": \"20261021\", \"up_dwn_r_p2\": \"  0.10\"},"
+                + "{\"dt\": \"20261020\", \"up_dwn_r_p2\": \"  1.25\"}]}}";
+        // 다른 종목의 행은 읽지 않아야 한다.
+        String other = "{\"dataBody\": {\"out2\": [{\"dt\": \"20261020\", \"up_dwn_r_p2\": \" -3.00\"}]}}";
+        listener.onInsight(fetchedOn1021(message("66666666-6666-4666-8666-666666666661", "overseas-daily-price", "\"ITESTC\"", first)));
+        listener.onInsight(fetchedOn1021(message("66666666-6666-4666-8666-666666666662", "overseas-daily-price", "\"ITESTD\"", other)));
+
+        OverseasCloseRate rate = closeRateQuery.find("ITESTC", OffsetDateTime.parse("2026-10-21T08:00:00Z"))
+                .orElseThrow();
+
+        assertThat(rate.date()).isEqualTo("20261020");
+        assertThat(rate.rate()).isEqualTo("  1.25");
+    }
+
+    @Test
     void rawResponseValuesSurviveInJsonb() throws IOException {
         listener.onInsight(message("33333333-3333-4333-8333-333333333333", "daily-price", "\"IT0002\"", RAW_RESPONSE));
 
@@ -136,6 +157,10 @@ class InsightIntegrationTest {
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> listener.onInsight(message)).isNotNull();
         assertThat(count("daily_price", "event_id = CAST('44444444-4444-4444-8444-444444444444' AS uuid)")).isZero();
+    }
+
+    private static String fetchedOn1021(String message) {
+        return message.replace("\"fetchedAt\":\"2026-10-20T16:30:01.800+09:00\"", "\"fetchedAt\":\"2026-10-21T16:30:01.800+09:00\"");
     }
 
     private static long count(String table, String where) {
