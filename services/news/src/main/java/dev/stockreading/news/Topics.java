@@ -21,7 +21,7 @@ public class Topics {
         return TopicBuilder.name(NEWS_COLLECTED).partitions(PARTITIONS).replicas(1).build();
     }
 
-    // 생산자(collector)와 같은 파티션 수여야 한다(ADR-024).
+    // 생산자(collector)와 같은 파티션 수여야 한다.
     @Bean
     NewTopic filingCollectedTopic() {
         return TopicBuilder.name(FILING_COLLECTED).partitions(PARTITIONS).replicas(1).build();

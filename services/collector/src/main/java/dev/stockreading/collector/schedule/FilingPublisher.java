@@ -44,7 +44,7 @@ class FilingPublisher {
 
     // 메모리 기반 재발행 억제이므로 재시작하면 수집 범위(lookback) 안의 공시가 다시 발행된다.
     // 중복은 소비 쪽이 접수번호로 최종으로 막는다. 같은 공시라도 보유 티커 조합이 바뀌면 새 연결을
-    // 알리기 위해 다시 발행한다(뉴스와 같은 방식, ADR-017).
+    // 알리기 위해 다시 발행한다(뉴스 수집의 재발행 억제와 같은 방식).
     private final Set<SentKey> sentKeys = ConcurrentHashMap.newKeySet();
 
     FilingPublisher(FilingCollector collector, KafkaTemplate<String, String> kafka, ObjectMapper mapper, Clock clock) {

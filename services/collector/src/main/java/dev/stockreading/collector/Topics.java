@@ -20,7 +20,7 @@ public class Topics {
     // market.snapshot.failed 는 market.snapshot 과 같은 키(종목)와 파티션 수 3으로 맞춘다. 같은 종목의
     // 성공과 실패가 같은 파티션 순서로 흐르고, 소비 쪽(market) 선언과도 같아야 한다.
     // news.collected, market.insight 의 파티션 수는 소비 쪽 선언과 같아야 한다(ADR-013, ADR-018).
-    // filing.collected 도 같은 이유로 3이며, 소비 서비스를 붙일 때 같은 값으로 선언한다(ADR-024).
+    // filing.collected 도 같은 이유로 3이며, 소비 쪽(news) 선언과 같아야 한다.
     @Bean
     NewTopics kafkaTopics() {
         return new NewTopics(
