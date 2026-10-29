@@ -29,7 +29,8 @@ class MarketPropertiesDefaultsTest {
             MarketProperties properties = context.getBean(MarketProperties.class);
             assertThat(properties.windowMinutes()).isEqualTo(5);
             assertThat(properties.windowThresholdPercent()).isEqualByComparingTo("1.00");
-            assertThat(properties.prevCloseField()).isEqualTo("bdy_cls_prc");
+            // 제공자 고유 이름은 공개 파일에 두지 않으므로 기본값은 비어 있다.
+            assertThat(properties.prevCloseField()).isEmpty();
             assertThat(properties.prevCloseThresholdPercent()).isEqualByComparingTo("3.00");
         });
     }
