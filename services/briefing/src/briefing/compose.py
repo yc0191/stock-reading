@@ -8,8 +8,8 @@ from briefing.evidence import NewsItem
 
 KST = ZoneInfo("Asia/Seoul")
 
-NO_EVIDENCE = "변동 시점 이전에 공개된 관련 근거를 찾지 못했습니다."
-DISCLAIMER = "※ 투자 조언이 아니며, 위 내용은 변동 시점 이전에 공개된 자료의 나열일 뿐 원인을 단정하지 않습니다."
+NO_EVIDENCE = "변동 시점 전후에 공개된 관련 근거를 찾지 못했습니다."
+DISCLAIMER = "※ 투자 조언이 아니며, 위 내용은 변동 시점 전후에 공개된 자료의 나열일 뿐 원인을 단정하지 않습니다."
 
 
 def direction_of(change_percent: float) -> str:
