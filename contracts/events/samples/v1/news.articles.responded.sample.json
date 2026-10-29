@@ -1,0 +1,24 @@
+{
+  "eventId": "4a7e2c91-d5b0-4863-9e1f-8b3a6c0d5f27",
+  "eventType": "news.articles.responded",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T16:15:44+09:00",
+  "producedAt": "2026-10-20T16:15:44.150+09:00",
+  "correlationId": "collect-2026-10-20T16:00:30+09:00",
+  "payload": {
+    "jobId": "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13",
+    "seq": 1,
+    "symbol": "TEST01",
+    "articles": [
+      {
+        "articleId": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        "title": "테스트 기사 제목",
+        "summary": "테스트 기사 요약입니다.",
+        "publishedAt": "2026-10-20T16:02:00+09:00",
+        "publisher": "news.example.com",
+        "url": "https://news.example.com/articles/12345"
+      }
+    ],
+    "truncated": false
+  }
+}

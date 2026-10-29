@@ -23,6 +23,8 @@ spring:
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     producer:
       acks: all
+      # 시세 이력·기사 응답이 길어질 수 있어 전송 구간에서 압축한다. 소비자는 알아서 푼다.
+      compression-type: gzip
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
 

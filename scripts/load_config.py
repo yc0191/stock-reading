@@ -1,4 +1,4 @@
-"""Parameter Store 의 notifier·collector 설정을 읽어 .env 에 반영한다. 값은 어디에도 출력하지 않는다."""
+"""Parameter Store 의 notifier·collector·briefing 설정을 읽어 .env 에 반영한다. 값은 어디에도 출력하지 않는다."""
 import argparse
 import json
 import os
@@ -8,6 +8,7 @@ import sys
 
 PREFIX = "/stock-reading/dev/notifier/"
 COLLECTOR_PREFIX = "/stock-reading/dev/collector/"
+BRIEFING_PREFIX = "/stock-reading/dev/briefing/"
 DEFAULT_REGION = "ap-southeast-2"
 
 # 파라미터 이름 -> 환경변수 이름. 여기에 없는 이름은 읽어도 반영하지 않는다.
@@ -33,6 +34,21 @@ COLLECTOR_ENV_NAMES = {
     "news-search-secret-header": "NEWS_SEARCH_SECRET_HEADER",
     "news-search-queries": "NEWS_SEARCH_QUERIES",
 }
+
+# briefing 도 선택 그룹이다: 키가 없으면 브리핑이 규칙 기반 리포트로 동작하므로 다른 그룹 반영을 막지 않는다.
+BRIEFING_ENV_NAMES = {
+    "anthropic-api-key": "ANTHROPIC_API_KEY",
+}
+
+# 선택 그룹: (--only 이름, 경로, 매핑). 순서대로 가져온다.
+OPTIONAL_GROUPS = (
+    ("collector", COLLECTOR_PREFIX, COLLECTOR_ENV_NAMES),
+    ("briefing", BRIEFING_PREFIX, BRIEFING_ENV_NAMES),
+)
+
+# --only로 한 그룹만 확인해도 다른 그룹이 관리하는 이름을 낡은 이름으로 오인하지 않도록 전체 목록과 비교한다.
+MANAGED_ENV_NAMES = frozenset(ENV_NAMES.values()).union(
+    *(env_names.values() for _, _, env_names in OPTIONAL_GROUPS))
 
 
 def to_env_updates(parameters, prefix=PREFIX, env_names=ENV_NAMES):
@@ -101,7 +117,8 @@ def compare_env(text, updates):
 def unmapped_credential_names(text, updates):
     """매핑되지 않은 앱키·시크릿 이름을 찾는다. 옛 이름이 남아 낡은 값을 쓰는 일을 알아채기 위해서다."""
     return sorted(name for name in parse_env(text)
-                  if ("APP_KEY" in name or "APP_SECRET" in name) and name not in updates)
+                  if ("APP_KEY" in name or "APP_SECRET" in name)
+                  and name not in updates and name not in MANAGED_ENV_NAMES)
 
 
 def fetch_parameters(profile, region, run=subprocess.run, prefix=PREFIX):
@@ -131,7 +148,8 @@ def main(argv=None, run=subprocess.run):
     parser.add_argument("--profile", help="AWS CLI 프로필. 없으면 기본 자격증명 방식(AWS_PROFILE 등)을 쓴다")
     parser.add_argument("--region", default=DEFAULT_REGION)
     # 뉴스 검증처럼 한 그룹의 키만 필요할 때, 다른 그룹의 비밀이 .env 에 들어오지 않게 한다.
-    parser.add_argument("--only", choices=["notifier", "collector"], help="한 그룹만 가져온다. 없으면 둘 다 가져온다")
+    parser.add_argument("--only", choices=["notifier", "collector", "briefing"],
+                        help="한 그룹만 가져온다. 없으면 모두 가져온다")
     parser.add_argument("--dry-run", action="store_true", help="파일을 쓰지 않고 반영될 키 이름만 보여 준다")
     # .env 는 복사본이라 Parameter Store 와 어긋날 수 있다. 실서버를 호출하기 전에 값을 출력하지 않고 비교한다.
     parser.add_argument("--check", action="store_true",
@@ -139,7 +157,7 @@ def main(argv=None, run=subprocess.run):
     args = parser.parse_args(argv)
 
     updates = {}
-    if args.only != "collector":
+    if args.only in (None, "notifier"):
         try:
             updates, ignored = to_env_updates(fetch_parameters(args.profile, args.region, run))
         except (RuntimeError, ValueError) as error:
@@ -154,17 +172,19 @@ def main(argv=None, run=subprocess.run):
             print("중단: 필요한 파라미터가 없습니다 ->", ", ".join(missing))
             return 1
 
-    if args.only != "notifier":
+    for group, prefix, env_names in OPTIONAL_GROUPS:
+        if args.only not in (None, group):
+            continue
         try:
-            collector_updates, _ = to_env_updates(
-                fetch_parameters(args.profile, args.region, run, COLLECTOR_PREFIX), COLLECTOR_PREFIX, COLLECTOR_ENV_NAMES)
+            group_updates, _ = to_env_updates(
+                fetch_parameters(args.profile, args.region, run, prefix), prefix, env_names)
         except (RuntimeError, ValueError) as error:
             print("중단:", error)
             return 1
-        updates.update(collector_updates)
-        for short, env_name in COLLECTOR_ENV_NAMES.items():
-            if env_name not in collector_updates:
-                print(f"참고: collector/{short} 가 없어 {env_name} 은 반영하지 않습니다")
+        updates.update(group_updates)
+        for short, env_name in env_names.items():
+            if env_name not in group_updates:
+                print(f"참고: {group}/{short} 가 없어 {env_name} 은 반영하지 않습니다")
 
     if args.check:
         text = open(args.env_file, encoding="utf-8").read() if os.path.exists(args.env_file) else ""

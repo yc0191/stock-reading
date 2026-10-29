@@ -2,12 +2,14 @@ package dev.stockreading.collector.news;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,15 +42,27 @@ public class NewsCollector {
         return collect(configuredQueries);
     }
 
+    /** collect() 와 같지만 제대로 모으지 못했을 수 있는 종목과 시작 시각도 함께 돌려준다. */
+    public NewsCollection collectWithStatus() {
+        return collectWithStatus(configuredQueries);
+    }
+
+    public List<NewsItem> collect(List<NewsQuery> queries) {
+        return collectWithStatus(queries).items();
+    }
+
     // 같은 URL이거나 정제한 제목이 같으면 한 건으로 합친다. 제목이 비슷할 뿐인 기사는 합치지 않는다.
     // 잘못 합치면 서로 다른 기사를 잃기 때문이고, 유사도 판단은 뉴스 선별 단계의 몫이다.
     // 한 검색어가 실패해도 나머지는 계속하고, 결과는 최신순이다.
     // 거르기는 검색어별 결과에 병합 전에 한다. 병합 뒤에는 어느 검색어에 대한 판정인지 알 수 없다.
     // 검색어는 관심 종목이 드러날 수 있어 로그에 남기지 않고 순번만 남긴다.
-    public List<NewsItem> collect(List<NewsQuery> queries) {
+    public NewsCollection collectWithStatus(List<NewsQuery> queries) {
         Map<String, NewsItem> byUrl = new LinkedHashMap<>();
         Map<String, String> urlKeyByTitleKey = new LinkedHashMap<>();
         Instant now = clock.instant();
+        // 첫 검색 호출을 시작한 시각이다. 호출이 하나도 없으면 수집을 시작한 시각을 쓴다.
+        OffsetDateTime startedAt = null;
+        Set<String> incompleteSymbols = new LinkedHashSet<>();
         int passed = 0;
         int tooOld = 0;
         int tooFarAhead = 0;
@@ -60,6 +74,7 @@ public class NewsCollector {
             index++;
             if (!dailyCallLimit.tryAcquire()) {
                 skippedByLimit++;
+                incompleteSymbols.addAll(query.symbols());
                 continue;
             }
             // 짧은 시간에 호출을 몰면 제공자가 429로 거절해 그 검색어의 기사가 해당 주기에 빠진다.
@@ -67,11 +82,15 @@ public class NewsCollector {
                 pause.pause(properties.callIntervalMs());
             }
             called = true;
+            if (startedAt == null) {
+                startedAt = OffsetDateTime.now(clock);
+            }
             List<NewsItem> found;
             try {
                 found = search.search(query.query(), properties.display());
             } catch (NewsSearchApiException e) {
                 log.warn("news query failed index={} reason={}", index, e.getMessage());
+                incompleteSymbols.addAll(query.symbols());
                 continue;
             }
             NewsFilter.Result filtered = NewsFilter.apply(query.query(), found, now);
@@ -105,7 +124,7 @@ public class NewsCollector {
         log.info("news filtered passed={} tooOld={} tooFarAhead={} unmatched={}", passed, tooOld, tooFarAhead, unmatched);
         List<NewsItem> result = new ArrayList<>(byUrl.values());
         result.sort(Comparator.comparing(NewsItem::publishedAt).reversed());
-        return result;
+        return new NewsCollection(result, incompleteSymbols, startedAt != null ? startedAt : OffsetDateTime.ofInstant(now, clock.getZone()));
     }
 
     private static NewsItem withSymbols(NewsItem item, NewsQuery query) {

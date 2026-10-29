@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stock-reading.local/contracts/market.history.requested.v1",
+  "title": "market.history.requested v1",
+  "description": "브리핑이 market 서비스에 한 종목의 시세 이력을 요청한다. 읽기 전용 요청이라 같은 요청을 다시 보내도 부작용이 없다. 이력 조회는 항상 since·until 상·하한을 둔다. 메시지 키는 종목코드다.",
+  "type": "object",
+  "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "const": "market.history.requested" },
+    "schemaVersion": { "const": 1 },
+    "occurredAt": { "type": "string", "format": "date-time", "description": "요청을 만든 시각." },
+    "producedAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1, "description": "작업을 시작시킨 market.move의 correlationId를 이어받는다." },
+    "payload": {
+      "type": "object",
+      "required": ["jobId", "seq", "symbol", "since", "until", "maxPoints"],
+      "properties": {
+        "jobId": { "type": "string", "format": "uuid", "description": "작업 키. 작업을 시작시킨 market.move의 eventId다." },
+        "seq": { "type": "integer", "minimum": 1, "description": "요청 순번. 재전송은 새 순번을 쓰고, 응답이 같은 값을 되돌려준다." },
+        "symbol": { "type": "string", "pattern": "^[0-9A-Z]{6}$" },
+        "since": { "type": "string", "format": "date-time", "description": "조회 하한. since <= asOf." },
+        "until": { "type": "string", "format": "date-time", "description": "조회 상한. asOf <= until." },
+        "maxPoints": { "type": "integer", "minimum": 1, "description": "응답에 담을 최대 건수." }
+      }
+    }
+  }
+}
