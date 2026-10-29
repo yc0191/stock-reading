@@ -10,8 +10,10 @@ import org.springframework.stereotype.Component;
 
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.TickEnvelope;
+import dev.stockreading.collector.insight.PreOpenTickPublisher;
 import tools.jackson.databind.ObjectMapper;
 
+/** 공시는 장 시작 전 tick 에서만 받는다. 밤사이 공시가 국내 장 시작 전에 들어와 있으면 충분하다. */
 @Component
 class FilingTickListener {
 
@@ -34,7 +36,7 @@ class FilingTickListener {
     void onTick(String message) {
         TickEnvelope tick = mapper.readValue(message, TickEnvelope.class);
         String jobType = tick.payload().jobType();
-        if (!TickPublisher.JOB_COLLECT_FILINGS.equals(jobType)) {
+        if (!PreOpenTickPublisher.JOB_COLLECT_PRE_OPEN.equals(jobType)) {
             log.debug("ignoring tick with jobType={}", jobType);
             return;
         }

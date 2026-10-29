@@ -27,8 +27,12 @@ collector:
     enabled: ${COLLECTOR_SCHEDULE_ENABLED:false}
     # 뉴스 수집 주기(15분)
     news-interval-ms: 900000
-    # 공시(EDGAR) 수집 주기(15분)
-    filings-interval-ms: 900000
+  pre-open:
+    # 꺼 두면 장 시작 전 tick 을 발행하지 않는다. 휴장일은 판정하지 않는다.
+    # 이 tick 하나로 보유 미국 종목 해외 일봉, 세계지수 아메리카(C), SEC 공시를 받는다. 공시는 이때만 받는다.
+    enabled: ${COLLECTOR_PRE_OPEN_ENABLED:false}
+    # 한국 시간 기준 cron(초 분 시 일 월 요일)
+    cron: ${COLLECTOR_PRE_OPEN_CRON:0 30 8 * * MON-FRI}
   insight:
     schedule:
       # 꺼 두면 마감 후 tick 을 발행하지 않는다. 휴장일은 판정하지 않는다.
@@ -87,8 +91,9 @@ collector:
     max-calls-per-second: 10
     # 수집할 공시 형식(쉼표 구분). 비거나 형식이 틀리면 시작 단계에서 실패한다.
     forms: ${EDGAR_FORMS:8-K,8-K/A,6-K}
-    # 접수 시각이 이 시간 안인 공시만 발행한다. 주말을 넘겨도 금요일 공시가 남도록 72시간으로 둔다.
-    lookback-hours: 72
+    # 접수 시각이 이 시간 안인 공시만 발행한다. 공시는 평일 장 시작 전에 하루 한 번만 받으므로
+    # 금요일→월요일 간격(72시간)보다 넉넉하게, 수집기가 며칠 꺼지거나 연휴가 끼어도 빠지지 않게 7일로 둔다.
+    lookback-hours: 168
   dart:
     base-url: https://opendart.fss.or.kr/api
     # 비밀: 환경변수로만 받는다(Parameter Store -> .env).

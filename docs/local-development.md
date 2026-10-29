@@ -96,8 +96,19 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 | `EDGAR_FORMS` | 수집할 공시 형식. 쉼표로 구분합니다(기본 `8-K,8-K/A,6-K`). 비어 있거나 형식이 틀리면 시작 단계에서 실패합니다 |
 | `COLLECTOR_INSIGHT_SCHEDULE_ENABLED` | `true`일 때만 장 마감 후 조회 tick(`collect-post-close`)을 발행합니다(기본 `false`). 휴장일은 판정하지 않아 휴장일에도 발행됩니다 |
 | `COLLECTOR_INSIGHT_CRON` | 마감 후 조회 시각. 한국 시간 기준 cron(초 분 시 일 월 요일, 기본 `0 30 16 * * MON-FRI`) |
+| `COLLECTOR_PRE_OPEN_ENABLED` | `true`일 때만 장 시작 전 수집 tick(`collect-pre-open`)을 발행합니다(기본 `false`). 휴장일은 판정하지 않아 휴장일에도 발행됩니다. 공시는 이 tick에서만 받으므로 꺼 두면 공시를 수집하지 않습니다 |
+| `COLLECTOR_PRE_OPEN_CRON` | 장 시작 전 수집 시각. 한국 시간 기준 cron(기본 평일 08:30, `0 30 8 * * MON-FRI`) |
 
 마감 후 조회(일봉, 세계지수, 환율종합, 시장종합)는 `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 동작하며, 응답 원문을 `market.insight` 이벤트로 발행합니다([ADR-018](adr/018-post-close-insight-event.md)). 일봉의 시장구분과 조회 건수, 세계지수의 대륙 목록은 `application.yml`의 `collector.insight.*`에 기본값이 있습니다.
+
+장 시작 전 수집(평일 08:30)은 국내 장중 변동의 근거로 쓸 직전 미국 장 결과와 밤사이 공시를 미리 받습니다. 하나의 tick(`collect-pre-open`)을 두 리스너가 받습니다.
+
+| 받는 것 | 조건 | 결과 |
+|---|---|---|
+| 세계지수 아메리카(`C`) 1건, 보유 미국 종목(`ETF_US_HOLDINGS`) 해외 일봉 | `COLLECTOR_MARKET_DATA_SOURCE=broker` | 마감 후 조회와 같은 `market.insight`(`world-index`, `overseas-daily-price`)와 같은 테이블. 시세 조회와 같은 호출 상한을 거칩니다 |
+| SEC EDGAR 공시 | `EDGAR_USER_AGENT`가 있을 때 | `filing.collected`. 접수 시각이 최근 168시간(`collector.edgar.lookback-hours`) 안인 공시만 발행합니다. 하루 한 번이라 주말과 연휴를 넘겨도 빠지지 않게 넉넉히 둡니다 |
+
+공시 15분 주기 수집(`collect-filings`, `collector.schedule.filings-interval-ms`)은 없어졌습니다. SEC 호출은 gzip 압축을 요청하고, 서버가 압축하지 않고 주면 그대로 읽습니다. 장 마감 후 수집(16:30)은 그대로입니다.
 
 시세 조회는 종목마다 병렬로 호출하고 실패해도 재시도하지 않으며 다음 tick에 맡깁니다. 성공하면 응답 원문을 `market.snapshot`의 `raw`에, 실패하면 종목마다 `market.snapshot.failed`를 발행합니다(실패 원문 포함, 키·시크릿·접근토큰 값은 가려서 담습니다). 로그와 예외 메시지에는 서버가 보낸 문구 대신 형식을 확인한 처리 코드(영숫자 8자 이하, 아니면 `invalid`)만 남습니다. 테스트는 로컬 가짜 HTTP 서버(`FakeBrokerServer`)를 쓰며 실제 서버를 호출하지 않습니다.
 
@@ -155,7 +166,7 @@ python3 scripts/load_config.py --only collector --check
 
 | 대상 | 명령 | 개수 |
 |---|---|---|
-| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 538 (실서버 확인·실험용 5개, 부하 시험 1개, 시세처리기 DB 통합 8개, 뉴스 저장 DB 통합 4개는 건너뜀) |
+| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 548 (실서버 확인·실험용 5개, 부하 시험 1개, 시세처리기 DB 통합 8개, 뉴스 저장 DB 통합 4개는 건너뜀) |
 | Python (브리핑) | `services/briefing/.venv/bin/python -m pytest services/briefing` | 28 |
 | Python (설정 로더, 가설 검증 도구) | `services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests` | 64 |
 

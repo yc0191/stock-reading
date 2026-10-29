@@ -65,10 +65,10 @@ class FilingCollectedContractTest {
     }
 
     @Test
-    void scheduleTickSchemaAcceptsTheFilingsJobType() throws IOException {
-        String tick = ContractSchemas.sample("schedule.tick.sample.json").replace("\"collect\"", "\"collect-filings\"");
+    void scheduleTickSchemaAcceptsThePreOpenJobType() throws IOException {
+        String tick = ContractSchemas.sample("schedule.tick.sample.json").replace("\"collect\"", "\"collect-pre-open\"");
 
-        assertThat(tick).contains("collect-filings");
+        assertThat(tick).contains("collect-pre-open");
         assertThat(ContractSchemas.validate("schedule.tick.v1.schema.json", tick)).isEmpty();
     }
 

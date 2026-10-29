@@ -10,12 +10,12 @@
 - **수집 대상**: 보유 종목 설정(`ETF_US_HOLDINGS`)에 있는 모든 고유 티커. SEC 티커 매핑 파일(`company_tickers.json`)로 티커를 10자리 CIK로 바꾼다. 매핑 파일은 하루에 한 번만 받는다. 종류 구분 표기(`.`)는 매핑 파일의 하이픈 표기로 맞춘다. 같은 CIK의 티커(여러 종류 주식)는 한 번만 조회한다.
 - **공시 형식**: 기본값은 `8-K`, `8-K/A`, `6-K`이고, `EDGAR_FORMS`로 바꿀 수 있다. 6-K를 넣은 이유는 미국에 상장한 외국 기업이 8-K 대신 6-K를 내기 때문이다. 6-K에는 항목 번호가 없어 `items`가 빈 배열이 된다. 10-Q와 10-K는 기본값에서 뺐다. 실적은 보통 8-K 항목 2.02로 먼저 나온다.
 - **추출하는 값**: 접수번호, 형식, 접수 시각(UTC, 초 단위), 공시일, 8-K 항목 번호(`items`를 쉼표로 나눈 값), 원문 주소. 원문 주소는 `Archives/edgar/data/<CIK>/<접수번호>/<주 문서>`이다. 주 문서가 없으면 접수 색인 페이지를 쓴다. 공시 이력은 `filings.recent`만 읽는다(최근 1,000건 또는 1년치이므로 수집 범위를 충분히 덮는다).
-- **수집 범위**: 접수 시각이 지금부터 72시간 안인 공시만 발행한다. 주말을 넘겨도 금요일 공시가 범위에 남는다. 변동 시각 기준의 시간 규칙은 수집 단계가 아니라 조회하는 쪽에서 적용한다.
-- **호출 제한**: 모든 EDGAR 호출은 한 간격 장치를 거친다. 호출 사이 간격은 최소 1초를 상한(기본 10, 허용 범위 1~10)으로 나눈 값이다. 이 간격을 지키면 어느 1초 구간에서도 호출이 상한을 넘지 않는다.
+- **수집 범위**: 접수 시각이 지금부터 168시간(7일, `collector.edgar.lookback-hours`) 안인 공시만 발행한다. 처음에는 72시간이었으나 수집을 평일 08:30 하루 한 번으로 줄이면서(아래 스케줄) 금요일→월요일 간격(72시간)과 여유가 없어져 늘렸다. 수집기가 며칠 꺼지거나 연휴가 끼어도 빠지지 않는다. 호출 수는 그대로이고 중복은 재발행 억제와 소비 쪽 접수번호 유니크로 막힌다(2026-10-29 변경). 변동 시각 기준의 시간 규칙은 수집 단계가 아니라 조회하는 쪽에서 적용한다.
+- **호출 제한**: 모든 EDGAR 호출은 한 간격 장치를 거친다. 호출 사이 간격은 최소 1초를 상한(기본 10, 허용 범위 1~10)으로 나눈 값이다. 이 간격을 지키면 어느 1초 구간에서도 호출이 상한을 넘지 않는다. 모든 호출은 gzip 압축을 요청한다. submissions는 조건 조회(Last-Modified/ETag)가 없어 매번 최근 이력을 통째로 주는데, 회사 하나에 약 167KB가 압축하면 약 22KB가 된다(2026-10-29 실측). 서버가 압축하지 않고 주면 그대로 읽는다(2026-10-29 추가).
 - **User-Agent**: `EDGAR_USER_AGENT` 환경변수로만 받는다. 설정의 `toString`과 예외 메시지, 로그에는 이 값이 남지 않는다. 비어 있으면 호출하지 않는다. 티커와 CIK도 보유 종목이 드러나므로 로그에는 순번과 개수만 남긴다.
 - **실패 분류**: 실패는 다음 중 하나로 나눈다: 설정 없음, 모르는 티커, 404, 403, 429, 그 밖의 4xx, 5xx, 시간 초과, 네트워크, 응답 형식 오류, 중단. 한 회사의 조회가 실패해도 나머지는 계속한다. 설정이 없거나 매핑 파일을 받지 못하면 모든 종목이 같은 이유로 실패하므로 그 수집은 바로 멈춘다.
 - **이벤트**: 토픽은 `filing.collected`이고 파티션은 3개다. 공시 한 건이 이벤트 한 건이다. 메시지 키는 접수번호, `occurredAt`은 접수 시각이다. 이벤트에는 본문 없이 메타데이터만 싣는다(`tickers`, `cik`, `accessionNumber`, `form`, `items`, `acceptedAt`, `filingDate`, `url`). 계약에 맞지 않는 공시는 발행하지 않는다. 소비 서비스(news)도 같은 파티션 수로 이 토픽을 선언한다(ADR-013).
-- **스케줄**: `schedule.tick`의 `jobType`에 `collect-filings`를 추가한다. 기본 주기는 15분(`collector.schedule.filings-interval-ms`)이다. 리스너는 별도 consumer group(`collector-filings`)으로 구독한다(ADR-017과 같은 이유).
+- **스케줄 (2026-10-29 변경)**: 공시는 평일 08:30(한국 시간) 장 시작 전 수집에서 하루 한 번만 받는다. 시각은 설정값(`COLLECTOR_PRE_OPEN_CRON`, 기본 `0 30 8 * * MON-FRI`)이고 발행은 기본 꺼짐(`COLLECTOR_PRE_OPEN_ENABLED`)이다. 같은 `collect-pre-open` tick으로 보유 미국 종목 해외 일봉과 세계지수 아메리카(C)도 받는다(기존 `market.insight` 이벤트와 테이블을 그대로 쓴다). 국내 장중 변동의 근거로는 밤사이 공시가 09:00 전에 들어와 있으면 충분하고, 매번 1년치 이력을 받는 15분 주기는 낭비라서 처음의 15분 주기(`collect-filings`, `collector.schedule.filings-interval-ms`)는 없앴다. 리스너는 계속 별도 consumer group(`collector-filings`)으로 구독한다(ADR-017과 같은 이유).
 - **재발행 억제**: 뉴스와 같은 방식이다(ADR-017). 접수번호와 정렬한 티커 목록의 조합을 메모리에 기억한다. 기억은 전송이 성공한 뒤에만 남긴다. 같은 공시라도 새 보유 티커가 연결되면 다시 발행한다.
 - **거래소 정보**: `ExchangePort`가 티커의 상장 거래소를 submissions의 `exchanges` 값 그대로 돌려준다. 같은 값을 하루 동안 기억한다. 거래소 값을 시세 제공자의 거래소 코드로 바꾸는 일은 해외 시세 쪽이 맡는다.
 
@@ -25,8 +25,9 @@
 
 ## 결과
 - 공시 근거를 쓰는 데 키 관리가 필요 없다. 연락 이메일 하나만 환경변수로 둔다.
-- 재발행 억제가 메모리 기반이라 재시작하면 72시간 안의 공시가 다시 발행된다. 중복은 소비 쪽이 접수번호 유니크로 막는다.
+- 재발행 억제가 메모리 기반이라 재시작하면 168시간 안의 공시가 다시 발행된다. 중복은 소비 쪽이 접수번호 유니크로 막는다.
 - 조기 폐장일(16:00보다 일찍 끝나는 날)도 16:00으로 계산한다. 그날은 실제 마감과 16:00 사이의 기준 시각에서 직전 장이 골린다.
 - 필요한 날짜의 행이 없으면 더 오래된 장이 골릴 수 있다. 고른 일자를 함께 돌려주므로 쓰는 쪽이 알아챌 수 있다.
 - 실제 SEC 응답 구조는 2026-10-28 실호출로 확인했다. 수집부터 발행까지의 흐름은 실호출로 확인하지 않았다. `EdgarClientLiveTest`가 실호출 확인 도구이며, `EDGAR_LIVE=1`일 때만 돈다.
-- 검증: `EdgarClientTest`(매핑, 추출, 실패 분류, User-Agent 비노출), `EdgarCallSpacingTest`(1초 구간마다 상한 이하), `FilingFilterTest`, `FilingCollectorTest`, `EdgarExchangesTest`, `FilingTickListenerTest`(키, 계약, 재발행 억제, 전송 실패 시 재시도), `FilingCollectedContractTest`. 저장·조회: `FilingListenerTest`, `FilingContractTest`, `FilingQueryTest`, `OverseasCloseRateQueryTest`, DB 통합 테스트 `FilingIntegrationTest`(news)·`InsightIntegrationTest`(market, 환경변수가 있을 때만 실행).
+- 공시가 하루 한 번이라 낮에 접수된 미국 공시(미국 장 마감 뒤 실적 등)는 다음 평일 08:30에야 들어온다. 휴장일 판정이 없어 평일 휴장일에도 수집은 돈다.
+- 검증: `EdgarClientTest`(매핑, 추출, 실패 분류, User-Agent 비노출, gzip 풀기·비압축·깨진 압축), `PreOpenTickPublisherTest`(계약, cron, 기본 꺼짐), `TickPublisherTest`(공시 타이머 없음), `EdgarCallSpacingTest`(1초 구간마다 상한 이하), `FilingFilterTest`, `FilingCollectorTest`, `EdgarExchangesTest`, `FilingTickListenerTest`(키, 계약, 재발행 억제, 전송 실패 시 재시도), `FilingCollectedContractTest`. 저장·조회: `FilingListenerTest`, `FilingContractTest`, `FilingQueryTest`, `OverseasCloseRateQueryTest`, DB 통합 테스트 `FilingIntegrationTest`(news)·`InsightIntegrationTest`(market, 환경변수가 있을 때만 실행).

@@ -1,6 +1,8 @@
 package dev.stockreading.collector.edgar;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -14,6 +16,7 @@ import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
+import java.util.zip.GZIPInputStream;
 
 import org.springframework.stereotype.Component;
 
@@ -23,6 +26,7 @@ import tools.jackson.databind.ObjectMapper;
 /**
  * SEC EDGAR 조회 클라이언트. 인증키는 없고 User-Agent 선언이 필요하다(값은 설정에서만 읽고 어디에도 남기지 않는다).
  * 모든 호출이 한 간격 장치를 거쳐 초당 상한을 넘지 않는다.
+ * submissions 는 조건 조회가 없어 매번 통째로 오므로 gzip 압축을 요청한다(회사당 약 167KB가 약 22KB로 준다).
  */
 @Component
 class EdgarClient implements EdgarPort {
@@ -109,12 +113,13 @@ class EdgarClient implements EdgarPort {
                 .timeout(Duration.ofSeconds(properties.timeoutSeconds()))
                 .header("User-Agent", properties.userAgent())
                 .header("Accept", "application/json")
+                .header("Accept-Encoding", "gzip")
                 .GET()
                 .build();
-        HttpResponse<String> response;
+        HttpResponse<byte[]> response;
         try {
             spacing.await();
-            response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            response = http.send(request, HttpResponse.BodyHandlers.ofByteArray());
         } catch (HttpTimeoutException e) {
             throw new EdgarApiException(EdgarFailure.TIMEOUT, null);
         } catch (IOException e) {
@@ -129,9 +134,23 @@ class EdgarClient implements EdgarPort {
             throw new EdgarApiException(classify(status), status);
         }
         try {
-            return mapper.readTree(response.body());
-        } catch (RuntimeException e) {
+            return mapper.readTree(decode(response));
+        } catch (IOException | RuntimeException e) {
             throw new EdgarApiException(EdgarFailure.INVALID_RESPONSE, status);
+        }
+    }
+
+    // 압축을 요청해도 서버가 압축하지 않고 줄 수 있으므로 Content-Encoding 을 보고 푼다.
+    static String decode(HttpResponse<byte[]> response) throws IOException {
+        byte[] body = response.body();
+        boolean gzip = response.headers().firstValue("Content-Encoding")
+                .map(value -> value.trim().equalsIgnoreCase("gzip"))
+                .orElse(false);
+        if (!gzip) {
+            return new String(body, StandardCharsets.UTF_8);
+        }
+        try (InputStream in = new GZIPInputStream(new ByteArrayInputStream(body))) {
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
     }
 

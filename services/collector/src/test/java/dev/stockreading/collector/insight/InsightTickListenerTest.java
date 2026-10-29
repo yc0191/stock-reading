@@ -280,6 +280,62 @@ class InsightTickListenerTest {
         assertThat(messages()).anyMatch(m -> m.contains("position=1 reason=EMPTY_RESPONSE"));
     }
 
+    @Test
+    void preOpenTickQueriesOnlyTheAmericasIndexAndHoldingsDailyPrices() throws IOException {
+        when(holdings.allTickers()).thenReturn(List.of("TESTA", "TESTB.X"));
+        when(exchanges.exchanges("TESTB.X")).thenReturn(List.of("NYSE"));
+
+        listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"));
+
+        ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
+        verify(kafka, times(3)).send(eq(Topics.MARKET_INSIGHT), key.capture(), value.capture());
+        // 이벤트와 키는 장 마감 후 조회와 같고, 국내 일봉·다른 대륙·환율·시장종합은 조회하지 않는다.
+        assertThat(key.getAllValues()).containsExactly(
+                "world-index:C", "overseas-daily-price:TESTA", "overseas-daily-price:TESTB.X");
+        verify(source).worldIndex("C");
+        verify(source, never()).worldIndex("S");
+        verify(source, never()).dailyPrice(anyString());
+        verify(source, never()).exchangeRateSummary();
+        verify(source, never()).marketSummary();
+        verify(source).overseasDailyPrice("NAS", "TESTA");
+        verify(source).overseasDailyPrice("NYS", "TESTB.X");
+        for (String json : value.getAllValues()) {
+            assertThat(ContractSchemas.validate(SCHEMA, json)).isEmpty();
+            JsonNode event = mapper.readTree(json);
+            assertThat(event.path("correlationId").asString()).isEqualTo("collect-pre-open-2026-10-21T08:30:00+09:00");
+            assertThat(event.path("payload").path("scheduledFor").asString()).isEqualTo("2026-10-21T08:30:00+09:00");
+        }
+    }
+
+    @Test
+    void preOpenIndexFailureAndOneTickerFailureDoNotStopTheRestAndLogNoTickers() throws IOException {
+        when(holdings.allTickers()).thenReturn(List.of("TESTA", "TESTB"));
+        when(source.worldIndex("C")).thenThrow(new BrokerApiException(FailureType.TICK_SKIPPED, "호출 상한 대기 시간 초과"));
+        when(source.overseasDailyPrice("NAS", "TESTA"))
+                .thenThrow(new BrokerApiException(FailureType.HTTP_ERROR, "시세 API 오류 http=500 processCode=E777"));
+
+        assertThatCode(() -> listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"))).doesNotThrowAnyException();
+
+        ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
+        verify(kafka, times(1)).send(eq(Topics.MARKET_INSIGHT), key.capture(), anyString());
+        assertThat(key.getAllValues()).containsExactly("overseas-daily-price:TESTB");
+        List<String> messages = messages();
+        assertThat(messages).anyMatch(m -> m.contains("sent 0 pre-open world index events") && m.contains("failed=1"));
+        assertThat(messages).anyMatch(m -> m.contains("position=1 reason=HTTP_ERROR"));
+        assertThat(String.join("\n", messages)).doesNotContain("TESTA", "TESTB");
+    }
+
+    @Test
+    void preOpenAndPostCloseTicksOfTheSameDayAreBothProcessed() throws IOException {
+        listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"));
+        listener.onTick(tick("2026-10-21T16:30:00+09:00"));
+        listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"));
+
+        verify(source, times(2)).worldIndex("C");
+        verify(source, times(1)).marketSummary();
+    }
+
     private List<String> messages() {
         return logs.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
     }
@@ -302,6 +358,14 @@ class InsightTickListenerTest {
                     .getDeclaredMethod("onTick", String.class).getAnnotation(KafkaListener.class);
             assertThat(insight.groupId()).isNotEqualTo(otherListener.groupId());
         }
+    }
+
+    private static String preOpenTick(String scheduledFor) throws IOException {
+        return ContractSchemas.sample("schedule.tick.sample.json")
+                .replace("\"collect\"", "\"collect-pre-open\"")
+                .replace("\"correlationId\": \"collect-2026-10-20T16:00:00+09:00\"",
+                        "\"correlationId\": \"collect-pre-open-2026-10-21T08:30:00+09:00\"")
+                .replace("\"scheduledFor\": \"2026-10-20T16:00:00+09:00\"", "\"scheduledFor\": \"" + scheduledFor + "\"");
     }
 
     private static String tick(String scheduledFor) throws IOException {

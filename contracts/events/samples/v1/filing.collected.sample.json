@@ -3,8 +3,8 @@
   "eventType": "filing.collected",
   "schemaVersion": 1,
   "occurredAt": "2026-10-20T20:30:28Z",
-  "producedAt": "2026-10-21T05:45:01.120+09:00",
-  "correlationId": "collect-filings-2026-10-21T05:45:00+09:00",
+  "producedAt": "2026-10-21T08:30:01.120+09:00",
+  "correlationId": "collect-pre-open-2026-10-21T08:30:00+09:00",
   "payload": {
     "tickers": ["TESTA"],
     "cik": "0000000001",

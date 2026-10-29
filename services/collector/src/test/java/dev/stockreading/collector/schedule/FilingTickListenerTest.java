@@ -54,12 +54,12 @@ class FilingTickListenerTest {
     }
 
     @Test
-    void filingsTickPublishesOneEventPerFilingKeyedByAccessionAndPassesTheContract() throws IOException {
+    void preOpenTickPublishesOneEventPerFilingKeyedByAccessionAndPassesTheContract() throws IOException {
         when(collector.collect()).thenReturn(List.of(
                 collected("0000000001-26-000001", "8-K", List.of("2.02", "9.01"), "TESTA"),
                 collected("0000000001-26-000002", "6-K", List.of(), "TESTA")));
 
-        listener.onTick(filingsTick("2026-10-21T05:45:00+09:00"));
+        listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"));
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
@@ -68,7 +68,7 @@ class FilingTickListenerTest {
         for (String json : value.getAllValues()) {
             assertThat(ContractSchemas.validate("filing.collected.v1.schema.json", json)).isEmpty();
             assertThat(json)
-                    .contains("\"correlationId\":\"collect-filings-2026-10-21T05:45:00+09:00\"")
+                    .contains("\"correlationId\":\"collect-pre-open-2026-10-21T08:30:00+09:00\"")
                     .contains("\"occurredAt\":\"2026-10-20T20:30:28Z\"")
                     .contains("\"acceptedAt\":\"2026-10-20T20:30:28Z\"");
         }
@@ -80,8 +80,8 @@ class FilingTickListenerTest {
     void secondTickDoesNotRepublishTheSameFiling() {
         when(collector.collect()).thenReturn(List.of(collected("0000000001-26-000001", "8-K", List.of("8.01"), "TESTA")));
 
-        listener.onTick(filingsTick("2026-10-21T05:45:00+09:00"));
-        listener.onTick(filingsTick("2026-10-21T06:00:00+09:00"));
+        listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"));
+        listener.onTick(preOpenTick("2026-10-22T08:30:00+09:00"));
 
         verify(kafka, times(1)).send(eq(Topics.FILING_COLLECTED), anyString(), anyString());
     }
@@ -92,8 +92,8 @@ class FilingTickListenerTest {
                 .thenReturn(List.of(collected("0000000001-26-000001", "8-K", List.of("8.01"), "TESTA")))
                 .thenReturn(List.of(collected("0000000001-26-000001", "8-K", List.of("8.01"), "TESTA", "TESTA.B")));
 
-        listener.onTick(filingsTick("2026-10-21T05:45:00+09:00"));
-        listener.onTick(filingsTick("2026-10-21T06:00:00+09:00"));
+        listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"));
+        listener.onTick(preOpenTick("2026-10-22T08:30:00+09:00"));
 
         verify(kafka, times(2)).send(eq(Topics.FILING_COLLECTED), anyString(), anyString());
     }
@@ -105,9 +105,9 @@ class FilingTickListenerTest {
                 .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("broker down")))
                 .thenReturn(CompletableFuture.completedFuture(null));
 
-        listener.onTick(filingsTick("2026-10-21T05:45:00+09:00"));
-        listener.onTick(filingsTick("2026-10-21T06:00:00+09:00"));
-        listener.onTick(filingsTick("2026-10-21T06:15:00+09:00"));
+        listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"));
+        listener.onTick(preOpenTick("2026-10-22T08:30:00+09:00"));
+        listener.onTick(preOpenTick("2026-10-23T08:30:00+09:00"));
 
         verify(kafka, times(2)).send(eq(Topics.FILING_COLLECTED), anyString(), anyString());
     }
@@ -118,7 +118,7 @@ class FilingTickListenerTest {
                 collected("0000000001-26-000001", "8-K", List.of(), "testa"),
                 collected("bad-accession", "8-K", List.of(), "TESTA")));
 
-        listener.onTick(filingsTick("2026-10-21T05:45:00+09:00"));
+        listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"));
 
         verify(kafka, never()).send(anyString(), anyString(), anyString());
     }
@@ -127,15 +127,24 @@ class FilingTickListenerTest {
     void sameTickDeliveredTwiceCollectsOnlyOnce() {
         when(collector.collect()).thenReturn(List.of());
 
-        listener.onTick(filingsTick("2026-10-21T05:45:00+09:00"));
-        listener.onTick(filingsTick("2026-10-21T05:45:00+09:00"));
+        listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"));
+        listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"));
 
         verify(collector, times(1)).collect();
     }
 
     @Test
     void otherJobTypesAreIgnored() {
-        listener.onTick(tick("collect-news", "2026-10-21T05:45:00+09:00"));
+        listener.onTick(tick("collect-news", "2026-10-21T08:30:00+09:00"));
+        listener.onTick(tick("collect-post-close", "2026-10-21T16:30:00+09:00"));
+
+        verify(collector, never()).collect();
+    }
+
+    @Test
+    void oldFilingsTickNoLongerCollects() {
+        // 15분 공시 수집이 없어졌으므로 예전 jobType 이 남아 있어도 수집하지 않는다.
+        listener.onTick(tick("collect-filings", "2026-10-21T05:45:00+09:00"));
 
         verify(collector, never()).collect();
     }
@@ -144,7 +153,7 @@ class FilingTickListenerTest {
     void collectFailureDoesNotKillTheListener() {
         when(collector.collect()).thenThrow(new EdgarApiException(EdgarFailure.NOT_CONFIGURED, null));
 
-        assertThatCode(() -> listener.onTick(filingsTick("2026-10-21T05:45:00+09:00"))).doesNotThrowAnyException();
+        assertThatCode(() -> listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"))).doesNotThrowAnyException();
         verify(kafka, never()).send(anyString(), anyString(), anyString());
     }
 
@@ -163,8 +172,8 @@ class FilingTickListenerTest {
                 "https://www.sec.gov/Archives/edgar/data/1/000000000126000001/test-8k.htm"));
     }
 
-    private static String filingsTick(String scheduledFor) {
-        return tick("collect-filings", scheduledFor);
+    private static String preOpenTick(String scheduledFor) {
+        return tick("collect-pre-open", scheduledFor);
     }
 
     private static String tick(String jobType, String scheduledFor) {

@@ -26,7 +26,7 @@ import tools.jackson.databind.ObjectMapper;
 /**
  * 일봉(종목별), 세계지수(대륙별), 환율종합, 시장종합, 해외 일봉(보유 미국 종목별) 순으로 한 번씩 조회해 응답마다
  * market.insight 한 건을 발행한다. 한 건이 실패해도 나머지는 계속한다. 메시지 키는 "<apiType>:<target>"이고
- * target 이 없으면 apiType 이다.
+ * target 이 없으면 apiType 이다. 장 시작 전에는 직전 미국 장 결과만 받는다(publishPreOpen).
  */
 @Component
 @ConditionalOnProperty(name = "collector.market-data.source", havingValue = "broker")
@@ -43,6 +43,8 @@ class InsightPublisher {
     static final String EXCHANGE_UNKNOWN = "EXCHANGE_UNKNOWN";
     static final String EMPTY_RESPONSE = "EMPTY_RESPONSE";
     static final String PUBLISH_FAILED = "PUBLISH_FAILED";
+    // 장 시작 전에는 막 끝난 미국 장의 지수만 필요하므로 아메리카만 조회한다.
+    static final String PRE_OPEN_CONTINENT = "C";
 
     private static final Logger log = LoggerFactory.getLogger(InsightPublisher.class);
     private static final Pattern SYMBOL = Pattern.compile("^[0-9A-Z]{6}$");
@@ -104,6 +106,15 @@ class InsightPublisher {
             failed++;
         }
         log.info("sent {} market.insight events corr={} failed={}", published, correlationId, failed);
+        publishOverseas(correlationId, scheduledFor);
+    }
+
+    /** 장 시작 전 조회: 세계지수 아메리카와 보유 미국 종목 해외 일봉. 이벤트와 키는 장 마감 후 조회와 같다. */
+    void publishPreOpen(String correlationId, String scheduledFor) {
+        boolean published = publishOne(WORLD_INDEX, PRE_OPEN_CONTINENT,
+                () -> source.worldIndex(PRE_OPEN_CONTINENT), correlationId, scheduledFor);
+        log.info("sent {} pre-open world index events corr={} failed={}",
+                published ? 1 : 0, correlationId, published ? 0 : 1);
         publishOverseas(correlationId, scheduledFor);
     }
 

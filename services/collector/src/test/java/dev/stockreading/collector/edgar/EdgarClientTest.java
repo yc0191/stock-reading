@@ -3,6 +3,7 @@ package dev.stockreading.collector.edgar;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -91,6 +92,42 @@ class EdgarClientTest {
         assertThat(eightK.items()).containsExactly("2.02", "9.01");
         assertThat(eightK.url())
                 .isEqualTo("https://www.sec.gov/Archives/edgar/data/1/000000000126000003/test-8k.htm");
+    }
+
+    @Test
+    void gzipIsRequestedAndCompressedResponsesAreDecompressed() throws Exception {
+        EdgarClient client = client(FakeEdgarServer.USER_AGENT);
+        server.gzip = true;
+
+        assertThat(client.cikOf("TESTB.C")).isEqualTo("0000000002");
+        CompanySubmissions submissions = client.submissions("0000000001");
+
+        assertThat(server.acceptEncodings).containsExactly("gzip", "gzip");
+        assertThat(submissions.exchanges()).containsExactly("Nasdaq");
+        assertThat(submissions.filings()).extracting(Filing::accessionNumber).containsExactly(
+                "0000000001-26-000003", "0000000001-26-000002", "0000000001-26-000001", "0000000001-26-000004");
+    }
+
+    @Test
+    void uncompressedResponseIsStillReadWhenTheServerIgnoresGzip() throws Exception {
+        EdgarClient client = client(FakeEdgarServer.USER_AGENT);
+
+        CompanySubmissions submissions = client.submissions("0000000001");
+
+        assertThat(server.acceptEncodings).containsExactly("gzip");
+        assertThat(submissions.filings()).hasSize(4);
+    }
+
+    @Test
+    void brokenGzipBodyIsClassifiedAsInvalidResponse() throws Exception {
+        EdgarClient client = client(FakeEdgarServer.USER_AGENT);
+        server.rawGzipBody = "not gzip".getBytes(StandardCharsets.UTF_8);
+
+        assertThatThrownBy(() -> client.submissions("0000000001"))
+                .isInstanceOfSatisfying(EdgarApiException.class, e -> {
+                    assertThat(e.failure()).isEqualTo(EdgarFailure.INVALID_RESPONSE);
+                    assertThat(e.httpStatus()).isEqualTo(200);
+                });
     }
 
     @Test

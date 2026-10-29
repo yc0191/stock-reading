@@ -6,14 +6,18 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.Arrays;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.ContractSchemas;
@@ -41,15 +45,15 @@ class TickPublisherTest {
     }
 
     @Test
-    void filingsTickIsKeyedByJobTypeAndMatchesTheContract() throws IOException {
-        new TickPublisher(kafka, mapper, CLOCK).publishCollectFilingsTick();
+    void timerHasNoFilingsTickBecauseFilingsComeOnlyWithThePreOpenTick() {
+        // 공시는 장 시작 전 tick 에서만 받는다. 이 타이머에 주기 작업이 다시 생기면 공시 15분 수집이 되살아난다.
+        List<String> timers = Arrays.stream(TickPublisher.class.getDeclaredMethods())
+                .filter(method -> method.isAnnotationPresent(Scheduled.class))
+                .map(Method::getName)
+                .sorted()
+                .toList();
 
-        ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
-        verify(kafka).send(eq(Topics.SCHEDULE_TICK), eq("collect-filings"), value.capture());
-        assertThat(ContractSchemas.validate("schedule.tick.v1.schema.json", value.getValue())).isEmpty();
-        assertThat(value.getValue())
-                .contains("\"jobType\":\"collect-filings\"")
-                .contains("\"correlationId\":\"collect-filings-2026-10-20T16:00:00+09:00\"");
+        assertThat(timers).containsExactly("publishCollectNewsTick", "publishCollectTick");
     }
 
     @Test

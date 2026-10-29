@@ -1,15 +1,20 @@
 package dev.stockreading.collector.edgar;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.zip.GZIPOutputStream;
 
 import com.sun.net.httpserver.HttpServer;
 
-/** 가짜 SEC 서버. 티커 매핑 파일과 submissions 를 돌려주고, 받은 User-Agent 와 호출 수를 기록한다. 값은 모두 가짜다. */
+/**
+ * 가짜 SEC 서버. 티커 매핑 파일과 submissions 를 돌려주고, 받은 User-Agent·Accept-Encoding 과 호출 수를 기록한다.
+ * gzip 이 true 이고 요청이 gzip 을 받겠다고 하면 실제 SEC 처럼 압축해서 준다. 값은 모두 가짜다.
+ */
 final class FakeEdgarServer implements AutoCloseable {
 
     static final String USER_AGENT = "TestCompany test-contact@example.com";
@@ -37,6 +42,10 @@ final class FakeEdgarServer implements AutoCloseable {
     final AtomicInteger submissionsCalls = new AtomicInteger();
     final List<String> userAgents = new CopyOnWriteArrayList<>();
     final List<String> paths = new CopyOnWriteArrayList<>();
+    final List<String> acceptEncodings = new CopyOnWriteArrayList<>();
+    volatile boolean gzip;
+    // null 이 아니면 본문 대신 이 바이트를 그대로 주고 Content-Encoding: gzip 을 붙인다(깨진 압축 재현용).
+    volatile byte[] rawGzipBody;
     volatile int tickerMapStatus = 200;
     volatile String tickerMapBody = TICKER_MAP;
     volatile int submissionsStatus = 200;
@@ -67,12 +76,29 @@ final class FakeEdgarServer implements AutoCloseable {
                 "https://www.sec.gov/Archives/edgar/data", userAgent, 5, 10, "8-K,8-K/A,6-K", 72);
     }
 
-    private static void respond(com.sun.net.httpserver.HttpExchange exchange, int status, String body)
+    private void respond(com.sun.net.httpserver.HttpExchange exchange, int status, String body)
             throws IOException {
+        String acceptEncoding = exchange.getRequestHeaders().getFirst("Accept-Encoding");
+        acceptEncodings.add(String.valueOf(acceptEncoding));
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        if (rawGzipBody != null) {
+            bytes = rawGzipBody;
+            exchange.getResponseHeaders().add("Content-Encoding", "gzip");
+        } else if (gzip && acceptEncoding != null && acceptEncoding.contains("gzip")) {
+            bytes = compress(bytes);
+            exchange.getResponseHeaders().add("Content-Encoding", "gzip");
+        }
         exchange.sendResponseHeaders(status, bytes.length);
         exchange.getResponseBody().write(bytes);
         exchange.close();
+    }
+
+    static byte[] compress(byte[] bytes) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (GZIPOutputStream gzipOut = new GZIPOutputStream(out)) {
+            gzipOut.write(bytes);
+        }
+        return out.toByteArray();
     }
 
     @Override

@@ -32,7 +32,7 @@ class EdgarPropertiesBindingTest {
             assertThat(properties.formSet()).containsExactly("8-K", "8-K/A", "6-K");
             assertThat(properties.hasUserAgent()).isFalse();
             assertThat(properties.maxCallsPerSecond()).isLessThanOrEqualTo(10);
-            assertThat(properties.lookbackHours()).isEqualTo(72);
+            assertThat(properties.lookbackHours()).isEqualTo(168);
         });
     }
 
