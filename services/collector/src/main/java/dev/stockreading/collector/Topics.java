@@ -16,10 +16,10 @@ public class Topics {
     public static final String MARKET_INSIGHT = "market.insight";
     public static final String COLLECTION_COMPLETED = "collection.completed";
 
-    // 파티션 수는 시작값이며, ADR-005 부하 검증으로 확인한다.
+    // 파티션 수는 부하를 재서 정한 값이 아니라 시작값이다.
     // market.snapshot.failed 는 market.snapshot 과 같은 키(종목)와 파티션 수 3으로 맞춘다. 같은 종목의
     // 성공과 실패가 같은 파티션 순서로 흐르고, 소비 쪽(market) 선언과도 같아야 한다.
-    // news.collected, market.insight 의 파티션 수는 소비 쪽 선언과 같아야 한다(ADR-013, ADR-018).
+    // news.collected, market.insight 의 파티션 수는 소비 쪽 선언과 같아야 한다.
     // collection.completed 는 키가 jobType 뿐이라 파티션 1개이며, 소비 쪽(briefing) 선언과 같아야 한다.
     @Bean
     NewTopics kafkaTopics() {

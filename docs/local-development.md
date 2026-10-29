@@ -25,9 +25,9 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 # 브리핑, 발송기는 아래 참고
 ```
 
-시세처리기(market)는 `market.snapshot`을 `price_snapshot`(`as_of` 기준 날짜별 파티션, 응답 원문은 jsonb `raw`)에, `market.snapshot.failed`를 `quote_failure`에 저장합니다. 파티션은 저장 직전에 없으면 만들며(Asia/Seoul 자정 경계), 테이블 구조와 근거는 [ADR-019](adr/019-quote-storage.md)입니다. 원문 보존 기간은 아직 정하지 않았습니다.
+시세처리기(market)는 `market.snapshot`을 `price_snapshot`(`as_of` 기준 날짜별 파티션, 응답 원문은 jsonb `raw`)에, `market.snapshot.failed`를 `quote_failure`에 저장합니다. 파티션은 저장 직전에 없으면 만들며(Asia/Seoul 자정 경계), 테이블 구조는 `services/market/src/main/resources/db/migration/`의 마이그레이션이 원본입니다. 원문 보존 기간은 아직 정하지 않았습니다.
 
-시세처리기는 스냅샷마다 급변동을 감지해 `market.move`를 발행합니다([ADR-020](adr/020-move-detection.md)). 유형 1(`window`)은 최근 N분 이력의 가장 오래된 스냅샷 대비, 유형 2(`prevClose`)는 응답 원문의 전일 종가 필드 대비 변동률이 임계값 이상일 때이며, 한 번 발행한 뒤에는 마지막 발행 가격에서 임계값만큼 더 움직일 때만 다시 발행합니다(상태는 `move_state` 테이블에 둡니다). 설정은 `services/market/src/main/resources/application.yml`의 `market.*`이고 환경변수로 덮어쓸 수 있습니다.
+시세처리기는 스냅샷마다 급변동을 감지해 `market.move`를 발행합니다. 유형 1(`window`)은 최근 N분 이력의 가장 오래된 스냅샷 대비, 유형 2(`prevClose`)는 응답 원문의 전일 종가 필드 대비 변동률이 임계값 이상일 때이며, 한 번 발행한 뒤에는 마지막 발행 가격에서 임계값만큼 더 움직일 때만 다시 발행합니다(상태는 `move_state` 테이블에 둡니다). 설정은 `services/market/src/main/resources/application.yml`의 `market.*`이고 환경변수로 덮어쓸 수 있습니다.
 
 | 설정 키 | 기본값 | 설명 |
 |---|---|---|
@@ -136,7 +136,7 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 
 ## 수집기의 외부 데이터 설정 (`collector`)
 
-수집기에는 공시, 시세, 뉴스 검색 클라이언트가 있습니다. 시세 기본은 가짜 데이터(시뮬레이터)이며, `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 외부 API를 씁니다. 뉴스는 `collect-news` tick마다 검색해 기사마다 `news.collected`를 발행하고, 기사 전송이 모두 확정된 뒤 `collection.completed`를 한 건 발행합니다([ADR-010](adr/010-event-format.md), [ADR-017](adr/017-news-collection-and-storage.md)). 공시는 아직 조회 클라이언트까지만 구현되어 있고 이벤트로 발행하지 않습니다.
+수집기에는 공시, 시세, 뉴스 검색 클라이언트가 있습니다. 시세 기본은 가짜 데이터(시뮬레이터)이며, `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 외부 API를 씁니다. 뉴스는 `collect-news` tick마다 검색해 기사마다 `news.collected`를 발행하고, 기사 전송이 모두 확정된 뒤 `collection.completed`를 한 건 발행합니다([ADR-010](adr/010-event-format.md)). 공시는 아직 조회 클라이언트까지만 구현되어 있고 이벤트로 발행하지 않습니다.
 
 | 설정 | 설명 |
 |---|---|
@@ -153,7 +153,7 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 | `COLLECTOR_INSIGHT_SCHEDULE_ENABLED` | `true`일 때만 장 마감 후 조회 tick(`collect-post-close`)을 발행합니다(기본 `false`). 휴장일은 판정하지 않아 휴장일에도 발행됩니다 |
 | `COLLECTOR_INSIGHT_CRON` | 마감 후 조회 시각. 한국 시간 기준 cron(초 분 시 일 월 요일, 기본 `0 30 16 * * MON-FRI`) |
 
-마감 후 조회(일봉, 세계지수, 환율종합, 시장종합)는 `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 동작하며, 응답 원문을 `market.insight` 이벤트로 발행합니다([ADR-018](adr/018-post-close-insight-event.md)). 일봉의 시장구분과 조회 건수, 세계지수의 대륙 목록은 `application.yml`의 `collector.insight.*`에 기본값이 있습니다.
+마감 후 조회(일봉, 세계지수, 환율종합, 시장종합)는 `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 동작하며, 응답 원문을 `market.insight` 이벤트로 발행합니다. 일봉의 시장구분과 조회 건수, 세계지수의 대륙 목록은 `application.yml`의 `collector.insight.*`에 기본값이 있습니다.
 
 시세 조회는 종목마다 병렬로 호출하고 실패해도 재시도하지 않으며 다음 tick에 맡깁니다. 성공하면 응답 원문을 `market.snapshot`의 `raw`에, 실패하면 종목마다 `market.snapshot.failed`를 발행합니다(실패 원문 포함, 키·시크릿·접근토큰 값은 가려서 담습니다). 로그와 예외 메시지에는 서버가 보낸 문구 대신 형식을 확인한 처리 코드(영숫자 8자 이하, 아니면 `invalid`)만 남습니다. 테스트는 로컬 가짜 HTTP 서버(`FakeBrokerServer`)를 쓰며 실제 서버를 호출하지 않습니다.
 
@@ -187,7 +187,7 @@ python3 scripts/live_probe.py --profile <AWS 프로필> --base-url <시세 제�
 
 ## 설정 값 가져오기 (Parameter Store, 선택)
 
-메일 설정(SMTP 호스트·포트·계정, 발신·수신 주소) 6개를 AWS Systems Manager Parameter Store(시드니, `ap-southeast-2`)에 두고 `.env`로 가져옵니다. 수집기의 키 5개(`/stock-reading/dev/collector/` 아래)와 브리핑의 LLM 키(`/stock-reading/dev/briefing/anthropic-api-key` → `ANTHROPIC_API_KEY`)도 같은 방식으로 가져옵니다. 두 그룹은 선택이라 없어도 메일 설정 반영은 막지 않으며, LLM 키가 없으면 브리핑은 규칙 기반 리포트를 만듭니다. 서비스는 계속 환경변수만 읽습니다([ADR-015](adr/015-parameter-store.md)).
+메일 설정(SMTP 호스트·포트·계정, 발신·수신 주소) 6개를 AWS Systems Manager Parameter Store(시드니, `ap-southeast-2`)에 두고 `.env`로 가져옵니다. 수집기의 키 5개(`/stock-reading/dev/collector/` 아래)와 브리핑의 LLM 키(`/stock-reading/dev/briefing/anthropic-api-key` → `ANTHROPIC_API_KEY`)도 같은 방식으로 가져옵니다. 두 그룹은 선택이라 없어도 메일 설정 반영은 막지 않으며, LLM 키가 없으면 브리핑은 규칙 기반 리포트를 만듭니다. 서비스는 계속 환경변수만 읽습니다.
 
 ```bash
 # 읽을 값 확인 (파일은 쓰지 않고 키 이름만 출력)
