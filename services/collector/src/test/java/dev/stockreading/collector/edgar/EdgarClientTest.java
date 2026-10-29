@@ -36,7 +36,9 @@ class EdgarClientTest {
 
     private EdgarClient client(String userAgent) throws Exception {
         server = new FakeEdgarServer();
-        return new EdgarClient(server.properties(userAgent), JsonMapper.builder().build(), CLOCK);
+        EdgarProperties properties = server.properties(userAgent);
+        return new EdgarClient(properties, JsonMapper.builder().build(), CLOCK,
+                EdgarCallSpacing.perSecond(properties.maxCallsPerSecond()));
     }
 
     @Test

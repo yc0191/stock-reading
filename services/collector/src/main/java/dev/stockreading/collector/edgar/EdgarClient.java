@@ -39,10 +39,7 @@ class EdgarClient implements EdgarPort {
     private Map<String, String> cikByTicker;
     private Instant tickerMapLoadedAt;
 
-    EdgarClient(EdgarProperties properties, ObjectMapper mapper, Clock clock) {
-        this(properties, mapper, clock, EdgarCallSpacing.perSecond(properties.maxCallsPerSecond()));
-    }
-
+    // 생성자는 하나만 둔다. 둘 이상이면 스프링이 어느 것으로 만들지 정하지 못해 수집기가 시작하지 못한다.
     EdgarClient(EdgarProperties properties, ObjectMapper mapper, Clock clock, EdgarCallSpacing spacing) {
         this.properties = properties;
         this.mapper = mapper;
