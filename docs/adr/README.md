@@ -1,7 +1,7 @@
 # 설계 결정 기록 (ADR)
 
 ADR = Architecture Decision Record. "무엇을, 왜, 어떤 대안을 놓고 정했는지"를 결정 하나당 문서 하나로 남깁니다.
-결정이 바뀌면 지우지 않고 상태를 `대체됨(Superseded by ADR-0xx)`으로 바꿉니다.
+언제 ADR을 쓰는지와 결정이 바뀔 때의 처리는 `.claude/rules/adr.md`를 따릅니다.
 
 | # | 주제 | 상태 |
 |---|---|---|
