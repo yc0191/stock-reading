@@ -6,7 +6,8 @@ enum ApiType {
     DAILY_PRICE("daily-price", "daily_price", true),
     WORLD_INDEX("world-index", "world_index", true),
     EXCHANGE_RATE_SUMMARY("exchange-rate-summary", "exchange_rate_summary", false),
-    MARKET_SUMMARY("market-summary", "market_summary", false);
+    MARKET_SUMMARY("market-summary", "market_summary", false),
+    OVERSEAS_DAILY_PRICE("overseas-daily-price", "overseas_daily_price", true);
 
     private final String wireValue;
     private final String table;

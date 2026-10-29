@@ -276,6 +276,16 @@ class BrokerClient {
         return postRaw("/api/v1/ivs11560", body);
     }
 
+    // 해외주식 통합차트의 일봉. 거래소 코드(NAS, NYS, AMX)와 티커로 조회한다.
+    String overseasDailyPriceRaw(String exchangeCode, String ticker, int count) {
+        ObjectNode body = mapper.createObjectNode();
+        body.put("krx_cd", exchangeCode);
+        body.put("is_cd", ticker);
+        body.put("chrt_clsf", "3");
+        body.put("rcrd_c", String.valueOf(count));
+        return postRaw("/api/v1/gsc10060", body);
+    }
+
     String worldIndexRaw(String continent) {
         ObjectNode body = mapper.createObjectNode();
         body.put("lnd_clsf", continent);

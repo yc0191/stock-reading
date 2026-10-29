@@ -77,6 +77,8 @@ class DataSourceWiringTest {
             assertThat(insight.continents()).containsExactly("C", "S", "E");
             assertThat(insight.dailyMarketClass()).isEqualTo("0");
             assertThat(insight.dailyCount()).isEqualTo(30);
+            assertThat(insight.overseasDailyCount()).isEqualTo(30);
+            assertThat(insight.overseasMaxTickers()).isEqualTo(100);
         });
     }
 

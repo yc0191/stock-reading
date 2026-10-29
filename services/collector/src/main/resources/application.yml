@@ -40,6 +40,10 @@ collector:
     daily-count: 30
     # 세계지수 대륙구분: S(아시아), C(아메리카), E(유럽). 대륙마다 한 번씩 조회한다.
     continents: C,S,E
+    # 보유 미국 종목의 해외 일봉 조회 건수
+    overseas-daily-count: 30
+    # 한 번에 해외 일봉을 조회할 종목 수 상한. 넘친 종목은 호출하지 않고 건너뛴 개수만 경고로 남긴다.
+    overseas-max-tickers: 100
   market-data:
     # simulator | broker
     source: ${COLLECTOR_MARKET_DATA_SOURCE:simulator}

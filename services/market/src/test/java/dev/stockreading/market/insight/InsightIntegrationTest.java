@@ -52,7 +52,7 @@ class InsightIntegrationTest {
                 .query(String.class).list();
 
         assertThat(tables).contains("daily_price", "world_index", "exchange_rate_summary", "market_summary",
-                "failed_event", "price_snapshot");
+                "overseas_daily_price", "failed_event", "price_snapshot");
     }
 
     @Test
@@ -75,6 +75,21 @@ class InsightIntegrationTest {
                 .query(String.class).single()).isEqualTo("ASIA");
         assertThat(count("exchange_rate_summary", "event_id = CAST('22222222-2222-4222-8222-222222222222' AS uuid)")).isEqualTo(1);
         assertThat(count("market_summary", "event_id = CAST('22222222-2222-4222-8222-222222222223' AS uuid)")).isEqualTo(1);
+    }
+
+    @Test
+    void overseasDailyPriceIsStoredOnceWithItsTicker() throws IOException {
+        String message = message("55555555-5555-4555-8555-555555555555", "overseas-daily-price", "\"ITESTB.X\"", RAW_RESPONSE);
+
+        listener.onInsight(message);
+        listener.onInsight(message);
+
+        assertThat(jdbc.sql("SELECT target FROM overseas_daily_price WHERE event_id = CAST('55555555-5555-4555-8555-555555555555' AS uuid)")
+                .query(String.class).single()).isEqualTo("ITESTB.X");
+        assertThat(jdbc.sql("""
+                        SELECT response #>> '{dataBody,items,0,rate}' FROM overseas_daily_price
+                        WHERE event_id = CAST('55555555-5555-4555-8555-555555555555' AS uuid)
+                        """).query(String.class).single()).isEqualTo("1.10");
     }
 
     @Test

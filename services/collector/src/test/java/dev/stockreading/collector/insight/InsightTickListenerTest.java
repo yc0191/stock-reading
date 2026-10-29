@@ -17,17 +17,26 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 
 import dev.stockreading.collector.CollectorProperties;
 import dev.stockreading.collector.Topics;
+import dev.stockreading.collector.edgar.EdgarApiException;
+import dev.stockreading.collector.edgar.EdgarFailure;
+import dev.stockreading.collector.edgar.ExchangePort;
 import dev.stockreading.collector.event.ContractSchemas;
+import dev.stockreading.collector.holdings.HoldingsPort;
 import dev.stockreading.collector.marketdata.BrokerApiException;
 import dev.stockreading.collector.marketdata.FailureType;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -40,7 +49,10 @@ class InsightTickListenerTest {
     private static final String RAW = "{\"dataHeader\": {\"resultCode\": \"200\"}, \"dataBody\": {\"v\": \"  10250\", \"r\": 1.50}}";
 
     private InsightSourcePort source;
+    private HoldingsPort holdings;
+    private ExchangePort exchanges;
     private KafkaTemplate<String, String> kafka;
+    private ListAppender<ILoggingEvent> logs;
     private final ObjectMapper mapper = JsonMapper.builder().build();
     private InsightTickListener listener;
 
@@ -54,13 +66,32 @@ class InsightTickListenerTest {
         when(source.worldIndex(anyString())).thenReturn(RAW);
         when(source.exchangeRateSummary()).thenReturn(RAW);
         when(source.marketSummary()).thenReturn(RAW);
+        when(source.overseasDailyPrice(anyString(), anyString())).thenReturn(" " + RAW);
+        // 보유 미국 종목이 없으면 기존 조회만 한다. 해외 일봉 테스트가 따로 목록을 준다.
+        holdings = mock(HoldingsPort.class);
+        when(holdings.allTickers()).thenReturn(List.of());
+        exchanges = mock(ExchangePort.class);
+        when(exchanges.exchanges(anyString())).thenReturn(List.of("Nasdaq"));
         listener = listener(List.of("TEST01", "TEST02"), List.of("C", "S"));
+        logs = new ListAppender<>();
+        logs.start();
+        ((Logger) LoggerFactory.getLogger(InsightPublisher.class)).addAppender(logs);
+    }
+
+    @AfterEach
+    void detachLogs() {
+        ((Logger) LoggerFactory.getLogger(InsightPublisher.class)).detachAppender(logs);
     }
 
     private InsightTickListener listener(List<String> symbols, List<String> continents) {
-        var properties = new InsightProperties(new InsightProperties.Schedule(false, "0 30 16 * * MON-FRI"), "0", 30, continents);
-        var publisher = new InsightPublisher(
-                source, new CollectorProperties(symbols, 30000, 3_000), properties, kafka, mapper, CLOCK);
+        return listener(symbols, continents, 100);
+    }
+
+    private InsightTickListener listener(List<String> symbols, List<String> continents, int overseasMaxTickers) {
+        var properties = new InsightProperties(new InsightProperties.Schedule(false, "0 30 16 * * MON-FRI"), "0", 30, continents,
+                30, overseasMaxTickers);
+        var publisher = new InsightPublisher(source, new CollectorProperties(symbols, 30000, 3_000), properties,
+                holdings, exchanges, kafka, mapper, CLOCK);
         return new InsightTickListener(publisher, mapper);
     }
 
@@ -134,6 +165,19 @@ class InsightTickListenerTest {
     }
 
     @Test
+    void rateLimitedExistingCallFailsOnlyThatCall() throws IOException {
+        when(source.dailyPrice("TEST01")).thenThrow(new BrokerApiException(FailureType.TICK_SKIPPED, "호출 상한 대기 시간 초과"));
+        when(source.marketSummary()).thenThrow(new BrokerApiException(FailureType.TICK_SKIPPED, "호출 상한 대기 시간 초과"));
+
+        assertThatCode(() -> listener.onTick(tick("2026-10-20T16:30:00+09:00"))).doesNotThrowAnyException();
+
+        ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
+        verify(kafka, times(4)).send(eq(Topics.MARKET_INSIGHT), key.capture(), anyString());
+        assertThat(key.getAllValues()).containsExactly(
+                "daily-price:TEST02", "world-index:C", "world-index:S", "exchange-rate-summary");
+    }
+
+    @Test
     void blankResponseIsNotPublished() throws IOException {
         when(source.marketSummary()).thenReturn("   ");
 
@@ -151,6 +195,93 @@ class InsightTickListenerTest {
 
         verify(source, never()).dailyPrice("bad");
         verify(source, times(1)).dailyPrice("TEST01");
+    }
+
+    @Test
+    void overseasDailyPricesComeAfterTheExistingResponsesWithTickerTargets() throws IOException {
+        when(holdings.allTickers()).thenReturn(List.of("TESTA", "TESTB.X"));
+        when(exchanges.exchanges("TESTB.X")).thenReturn(List.of("OTC", "NYSE"));
+
+        listener.onTick(tick("2026-10-20T16:30:00+09:00"));
+
+        ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
+        verify(kafka, times(8)).send(eq(Topics.MARKET_INSIGHT), key.capture(), value.capture());
+        assertThat(key.getAllValues()).containsExactly(
+                "daily-price:TEST01", "daily-price:TEST02", "world-index:C", "world-index:S",
+                "exchange-rate-summary", "market-summary",
+                "overseas-daily-price:TESTA", "overseas-daily-price:TESTB.X");
+        verify(source).overseasDailyPrice("NAS", "TESTA");
+        verify(source).overseasDailyPrice("NYS", "TESTB.X");
+        for (String json : value.getAllValues()) {
+            assertThat(ContractSchemas.validate(SCHEMA, json)).isEmpty();
+        }
+        JsonNode overseas = mapper.readTree(value.getAllValues().get(6));
+        assertThat(overseas.path("payload").path("apiType").asString()).isEqualTo("overseas-daily-price");
+        assertThat(overseas.path("payload").path("target").asString()).isEqualTo("TESTA");
+        // 바깥 공백만 제거되고 안쪽은 그대로다.
+        assertThat(overseas.path("payload").path("response").asString()).isEqualTo(RAW);
+    }
+
+    @Test
+    void tickersOverTheLimitAreNotQueriedAndOnlyTheirCountIsLogged() throws IOException {
+        when(holdings.allTickers()).thenReturn(List.of("TESTA", "TESTB", "TESTC"));
+        listener = listener(List.of(), List.of(), 2);
+
+        listener.onTick(tick("2026-10-20T16:30:00+09:00"));
+
+        verify(source).overseasDailyPrice("NAS", "TESTA");
+        verify(source).overseasDailyPrice("NAS", "TESTB");
+        verify(source, never()).overseasDailyPrice(anyString(), eq("TESTC"));
+        verify(exchanges, never()).exchanges("TESTC");
+        assertThat(messages()).anyMatch(m -> m.contains("skipped 1 tickers over the limit 2"));
+        assertThat(String.join("\n", messages())).doesNotContain("TESTA", "TESTB", "TESTC");
+    }
+
+    @Test
+    void oneFailingOverseasTickerDoesNotStopTheOthersAndIsLoggedByPositionAndKind() throws IOException {
+        when(holdings.allTickers()).thenReturn(List.of("TESTA", "TESTB", "TESTC", "TESTD", "TESTE"));
+        when(exchanges.exchanges("TESTA")).thenThrow(new EdgarApiException(EdgarFailure.TIMEOUT, null));
+        when(exchanges.exchanges("TESTB")).thenReturn(List.of("CBOE"));
+        when(source.overseasDailyPrice("NAS", "TESTC"))
+                .thenThrow(new BrokerApiException(FailureType.TICK_SKIPPED, "호출 상한 대기 시간 초과"));
+        when(source.overseasDailyPrice("NAS", "TESTD"))
+                .thenThrow(new BrokerApiException(FailureType.HTTP_ERROR, "시세 API 오류 http=500 processCode=E777"));
+
+        assertThatCode(() -> listener.onTick(tick("2026-10-20T16:30:00+09:00"))).doesNotThrowAnyException();
+
+        ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
+        verify(kafka, times(7)).send(eq(Topics.MARKET_INSIGHT), key.capture(), anyString());
+        // 기존 장 마감 후 조회 6건은 모두 나가고, 해외 일봉은 실패하지 않은 마지막 종목만 나간다.
+        assertThat(key.getAllValues()).containsExactly(
+                "daily-price:TEST01", "daily-price:TEST02", "world-index:C", "world-index:S",
+                "exchange-rate-summary", "market-summary", "overseas-daily-price:TESTE");
+        List<String> messages = messages();
+        assertThat(messages).anyMatch(m -> m.contains("position=1 reason=EXCHANGE_LOOKUP_FAILED"));
+        assertThat(messages).anyMatch(m -> m.contains("position=2 reason=EXCHANGE_UNKNOWN"));
+        assertThat(messages).anyMatch(m -> m.contains("position=3 reason=TICK_SKIPPED"));
+        assertThat(messages).anyMatch(m -> m.contains("position=4 reason=HTTP_ERROR"));
+        assertThat(messages).anyMatch(m -> m.contains("sent 1 overseas daily price events")
+                && m.contains("tickers=5 failed=4")
+                && m.contains("EXCHANGE_LOOKUP_FAILED=1") && m.contains("EXCHANGE_UNKNOWN=1")
+                && m.contains("HTTP_ERROR=1") && m.contains("TICK_SKIPPED=1"));
+        assertThat(String.join("\n", messages)).doesNotContain("TESTA", "TESTB", "TESTC", "TESTD", "TESTE");
+    }
+
+    @Test
+    void blankOverseasResponseIsCountedAsAFailure() throws IOException {
+        when(holdings.allTickers()).thenReturn(List.of("TESTA"));
+        when(source.overseasDailyPrice("NAS", "TESTA")).thenReturn("  ");
+        listener = listener(List.of(), List.of());
+
+        listener.onTick(tick("2026-10-20T16:30:00+09:00"));
+
+        verify(kafka, never()).send(anyString(), eq("overseas-daily-price:TESTA"), anyString());
+        assertThat(messages()).anyMatch(m -> m.contains("position=1 reason=EMPTY_RESPONSE"));
+    }
+
+    private List<String> messages() {
+        return logs.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
     }
 
     @Test
