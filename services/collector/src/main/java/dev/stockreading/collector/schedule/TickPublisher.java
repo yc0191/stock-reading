@@ -18,7 +18,7 @@ import dev.stockreading.collector.event.TickPayload;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * 타이머는 한 곳뿐이다(ADR-012): 작업 시각이 되면 schedule.tick만 발행한다.
+ * 타이머는 한 곳뿐이다: 작업 시각이 되면 schedule.tick만 발행한다.
  * collector.schedule.enabled 가 true 일 때만 빈이 만들어진다(기본 꺼짐).
  */
 @Component

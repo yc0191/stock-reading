@@ -184,4 +184,19 @@ class MoveDetectorTest {
     void prevCloseWithoutRawIsNotJudged() {
         assertThat(prevClose(10_400, null).outcome()).isEqualTo(Outcome.UNKNOWN);
     }
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.NullSource
+    @ValueSource(strings = {"", "  "})
+    void prevCloseIsOffWhenTheFieldIsNotSet(String field) {
+        MarketProperties properties = new MarketProperties(
+                5, new BigDecimal("1.00"), field, new BigDecimal("3.00"));
+        MoveDetector off = new MoveDetector(repository, properties, JsonMapper.builder().build());
+        when(repository.findBetween(anyString(), any(), any())).thenReturn(List.of(point("16:00:00", 10_000)));
+
+        List<Evaluation> evaluations = off.evaluate("TEST01", NOW, 10_400, raw("10000"));
+
+        assertThat(evaluations.get(1).outcome()).isEqualTo(Outcome.UNKNOWN);
+        assertThat(evaluations.get(0).outcome()).isEqualTo(Outcome.DETECTED);
+    }
 }

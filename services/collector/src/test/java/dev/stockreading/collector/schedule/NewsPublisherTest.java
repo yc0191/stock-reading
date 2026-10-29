@@ -29,6 +29,7 @@ import org.springframework.kafka.support.SendResult;
 
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.ContractSchemas;
+import dev.stockreading.collector.news.NewsCollection;
 import dev.stockreading.collector.news.NewsCollector;
 import dev.stockreading.collector.news.NewsItem;
 import tools.jackson.databind.JsonNode;
@@ -37,8 +38,13 @@ import tools.jackson.databind.json.JsonMapper;
 
 class NewsPublisherTest {
 
+    private static NewsCollection collected(List<NewsItem> items) {
+        return new NewsCollection(items, Set.of(), OffsetDateTime.parse("2026-10-20T16:00:01+09:00"));
+    }
+
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-10-20T07:00:00Z"), ZoneId.of("Asia/Seoul"));
     private static final String CORRELATION_ID = "collect-news-2026-10-20T16:00:00+09:00";
+    private static final String SCHEDULED_FOR = "2026-10-20T16:00:00+09:00";
     private static final String SCHEMA = "news.collected.v1.schema.json";
 
     private NewsCollector collector;
@@ -57,11 +63,11 @@ class NewsPublisherTest {
 
     @Test
     void publishesOneEventPerItemKeyedByUrlAndMatchingTheContract() throws IOException {
-        when(collector.collect()).thenReturn(List.of(
+        when(collector.collectWithStatus()).thenReturn(collected(List.of(
                 item("https://news.example.com/a", Set.of("TEST01")),
-                item("https://news.example.com/b", Set.of("TEST02", "*"))));
+                item("https://news.example.com/b", Set.of("TEST02", "*")))));
 
-        publisher.publishCollected(CORRELATION_ID);
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
@@ -79,76 +85,76 @@ class NewsPublisherTest {
 
     @Test
     void doesNotPublishTheSameUrlAgain() {
-        when(collector.collect()).thenReturn(List.of(item("https://news.example.com/a", Set.of("TEST01"))));
+        when(collector.collectWithStatus()).thenReturn(collected(List.of(item("https://news.example.com/a", Set.of("TEST01")))));
 
-        publisher.publishCollected(CORRELATION_ID);
-        publisher.publishCollected("collect-news-next");
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
+        publisher.publishCollected("collect-news-next", SCHEDULED_FOR);
 
         verify(kafka, times(1)).send(eq(Topics.NEWS_COLLECTED), anyString(), anyString());
     }
 
     @Test
     void sameUrlWithDifferentSymbolsIsPublishedAgain() {
-        when(collector.collect())
-                .thenReturn(List.of(item("https://news.example.com/a", Set.of("TEST01"), Set.of("테스트검색어"))))
-                .thenReturn(List.of(item("https://news.example.com/a", Set.of("TEST02"), Set.of("테스트검색어"))));
+        when(collector.collectWithStatus())
+                .thenReturn(collected(List.of(item("https://news.example.com/a", Set.of("TEST01"), Set.of("테스트검색어")))))
+                .thenReturn(collected(List.of(item("https://news.example.com/a", Set.of("TEST02"), Set.of("테스트검색어")))));
 
-        publisher.publishCollected(CORRELATION_ID);
-        publisher.publishCollected("collect-news-next");
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
+        publisher.publishCollected("collect-news-next", SCHEDULED_FOR);
 
         verify(kafka, times(2)).send(eq(Topics.NEWS_COLLECTED), eq("https://news.example.com/a"), anyString());
     }
 
     @Test
     void sameUrlWithDifferentMatchedQueriesIsPublishedAgain() {
-        when(collector.collect())
-                .thenReturn(List.of(item("https://news.example.com/a", Set.of("TEST01"), Set.of("테스트검색어"))))
-                .thenReturn(List.of(item("https://news.example.com/a", Set.of("TEST01"), Set.of("다른검색어"))));
+        when(collector.collectWithStatus())
+                .thenReturn(collected(List.of(item("https://news.example.com/a", Set.of("TEST01"), Set.of("테스트검색어")))))
+                .thenReturn(collected(List.of(item("https://news.example.com/a", Set.of("TEST01"), Set.of("다른검색어")))));
 
-        publisher.publishCollected(CORRELATION_ID);
-        publisher.publishCollected("collect-news-next");
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
+        publisher.publishCollected("collect-news-next", SCHEDULED_FOR);
 
         verify(kafka, times(2)).send(eq(Topics.NEWS_COLLECTED), eq("https://news.example.com/a"), anyString());
     }
 
     @Test
     void sameUrlWithSameSymbolsAndQueriesInDifferentOrderIsNotPublishedAgain() {
-        when(collector.collect())
-                .thenReturn(List.of(item("https://news.example.com/a",
-                        new LinkedHashSet<>(List.of("TEST01", "TEST02")), new LinkedHashSet<>(List.of("가", "나")))))
-                .thenReturn(List.of(item("https://news.example.com/a",
-                        new LinkedHashSet<>(List.of("TEST02", "TEST01")), new LinkedHashSet<>(List.of("나", "가")))));
+        when(collector.collectWithStatus())
+                .thenReturn(collected(List.of(item("https://news.example.com/a",
+                        new LinkedHashSet<>(List.of("TEST01", "TEST02")), new LinkedHashSet<>(List.of("가", "나"))))))
+                .thenReturn(collected(List.of(item("https://news.example.com/a",
+                        new LinkedHashSet<>(List.of("TEST02", "TEST01")), new LinkedHashSet<>(List.of("나", "가"))))));
 
-        publisher.publishCollected(CORRELATION_ID);
-        publisher.publishCollected("collect-news-next");
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
+        publisher.publishCollected("collect-news-next", SCHEDULED_FOR);
 
         verify(kafka, times(1)).send(eq(Topics.NEWS_COLLECTED), anyString(), anyString());
     }
 
     @Test
     void failedSendIsNotRememberedSoItIsRetriedOnTheNextRun() {
-        when(collector.collect()).thenReturn(List.of(item("https://news.example.com/a", Set.of("TEST01"))));
+        when(collector.collectWithStatus()).thenReturn(collected(List.of(item("https://news.example.com/a", Set.of("TEST01")))));
         doThrow(new IllegalStateException("broker down")).when(kafka).send(anyString(), anyString(), anyString());
 
-        publisher.publishCollected(CORRELATION_ID);
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
 
         reset(kafka);
         stubSendSucceeds();
-        publisher.publishCollected("collect-news-next");
+        publisher.publishCollected("collect-news-next", SCHEDULED_FOR);
 
         verify(kafka, times(1)).send(eq(Topics.NEWS_COLLECTED), eq("https://news.example.com/a"), anyString());
     }
 
     @Test
     void asyncFailedSendIsNotRememberedSoItIsRetriedOnTheNextRun() {
-        when(collector.collect()).thenReturn(List.of(item("https://news.example.com/a", Set.of("TEST01"))));
+        when(collector.collectWithStatus()).thenReturn(collected(List.of(item("https://news.example.com/a", Set.of("TEST01")))));
         when(kafka.send(anyString(), anyString(), anyString()))
                 .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("timeout")))
                 .thenReturn(CompletableFuture.completedFuture(null));
 
-        publisher.publishCollected(CORRELATION_ID);
-        publisher.publishCollected("collect-news-next");
-        publisher.publishCollected("collect-news-after");
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
+        publisher.publishCollected("collect-news-next", SCHEDULED_FOR);
+        publisher.publishCollected("collect-news-after", SCHEDULED_FOR);
 
         // 첫 전송은 실패해 기록되지 않았고, 두 번째는 성공해 기록되었으므로 세 번째 tick 에서는 보내지 않는다.
         verify(kafka, times(2)).send(eq(Topics.NEWS_COLLECTED), eq("https://news.example.com/a"), anyString());
@@ -156,64 +162,64 @@ class NewsPublisherTest {
 
     @Test
     void urlIsRecordedOnlyAfterTheSendFutureCompletes() {
-        when(collector.collect()).thenReturn(List.of(item("https://news.example.com/a", Set.of("TEST01"))));
+        when(collector.collectWithStatus()).thenReturn(collected(List.of(item("https://news.example.com/a", Set.of("TEST01")))));
         CompletableFuture<SendResult<String, String>> pending = new CompletableFuture<>();
         when(kafka.send(anyString(), anyString(), anyString())).thenReturn(pending);
 
-        publisher.publishCollected(CORRELATION_ID);
-        publisher.publishCollected("collect-news-next");
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
+        publisher.publishCollected("collect-news-next", SCHEDULED_FOR);
         verify(kafka, times(2)).send(eq(Topics.NEWS_COLLECTED), anyString(), anyString());
 
         pending.complete(null);
-        publisher.publishCollected("collect-news-after");
+        publisher.publishCollected("collect-news-after", SCHEDULED_FOR);
         verify(kafka, times(2)).send(eq(Topics.NEWS_COLLECTED), anyString(), anyString());
     }
 
     @Test
     void oneFailedSendDoesNotStopTheOtherItems() {
-        when(collector.collect()).thenReturn(List.of(
+        when(collector.collectWithStatus()).thenReturn(collected(List.of(
                 item("https://news.example.com/a", Set.of("TEST01")),
-                item("https://news.example.com/b", Set.of("TEST01"))));
+                item("https://news.example.com/b", Set.of("TEST01")))));
         doThrow(new IllegalStateException("broker down")).when(kafka)
                 .send(eq(Topics.NEWS_COLLECTED), eq("https://news.example.com/a"), anyString());
 
-        publisher.publishCollected(CORRELATION_ID);
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
 
         verify(kafka).send(eq(Topics.NEWS_COLLECTED), eq("https://news.example.com/b"), anyString());
     }
 
     @Test
     void collectFailureIsSwallowed() {
-        when(collector.collect()).thenThrow(new IllegalStateException("search failed for 테스트검색어"));
+        when(collector.collectWithStatus()).thenThrow(new IllegalStateException("search failed for 테스트검색어"));
 
-        publisher.publishCollected(CORRELATION_ID);
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
 
         verify(kafka, never()).send(anyString(), anyString(), anyString());
     }
 
     @Test
     void itemsThatWouldBreakTheContractAreSkipped() {
-        when(collector.collect()).thenReturn(List.of(
+        when(collector.collectWithStatus()).thenReturn(collected(List.of(
                 item("https://news.example.com/no-symbols", Set.of()),
                 item("https://news.example.com/bad-symbol", Set.of("TEST011")),
                 item("not a url", Set.of("TEST01")),
-                item("https://news.example.com/ok", Set.of("TEST01"))));
+                item("https://news.example.com/ok", Set.of("TEST01")))));
 
-        publisher.publishCollected(CORRELATION_ID);
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
 
         verify(kafka, times(1)).send(eq(Topics.NEWS_COLLECTED), eq("https://news.example.com/ok"), anyString());
     }
 
     @Test
     void whenEveryItemIsSkippedNothingIsPublishedAndNothingIsRemembered() {
-        when(collector.collect())
-                .thenReturn(List.of(item("https://news.example.com/a", Set.of())))
-                .thenReturn(List.of(item("https://news.example.com/a", Set.of("TEST01"))));
+        when(collector.collectWithStatus())
+                .thenReturn(collected(List.of(item("https://news.example.com/a", Set.of()))))
+                .thenReturn(collected(List.of(item("https://news.example.com/a", Set.of("TEST01")))));
 
-        publisher.publishCollected(CORRELATION_ID);
-        verify(kafka, never()).send(anyString(), anyString(), anyString());
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
+        verify(kafka, never()).send(eq(Topics.NEWS_COLLECTED), anyString(), anyString());
 
-        publisher.publishCollected("collect-news-next");
+        publisher.publishCollected("collect-news-next", SCHEDULED_FOR);
         verify(kafka, times(1)).send(eq(Topics.NEWS_COLLECTED), anyString(), anyString());
     }
 
@@ -223,9 +229,9 @@ class NewsPublisherTest {
         NewsItem long1 = new NewsItem(emoji.repeat(501), emoji.repeat(2001), "https://news.example.com/a",
                 null, OffsetDateTime.parse("2026-10-20T15:42:00+09:00"), "news.example.com",
                 Set.of("TEST01"), Set.of());
-        when(collector.collect()).thenReturn(List.of(long1));
+        when(collector.collectWithStatus()).thenReturn(collected(List.of(long1)));
 
-        publisher.publishCollected(CORRELATION_ID);
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
 
         ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
         verify(kafka).send(eq(Topics.NEWS_COLLECTED), anyString(), value.capture());
@@ -242,9 +248,9 @@ class NewsPublisherTest {
         NewsItem item = new NewsItem("테스트 제목", null, "https://news.example.com/a", null,
                 OffsetDateTime.parse("2026-10-20T15:42:00+09:00"), "news.example.com",
                 Set.of("TEST01"), null);
-        when(collector.collect()).thenReturn(List.of(item));
+        when(collector.collectWithStatus()).thenReturn(collected(List.of(item)));
 
-        publisher.publishCollected(CORRELATION_ID);
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
 
         ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
         verify(kafka).send(eq(Topics.NEWS_COLLECTED), anyString(), value.capture());

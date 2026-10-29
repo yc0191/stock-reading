@@ -27,6 +27,15 @@ class MoveDetector {
         this.repository = repository;
         this.properties = properties;
         this.mapper = mapper;
+        if (!prevCloseEnabled()) {
+            log.warn("prevClose disabled: MARKET_PREV_CLOSE_FIELD is not set");
+        }
+    }
+
+    /** 필드 이름은 공개 파일에 두지 않고 .env로만 받으므로, 비어 있으면 스냅샷마다 로그를 남기지 않고 유형 2를 끈다. */
+    private boolean prevCloseEnabled() {
+        String field = properties.prevCloseField();
+        return field != null && !field.isBlank();
     }
 
     List<Evaluation> evaluate(String symbol, OffsetDateTime asOf, long price, String raw) {
@@ -35,7 +44,7 @@ class MoveDetector {
 
     /**
      * 최근 N분 이력의 가장 오래된 스냅샷을 기준으로 삼는다. 변동 시각은 기준 이후 스냅샷 중
-     * 기준 대비 변동률이 임계값 미만이던 가장 최근 것의 시각이고, 그런 스냅샷이 없으면 기준의 시각이다(ADR-020).
+     * 기준 대비 변동률이 임계값 미만이던 가장 최근 것의 시각이고, 그런 스냅샷이 없으면 기준의 시각이다.
      */
     private Evaluation evaluateWindow(String symbol, OffsetDateTime asOf, long price) {
         BigDecimal threshold = properties.windowThresholdPercent();
@@ -67,6 +76,9 @@ class MoveDetector {
 
     /** 전일 종가는 원문에서 읽는다. 필드가 없거나 양의 정수가 아니면 판단하지 않는다. */
     private Evaluation evaluatePrevClose(String symbol, OffsetDateTime asOf, long price, String raw) {
+        if (!prevCloseEnabled()) {
+            return Evaluation.unknown(DetectionType.PREV_CLOSE);
+        }
         BigDecimal threshold = properties.prevCloseThresholdPercent();
         Long prevClose = readPrevClose(symbol, raw);
         if (prevClose == null) {

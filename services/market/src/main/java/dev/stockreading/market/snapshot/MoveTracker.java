@@ -10,7 +10,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * 감지 결과를 market.move 발행으로 잇는다. 한 번 발행한 뒤에는 종목·유형별로 마지막 발행 가격에서
- * 임계값 이상 더 움직일 때만 재발행하고, 감지 조건이 풀리면 상태를 지워 다음 변동을 처음부터 발행한다(ADR-020).
+ * 임계값 이상 더 움직일 때만 재발행하고, 감지 조건이 풀리면 상태를 지워 다음 변동을 처음부터 발행한다.
  */
 @Component
 class MoveTracker {

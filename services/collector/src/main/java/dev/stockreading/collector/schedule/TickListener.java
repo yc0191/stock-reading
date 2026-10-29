@@ -38,7 +38,7 @@ class TickListener {
     private final ObjectMapper mapper;
     private final Clock clock;
 
-    // v0: 메모리 기반 중복 방지. 이후 DB 기록으로 대체한다(ADR-012).
+    // v0: 메모리 기반 중복 방지. 이후 DB 기록으로 대체한다.
     private final Set<String> processedTicks = ConcurrentHashMap.newKeySet();
 
     TickListener(MarketDataPort marketData, CollectorProperties properties,

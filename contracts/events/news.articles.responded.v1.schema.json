@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stock-reading.local/contracts/news.articles.responded.v1",
+  "title": "news.articles.responded v1",
+  "description": "news 서비스가 기사 요청에 답한다. 0건 응답도 정상 응답이다. 본문과 개인 정보는 담지 않는다. 메시지 키는 종목코드다.",
+  "type": "object",
+  "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "const": "news.articles.responded" },
+    "schemaVersion": { "const": 1 },
+    "occurredAt": { "type": "string", "format": "date-time", "description": "응답을 만든 시각." },
+    "producedAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1, "description": "요청의 correlationId를 이어받는다." },
+    "payload": {
+      "type": "object",
+      "required": ["jobId", "seq", "symbol", "articles", "truncated"],
+      "properties": {
+        "jobId": { "type": "string", "format": "uuid", "description": "요청의 jobId." },
+        "seq": { "type": "integer", "minimum": 1, "description": "요청의 seq." },
+        "symbol": { "type": "string", "pattern": "^[0-9A-Z]{6}$" },
+        "articles": {
+          "type": "array",
+          "description": "발행 시각 최신순 기사.",
+          "items": {
+            "type": "object",
+            "required": ["articleId", "title", "summary", "publishedAt", "publisher", "url"],
+            "properties": {
+              "articleId": { "type": "string", "minLength": 1, "description": "news가 계산하는 기사 식별자(article_key). 리포트의 근거 인용과 응답 집합 비교에 쓴다." },
+              "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+              "summary": { "type": "string", "maxLength": 2000, "description": "빈 문자열을 허용한다." },
+              "publishedAt": { "type": "string", "format": "date-time" },
+              "publisher": { "type": "string", "minLength": 1 },
+              "url": { "type": "string", "format": "uri" }
+            }
+          }
+        },
+        "truncated": { "type": "boolean", "description": "maxArticles 때문에 잘렸으면 true." }
+      }
+    }
+  }
+}

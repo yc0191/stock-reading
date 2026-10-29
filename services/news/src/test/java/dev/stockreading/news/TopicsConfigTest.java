@@ -12,14 +12,15 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 class TopicsConfigTest {
 
     @Test
-    void declaresConsumedTopicsWithThreePartitions() {
+    void declaresCollectedArticleQueryAndFilingTopicsWithThreePartitions() {
         new ApplicationContextRunner()
                 .withUserConfiguration(Topics.class)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     Map<String, NewTopic> topics = context.getBeansOfType(NewTopic.class);
                     assertThat(topics.values()).extracting(NewTopic::name)
-                            .containsExactlyInAnyOrder("news.collected", "filing.collected");
+                            .containsExactlyInAnyOrder("news.collected", "news.articles.requested",
+                                    "news.articles.responded", "filing.collected");
                     assertThat(topics.values()).extracting(NewTopic::numPartitions).containsOnly(3);
                 });
     }

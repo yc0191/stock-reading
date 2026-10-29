@@ -152,6 +152,81 @@ class NewsCollectorTest {
         verify(search, never()).search(eq("나"), anyInt());
     }
 
+    @Test
+    void failedQuerySymbolsAreReportedAsIncomplete() {
+        when(search.search(eq("실패"), anyInt())).thenThrow(new NewsSearchApiException("boom"));
+        when(search.search(eq("테스트검색어"), anyInt())).thenReturn(List.of());
+
+        NewsCollection result = collector.collectWithStatus(
+                List.of(query("실패", "TEST02", "TEST03"), query("테스트검색어", "TEST01")));
+
+        assertThat(result.incompleteSymbols()).containsExactlyInAnyOrder("TEST02", "TEST03");
+    }
+
+    @Test
+    void failedMarketWideQueryReportsTheMarketWideSymbol() {
+        when(search.search(eq("테스트시황"), anyInt())).thenThrow(new NewsSearchApiException("boom"));
+
+        NewsCollection result = collector.collectWithStatus(List.of(query("테스트시황", "*")));
+
+        assertThat(result.incompleteSymbols()).containsExactly("*");
+    }
+
+    @Test
+    void symbolsOfQueriesSkippedByTheDailyLimitAreReportedAsIncomplete() {
+        NewsCollector limited = new NewsCollector(search,
+                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 1, 0), CLOCK, ms -> { });
+        when(search.search(anyString(), anyInt())).thenReturn(List.of());
+
+        NewsCollection result = limited.collectWithStatus(
+                List.of(query("가", "TEST01"), query("나", "TEST02"), query("다", "*")));
+
+        assertThat(result.incompleteSymbols()).containsExactlyInAnyOrder("TEST02", "*");
+    }
+
+    @Test
+    void fullyCollectedRunHasNoIncompleteSymbols() {
+        when(search.search(anyString(), anyInt())).thenReturn(List.of());
+
+        NewsCollection result = collector.collectWithStatus(List.of(query("가", "TEST01")));
+
+        assertThat(result.incompleteSymbols()).isEmpty();
+    }
+
+    @Test
+    void startedAtIsWhenTheFirstSearchCallBegan() {
+        List<OffsetDateTime> callTimes = new ArrayList<>();
+        Instant[] now = {Instant.parse("2026-10-22T07:10:00Z")};
+        Clock moving = new Clock() {
+            @Override
+            public ZoneId getZone() {
+                return ZoneId.of("Asia/Seoul");
+            }
+
+            @Override
+            public Clock withZone(ZoneId zone) {
+                return this;
+            }
+
+            @Override
+            public Instant instant() {
+                return now[0];
+            }
+        };
+        when(search.search(anyString(), anyInt())).thenAnswer(invocation -> {
+            callTimes.add(OffsetDateTime.ofInstant(moving.instant(), ZoneId.of("Asia/Seoul")));
+            now[0] = now[0].plusSeconds(30);
+            return List.of();
+        });
+        NewsCollector timed = new NewsCollector(search,
+                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 100, 0), moving, ms -> { });
+
+        NewsCollection result = timed.collectWithStatus(List.of(query("가", "A"), query("나", "A")));
+
+        assertThat(callTimes).hasSize(2);
+        assertThat(result.startedAt()).isEqualTo(callTimes.get(0));
+    }
+
     private NewsCollector collectorWithInterval(long intervalMs, int dailyLimit, List<Long> pauses) {
         return new NewsCollector(search,
                 new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", dailyLimit, intervalMs), CLOCK, pauses::add);

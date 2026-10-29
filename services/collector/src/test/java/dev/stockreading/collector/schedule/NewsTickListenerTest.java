@@ -27,12 +27,17 @@ import org.springframework.kafka.core.KafkaTemplate;
 
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.ContractSchemas;
+import dev.stockreading.collector.news.NewsCollection;
 import dev.stockreading.collector.news.NewsCollector;
 import dev.stockreading.collector.news.NewsItem;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 class NewsTickListenerTest {
+
+    private static NewsCollection collected(List<NewsItem> items) {
+        return new NewsCollection(items, Set.of(), OffsetDateTime.parse("2026-10-20T16:00:01+09:00"));
+    }
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-10-20T07:00:00Z"), ZoneId.of("Asia/Seoul"));
 
@@ -52,7 +57,7 @@ class NewsTickListenerTest {
 
     @Test
     void newsTickPublishesOneEventPerItemKeyedByUrlAndPassesTheContract() throws IOException {
-        when(collector.collect()).thenReturn(List.of(item("https://news.example.com/a"), item("https://news.example.com/b")));
+        when(collector.collectWithStatus()).thenReturn(collected(List.of(item("https://news.example.com/a"), item("https://news.example.com/b"))));
 
         listener.onTick(newsTick());
 
@@ -68,7 +73,7 @@ class NewsTickListenerTest {
 
     @Test
     void secondTickDoesNotRepublishTheSameArticles() throws IOException {
-        when(collector.collect()).thenReturn(List.of(item("https://news.example.com/a")));
+        when(collector.collectWithStatus()).thenReturn(collected(List.of(item("https://news.example.com/a"))));
 
         listener.onTick(newsTick("2026-10-20T16:00:00+09:00"));
         listener.onTick(newsTick("2026-10-20T16:15:00+09:00"));
@@ -78,19 +83,19 @@ class NewsTickListenerTest {
 
     @Test
     void sameTickDeliveredTwiceCollectsOnlyOnce() throws IOException {
-        when(collector.collect()).thenReturn(List.of());
+        when(collector.collectWithStatus()).thenReturn(collected(List.of()));
 
         listener.onTick(newsTick());
         listener.onTick(newsTick());
 
-        verify(collector, times(1)).collect();
+        verify(collector, times(1)).collectWithStatus();
     }
 
     @Test
     void listenerSurvivesCollectFailureAndWorksOnTheNextTick() throws IOException {
-        when(collector.collect())
+        when(collector.collectWithStatus())
                 .thenThrow(new IllegalStateException("boom"))
-                .thenReturn(List.of(item("https://news.example.com/a")));
+                .thenReturn(collected(List.of(item("https://news.example.com/a"))));
 
         assertThatCode(() -> listener.onTick(newsTick("2026-10-20T16:00:00+09:00"))).doesNotThrowAnyException();
         listener.onTick(newsTick("2026-10-20T16:15:00+09:00"));
@@ -102,7 +107,7 @@ class NewsTickListenerTest {
     void ignoresOtherJobTypes() throws IOException {
         listener.onTick(ContractSchemas.sample("schedule.tick.sample.json"));
 
-        verify(collector, never()).collect();
+        verify(collector, never()).collectWithStatus();
         verify(kafka, never()).send(anyString(), anyString(), anyString());
     }
 
