@@ -58,6 +58,7 @@
 - 값이 정해진 경우: `켜는 조건: BROKER_PROBE=1`
 - 값이 있기만 하면 되는 경우: 변수 이름만 `·`로 나열(`켜는 조건: MARKET_IT_DB_URL·MARKET_IT_DB_USER·MARKET_IT_DB_PASSWORD`)
 - 여러 조건이 모두 필요하면 `, `로 함께 적습니다(`켜는 조건: BROKER_SMOKE=1, LIVE_PROBE_GUARD=1`).
+- 전체 실행 스크립트의 옵션으로만 켜는 경우: `켜는 조건: test-all.sh --live`
 - 가상 칸의 부하 측정처럼 실제 칸이 아닌 조건부 테스트도 같은 방식으로 적고 앞에 종류를 씁니다(`[부하, 켜는 조건: QUOTE_LOAD=1]`).
 
 `켜는 조건`이 없는 테스트는 평소 테스트 명령에서 항상 돕니다.
