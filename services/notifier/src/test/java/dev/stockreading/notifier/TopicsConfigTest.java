@@ -2,6 +2,9 @@ package dev.stockreading.notifier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.Map;
+import java.util.stream.Collectors;
+
 import org.apache.kafka.clients.admin.NewTopic;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -15,9 +18,26 @@ class TopicsConfigTest {
                 .withUserConfiguration(Topics.class)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
-                    NewTopic topic = context.getBean(NewTopic.class);
-                    assertThat(topic.name()).isEqualTo("briefing.generated");
-                    assertThat(topic.numPartitions()).isEqualTo(3);
+                    assertThat(declared(context.getBeansOfType(NewTopic.class)))
+                            .containsEntry("briefing.generated", 3);
                 });
+    }
+
+    @Test
+    void declaresDailyBriefingGeneratedWithOnePartitionLikeTheBriefingService() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(Topics.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    // 브리핑 main.py 의 TOPIC_PARTITIONS 와 같아야 한다.
+                    assertThat(declared(context.getBeansOfType(NewTopic.class)))
+                            .containsExactlyInAnyOrderEntriesOf(Map.of(
+                                    "briefing.generated", 3,
+                                    "briefing.daily.generated", 1));
+                });
+    }
+
+    private static Map<String, Integer> declared(Map<String, NewTopic> beans) {
+        return beans.values().stream().collect(Collectors.toMap(NewTopic::name, NewTopic::numPartitions));
     }
 }
