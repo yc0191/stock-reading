@@ -1,0 +1,114 @@
+package dev.stockreading.news.query;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+
+import java.time.OffsetDateTime;
+import java.util.List;
+
+import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.mockito.ArgumentCaptor;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+
+import dev.stockreading.news.event.ArticlesPayload;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * 기사 조회를 실제 Postgres에 저장된 기사로 확인한다. 세 환경변수가 모두 있을 때만 실행하며,
+ * 대상은 news 스키마가 비어 있는 테스트 전용 DB라고 가정한다. 평소 gradlew test 에서는 건너뛴다.
+ */
+@EnabledIfEnvironmentVariable(named = "NEWS_IT_DB_URL", matches = ".+")
+@EnabledIfEnvironmentVariable(named = "NEWS_IT_DB_USER", matches = ".+")
+@EnabledIfEnvironmentVariable(named = "NEWS_IT_DB_PASSWORD", matches = ".+")
+class ArticleQueryIntegrationTest {
+
+    private static final OffsetDateTime SINCE = OffsetDateTime.parse("2026-03-11T09:00:00+09:00");
+    private static final OffsetDateTime UNTIL = OffsetDateTime.parse("2026-03-12T09:00:00+09:00");
+
+    private static JdbcClient jdbc;
+    private static ArticleQueryRepository repository;
+
+    @BeforeAll
+    static void migrateAndSeed() {
+        String url = System.getenv("NEWS_IT_DB_URL");
+        String user = System.getenv("NEWS_IT_DB_USER");
+        String password = System.getenv("NEWS_IT_DB_PASSWORD");
+
+        // 서비스 설정(application.yml)과 같이 news 스키마에만 마이그레이션하고, 스키마는 만들지 않는다.
+        Flyway.configure().dataSource(url, user, password).locations("classpath:db/migration")
+                .schemas("news").defaultSchema("news").createSchemas(false).load().migrate();
+
+        jdbc = JdbcClient.create(new DriverManagerDataSource(url + (url.contains("?") ? "&" : "?") + "currentSchema=news",
+                user, password));
+        repository = new ArticleQueryRepository(jdbc);
+
+        // 이 패키지는 쓰기 경로가 없으므로 기사와 종목 태그를 SQL로 직접 넣는다.
+        insert("q-before", SINCE.minusSeconds(1), "ITQ001");
+        insert("q-since", SINCE, "ITQ001");
+        insert("q-market", SINCE.plusHours(1), "*");
+        insert("q-both", SINCE.plusHours(2), "ITQ001", "*");
+        insert("q-other", SINCE.plusHours(3), "ITQ002");
+        insert("q-until", UNTIL, "ITQ001");
+        insert("q-after", UNTIL.plusSeconds(1), "ITQ001");
+    }
+
+    @Test
+    void returnsTheSymbolAndMarketWideArticlesInRangeNewestFirst() {
+        List<ArticleQueryRepository.StoredArticle> found = repository.findByRange("ITQ001", SINCE, UNTIL, 100);
+
+        // 기간 양끝은 포함하고, 두 태그를 모두 가진 기사는 한 번만, 다른 종목의 기사는 빠진다.
+        assertThat(found).extracting(ArticleQueryRepository.StoredArticle::title)
+                .containsExactly("q-until", "q-both", "q-market", "q-since");
+        assertThat(found.get(0).publishedAt().toInstant()).isEqualTo(UNTIL.toInstant());
+        assertThat(found.get(3).publishedAt().toInstant()).isEqualTo(SINCE.toInstant());
+    }
+
+    @Test
+    void limitKeepsTheNewestArticles() {
+        assertThat(repository.findByRange("ITQ001", SINCE, UNTIL, 2))
+                .extracting(ArticleQueryRepository.StoredArticle::title).containsExactly("q-until", "q-both");
+    }
+
+    @Test
+    void responseIsCutAtMaxArticlesAndMarkedTruncated() {
+        ArticlesPublisher publisher = mock(ArticlesPublisher.class);
+        ArticlesRequestListener listener = new ArticlesRequestListener(repository, publisher, JsonMapper.builder().build());
+
+        listener.onRequest(request(3));
+
+        ArgumentCaptor<List<ArticlesPayload.Article>> articles = ArgumentCaptor.captor();
+        verify(publisher).publish(eq("it-job"), eq(1), eq("ITQ001"), articles.capture(), eq(true), eq("it"));
+        assertThat(articles.getValue()).extracting(ArticlesPayload.Article::title)
+                .containsExactly("q-until", "q-both", "q-market");
+    }
+
+    private static void insert(String title, OffsetDateTime publishedAt, String... symbols) {
+        String url = "https://news.example.com/it/" + title;
+        long id = jdbc.sql("""
+                        INSERT INTO news_article (event_id, article_key, title, summary, url, publisher, published_at)
+                        VALUES (gen_random_uuid(), encode(sha256(convert_to(:url, 'UTF8')), 'hex'), :title, '요약', :url,
+                                'news.example.com', :publishedAt)
+                        RETURNING id
+                        """)
+                .param("url", url).param("title", title).param("publishedAt", publishedAt).query(Long.class).single();
+        for (String symbol : symbols) {
+            jdbc.sql("INSERT INTO news_article_symbol (article_id, symbol) VALUES (:id, :symbol)")
+                    .param("id", id).param("symbol", symbol).update();
+        }
+    }
+
+    private static String request(int maxArticles) {
+        return """
+                {"eventId":"e1000000-0000-4000-8000-000000000001","eventType":"news.articles.requested","schemaVersion":1,
+                 "occurredAt":"2026-03-12T09:10:00+09:00","producedAt":"2026-03-12T09:10:00+09:00","correlationId":"it",
+                 "payload":{"jobId":"it-job","seq":1,"symbol":"ITQ001",
+                            "since":"2026-03-11T09:00:00+09:00","until":"2026-03-12T09:00:00+09:00","maxArticles":%d}}
+                """.formatted(maxArticles);
+    }
+}

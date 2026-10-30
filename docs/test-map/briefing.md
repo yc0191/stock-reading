@@ -9,6 +9,6 @@
 | 변동을 브리핑 문장으로 바꾸기 | compose.py, service.py | test_compose.py, test_service.py | 해당 없음 - 메시지와 뉴스를 인자로 받을 뿐 외부 의존을 부르지 않음 | 해당 없음 - 외부 의존을 부르지 않음 |
 | 리포트 생성(LLM, 규칙 기반 대체) | report.py | 없음 - LLM 호출과 나뉘지 않은 로직은 가짜 LLM 테스트에서 함께 확인 | test_report.py | 없음 - 데일리 브리핑 작업에서 채움 [외부 API] |
 | Kafka 실행부(토픽 선언, 요청·응답 연결) | main.py | test_topics.py | test_runner.py | 없음 - 데일리 브리핑 작업에서 채움 [서비스 흐름] |
-| 실패 기록 | failure_store.py | 해당 없음 - DB 쓰기와 재시도가 전부라 가짜 DB 로 가상 칸에서 확인 | test_failure_store.py | 없음 - real-db 구간에서 채움 [DB] |
+| 실패 기록 | failure_store.py | 해당 없음 - DB 쓰기와 재시도가 전부라 가짜 DB 로 가상 칸에서 확인 | test_failure_store.py | test_failure_store_db.py [DB, 켜는 조건: BRIEFING_IT_DB_URL·BRIEFING_IT_DB_USER·BRIEFING_IT_DB_PASSWORD] |
 
 테스트 도우미: contracts.py
