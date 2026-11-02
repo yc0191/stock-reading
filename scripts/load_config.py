@@ -27,6 +27,9 @@ COLLECTOR_ENV_NAMES = {
     "dart-api-key": "DART_API_KEY",
     "kb-app-key": "BROKER_APP_KEY",
     "kb-app-secret": "BROKER_APP_SECRET",
+    "broker-base-url": "BROKER_BASE_URL",
+    # 전체 실행 스크립트(test-all.sh --live)가 실제 시세를 부를 기준 종목 하나.
+    "test-live-symbol": "TEST_ALL_LIVE_SYMBOL",
     "naver-client-id": "NEWS_SEARCH_CLIENT_ID",
     "naver-client-secret": "NEWS_SEARCH_CLIENT_SECRET",
     "news-search-base-url": "NEWS_SEARCH_BASE_URL",
