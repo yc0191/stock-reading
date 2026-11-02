@@ -293,6 +293,154 @@ def test_real_repository_map_is_readable_and_has_the_live_row():
     assert rr.db_tests(REPO_ROOT).keys() >= {"market", "news", "briefing"}
 
 
+# ---------------------------------------------------------------- --live 브리핑·메일
+
+BRIEF_LIVE = "test_briefing_flow_live.py [서비스 흐름, 외부 API, 켜는 조건: test-all.sh --live]"
+LIVE_SCRIPTS_ROWS = [
+    ("전체 실행과 결과 표", "test-all.sh, run_report.py, live_briefing.py", "test_run_report.py", "test_run_report.py",
+     "test_quote_flow_live.py [서비스 흐름, 켜는 조건: test-all.sh --live]; " + BRIEF_LIVE),
+]
+BRIEFING_ROWS = [
+    ("리포트 생성", "report.py", "test_report.py", NA,
+     "scripts/test_briefing_flow_live.py [외부 API, 켜는 조건: test-all.sh --live]"),
+]
+LIVE_STAGES = (("live", "시세 흐름 실제", "ok", "", "90", "live/py/scripts.xml"),
+               ("livebrief", "브리핑·메일 실제", "ok", "리포트 파일 build/test-all-live/briefing-R.txt", "100",
+                "live/py/scripts-briefing.xml"))
+
+
+def live_brief_results(results: Path, brief_status="passed", counts=None, brief_stage=None) -> None:
+    passing_results(results)
+    py_xml(results, "main", "briefing", [("tests.test_report", "passed")])
+    py_xml(results, "main", "scripts", [("tests.test_run_report", "passed"), ("tests.test_quote_flow_live", "skipped"),
+                                        ("tests.test_briefing_flow_live", "skipped")])
+    py_xml(results, "live", "scripts", [("tests.test_quote_flow_live", "passed")])
+    py_xml(results, "live", "scripts-briefing", [("tests.test_briefing_flow_live", brief_status)])
+    write(results / "live/counts.json", json.dumps({"snapshots": 1, "with_raw": 1, "failures": {}}))
+    if counts is not None:
+        write(results / "live/briefing-counts.json", json.dumps(counts))
+    stages(results, OK_STAGES[0], LIVE_STAGES[0], brief_stage or LIVE_STAGES[1])
+
+
+def make_live_maps(root: Path) -> None:
+    make_maps(root, market_rows=MARKET_ROWS, scripts_rows=LIVE_SCRIPTS_ROWS)
+    write(root / "docs/test-map/briefing.md", map_text(BRIEFING_ROWS))
+
+
+def test_parse_item_reads_a_test_of_another_map():
+    item = rr.parse_item("scripts/test_briefing_flow_live.py [외부 API, 켜는 조건: test-all.sh --live]")[0]
+    assert item.group == "scripts"
+    assert item.tests == ("test_briefing_flow_live.py",)
+    assert item.phase == "live"
+    assert rr.parse_item("test_report.py")[0].group == ""
+
+
+def test_live_run_with_briefing_shows_llm_and_mail_calls_and_the_report_file(tmp_path):
+    make_live_maps(tmp_path)
+    results = tmp_path / "results"
+    live_brief_results(results, counts={"briefings": 1, "generatedBy": "llm", "llm": 1, "mail": 1})
+
+    code, output = render(tmp_path, results, live=True)
+
+    assert code == 0, output
+    # briefing 지도의 칸이 scripts 지도의 테스트 결과로 판정된다.
+    assert row_of(output, "리포트 생성").endswith("| 돌았음(외부 API) |")
+    assert row_of(output, "전체 실행과 결과 표").endswith("| 돌았음(서비스 흐름) + 돌았음(서비스 흐름, 외부 API) |")
+    assert "| 브리핑·메일 실제 | 통과 (실행 1, 실패 0, 건너뜀 0, 리포트 파일 build/test-all-live/briefing-R.txt) |" in output
+    assert "| 시세 흐름 실제 | 통과 (실행 1, 실패 0, 건너뜀 0) |" in output
+    assert "실제 호출: 토큰 1, 시세 1, LLM 1, 메일 1" in output
+
+
+def test_llm_retries_are_visible_in_the_call_line(tmp_path):
+    make_live_maps(tmp_path)
+    results = tmp_path / "results"
+    live_brief_results(results, counts={"briefings": 1, "generatedBy": "llm", "llm": 2, "mail": 1})
+
+    code, output = render(tmp_path, results, live=True)
+
+    assert code == 0
+    assert "실제 호출: 토큰 1, 시세 1, LLM 2, 메일 1" in output
+
+
+def test_rule_based_briefing_fails_the_cell_and_the_stage(tmp_path):
+    make_live_maps(tmp_path)
+    results = tmp_path / "results"
+    failed_stage = ("livebrief", "브리핑·메일 실제", "fail", "리포트·메일 확인 실패", "100", "live/py/scripts-briefing.xml")
+    live_brief_results(results, brief_status="failed", brief_stage=failed_stage,
+                       counts={"briefings": 1, "generatedBy": "rule-based", "llm": 0, "mail": 1})
+
+    code, output = render(tmp_path, results, live=True)
+
+    assert code == 1
+    assert row_of(output, "리포트 생성").endswith("| 실패(외부 API) |")
+    assert "| 브리핑·메일 실제 | 실패 (실행 1, 실패 1, 건너뜀 0, 리포트·메일 확인 실패) |" in output
+    assert "실제 호출: 토큰 1, 시세 1, LLM 0, 메일 1" in output
+
+
+def test_briefing_not_reached_means_no_llm_or_mail_calls(tmp_path):
+    make_live_maps(tmp_path)
+    results = tmp_path / "results"
+    not_run = ("livebrief", "브리핑·메일 실제", "fail", "시세 흐름 실제가 통과하지 않아 돌리지 않음", "0", "")
+    live_brief_results(results, brief_stage=not_run)
+    (results / "live/py/scripts-briefing.xml").unlink()
+
+    code, output = render(tmp_path, results, live=True)
+
+    assert code == 1
+    assert row_of(output, "리포트 생성").endswith("| 실패(외부 API, 결과 없음: test_briefing_flow_live.py) |")
+    assert "실제 호출: 토큰 1, 시세 1, LLM 0, 메일 0" in output
+
+
+def test_briefing_started_without_counts_is_reported_as_unknown(tmp_path):
+    make_live_maps(tmp_path)
+    results = tmp_path / "results"
+    failed_stage = ("livebrief", "브리핑·메일 실제", "fail", "news 가 시작 중에 끝남", "30", "live/py/scripts-briefing.xml")
+    live_brief_results(results, brief_stage=failed_stage)
+
+    code, output = render(tmp_path, results, live=True)
+
+    assert code == 1
+    assert "LLM·메일 알 수 없음" in output
+
+
+def test_default_run_skips_the_briefing_cell_of_another_map(tmp_path):
+    make_live_maps(tmp_path)
+    results = tmp_path / "results"
+    passing_results(results)
+    py_xml(results, "main", "briefing", [("tests.test_report", "passed")])
+
+    code, output = render(tmp_path, results)
+
+    assert code == 0, output
+    assert row_of(output, "리포트 생성").endswith(f"| 건너뜀(외부 API, {rr.LIVE_SKIP_REASON}) |")
+    assert "실제 호출: 0회" in output
+
+
+def test_plan_with_live_lists_the_briefing_and_mail_step():
+    result = run_script("--live", "--plan")
+    assert result.returncode == 0
+    assert "브리핑·메일 실제" in result.stdout and "[테스트]" in result.stdout
+
+
+def test_script_checks_every_live_key_before_calling_anything():
+    text = SCRIPT.read_text(encoding="utf-8")
+    keys = text.split('LIVE_KEYS="', 1)[1].split('"', 1)[0].split()
+    assert {"BROKER_APP_KEY", "TEST_ALL_LIVE_SYMBOL", "ANTHROPIC_API_KEY", "SMTP_HOST", "NOTIFIER_RECIPIENT"} <= set(keys)
+    # 키 확인이 bootJar·Kafka 기동보다 앞에 있어야 한다.
+    body = text.split("run_live() {", 1)[1]
+    assert body.index("missing_live_keys") < body.index("bootJar") < body.index("docker run")
+
+
+def test_script_turns_on_real_mail_only_inside_the_test_notifier():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert text.count("NOTIFIER_SEND_ENABLED=true") == 1
+    notifier_block = text.split('echo "notifier 기동', 1)[1].split("NOTIFIER_PID=$!", 1)[0]
+    assert "NOTIFIER_SEND_ENABLED=true" in notifier_block
+    assert 'NOTIFIER_SUBJECT_PREFIX="[테스트]"' in notifier_block and "NOTIFIER_MAX_PER_HOUR=1" in notifier_block
+    # .env 에 쓰는 명령이 없어야 한다(읽기만 한다).
+    assert ">> \"$ENV_FILE\"" not in text and "> \"$ENV_FILE\"" not in text
+
+
 def _is_jdk21(java_home: Path) -> bool:
     text = SCRIPT.read_text(encoding="utf-8")
     func = "is_jdk21() {" + text.split("is_jdk21() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"

@@ -29,7 +29,7 @@ JAVA_TOP_LEVEL = re.compile(
     r"(?:(?:public|protected|private|abstract|final|static|sealed|non-sealed|strictfp)\s+)*"
     r"(?:class|interface|enum|record|@interface)\s+([A-Za-z_]\w*)"
 )
-TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.\-]*")
+TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.\-/]*")
 BRACKET = re.compile(r"\[[^\]]*\]")
 PY_TEST_FILE = re.compile(r"test_\w+(?:\.py)?")
 
@@ -138,7 +138,18 @@ def parse_map(path: Path, errors: list, shown: str):
     return rows, helper
 
 
-def check_cell(cell: str, where: str, col: str, tests: dict, java: bool, errors: list) -> set:
+def check_other_map_test(token: str, where: str, col: str, root: Path, errors: list) -> None:
+    """'scripts/test_x.py' 처럼 다른 지도의 테스트를 가리키는 이름을 검사한다. 그 테스트의 연결은 원래 지도에서 센다."""
+    group, _, name = token.rpartition("/")
+    if f"{group}.md" not in MAP_FILES:
+        errors.append(f"{where}: '{col}' 칸의 {token} 에서 {group} 는 지도 이름이 아닙니다. "
+                      f"'<지도 이름>/<테스트 이름>' 형식으로 쓰세요({', '.join(m[:-3] for m in MAP_FILES)})")
+    elif lookup(name, inventory(root, f"{group}.md").tests) is None:
+        errors.append(f"{where}: '{col}' 칸의 테스트 {token} 가 {group} 지도의 테스트 폴더에 없습니다. "
+                      f"이름을 실제 테스트에 맞게 고치거나 칸에서 빼세요")
+
+
+def check_cell(cell: str, where: str, col: str, tests: dict, java: bool, errors: list, root: Path | None = None) -> set:
     """칸 하나를 검사하고 칸에 적힌 테스트 이름(인벤토리 이름)을 돌려준다."""
     linked = set()
     if not cell.strip():
@@ -159,6 +170,10 @@ def check_cell(cell: str, where: str, col: str, tests: dict, java: bool, errors:
             continue
         refs = []
         for token in TOKEN.findall(BRACKET.sub("", item)):
+            if "/" in token and root is not None:
+                check_other_map_test(token, where, col, root, errors)
+                refs.append(token)
+                continue
             name = lookup(token, tests)
             if name:
                 refs.append(name)
@@ -201,7 +216,7 @@ def check_map_file(root: Path, map_file: str, errors: list) -> None:
             else:
                 counts[name] = counts.get(name, 0) + 1
         for col in TEST_COLUMNS:
-            linked |= check_cell(row.cells[col], where, col, inv.tests, java, errors)
+            linked |= check_cell(row.cells[col], where, col, inv.tests, java, errors, root)
 
     if helper is None:
         if rows:

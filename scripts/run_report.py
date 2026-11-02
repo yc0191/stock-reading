@@ -6,10 +6,11 @@
 
 결과 폴더 모양(test-all.sh 가 만든다):
   <results>/<단계>/java/<서비스>/TEST-*.xml   Gradle 결과
-  <results>/<단계>/py/<briefing|scripts>.xml  pytest --junitxml 결과
+  <results>/<단계>/py/<briefing|scripts>[-<이름>].xml  pytest --junitxml 결과('-' 앞이 지도 이름)
   <results>/stages.tsv                         단계마다 한 줄(키, 이름, 상태, 설명, 초, 결과 폴더)
   <results>/live/counts.json                   시세 흐름 실제 테스트가 남긴 행 개수(값은 없음)
-단계는 main(Java 전체·브리핑·설정 로더), db(실제 DB 테스트), live(--live 시세 흐름)다.
+  <results>/live/briefing-counts.json          브리핑·메일 실제 테스트가 남긴 개수(LLM 호출, 메일 발송 등)
+단계는 main(Java 전체·브리핑·설정 로더), db(실제 DB 테스트), live(--live 시세 흐름과 브리핑·메일)다.
 """
 from __future__ import annotations
 
@@ -27,7 +28,7 @@ LIVE_SKIP_REASON = "실제 호출 옵션 없음"
 LIVE_CONDITION = "test-all.sh --live"
 DB_CONDITION = re.compile(r"\b[A-Z]+_IT_DB_[A-Z]+\b")
 PY_FILE = re.compile(r"^test_\w+$")
-NAME_WITH_BRACKET = re.compile(r"([A-Za-z_][A-Za-z0-9_.\-]*)\s*(\[[^\]]*\])?")
+NAME_WITH_BRACKET = re.compile(r"([A-Za-z_][A-Za-z0-9_.\-/]*)\s*(\[[^\]]*\])?")
 SKIPPED_FAILURE_TYPES = ("TICK_SKIPPED",)
 TOKEN_FAILURE_TYPES = ("TOKEN_ISSUE_FAILED",)
 
@@ -41,6 +42,7 @@ class Item:
     tests: tuple
     label: str  # 대괄호의 종류 표시(DB, 외부 API 등). 없으면 빈 문자열
     condition: str  # 켜는 조건. 없으면 빈 문자열
+    group: str = ""  # 다른 지도의 테스트를 가리킬 때('scripts/test_x.py') 그 지도 이름. 없으면 칸이 있는 지도
 
     @property
     def phase(self) -> str:
@@ -75,7 +77,8 @@ def parse_item(text: str) -> list:
     items = []
     for part in NAME_WITH_BRACKET.finditer(text):
         label, condition = _bracket(part.group(2)) if part.group(2) else ("", "")
-        items.append(Item("tests", (part.group(1),), label, condition))
+        group, _, name = part.group(1).rpartition("/")
+        items.append(Item("tests", (name,), label, condition, group))
     return items
 
 
@@ -116,7 +119,8 @@ def load_results(phase_dir: Path) -> dict:
             name = _java_name(suite.get("name", ""))
             found.setdefault((group, name), []).extend(_case_status(c) for c in suite.iter("testcase"))
     for xml in sorted((phase_dir / "py").glob("*.xml")):
-        group = xml.stem
+        # 한 단계에서 같은 지도의 pytest 를 여러 번 돌리면 'scripts-briefing.xml' 처럼 이름을 붙여 따로 남긴다.
+        group = xml.stem.split("-", 1)[0]
         for suite in _suites(xml):
             for case in suite.iter("testcase"):
                 name = _py_name(case.get("classname", ""))
@@ -158,7 +162,7 @@ def judge_item(item: Item, group: str, results: dict, live: bool) -> tuple:
     phase_results = results.get(item.phase, {})
     statuses, missing = [], []
     for name in item.tests:
-        key = (group, name[:-3] if name.endswith(".py") else name)
+        key = (item.group or group, name[:-3] if name.endswith(".py") else name)
         if key in phase_results:
             statuses.extend(phase_results[key])
         else:
@@ -278,6 +282,22 @@ def live_calls(counts: dict | None) -> str:
     return f"토큰 {token}, 시세 {quote}"
 
 
+def briefing_calls(counts: dict | None) -> str:
+    """브리핑·메일 실제 테스트가 남긴 개수로 LLM 호출과 메일 발송 횟수를 적는다. 1이 아니면 그대로 보인다."""
+    if not counts:
+        return "LLM·메일 알 수 없음(브리핑 확인 기록 없음)"
+    return f"LLM {counts.get('llm', 0)}, 메일 {counts.get('mail', 0)}"
+
+
+def _read_json(path: Path) -> dict | None:
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+
 def report(root: Path, results_dir: Path, live: bool, out=sys.stdout) -> int:
     results = {phase: load_results(results_dir / phase) for phase in ("main", "db", "live")}
     failed = False
@@ -314,9 +334,12 @@ def report(root: Path, results_dir: Path, live: bool, out=sys.stdout) -> int:
         print(f"| {stage.label} | {word}{f' ({extra})' if extra else ''} | {_duration(stage.seconds)} |", file=out)
 
     if live:
-        counts_file = results_dir / "live" / "counts.json"
-        counts = json.loads(counts_file.read_text(encoding="utf-8")) if counts_file.is_file() else None
-        print(f"\n실제 호출: {live_calls(counts)}", file=out)
+        calls = live_calls(_read_json(results_dir / "live" / "counts.json"))
+        # 브리핑·메일 단계에 가지 못했으면(시세 흐름 실패 등) LLM·메일은 부르지 않은 것이다.
+        reached = any(s.key == "livebrief" and s.status != "skip" and s.results for s in stages)
+        brief = _read_json(results_dir / "live" / "briefing-counts.json")
+        calls += ", " + (briefing_calls(brief) if reached or brief else "LLM 0, 메일 0")
+        print(f"\n실제 호출: {calls}", file=out)
     else:
         print("\n실제 호출: 0회", file=out)
     print(f"결과: {'실패 (종료 코드 1)' if failed else '통과 (종료 코드 0)'}", file=out)

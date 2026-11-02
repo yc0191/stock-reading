@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# 전체 실행 스크립트. 단위·가상 테스트와 실제 DB 테스트를 항상 돌리고, --live 일 때만 시세 흐름 실제 테스트를 돌린 뒤
-# 테스트 지도(docs/test-map)의 기능별 '돌았음 / 건너뜀(이유) / 실패' 표를 출력한다. 하나라도 실패하면 1로 끝난다.
+# 전체 실행 스크립트. 단위·가상 테스트와 실제 DB 테스트를 항상 돌리고, --live 일 때만 시세 흐름과 브리핑·메일 실제 테스트를
+# 돌린 뒤 테스트 지도(docs/test-map)의 기능별 '돌았음 / 건너뜀(이유) / 실패' 표를 출력한다. 하나라도 실패하면 1로 끝난다.
 #
 # 사용법: scripts/test-all.sh [--live] [--plan]
-#   --live  실제 시세 서버를 부른다(토큰 1 + 시세 1). 사람이 직접 결정해서만 쓴다.
+#   --live  실제 외부를 부른다(시세 토큰 1 + 시세 1 + LLM 1 + 메일 1통). 사람이 직접 결정해서만 쓴다.
 #   --plan  아무것도 띄우지 않고 실행 순서만 보여 준다.
 #
 # 실제 DB 테스트는 개발용 stock-postgres 안에 이 실행만의 stock_test_run_<시각>_<pid> 데이터베이스를 만들어 쓰고 지운다.
@@ -14,8 +14,13 @@
 #   TEST_ALL_ENV_FILE  .env 위치(기본 저장소 루트의 .env)
 #   TEST_ALL_PYTHON    브리핑 venv 파이썬(기본 services/briefing/.venv/bin/python)
 #   JAVA_HOME_21       JDK 21 위치(없으면 /usr/libexec/java_home -v 21 로 찾음)
-#   --live 전용: BROKER_BASE_URL, BROKER_APP_KEY, BROKER_APP_SECRET, TEST_ALL_LIVE_SYMBOL(6자리)
-#               실행 환경변수를 먼저 보고 없으면 .env 에서 읽는다.
+#   --live 전용: BROKER_BASE_URL, BROKER_APP_KEY, BROKER_APP_SECRET, TEST_ALL_LIVE_SYMBOL(6자리),
+#               ANTHROPIC_API_KEY, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, NOTIFIER_SENDER, NOTIFIER_RECIPIENT
+#               (선택: SMTP_PORT, BRIEFING_LLM_MODEL)
+#               실행 환경변수를 먼저 보고 없으면 .env 에서 읽는다. 하나라도 비면 시세를 부르기 전에 실패로 끝낸다.
+#               메일 발송 스위치는 이 스크립트가 띄운 테스트용 notifier 프로세스에만 켜고(.env 는 바꾸지 않음),
+#               제목 앞에 [테스트]를 붙이고 시간당 1통으로 묶는다. LLM 리포트 본문은 받은 메일과
+#               build/test-all-live/briefing-<실행 이름>.txt(권한 600, git 제외)에만 남는다.
 set -uo pipefail
 
 usage() {
@@ -44,8 +49,11 @@ if [ "$PLAN" = 1 ]; then
   echo "5. 실제 DB 테스트: 지도에서 고른 market·news·브리핑 실제 DB 테스트"
   if [ "$LIVE" = 1 ]; then
     echo "6. 시세 흐름 실제: 일회용 Kafka, market(테스트 전용 데이터베이스), collector(실제 시세, 종목 1개), tick 1건, 저장 확인"
+    echo "6b. 브리핑·메일 실제: news·notifier(발송 켬, [테스트], 1통)·briefing(실제 LLM) 기동, 가짜 변동·기사·수집 완료 넣기,"
+    echo "    리포트(generatedBy=llm)와 메일 발송 1통 확인, 본문은 build/test-all-live/ 에 저장"
   else
     echo "6. 시세 흐름 실제: 건너뜀($LIVE_SKIP_REASON)"
+    echo "6b. 브리핑·메일 실제: 건너뜀($LIVE_SKIP_REASON)"
   fi
   echo "7. 정리: 이 실행이 만든 데이터베이스·컨테이너·프로세스·임시 폴더만 지움"
   echo "8. docs/test-map 기능별 결과 표 출력"
@@ -65,12 +73,16 @@ PG_CONTAINER="stock-postgres"
 ENV_FILE="${TEST_ALL_ENV_FILE:-$ROOT/.env}"
 PY="${TEST_ALL_PYTHON:-$ROOT/services/briefing/.venv/bin/python}"
 LOCK_DIR="$ROOT/build/test-all.lock"
+LIVE_OUT_DIR="$ROOT/build/test-all-live"
 JAVA_SERVICES="collector market news notifier"
 
 # 바깥에서 들어온 켜는 변수가 기본 단계에 섞이면 엉뚱한 데이터베이스로 실제 DB 테스트가 돈다. 필요한 단계에서만 넣는다.
 unset MARKET_IT_DB_URL MARKET_IT_DB_USER MARKET_IT_DB_PASSWORD NEWS_IT_DB_URL NEWS_IT_DB_USER NEWS_IT_DB_PASSWORD \
   BRIEFING_IT_DB_URL BRIEFING_IT_DB_USER BRIEFING_IT_DB_PASSWORD \
-  QUOTE_FLOW_LIVE_DB_URL QUOTE_FLOW_LIVE_DB_USER QUOTE_FLOW_LIVE_DB_PASSWORD
+  QUOTE_FLOW_LIVE_DB_URL QUOTE_FLOW_LIVE_DB_USER QUOTE_FLOW_LIVE_DB_PASSWORD \
+  BRIEFING_FLOW_LIVE_KAFKA BRIEFING_FLOW_LIVE_RUN_ID BRIEFING_FLOW_LIVE_DB_URL BRIEFING_FLOW_LIVE_DB_USER \
+  BRIEFING_FLOW_LIVE_DB_PASSWORD BRIEFING_FLOW_LIVE_BRIEFING_LOG BRIEFING_FLOW_LIVE_NOTIFIER_LOG \
+  BRIEFING_FLOW_LIVE_REPORT_FILE
 
 TMP=""
 LOCKED=0
@@ -78,8 +90,14 @@ DB_CREATED=0
 KAFKA_STARTED=0
 MARKET_PID=""
 COLLECTOR_PID=""
+NEWS_PID=""
+NOTIFIER_PID=""
+BRIEFING_PID=""
 MARKET_JAR=""
 COLLECTOR_JAR=""
+NEWS_JAR=""
+NOTIFIER_JAR=""
+KAFKA_PORT=""
 CLEANED=0
 
 log() { printf '\n== %s\n' "$*"; }
@@ -109,6 +127,7 @@ admin_sql() {
 # ---------------------------------------------------------------- 정리
 
 stop_service() {
+  # 두 번째 인자는 이 실행이 띄운 프로세스의 명령줄에 있어야 하는 문자열(jar 경로, 브리핑은 임시 폴더)이다.
   local pid=$1 jar=$2 name=$3 cmd waited
   [ -n "$pid" ] || return 0
   kill -0 "$pid" 2>/dev/null || return 0
@@ -160,6 +179,12 @@ drop_db() {
 # 이 실행이 만든 것(서비스 프로세스, Kafka 컨테이너, 데이터베이스)을 지운다. 여러 번 불러도 같다.
 cleanup_resources() {
   local bad=0
+  stop_service "$NOTIFIER_PID" "$NOTIFIER_JAR" notifier || bad=1
+  NOTIFIER_PID=""
+  stop_service "$BRIEFING_PID" "$TMP/svc/briefing" briefing || bad=1
+  BRIEFING_PID=""
+  stop_service "$NEWS_PID" "$NEWS_JAR" news || bad=1
+  NEWS_PID=""
   stop_service "$COLLECTOR_PID" "$COLLECTOR_JAR" collector || bad=1
   COLLECTOR_PID=""
   stop_service "$MARKET_PID" "$MARKET_JAR" market || bad=1
@@ -416,6 +441,7 @@ fi
 # ---------------------------------------------------------------- 6. 시세 흐름 실제 (--live)
 
 LIVE_FAIL_REASON=""
+QUOTE_LIVE_OK=0
 
 wait_for_log() {
   # 서비스 로그에 문구가 나올 때까지 기다린다. 로그 내용은 출력하지 않는다(종목 코드가 있을 수 있음).
@@ -427,27 +453,47 @@ wait_for_log() {
   done
 }
 
+# 브리핑·메일 단계까지 필요한 키. 시세를 부르기 전에 모두 확인해 메일 설정이 빠졌는데 시세만 부르는 일이 없게 한다.
+LIVE_KEYS="BROKER_BASE_URL BROKER_APP_KEY BROKER_APP_SECRET TEST_ALL_LIVE_SYMBOL ANTHROPIC_API_KEY SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER NOTIFIER_RECIPIENT"
+
+missing_live_keys() {
+  local key missing=""
+  for key in $LIVE_KEYS; do
+    [ -n "$(env_or_dotenv "$key")" ] || missing="$missing${missing:+·}$key"
+  done
+  printf '%s' "$missing"
+}
+
+service_jar() {
+  local jar
+  jar=$(ls "services/$1/build/libs/"*.jar 2>/dev/null | grep -v -- '-plain' | head -1)
+  [ -n "$jar" ] && printf '%s' "$ROOT/$jar"
+}
+
 run_live() {
-  local base_url app_key app_secret symbol port waited svc_dir
+  local base_url app_key app_secret symbol port waited svc_dir missing
+  missing=$(missing_live_keys)
+  if [ -n "$missing" ]; then LIVE_FAIL_REASON="키 없음($missing)"; return 1; fi
   base_url=$(env_or_dotenv BROKER_BASE_URL)
   app_key=$(env_or_dotenv BROKER_APP_KEY)
   app_secret=$(env_or_dotenv BROKER_APP_SECRET)
   symbol=$(env_or_dotenv TEST_ALL_LIVE_SYMBOL)
-  if [ -z "$base_url" ] || [ -z "$app_key" ] || [ -z "$app_secret" ] || [ -z "$symbol" ]; then
-    LIVE_FAIL_REASON="키 없음(BROKER_BASE_URL·BROKER_APP_KEY·BROKER_APP_SECRET·TEST_ALL_LIVE_SYMBOL 중 빈 값)"; return 1
-  fi
   if ! [[ "$symbol" =~ ^[0-9]{6}$ ]]; then LIVE_FAIL_REASON="TEST_ALL_LIVE_SYMBOL 이 6자리 숫자가 아님"; return 1; fi
   if [ "$JAVA_OK" = 0 ] || [ "$PY_OK" = 0 ]; then LIVE_FAIL_REASON="JDK 21 또는 브리핑 venv 가 없음"; return 1; fi
 
   echo "bootJar 빌드"
-  ./gradlew -q :services:collector:bootJar :services:market:bootJar || { LIVE_FAIL_REASON="bootJar 빌드 실패"; return 1; }
-  MARKET_JAR=$(ls services/market/build/libs/*.jar 2>/dev/null | grep -v -- '-plain' | head -1)
-  COLLECTOR_JAR=$(ls services/collector/build/libs/*.jar 2>/dev/null | grep -v -- '-plain' | head -1)
-  if [ -z "$MARKET_JAR" ] || [ -z "$COLLECTOR_JAR" ]; then LIVE_FAIL_REASON="bootJar 를 찾지 못함"; return 1; fi
-  MARKET_JAR="$ROOT/$MARKET_JAR"
-  COLLECTOR_JAR="$ROOT/$COLLECTOR_JAR"
+  ./gradlew -q :services:collector:bootJar :services:market:bootJar :services:news:bootJar :services:notifier:bootJar \
+    || { LIVE_FAIL_REASON="bootJar 빌드 실패"; return 1; }
+  MARKET_JAR=$(service_jar market)
+  COLLECTOR_JAR=$(service_jar collector)
+  NEWS_JAR=$(service_jar news)
+  NOTIFIER_JAR=$(service_jar notifier)
+  if [ -z "$MARKET_JAR" ] || [ -z "$COLLECTOR_JAR" ] || [ -z "$NEWS_JAR" ] || [ -z "$NOTIFIER_JAR" ]; then
+    LIVE_FAIL_REASON="bootJar 를 찾지 못함"; return 1
+  fi
 
   port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+  KAFKA_PORT=$port
   echo "일회용 Kafka 기동: $KAFKA_NAME (127.0.0.1:$port)"
   KAFKA_STARTED=1
   # 컨테이너 안팎에서 같은 포트를 써서 publish-tick.sh 도 같은 주소로 붙게 한다. 볼륨이 없어 지우면 데이터도 사라진다.
@@ -473,6 +519,8 @@ run_live() {
   svc_dir="$TMP/svc"
   mkdir -p "$svc_dir/market" "$svc_dir/collector"
   echo "market 기동(테스트 전용 데이터베이스)"
+  # MARKET_PREV_CLOSE_FIELD 를 넘기지 않아 전일 종가 기준 감지는 꺼진다. 스냅샷이 1개라 구간 감지도 일어나지 않으므로
+  # market 이 스스로 변동을 내지 않고, 브리핑·메일 단계의 변동은 스크립트가 넣은 1건뿐이다.
   (
     export SPRING_DATASOURCE_URL="$JDBC_URL?currentSchema=market" SPRING_DATASOURCE_USERNAME="$M_USER" SPRING_DATASOURCE_PASSWORD="$M_PW"
     export SPRING_KAFKA_BOOTSTRAP_SERVERS="localhost:$port"
@@ -519,6 +567,92 @@ run_live() {
   ) || { LIVE_FAIL_REASON="저장 확인 실패"; return 1; }
 }
 
+# ---------------------------------------------------------------- 6b. 브리핑·메일 실제 (--live)
+
+LIVE_BRIEF_FAIL_REASON=""
+LIVE_REPORT_FILE="$LIVE_OUT_DIR/briefing-${RUN_ID}.txt"
+
+run_live_briefing() {
+  local svc_dir="$TMP/svc" bootstrap="localhost:$KAFKA_PORT" llm_key llm_model
+  llm_key=$(env_or_dotenv ANTHROPIC_API_KEY)
+  llm_model=$(env_or_dotenv BRIEFING_LLM_MODEL)
+  mkdir -p "$svc_dir/news" "$svc_dir/notifier" "$svc_dir/briefing"
+
+  echo "news 기동(테스트 전용 데이터베이스 news 스키마)"
+  (
+    export SPRING_DATASOURCE_URL="$JDBC_URL?currentSchema=news" SPRING_DATASOURCE_USERNAME="$N_USER" SPRING_DATASOURCE_PASSWORD="$N_PW"
+    export SPRING_KAFKA_BOOTSTRAP_SERVERS="$bootstrap"
+    cd "$svc_dir/news" && exec "$JAVA_HOME_21/bin/java" -jar "$NEWS_JAR"
+  ) > "$svc_dir/news.log" 2>&1 &
+  NEWS_PID=$!
+  # Flyway 로 기사 테이블을 만든 뒤에야 리스너가 파티션을 받는다.
+  wait_for_log "$svc_dir/news.log" "groupId=news] Adding newly assigned partitions:" "$NEWS_PID" 120
+  case $? in
+    0) ;;
+    2) LIVE_BRIEF_FAIL_REASON="news 가 시작 중에 끝남"; return 1 ;;
+    *) LIVE_BRIEF_FAIL_REASON="news 가 120초 안에 준비되지 않음"; return 1 ;;
+  esac
+
+  echo "notifier 기동(테스트용: 실제 발송, 제목 앞 [테스트], 시간당 1통)"
+  (
+    export SPRING_KAFKA_BOOTSTRAP_SERVERS="$bootstrap"
+    # 발송 스위치는 이 프로세스 환경에만 둔다. .env 는 읽지도 쓰지도 않는다(임시 폴더에서 띄움).
+    export NOTIFIER_SEND_ENABLED=true NOTIFIER_SUBJECT_PREFIX="[테스트]" NOTIFIER_MAX_PER_HOUR=1
+    SMTP_HOST=$(env_or_dotenv SMTP_HOST) SMTP_USERNAME=$(env_or_dotenv SMTP_USERNAME)
+    SMTP_PASSWORD=$(env_or_dotenv SMTP_PASSWORD) SMTP_PORT=$(env_or_dotenv SMTP_PORT)
+    NOTIFIER_SENDER=$(env_or_dotenv NOTIFIER_SENDER) NOTIFIER_RECIPIENT=$(env_or_dotenv NOTIFIER_RECIPIENT)
+    export SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER NOTIFIER_RECIPIENT
+    if [ -n "$SMTP_PORT" ]; then export SMTP_PORT; else unset SMTP_PORT; fi
+    # 제목의 한글 머리말이 환경변수에서 깨지지 않게 JVM 이 UTF-8 로 읽게 한다.
+    export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+    cd "$svc_dir/notifier" && exec "$JAVA_HOME_21/bin/java" -jar "$NOTIFIER_JAR"
+  ) > "$svc_dir/notifier.log" 2>&1 &
+  NOTIFIER_PID=$!
+  # notifier 는 처음 시작할 때 latest 부터 읽으므로 브리핑이 나오기 전에 파티션을 받아 두어야 메일을 놓치지 않는다.
+  wait_for_log "$svc_dir/notifier.log" "groupId=notifier] Adding newly assigned partitions: briefing.generated" "$NOTIFIER_PID" 120
+  case $? in
+    0) ;;
+    2) LIVE_BRIEF_FAIL_REASON="notifier 가 시작 중에 끝남"; return 1 ;;
+    *) LIVE_BRIEF_FAIL_REASON="notifier 가 120초 안에 준비되지 않음"; return 1 ;;
+  esac
+
+  echo "briefing 기동(테스트 전용 데이터베이스, 실제 LLM)"
+  (
+    export KAFKA_BOOTSTRAP="$bootstrap" POSTGRES_DB="$DB_NAME" BRIEFING_DB_USER="$B_USER" BRIEFING_DB_PASSWORD="$B_PW"
+    export ANTHROPIC_API_KEY="$llm_key" PYTHONPATH="$ROOT/services/briefing/src" PYTHONUNBUFFERED=1
+    if [ -n "$llm_model" ]; then export BRIEFING_LLM_MODEL="$llm_model"; else unset BRIEFING_LLM_MODEL; fi
+    # 캐시 위치를 이 실행의 임시 폴더로 두면 명령줄에 임시 폴더가 남아 정리할 때 이 실행의 프로세스인지 알 수 있다.
+    cd "$svc_dir/briefing" && exec "$PY" -X "pycache_prefix=$svc_dir/briefing/pycache" -m briefing.main
+  ) > "$svc_dir/briefing.log" 2>&1 &
+  BRIEFING_PID=$!
+  wait_for_log "$svc_dir/briefing.log" "briefing started:" "$BRIEFING_PID" 60
+  case $? in
+    0) ;;
+    2) LIVE_BRIEF_FAIL_REASON="briefing 이 시작 중에 끝남"; return 1 ;;
+    *) LIVE_BRIEF_FAIL_REASON="briefing 이 60초 안에 준비되지 않음"; return 1 ;;
+  esac
+  if ! grep -qF "briefing reports will be written by the LLM" "$svc_dir/briefing.log"; then
+    LIVE_BRIEF_FAIL_REASON="briefing 이 규칙 기반으로 시작됨(ANTHROPIC_API_KEY 확인)"; return 1
+  fi
+
+  echo "가짜 변동·근거 기사·수집 완료 넣기"
+  (
+    export LIVE_BRIEFING_DB_URL="$PG_URL" LIVE_BRIEFING_KAFKA="$bootstrap" LIVE_BRIEFING_RUN_ID="$RUN_ID"
+    export LIVE_BRIEFING_MARKET_USER="$M_USER" LIVE_BRIEFING_MARKET_PASSWORD="$M_PW"
+    export LIVE_BRIEFING_NEWS_USER="$N_USER" LIVE_BRIEFING_NEWS_PASSWORD="$N_PW"
+    "$PY" scripts/live_briefing.py seed
+  ) || { LIVE_BRIEF_FAIL_REASON="변동·기사 넣기 실패"; return 1; }
+
+  echo "리포트·메일 확인(개수와 생성 방식만 출력, 본문은 $LIVE_REPORT_FILE)"
+  (
+    export BRIEFING_FLOW_LIVE_KAFKA="$bootstrap" BRIEFING_FLOW_LIVE_RUN_ID="$RUN_ID"
+    export BRIEFING_FLOW_LIVE_DB_URL="$PG_URL" BRIEFING_FLOW_LIVE_DB_USER="$B_USER" BRIEFING_FLOW_LIVE_DB_PASSWORD="$B_PW"
+    export BRIEFING_FLOW_LIVE_BRIEFING_LOG="$svc_dir/briefing.log" BRIEFING_FLOW_LIVE_NOTIFIER_LOG="$svc_dir/notifier.log"
+    export BRIEFING_FLOW_LIVE_REPORT_FILE="$LIVE_REPORT_FILE" BRIEFING_FLOW_LIVE_COUNTS_FILE="$TMP/results/live/briefing-counts.json"
+    "$PY" -m pytest -c scripts/pytest.ini scripts/tests/test_briefing_flow_live.py --junitxml="$TMP/results/live/py/scripts-briefing.xml"
+  ) || { LIVE_BRIEF_FAIL_REASON="리포트·메일 확인 실패"; return 1; }
+}
+
 log "6. 시세 흐름 실제"
 t=$SECONDS
 if [ "$LIVE" = 0 ]; then
@@ -527,10 +661,28 @@ if [ "$LIVE" = 0 ]; then
 elif [ "$DB_READY" = 0 ]; then
   stage live "시세 흐름 실제" fail "DB 준비 실패로 돌리지 못함" 0
 elif run_live; then
-  stage live "시세 흐름 실제" ok "" $((SECONDS - t)) live
+  stage live "시세 흐름 실제" ok "" $((SECONDS - t)) live/py/scripts.xml
+  QUOTE_LIVE_OK=1
 else
   echo "시세 흐름 실제 실패: $LIVE_FAIL_REASON"
-  stage live "시세 흐름 실제" fail "$LIVE_FAIL_REASON" $((SECONDS - t)) live
+  stage live "시세 흐름 실제" fail "$LIVE_FAIL_REASON" $((SECONDS - t)) live/py/scripts.xml
+fi
+
+log "6b. 브리핑·메일 실제"
+t=$SECONDS
+if [ "$LIVE" = 0 ]; then
+  echo "건너뜀($LIVE_SKIP_REASON)"
+  stage livebrief "브리핑·메일 실제" skip "$LIVE_SKIP_REASON" 0
+elif [ "${QUOTE_LIVE_OK:-0}" = 0 ]; then
+  # 브리핑 서비스를 띄우지 않았으므로 LLM·메일은 부르지 않았다.
+  stage livebrief "브리핑·메일 실제" fail "시세 흐름 실제가 통과하지 않아 돌리지 않음" 0
+elif run_live_briefing; then
+  stage livebrief "브리핑·메일 실제" ok "리포트 파일 ${LIVE_REPORT_FILE#"$ROOT"/}" $((SECONDS - t)) live/py/scripts-briefing.xml
+else
+  echo "브리핑·메일 실제 실패: $LIVE_BRIEF_FAIL_REASON"
+  detail="$LIVE_BRIEF_FAIL_REASON"
+  [ -f "$LIVE_REPORT_FILE" ] && detail="$detail, 리포트 파일 ${LIVE_REPORT_FILE#"$ROOT"/}"
+  stage livebrief "브리핑·메일 실제" fail "$detail" $((SECONDS - t)) live/py/scripts-briefing.xml
 fi
 
 # ---------------------------------------------------------------- 7. 정리

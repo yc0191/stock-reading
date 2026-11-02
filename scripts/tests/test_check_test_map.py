@@ -210,3 +210,37 @@ def test_main_returns_zero_on_pass_and_one_with_messages_on_failure(tmp_path, ca
     assert ctm.main(["--root", str(root)]) == 1
     out = capsys.readouterr().out
     assert "docs/test-map/scripts.md" in out and "added.py" in out and "실패: 1건" in out
+
+
+def test_a_cell_may_name_a_test_of_another_map(tmp_path):
+    root = make_repo(tmp_path)
+    replace(root / "docs/test-map/briefing.md", "없음 - 나중에 채움 [외부 API]",
+            "scripts/test_tool.py [외부 API, 켜는 조건: test-all.sh --live]")
+    assert ctm.check(root) == []
+
+
+def test_a_test_of_another_map_must_exist_there(tmp_path):
+    root = make_repo(tmp_path)
+    replace(root / "docs/test-map/briefing.md", "없음 - 나중에 채움 [외부 API]",
+            "scripts/test_missing.py [외부 API, 켜는 조건: test-all.sh --live]")
+    errors = ctm.check(root)
+    assert len(errors) == 1
+    assert "scripts/test_missing.py" in errors[0] and "briefing.md" in errors[0]
+
+
+def test_another_map_name_must_be_a_real_map(tmp_path):
+    root = make_repo(tmp_path)
+    replace(root / "docs/test-map/briefing.md", "없음 - 나중에 채움 [외부 API]", "tools/test_tool.py [외부 API]")
+    errors = ctm.check(root)
+    assert len(errors) == 1
+    assert "지도 이름이 아닙니다" in errors[0]
+
+
+def test_naming_a_test_from_another_map_does_not_link_it_in_its_own_map(tmp_path):
+    # 다른 지도에서 가리켜도 그 테스트는 원래 지도의 기능 칸에 있어야 한다.
+    root = make_repo(tmp_path)
+    write(root / "scripts/tests/test_flow_live.py", "")
+    replace(root / "docs/test-map/briefing.md", "없음 - 나중에 채움 [외부 API]", "scripts/test_flow_live.py [외부 API]")
+    errors = ctm.check(root)
+    assert len(errors) == 1
+    assert "test_flow_live.py" in errors[0] and "scripts.md" in errors[0]
