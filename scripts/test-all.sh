@@ -8,16 +8,18 @@
 #
 # 실제 DB 테스트는 개발용 stock-postgres 안에 이 실행만의 stock_test_run_<시각>_<pid> 데이터베이스를 만들어 쓰고 지운다.
 # 꺼져 있던 stock-postgres 는 켜고 끝나도 끄지 않는다. 서비스 계정은 만들거나 바꾸지 않는다.
-# 서비스 계정 비밀번호와 시세 키는 .env 에서 필요한 키만 골라 읽어 자식 프로세스 환경변수로만 넘기고 출력하지 않는다.
+# 서비스 계정 비밀번호는 .env 에서, --live 의 키는 Parameter Store 에서 필요한 키만 골라 읽어 자식 프로세스 환경변수로만 넘기고 출력하지 않는다.
 #
 # 환경변수(모두 선택):
 #   TEST_ALL_ENV_FILE  .env 위치(기본 저장소 루트의 .env)
 #   TEST_ALL_PYTHON    브리핑 venv 파이썬(기본 services/briefing/.venv/bin/python)
 #   JAVA_HOME_21       JDK 21 위치(없으면 /usr/libexec/java_home -v 21 로 찾음)
+#   TEST_ALL_AWS_PROFILE  --live 가 Parameter Store 를 읽을 AWS CLI 프로필(없으면 기본 자격증명 방식)
 #   --live 전용: BROKER_BASE_URL, BROKER_APP_KEY, BROKER_APP_SECRET, TEST_ALL_LIVE_SYMBOL(6자리),
 #               ANTHROPIC_API_KEY, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, NOTIFIER_SENDER, NOTIFIER_RECIPIENT
 #               (선택: SMTP_PORT, BRIEFING_LLM_MODEL)
-#               실행 환경변수를 먼저 보고 없으면 .env 에서 읽는다. 하나라도 비면 시세를 부르기 전에 실패로 끝낸다.
+#               (BRIEFING_LLM_MODEL 을 뺀 위 키는) 실행할 때마다 Parameter Store 에서 새로 읽어 임시 폴더에만 두고,
+#               실행 환경변수와 .env 의 같은 키는 쓰지 않는다. 하나라도 비면 시세를 부르기 전에 실패로 끝낸다.
 #               메일 발송 스위치는 이 스크립트가 띄운 테스트용 notifier 프로세스에만 켜고(.env 는 바꾸지 않음),
 #               제목 앞에 [테스트]를 붙이고 시간당 1통으로 묶는다. LLM 리포트 본문은 받은 메일과
 #               build/test-all-live/briefing-<실행 이름>.txt(권한 600, git 제외)에만 남는다.
@@ -453,13 +455,31 @@ wait_for_log() {
   done
 }
 
+# --live 의 키는 .env 복사본이 낡아도 영향받지 않게 실행할 때마다 Parameter Store 에서 읽는다.
+# 값은 임시 폴더의 파일(권한 600)에만 두고 끝나면 임시 폴더와 함께 지운다. 로더는 키 이름만 출력한다.
+LIVE_PARAMS=""
+
+fetch_live_params() {
+  LIVE_PARAMS="$TMP/live-params.env"
+  if [ -n "${TEST_ALL_AWS_PROFILE:-}" ]; then
+    "$PY" "$ROOT/scripts/load_config.py" --env-file "$LIVE_PARAMS" --profile "$TEST_ALL_AWS_PROFILE" > "$TMP/load_config.log" 2>&1
+  else
+    "$PY" "$ROOT/scripts/load_config.py" --env-file "$LIVE_PARAMS" > "$TMP/load_config.log" 2>&1
+  fi
+}
+
+live_value() {
+  [ -n "$LIVE_PARAMS" ] && [ -f "$LIVE_PARAMS" ] || return 0
+  grep -E "^$1=" "$LIVE_PARAMS" | head -1 | cut -d= -f2- | tr -d "\"'\r"
+}
+
 # 브리핑·메일 단계까지 필요한 키. 시세를 부르기 전에 모두 확인해 메일 설정이 빠졌는데 시세만 부르는 일이 없게 한다.
 LIVE_KEYS="BROKER_BASE_URL BROKER_APP_KEY BROKER_APP_SECRET TEST_ALL_LIVE_SYMBOL ANTHROPIC_API_KEY SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER NOTIFIER_RECIPIENT"
 
 missing_live_keys() {
   local key missing=""
   for key in $LIVE_KEYS; do
-    [ -n "$(env_or_dotenv "$key")" ] || missing="$missing${missing:+·}$key"
+    [ -n "$(live_value "$key")" ] || missing="$missing${missing:+·}$key"
   done
   printf '%s' "$missing"
 }
@@ -472,12 +492,14 @@ service_jar() {
 
 run_live() {
   local base_url app_key app_secret symbol port waited svc_dir missing
+  if [ "$PY_OK" = 0 ]; then LIVE_FAIL_REASON="브리핑 venv 가 없어 Parameter Store 를 읽지 못함"; return 1; fi
+  if ! fetch_live_params; then LIVE_FAIL_REASON="Parameter Store 읽기 실패($TMP/load_config.log 참고, 키 이름만 있음)"; return 1; fi
   missing=$(missing_live_keys)
   if [ -n "$missing" ]; then LIVE_FAIL_REASON="키 없음($missing)"; return 1; fi
-  base_url=$(env_or_dotenv BROKER_BASE_URL)
-  app_key=$(env_or_dotenv BROKER_APP_KEY)
-  app_secret=$(env_or_dotenv BROKER_APP_SECRET)
-  symbol=$(env_or_dotenv TEST_ALL_LIVE_SYMBOL)
+  base_url=$(live_value BROKER_BASE_URL)
+  app_key=$(live_value BROKER_APP_KEY)
+  app_secret=$(live_value BROKER_APP_SECRET)
+  symbol=$(live_value TEST_ALL_LIVE_SYMBOL)
   if ! [[ "$symbol" =~ ^[0-9]{6}$ ]]; then LIVE_FAIL_REASON="TEST_ALL_LIVE_SYMBOL 이 6자리 숫자가 아님"; return 1; fi
   if [ "$JAVA_OK" = 0 ] || [ "$PY_OK" = 0 ]; then LIVE_FAIL_REASON="JDK 21 또는 브리핑 venv 가 없음"; return 1; fi
 
@@ -574,7 +596,7 @@ LIVE_REPORT_FILE="$LIVE_OUT_DIR/briefing-${RUN_ID}.txt"
 
 run_live_briefing() {
   local svc_dir="$TMP/svc" bootstrap="localhost:$KAFKA_PORT" llm_key llm_model
-  llm_key=$(env_or_dotenv ANTHROPIC_API_KEY)
+  llm_key=$(live_value ANTHROPIC_API_KEY)
   llm_model=$(env_or_dotenv BRIEFING_LLM_MODEL)
   mkdir -p "$svc_dir/news" "$svc_dir/notifier" "$svc_dir/briefing"
 
@@ -598,9 +620,9 @@ run_live_briefing() {
     export SPRING_KAFKA_BOOTSTRAP_SERVERS="$bootstrap"
     # 발송 스위치는 이 프로세스 환경에만 둔다. .env 는 읽지도 쓰지도 않는다(임시 폴더에서 띄움).
     export NOTIFIER_SEND_ENABLED=true NOTIFIER_SUBJECT_PREFIX="[테스트]" NOTIFIER_MAX_PER_HOUR=1
-    SMTP_HOST=$(env_or_dotenv SMTP_HOST) SMTP_USERNAME=$(env_or_dotenv SMTP_USERNAME)
-    SMTP_PASSWORD=$(env_or_dotenv SMTP_PASSWORD) SMTP_PORT=$(env_or_dotenv SMTP_PORT)
-    NOTIFIER_SENDER=$(env_or_dotenv NOTIFIER_SENDER) NOTIFIER_RECIPIENT=$(env_or_dotenv NOTIFIER_RECIPIENT)
+    SMTP_HOST=$(live_value SMTP_HOST) SMTP_USERNAME=$(live_value SMTP_USERNAME)
+    SMTP_PASSWORD=$(live_value SMTP_PASSWORD) SMTP_PORT=$(live_value SMTP_PORT)
+    NOTIFIER_SENDER=$(live_value NOTIFIER_SENDER) NOTIFIER_RECIPIENT=$(live_value NOTIFIER_RECIPIENT)
     export SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER NOTIFIER_RECIPIENT
     if [ -n "$SMTP_PORT" ]; then export SMTP_PORT; else unset SMTP_PORT; fi
     # 제목의 한글 머리말이 환경변수에서 깨지지 않게 JVM 이 UTF-8 로 읽게 한다.

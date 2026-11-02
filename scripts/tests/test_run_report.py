@@ -428,7 +428,40 @@ def test_script_checks_every_live_key_before_calling_anything():
     assert {"BROKER_APP_KEY", "TEST_ALL_LIVE_SYMBOL", "ANTHROPIC_API_KEY", "SMTP_HOST", "NOTIFIER_RECIPIENT"} <= set(keys)
     # 키 확인이 bootJar·Kafka 기동보다 앞에 있어야 한다.
     body = text.split("run_live() {", 1)[1]
-    assert body.index("missing_live_keys") < body.index("bootJar") < body.index("docker run")
+    assert body.index("fetch_live_params") < body.index("missing_live_keys") < body.index("bootJar") < body.index("docker run")
+
+
+def _live_functions(text: str) -> str:
+    return "".join(name + text.split(name, 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+                   for name in ("fetch_live_params() {", "live_value() {"))
+
+
+def test_live_keys_come_only_from_parameter_store_each_run(tmp_path):
+    text = SCRIPT.read_text(encoding="utf-8")
+    # 실제 호출에 쓰는 키는 .env·실행 환경변수 대신 매번 Parameter Store 에서 읽은 값만 쓴다.
+    keys = text.split('LIVE_KEYS="', 1)[1].split('"', 1)[0].split()
+    for key in keys + ["SMTP_PORT"]:
+        assert f"$(env_or_dotenv {key})" not in text
+        assert f'env_or_dotenv "$key"' not in text
+    # 가짜 로더로 로더가 --env-file 의 임시 파일에만 쓰고, 값이 그 파일에서만 읽히는지 확인한다.
+    loader = tmp_path / "fake_python"
+    write(loader, '#!/bin/sh\nfor a; do [ "$prev" = --env-file ] && f=$a; prev=$a; done\n'
+                  'printf \'TEST_ALL_LIVE_SYMBOL=TEST01\\n\' > "$f"\necho "$@"\n')
+    loader.chmod(0o755)
+    env = {"PATH": "/usr/bin:/bin", "TMP": str(tmp_path), "PY": str(loader), "ROOT": str(REPO_ROOT),
+           "TEST_ALL_LIVE_SYMBOL": "TEST99", "TEST_ALL_AWS_PROFILE": "test-profile"}
+    script = "set -u\n" + _live_functions(text) + \
+        'LIVE_PARAMS=""; fetch_live_params || exit 9; live_value TEST_ALL_LIVE_SYMBOL; echo; live_value SMTP_HOST\n'
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["TEST01", ""]
+    log = (tmp_path / "load_config.log").read_text(encoding="utf-8")
+    assert "--profile test-profile" in log and "live-params.env" in log
+    # 프로필이 없어도 set -u 아래에서 돈다.
+    del env["TEST_ALL_AWS_PROFILE"]
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert "--profile" not in (tmp_path / "load_config.log").read_text(encoding="utf-8")
 
 
 def test_script_turns_on_real_mail_only_inside_the_test_notifier():
