@@ -10,6 +10,7 @@ scripts/test-all.sh --live 가 일회용 Kafka 와 news·notifier·briefing 을 
 - BRIEFING_FLOW_LIVE_REPORT_FILE: 리포트 본문을 남길 파일
 - BRIEFING_FLOW_LIVE_COUNTS_FILE: 개수를 남길 파일(호출 횟수 계산용). 없으면 남기지 않음
 - BRIEFING_FLOW_LIVE_WAIT_SECONDS: 리포트를 기다리는 최대 시간. 기본 240
+- BRIEFING_FLOW_LIVE_SINCE: 이 단계를 시작하기 직전의 DB 시각. 이 시각 뒤에 기록된 실패만 본다(필수)
 """
 import json
 import os
@@ -41,10 +42,12 @@ def _read(path: str) -> str:
         return ""
 
 
-def _failed_jobs(conn) -> list:
+def _failed_jobs(conn, since: str) -> list:
     with conn.cursor() as cur:
         # 실패 이유(정해진 값)만 읽는다. 설명에는 값이 섞일 수 있어 읽지 않는다.
-        cur.execute("SELECT reason FROM briefing.failed_jobs ORDER BY created_at")
+        # 앞 단계(실제 DB 테스트)가 같은 DB 에 남긴 행은 빼고 이 실행이 기록한 것만 본다.
+        cur.execute("SELECT reason FROM briefing.failed_jobs WHERE created_at >= %s::timestamptz ORDER BY created_at",
+                    (since,))
         return [row[0] for row in cur.fetchall()]
 
 
@@ -64,6 +67,7 @@ def test_llm_report_is_published_and_one_real_email_is_sent():
 
     env = os.environ
     run_id = env["BRIEFING_FLOW_LIVE_RUN_ID"]
+    since = env["BRIEFING_FLOW_LIVE_SINCE"]
     wait = int(env.get("BRIEFING_FLOW_LIVE_WAIT_SECONDS", "240"))
     conninfo = make_conninfo(env["BRIEFING_FLOW_LIVE_DB_URL"], user=env["BRIEFING_FLOW_LIVE_DB_USER"],
                              password=env["BRIEFING_FLOW_LIVE_DB_PASSWORD"])
@@ -78,7 +82,7 @@ def test_llm_report_is_published_and_one_real_email_is_sent():
             # 리포트가 나오거나 실패가 기록될 때까지 기다린다.
             while time.monotonic() < deadline:
                 _poll_briefings(consumer, messages, 2)
-                failed = _failed_jobs(conn)
+                failed = _failed_jobs(conn, since)
                 if lb.run_briefings(messages, run_id)[0] or failed:
                     break
             mail_deadline = time.monotonic() + MAIL_WAIT_SECONDS
@@ -87,7 +91,7 @@ def test_llm_report_is_published_and_one_real_email_is_sent():
                     break
                 time.sleep(1)
             _poll_briefings(consumer, messages, SETTLE_SECONDS)
-            failed = _failed_jobs(conn)
+            failed = _failed_jobs(conn, since)
     finally:
         consumer.close()
 

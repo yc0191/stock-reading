@@ -13,6 +13,7 @@ seed 는 아래 환경변수로만 설정을 받는다(값은 test-all.sh 가 �
   LIVE_BRIEFING_NEWS_USER·LIVE_BRIEFING_NEWS_PASSWORD      기사를 넣는 news 서비스 계정
   LIVE_BRIEFING_KAFKA                                      일회용 Kafka 주소
   LIVE_BRIEFING_RUN_ID                                     이 실행의 이름(추적 ID 에 씀)
+  LIVE_BRIEFING_SINCE                                      시세 흐름 단계가 tick 을 보내기 직전의 DB 시각
 """
 from __future__ import annotations
 
@@ -193,11 +194,14 @@ def _connect(user_var: str, password_var: str):
 
 def read_snapshot() -> Snapshot:
     with _connect("LIVE_BRIEFING_MARKET_USER", "LIVE_BRIEFING_MARKET_PASSWORD") as conn, conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM market.price_snapshot")
+        # 같은 DB 에 실제 DB 테스트가 넣은 가짜 스냅샷이 남아 있으므로 이 실행의 시세 흐름이 저장한 행만 본다.
+        since = _env("LIVE_BRIEFING_SINCE")
+        cur.execute("SELECT count(*) FROM market.price_snapshot WHERE received_at >= %s::timestamptz", (since,))
         (count,) = cur.fetchone()
         if count != 1:
-            raise RuntimeError(f"테스트 전용 데이터베이스의 스냅샷이 {count}행입니다(1행이어야 함)")
-        cur.execute("SELECT symbol, price, as_of FROM market.price_snapshot")
+            raise RuntimeError(f"이번 실행이 저장한 스냅샷이 {count}행입니다(1행이어야 함)")
+        cur.execute("SELECT symbol, price, as_of FROM market.price_snapshot WHERE received_at >= %s::timestamptz",
+                    (since,))
         symbol, price, as_of = cur.fetchone()
     return Snapshot(symbol, int(price), as_of)
 

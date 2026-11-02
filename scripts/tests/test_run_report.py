@@ -433,7 +433,7 @@ def test_script_checks_every_live_key_before_calling_anything():
 
 def _live_functions(text: str) -> str:
     return "".join(name + text.split(name, 1)[1].split("\n}\n", 1)[0] + "\n}\n"
-                   for name in ("fetch_live_params() {", "live_value() {"))
+                   for name in ("fetch_live_params() {", "live_value() {", "keep_loader_log() {"))
 
 
 def test_live_keys_come_only_from_parameter_store_each_run(tmp_path):
@@ -457,11 +457,25 @@ def test_live_keys_come_only_from_parameter_store_each_run(tmp_path):
     assert result.stdout.splitlines() == ["TEST01", ""]
     log = (tmp_path / "load_config.log").read_text(encoding="utf-8")
     assert "--profile test-profile" in log and "live-params.env" in log
-    # 프로필이 없어도 set -u 아래에서 돈다.
-    del env["TEST_ALL_AWS_PROFILE"]
+
+
+def test_live_needs_a_named_aws_profile_and_keeps_the_loader_log(tmp_path):
+    text = SCRIPT.read_text(encoding="utf-8")
+    body = text.split("run_live() {", 1)[1]
+    # 프로필이 없으면 기본 자격증명으로 넘어가지 않고 Parameter Store 를 부르기 전에 멈춘다.
+    assert body.index('-z "${TEST_ALL_AWS_PROFILE:-}"') < body.index("fetch_live_params")
+    assert "--profile \"$TEST_ALL_AWS_PROFILE\"" in text.split("fetch_live_params() {", 1)[1].split("\n}\n", 1)[0]
+    # 읽기 실패 로그는 지워지는 임시 폴더 대신 결과 폴더에 권한 600 으로 남긴다.
+    (tmp_path / "tmp").mkdir()
+    write(tmp_path / "tmp" / "load_config.log", "중단: Parameter Store 읽기 실패\n")
+    env = {"PATH": "/usr/bin:/bin", "TMP": str(tmp_path / "tmp"), "ROOT": str(tmp_path),
+           "LIVE_OUT_DIR": str(tmp_path / "build" / "test-all-live"), "RUN_ID": "TESTRUN"}
+    script = _live_functions(text) + "keep_loader_log\n"
     result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, timeout=10)
-    assert result.returncode == 0, result.stderr
-    assert "--profile" not in (tmp_path / "load_config.log").read_text(encoding="utf-8")
+    assert result.stdout == "build/test-all-live/load_config-TESTRUN.log"
+    kept = tmp_path / "build" / "test-all-live" / "load_config-TESTRUN.log"
+    assert kept.read_text(encoding="utf-8").startswith("중단:")
+    assert kept.stat().st_mode & 0o777 == 0o600
 
 
 def test_script_turns_on_real_mail_only_inside_the_test_notifier():
@@ -494,3 +508,47 @@ def test_jdk_check_refuses_another_version_that_java_home_falls_back_to(tmp_path
     assert not _is_jdk21(fake_java(tmp_path / "jdk17", "17.0.15"))
     assert not _is_jdk21(fake_java(tmp_path / "jdk210", "210.0.1"))
     assert not _is_jdk21(tmp_path / "missing")
+
+
+def test_service_ready_patterns_match_the_kafka_client_log_format():
+    # Kafka 클라이언트는 "Adding newly assigned partitions: [schedule.tick-0]"처럼 대괄호로 감싸 찍는다.
+    # 대괄호 없이 토픽 이름을 기다리면 서비스가 떠도 끝까지 맞지 않아 대기 시간 초과로 실패한다.
+    import re
+    text = SCRIPT.read_text(encoding="utf-8")
+    patterns = re.findall(r'wait_for_log "[^"]+" "([^"]*Adding newly assigned partitions:[^"]*)"', text)
+    assert len(patterns) == 4
+    log_line = ("[Consumer clientId=consumer-collector-2, groupId=collector] "
+                "Adding newly assigned partitions: [schedule.tick-0]")
+    assert any(p in log_line for p in patterns)
+    for p in patterns:
+        rest = p.split("Adding newly assigned partitions:", 1)[1]
+        assert rest == "" or rest.startswith(" ["), p
+
+
+def test_live_checks_count_only_rows_saved_after_this_run_started():
+    # 실제 DB 테스트가 같은 테스트 DB 에 남긴 가짜 행(조회 실패 3종 등)을 이번 실행의 결과로 세면 안 된다.
+    text = SCRIPT.read_text(encoding="utf-8")
+    body = text.split("run_live() {", 1)[1]
+    assert body.index('LIVE_SINCE=$(echo "SELECT now();" | admin_sql)') < body.index('echo "tick 1건 발행"')
+    assert 'QUOTE_FLOW_LIVE_SINCE="$LIVE_SINCE"' in text and 'BRIEFING_FLOW_LIVE_SINCE="$LIVE_SINCE"' in text
+    quote = (REPO_ROOT / "scripts" / "tests" / "test_quote_flow_live.py").read_text(encoding="utf-8")
+    assert quote.count("FROM market.") == quote.count("received_at >= %s::timestamptz") >= 2 and 'os.environ["QUOTE_FLOW_LIVE_SINCE"]' in quote
+    brief = (REPO_ROOT / "scripts" / "tests" / "test_briefing_flow_live.py").read_text(encoding="utf-8")
+    assert "created_at >= %s::timestamptz" in brief and 'env["BRIEFING_FLOW_LIVE_SINCE"]' in brief
+    seed = (REPO_ROOT / "scripts" / "live_briefing.py").read_text(encoding="utf-8")
+    assert seed.count("FROM market.price_snapshot") == seed.count("received_at >= %s::timestamptz") == 2
+    assert 'LIVE_BRIEFING_SINCE="$LIVE_SINCE"' in text
+
+
+def test_live_stops_before_calling_when_broker_base_url_is_not_an_https_address():
+    text = SCRIPT.read_text(encoding="utf-8")
+    body = text.split("run_live() {", 1)[1]
+    guard = 'if ! [[ "$base_url" =~ ^https://[^/[:space:]]+$ ]]'
+    assert body.index(guard) < body.index("bootJar")
+    check = "check() { " + guard + "; then echo no; else echo yes; fi; }; "
+    for value, ok in [("https://example.com:443", "yes"), ("https://example.com", "yes"),
+                      ("someone@example.com", "no"), ("example.com:443", "no"),
+                      ("https://example.com:443/", "no"), ("https://example.com :443", "no"), ("", "no")]:
+        result = subprocess.run(["bash", "-c", check + 'base_url="$1"; check', "bash", value],
+                                capture_output=True, text=True, timeout=10)
+        assert result.stdout.strip() == ok, value

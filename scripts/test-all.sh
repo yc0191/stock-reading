@@ -14,7 +14,8 @@
 #   TEST_ALL_ENV_FILE  .env 위치(기본 저장소 루트의 .env)
 #   TEST_ALL_PYTHON    브리핑 venv 파이썬(기본 services/briefing/.venv/bin/python)
 #   JAVA_HOME_21       JDK 21 위치(없으면 /usr/libexec/java_home -v 21 로 찾음)
-#   TEST_ALL_AWS_PROFILE  --live 가 Parameter Store 를 읽을 AWS CLI 프로필(없으면 기본 자격증명 방식)
+#   TEST_ALL_AWS_PROFILE  --live 가 Parameter Store 를 읽을 AWS CLI 프로필. --live 에서는 필수이고,
+#                         엉뚱한 계정을 읽지 않도록 기본 자격증명 방식으로 넘어가지 않는다
 #   --live 전용: BROKER_BASE_URL, BROKER_APP_KEY, BROKER_APP_SECRET, TEST_ALL_LIVE_SYMBOL(6자리),
 #               ANTHROPIC_API_KEY, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, NOTIFIER_SENDER, NOTIFIER_RECIPIENT
 #               (선택: SMTP_PORT, BRIEFING_LLM_MODEL)
@@ -84,7 +85,7 @@ unset MARKET_IT_DB_URL MARKET_IT_DB_USER MARKET_IT_DB_PASSWORD NEWS_IT_DB_URL NE
   QUOTE_FLOW_LIVE_DB_URL QUOTE_FLOW_LIVE_DB_USER QUOTE_FLOW_LIVE_DB_PASSWORD \
   BRIEFING_FLOW_LIVE_KAFKA BRIEFING_FLOW_LIVE_RUN_ID BRIEFING_FLOW_LIVE_DB_URL BRIEFING_FLOW_LIVE_DB_USER \
   BRIEFING_FLOW_LIVE_DB_PASSWORD BRIEFING_FLOW_LIVE_BRIEFING_LOG BRIEFING_FLOW_LIVE_NOTIFIER_LOG \
-  BRIEFING_FLOW_LIVE_REPORT_FILE
+  BRIEFING_FLOW_LIVE_REPORT_FILE QUOTE_FLOW_LIVE_SINCE BRIEFING_FLOW_LIVE_SINCE
 
 TMP=""
 LOCKED=0
@@ -443,6 +444,7 @@ fi
 # ---------------------------------------------------------------- 6. 시세 흐름 실제 (--live)
 
 LIVE_FAIL_REASON=""
+LIVE_SINCE=""
 QUOTE_LIVE_OK=0
 
 wait_for_log() {
@@ -461,11 +463,13 @@ LIVE_PARAMS=""
 
 fetch_live_params() {
   LIVE_PARAMS="$TMP/live-params.env"
-  if [ -n "${TEST_ALL_AWS_PROFILE:-}" ]; then
-    "$PY" "$ROOT/scripts/load_config.py" --env-file "$LIVE_PARAMS" --profile "$TEST_ALL_AWS_PROFILE" > "$TMP/load_config.log" 2>&1
-  else
-    "$PY" "$ROOT/scripts/load_config.py" --env-file "$LIVE_PARAMS" > "$TMP/load_config.log" 2>&1
-  fi
+  "$PY" "$ROOT/scripts/load_config.py" --env-file "$LIVE_PARAMS" --profile "$TEST_ALL_AWS_PROFILE" > "$TMP/load_config.log" 2>&1
+}
+
+# 임시 폴더는 끝나면 지워지므로, 읽기 실패 이유(키 이름만 있음)는 결과 폴더에 옮겨 둔다.
+keep_loader_log() {
+  local kept="$LIVE_OUT_DIR/load_config-${RUN_ID}.log"
+  mkdir -p "$LIVE_OUT_DIR" && cp "$TMP/load_config.log" "$kept" 2>/dev/null && chmod 600 "$kept" && printf '%s' "${kept#"$ROOT"/}"
 }
 
 live_value() {
@@ -493,10 +497,13 @@ service_jar() {
 run_live() {
   local base_url app_key app_secret symbol port waited svc_dir missing
   if [ "$PY_OK" = 0 ]; then LIVE_FAIL_REASON="브리핑 venv 가 없어 Parameter Store 를 읽지 못함"; return 1; fi
-  if ! fetch_live_params; then LIVE_FAIL_REASON="Parameter Store 읽기 실패($TMP/load_config.log 참고, 키 이름만 있음)"; return 1; fi
+  if [ -z "${TEST_ALL_AWS_PROFILE:-}" ]; then LIVE_FAIL_REASON="TEST_ALL_AWS_PROFILE 이 없음(기본 자격증명은 쓰지 않음)"; return 1; fi
+  if ! fetch_live_params; then LIVE_FAIL_REASON="Parameter Store 읽기 실패($(keep_loader_log) 참고, 키 이름만 있음)"; return 1; fi
   missing=$(missing_live_keys)
   if [ -n "$missing" ]; then LIVE_FAIL_REASON="키 없음($missing)"; return 1; fi
   base_url=$(live_value BROKER_BASE_URL)
+  # 다른 파라미터 값(예: 메일 주소)이 잘못 들어가면 요청 주소를 만들다 조용히 실패하므로 시세를 부르기 전에 막는다.
+  if ! [[ "$base_url" =~ ^https://[^/[:space:]]+$ ]]; then LIVE_FAIL_REASON="BROKER_BASE_URL 이 https://<호스트>[:포트] 형식이 아님"; return 1; fi
   app_key=$(live_value BROKER_APP_KEY)
   app_secret=$(live_value BROKER_APP_SECRET)
   symbol=$(live_value TEST_ALL_LIVE_SYMBOL)
@@ -569,7 +576,7 @@ run_live() {
   ) > "$svc_dir/collector.log" 2>&1 &
   COLLECTOR_PID=$!
   # collector 그룹은 latest 부터 읽으므로 파티션을 받기 전에 보낸 tick 은 놓친다.
-  wait_for_log "$svc_dir/collector.log" "groupId=collector] Adding newly assigned partitions: schedule.tick" "$COLLECTOR_PID" 120
+  wait_for_log "$svc_dir/collector.log" "groupId=collector] Adding newly assigned partitions: [schedule.tick" "$COLLECTOR_PID" 120
   case $? in
     0) ;;
     2) LIVE_FAIL_REASON="collector 가 시작 중에 끝남"; return 1 ;;
@@ -577,6 +584,8 @@ run_live() {
   esac
   sleep 3
 
+  # 같은 테스트 DB 에 실제 DB 테스트가 넣은 가짜 행이 남아 있어, 이 시각 뒤에 저장된 행만 이번 실행의 결과로 센다.
+  LIVE_SINCE=$(echo "SELECT now();" | admin_sql) || { LIVE_FAIL_REASON="DB 시각을 읽지 못함"; return 1; }
   echo "tick 1건 발행"
   KAFKA_CONTAINER="$KAFKA_NAME" KAFKA_BOOTSTRAP="localhost:$port" bash scripts/publish-tick.sh collect >/dev/null \
     || { LIVE_FAIL_REASON="tick 을 보내지 못함"; return 1; }
@@ -584,7 +593,7 @@ run_live() {
   echo "테스트 전용 데이터베이스에서 다시 읽어 확인(개수만 출력)"
   (
     export QUOTE_FLOW_LIVE_DB_URL="$PG_URL" QUOTE_FLOW_LIVE_DB_USER="$M_USER" QUOTE_FLOW_LIVE_DB_PASSWORD="$M_PW"
-    export QUOTE_FLOW_LIVE_EXPECTED=1 QUOTE_FLOW_LIVE_WAIT_SECONDS=60 QUOTE_FLOW_LIVE_COUNTS_FILE="$TMP/results/live/counts.json"
+    export QUOTE_FLOW_LIVE_SINCE="$LIVE_SINCE" QUOTE_FLOW_LIVE_EXPECTED=1 QUOTE_FLOW_LIVE_WAIT_SECONDS=60 QUOTE_FLOW_LIVE_COUNTS_FILE="$TMP/results/live/counts.json"
     "$PY" -m pytest -c scripts/pytest.ini scripts/tests/test_quote_flow_live.py --junitxml="$TMP/results/live/py/scripts.xml"
   ) || { LIVE_FAIL_REASON="저장 확인 실패"; return 1; }
 }
@@ -631,7 +640,7 @@ run_live_briefing() {
   ) > "$svc_dir/notifier.log" 2>&1 &
   NOTIFIER_PID=$!
   # notifier 는 처음 시작할 때 latest 부터 읽으므로 브리핑이 나오기 전에 파티션을 받아 두어야 메일을 놓치지 않는다.
-  wait_for_log "$svc_dir/notifier.log" "groupId=notifier] Adding newly assigned partitions: briefing.generated" "$NOTIFIER_PID" 120
+  wait_for_log "$svc_dir/notifier.log" "groupId=notifier] Adding newly assigned partitions: [briefing.generated" "$NOTIFIER_PID" 120
   case $? in
     0) ;;
     2) LIVE_BRIEF_FAIL_REASON="notifier 가 시작 중에 끝남"; return 1 ;;
@@ -659,7 +668,7 @@ run_live_briefing() {
 
   echo "가짜 변동·근거 기사·수집 완료 넣기"
   (
-    export LIVE_BRIEFING_DB_URL="$PG_URL" LIVE_BRIEFING_KAFKA="$bootstrap" LIVE_BRIEFING_RUN_ID="$RUN_ID"
+    export LIVE_BRIEFING_DB_URL="$PG_URL" LIVE_BRIEFING_KAFKA="$bootstrap" LIVE_BRIEFING_RUN_ID="$RUN_ID" LIVE_BRIEFING_SINCE="$LIVE_SINCE"
     export LIVE_BRIEFING_MARKET_USER="$M_USER" LIVE_BRIEFING_MARKET_PASSWORD="$M_PW"
     export LIVE_BRIEFING_NEWS_USER="$N_USER" LIVE_BRIEFING_NEWS_PASSWORD="$N_PW"
     "$PY" scripts/live_briefing.py seed
@@ -667,7 +676,7 @@ run_live_briefing() {
 
   echo "리포트·메일 확인(개수와 생성 방식만 출력, 본문은 $LIVE_REPORT_FILE)"
   (
-    export BRIEFING_FLOW_LIVE_KAFKA="$bootstrap" BRIEFING_FLOW_LIVE_RUN_ID="$RUN_ID"
+    export BRIEFING_FLOW_LIVE_KAFKA="$bootstrap" BRIEFING_FLOW_LIVE_RUN_ID="$RUN_ID" BRIEFING_FLOW_LIVE_SINCE="$LIVE_SINCE"
     export BRIEFING_FLOW_LIVE_DB_URL="$PG_URL" BRIEFING_FLOW_LIVE_DB_USER="$B_USER" BRIEFING_FLOW_LIVE_DB_PASSWORD="$B_PW"
     export BRIEFING_FLOW_LIVE_BRIEFING_LOG="$svc_dir/briefing.log" BRIEFING_FLOW_LIVE_NOTIFIER_LOG="$svc_dir/notifier.log"
     export BRIEFING_FLOW_LIVE_REPORT_FILE="$LIVE_REPORT_FILE" BRIEFING_FLOW_LIVE_COUNTS_FILE="$TMP/results/live/briefing-counts.json"
