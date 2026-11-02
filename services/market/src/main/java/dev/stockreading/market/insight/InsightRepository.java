@@ -36,15 +36,19 @@ class InsightRepository {
         return statement.update() == 1;
     }
 
-    /** 해외 일봉 원문을 받은 시각이 늦은 순으로 limit 건 읽는다. 원문은 jsonb에서 텍스트로 꺼낸 그대로다. */
-    List<OverseasDailyRow> recentOverseasDailyPrices(String target, int limit) {
+    /**
+     * 받은 시각이 fetchedUntil 이하인 해외 일봉 원문을 받은 시각이 늦은 순으로 limit 건 읽는다.
+     * 원문은 jsonb에서 텍스트로 꺼낸 그대로다.
+     */
+    List<OverseasDailyRow> recentOverseasDailyPrices(String target, OffsetDateTime fetchedUntil, int limit) {
         return jdbc.sql("""
                         SELECT CAST(response AS text) AS response, fetched_at FROM overseas_daily_price
-                        WHERE target = :target
+                        WHERE target = :target AND fetched_at <= :fetchedUntil
                         ORDER BY fetched_at DESC, id DESC
                         LIMIT :limit
                         """)
                 .param("target", target)
+                .param("fetchedUntil", fetchedUntil)
                 .param("limit", limit)
                 .query((rs, rowNum) -> new OverseasDailyRow(
                         rs.getString("response"), rs.getObject("fetched_at", OffsetDateTime.class)))

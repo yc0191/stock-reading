@@ -63,7 +63,24 @@
               },
               "response": { "type": "string", "minLength": 1, "description": "status가 ok일 때만. 저장된 응답 원문 그대로." },
               "fetchedAt": { "type": "string", "format": "date-time", "description": "status가 ok 또는 too-large일 때. 고른 자료를 받은 시각(since <= fetchedAt <= asOf)." },
-              "responseBytes": { "type": "integer", "minimum": 1, "description": "status가 too-large일 때만. 뺀 원문의 크기(UTF-8 바이트)." }
+              "responseBytes": { "type": "integer", "minimum": 1, "description": "status가 too-large일 때만. 뺀 원문의 크기(UTF-8 바이트)." },
+              "indexRates": {
+                "type": "array",
+                "description": "선택. world-index이고 status가 ok 또는 too-large일 때만. 고른 원문의 지수마다 market이 계산한 등락률이다. 원문의 전일대비·등락률은 장이 끝난 지수에서 0으로 오므로 쓰지 않고, 같은 대륙의 저장 원문 중 받은 시각이 since~asOf 안이고 영업일이 더 이른 가장 최근 행의 종가를 직전 종가로 삼아 (종가 - 직전 종가) / 직전 종가 * 100으로 구한다.",
+                "items": {
+                  "type": "object",
+                  "required": ["code", "name", "businessDay", "close", "prevBusinessDay", "prevClose", "rate"],
+                  "properties": {
+                    "code": { "type": "string", "minLength": 1, "description": "지수 코드 원문(공백 제거)." },
+                    "name": { "type": "string", "description": "지수 이름 원문(공백 제거)." },
+                    "businessDay": { "type": "string", "minLength": 1, "description": "고른 원문의 영업일 원문(공백 제거)." },
+                    "close": { "type": "string", "minLength": 1, "description": "고른 원문의 종가 원문(공백 제거)." },
+                    "prevBusinessDay": { "type": ["string", "null"], "description": "직전 행의 영업일. 직전 행이 없으면 null." },
+                    "prevClose": { "type": ["string", "null"], "description": "직전 행의 종가 원문(공백 제거). 직전 행이 없으면 null." },
+                    "rate": { "type": ["string", "null"], "description": "계산한 등락률(%, 소수 둘째 자리 반올림). 직전 행이 없거나 직전 종가가 0이면 null(없음)." }
+                  }
+                }
+              }
             },
             "allOf": [
               {
@@ -80,9 +97,14 @@
                   "allOf": [
                     { "not": { "required": ["response"] } },
                     { "not": { "required": ["fetchedAt"] } },
-                    { "not": { "required": ["responseBytes"] } }
+                    { "not": { "required": ["responseBytes"] } },
+                    { "not": { "required": ["indexRates"] } }
                   ]
                 }
+              },
+              {
+                "if": { "properties": { "apiType": { "not": { "const": "world-index" } } }, "required": ["apiType"] },
+                "then": { "not": { "required": ["indexRates"] } }
               },
               {
                 "if": { "properties": { "apiType": { "const": "daily-price" } }, "required": ["apiType"] },

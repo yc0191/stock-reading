@@ -316,6 +316,35 @@ def test_context_response_rejects_malformed_tickers_and_close_rates():
         assert validate("market.context.responded.v1.schema.json", broken) != []
 
 
+def test_context_world_index_carries_computed_rates_next_to_the_raw_response():
+    world = sample("market.context.responded.sample.json")["payload"]["background"][2]
+
+    assert world["apiType"] == "world-index"
+    assert world["response"]
+    assert world["indexRates"][0]["rate"] == "2.04"
+    # 직전 행이 없는 지수는 키를 남기고 값만 null 이다.
+    assert world["indexRates"][1]["rate"] is None
+    assert world["indexRates"][1]["prevClose"] is None
+
+
+def test_context_index_rates_are_optional_and_only_on_world_index_with_data():
+    without = sample("market.context.responded.sample.json")
+    del without["payload"]["background"][2]["indexRates"]
+    on_summary = sample("market.context.responded.sample.json")
+    on_summary["payload"]["background"][0]["indexRates"] = []
+    on_missing = sample("market.context.responded.sample.json")
+    on_missing["payload"]["background"][2] = {
+        "apiType": "world-index", "target": "S", "status": "missing", "indexRates": []}
+    no_rate_key = sample("market.context.responded.sample.json")
+    del no_rate_key["payload"]["background"][2]["indexRates"][0]["rate"]
+    numeric_rate = sample("market.context.responded.sample.json")
+    numeric_rate["payload"]["background"][2]["indexRates"][0]["rate"] = 2.04
+
+    assert validate("market.context.responded.v1.schema.json", without) == []
+    for broken in (on_summary, on_missing, no_rate_key, numeric_rate):
+        assert validate("market.context.responded.v1.schema.json", broken) != []
+
+
 def test_filings_response_carries_metadata_only():
     filing = sample("news.filings.responded.sample.json")["payload"]["filings"][0]
     assert set(filing) == {"accessionNumber", "tickers", "form", "items", "acceptedAt", "url"}

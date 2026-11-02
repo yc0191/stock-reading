@@ -40,7 +40,8 @@ class HistoryRequestListener {
         HistoryRequestEnvelope.RequestPayload request = event.payload();
         OffsetDateTime since = OffsetDateTime.parse(request.since());
         OffsetDateTime until = OffsetDateTime.parse(request.until());
-        if (request.maxPoints() < 1 || since.isAfter(until)) {
+        Integer interval = request.intervalSeconds();
+        if (request.maxPoints() < 1 || since.isAfter(until) || (interval != null && interval < 1)) {
             // 잘못된 요청은 응답하지 않는다. 브리핑이 제한 시간 뒤 다시 보내거나 실패로 기록한다.
             throw new IllegalArgumentException("invalid history request jobId=" + request.jobId()
                     + " seq=" + request.seq());
@@ -48,8 +49,10 @@ class HistoryRequestListener {
 
         int limit = Math.min(request.maxPoints(), MAX_POINTS_CAP);
         // 한 건 더 읽어 잘렸는지 판단한다. 잘리면 뒤쪽을 버려, 기준이 되는 구간 앞쪽 가격을 남긴다.
-        List<PriceHistoryRepository.StoredPoint> rows =
-                repository.findBetweenInclusive(request.symbol(), since, until, limit + 1);
+        // 솎는 간격이 없는 이전 형식 요청은 솎지 않고 지금처럼 모든 점을 준다.
+        List<PriceHistoryRepository.StoredPoint> rows = interval == null
+                ? repository.findBetweenInclusive(request.symbol(), since, until, limit + 1)
+                : repository.findThinnedBetweenInclusive(request.symbol(), since, until, interval, limit + 1);
         boolean truncated = rows.size() > limit;
         List<HistoryPayload.Point> points = rows.stream()
                 .limit(limit)

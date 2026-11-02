@@ -106,11 +106,27 @@ class InsightIntegrationTest {
         listener.onInsight(fetchedOn1021(message("66666666-6666-4666-8666-666666666661", "overseas-daily-price", "\"ITESTC\"", first)));
         listener.onInsight(fetchedOn1021(message("66666666-6666-4666-8666-666666666662", "overseas-daily-price", "\"ITESTD\"", other)));
 
-        OverseasCloseRate rate = closeRateQuery.find("ITESTC", OffsetDateTime.parse("2026-10-21T08:00:00Z"))
-                .orElseThrow();
+        OverseasCloseRate rate = closeRateQuery.find("ITESTC", OffsetDateTime.parse("2026-10-21T08:00:00Z"),
+                OffsetDateTime.parse("2026-10-17T08:00:00Z")).orElseThrow();
 
         assertThat(rate.date()).isEqualTo("20261020");
         assertThat(rate.rate()).isEqualTo("  1.25");
+    }
+
+    @Test
+    void closeRateQueryDoesNotReadRowsFetchedAfterTheReferenceTime() throws IOException {
+        // 10/20 16:30(한국)에 받은 행은 10/19 장까지, 10/21 16:30에 받은 행은 10/20 장까지 담는다.
+        String older = "{\"dataBody\": {\"out2\": [{\"dt\": \"20261019\", \"up_dwn_r_p2\": \" -0.40\"}]}}";
+        String newer = "{\"dataBody\": {\"out2\": [{\"dt\": \"20261020\", \"up_dwn_r_p2\": \"  1.25\"}]}}";
+        listener.onInsight(message("66666666-6666-4666-8666-666666666663", "overseas-daily-price", "\"ITESTE\"", older));
+        listener.onInsight(fetchedOn1021(message("66666666-6666-4666-8666-666666666664", "overseas-daily-price", "\"ITESTE\"", newer)));
+        OffsetDateTime since = OffsetDateTime.parse("2026-10-17T00:00:00Z");
+
+        // 기준 시각이 10/21 행을 받기 1초 전이면 그 행은 읽지 않고, 받은 시각과 같으면 읽는다.
+        assertThat(closeRateQuery.find("ITESTE", OffsetDateTime.parse("2026-10-21T07:30:00.799Z"), since)
+                .orElseThrow().date()).isEqualTo("20261019");
+        assertThat(closeRateQuery.find("ITESTE", OffsetDateTime.parse("2026-10-21T07:30:01.800Z"), since)
+                .orElseThrow().date()).isEqualTo("20261020");
     }
 
     @Test

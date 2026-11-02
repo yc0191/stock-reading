@@ -100,6 +100,51 @@ class ContextContractTest {
                 .isNotEmpty();
     }
 
+    @Test
+    void responseSampleCarriesTheComputedWorldIndexRatesNextToTheRawResponse() throws IOException {
+        var world = mapper.readTree(ContractSchemas.sample("market.context.responded.sample.json"))
+                .at("/payload/background/2");
+
+        assertThat(world.get("apiType").asString()).isEqualTo("world-index");
+        assertThat(world.has("response")).isTrue();
+        assertThat(world.get("indexRates").get(0).get("rate").asString()).isEqualTo("2.04");
+        assertThat(world.get("indexRates").get(1).get("rate").isNull()).isTrue();
+    }
+
+    @Test
+    void producerPayloadWithIndexRatesMatchesSchemaEvenWhenARateIsMissing() throws IOException {
+        List<ContextPayload.IndexRate> rates = List.of(
+                new ContextPayload.IndexRate("TESTIX", "TEST INDEX", "20261020", "102.00", "20261019", "100.00", "2.00"),
+                new ContextPayload.IndexRate("FAKEIX", "FAKE INDEX", "20261020", "50.00", null, null, null));
+        String json = serialize(new ContextPayload(JOB_ID, 1, "TEST01", List.of(), List.of(), List.of(
+                ContextPayload.Background.ok("world-index", "C", "{\"a\": 1}", "2026-10-20T15:55:05+09:00")
+                        .withIndexRates(rates),
+                ContextPayload.Background.tooLarge("world-index", "S", "2026-10-20T15:55:05+09:00", 40_000)
+                        .withIndexRates(rates)), false));
+
+        assertThat(ContractSchemas.validate("market.context.responded.v1.schema.json", json)).isEmpty();
+        // 없음은 키를 빼지 않고 null로 실어야 브리핑이 "없음"을 구분한다.
+        assertThat(mapper.readTree(json).at("/payload/background/0/indexRates/1").has("prevClose")).isTrue();
+    }
+
+    @Test
+    void schemaRejectsIndexRatesOutsideAWorldIndexThatHasData() throws IOException {
+        List<ContextPayload.IndexRate> rates = List.of(
+                new ContextPayload.IndexRate("TESTIX", "TEST INDEX", "20261020", "102.00", null, null, null));
+        String onMarketSummary = serialize(new ContextPayload(JOB_ID, 1, "TEST01", List.of(), List.of(), List.of(
+                ContextPayload.Background.ok("market-summary", null, "{}", "2026-10-20T15:55:03+09:00")
+                        .withIndexRates(rates)), false));
+        String onMissing = serialize(new ContextPayload(JOB_ID, 1, "TEST01", List.of(), List.of(), List.of(
+                ContextPayload.Background.missing("world-index", "C").withIndexRates(rates)), false));
+        String withoutRateKey = serialize(new ContextPayload(JOB_ID, 1, "TEST01", List.of(), List.of(), List.of(
+                ContextPayload.Background.ok("world-index", "C", "{}", "2026-10-20T15:55:05+09:00")), false))
+                .replace("\"status\":\"ok\"", "\"status\":\"ok\",\"indexRates\":[{\"code\":\"TESTIX\"}]");
+
+        assertThat(ContractSchemas.validate("market.context.responded.v1.schema.json", onMarketSummary)).isNotEmpty();
+        assertThat(ContractSchemas.validate("market.context.responded.v1.schema.json", onMissing)).isNotEmpty();
+        assertThat(ContractSchemas.validate("market.context.responded.v1.schema.json", withoutRateKey)).isNotEmpty();
+    }
+
     private String serialize(ContextPayload payload) {
         return mapper.writeValueAsString(EventFactory.create(CLOCK, "market.context.responded",
                 OffsetDateTime.now(CLOCK), "collect-2026-10-20T16:00:30+09:00", payload));

@@ -38,8 +38,28 @@
         "apiType": "world-index",
         "target": "S",
         "status": "ok",
-        "response": "{\"dataHeader\": {\"resultCode\": \"0000\"}, \"dataBody\": {\"items\": [{\"name\": \"TEST INDEX\", \"close\": \" 100.00 \"}]}}",
-        "fetchedAt": "2026-10-20T15:55:05+09:00"
+        "response": "{\"dataHeader\": {\"resultCode\": \"0000\"}, \"dataBody\": {\"items\": [{\"code\": \"TESTIX\", \"name\": \"TEST INDEX\", \"day\": \"20261020\", \"close\": \" 100.00 \", \"rate\": \" 0.00 \"}, {\"code\": \"FAKEIX\", \"name\": \"FAKE INDEX\", \"day\": \"20261020\", \"close\": \" 50.00 \", \"rate\": \" 0.00 \"}]}}",
+        "fetchedAt": "2026-10-20T15:55:05+09:00",
+        "indexRates": [
+          {
+            "code": "TESTIX",
+            "name": "TEST INDEX",
+            "businessDay": "20261020",
+            "close": "100.00",
+            "prevBusinessDay": "20261019",
+            "prevClose": "98.00",
+            "rate": "2.04"
+          },
+          {
+            "code": "FAKEIX",
+            "name": "FAKE INDEX",
+            "businessDay": "20261020",
+            "close": "50.00",
+            "prevBusinessDay": null,
+            "prevClose": null,
+            "rate": null
+          }
+        ]
       },
       {
         "apiType": "daily-price",
