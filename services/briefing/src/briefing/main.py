@@ -22,6 +22,8 @@ from briefing.config import DEFAULT_SETTINGS, CoreSettings
 from briefing.events import (
     ARTICLES_REQUESTED_TOPIC,
     BRIEFING_GENERATED_TOPIC,
+    CONTEXT_REQUESTED_TOPIC,
+    FILINGS_REQUESTED_TOPIC,
     HISTORY_REQUESTED_TOPIC,
     OutboundEvent,
 )
@@ -35,6 +37,8 @@ MOVE_TOPIC = "market.move"
 COLLECTION_COMPLETED_TOPIC = "collection.completed"
 HISTORY_RESPONDED_TOPIC = "market.history.responded"
 ARTICLES_RESPONDED_TOPIC = "news.articles.responded"
+CONTEXT_RESPONDED_TOPIC = "market.context.responded"
+FILINGS_RESPONDED_TOPIC = "news.filings.responded"
 
 # 같은 토픽을 선언하는 다른 서비스(Topics.java)와 파티션 수가 같아야 한다. 어긋나면 일부 종목이 오류 없이 누락된다.
 TOPIC_PARTITIONS = {
@@ -44,6 +48,10 @@ TOPIC_PARTITIONS = {
     HISTORY_RESPONDED_TOPIC: 3,      # market
     ARTICLES_REQUESTED_TOPIC: 3,     # news
     ARTICLES_RESPONDED_TOPIC: 3,     # news
+    CONTEXT_REQUESTED_TOPIC: 3,      # market
+    CONTEXT_RESPONDED_TOPIC: 3,      # market
+    FILINGS_REQUESTED_TOPIC: 3,      # news
+    FILINGS_RESPONDED_TOPIC: 3,      # news
     BRIEFING_GENERATED_TOPIC: 3,     # notifier
 }
 SUBSCRIBED_TOPICS = (MOVE_TOPIC, COLLECTION_COMPLETED_TOPIC, HISTORY_RESPONDED_TOPIC, ARTICLES_RESPONDED_TOPIC)

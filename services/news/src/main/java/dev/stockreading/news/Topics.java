@@ -16,6 +16,8 @@ public class Topics {
     public static final String NEWS_ARTICLES_REQUESTED = "news.articles.requested";
     public static final String NEWS_ARTICLES_RESPONDED = "news.articles.responded";
     public static final String FILING_COLLECTED = "filing.collected";
+    public static final String NEWS_FILINGS_REQUESTED = "news.filings.requested";
+    public static final String NEWS_FILINGS_RESPONDED = "news.filings.responded";
     public static final int PARTITIONS = 3;
 
     @Bean
@@ -37,5 +39,15 @@ public class Topics {
     @Bean
     NewTopic filingCollectedTopic() {
         return TopicBuilder.name(FILING_COLLECTED).partitions(PARTITIONS).replicas(1).build();
+    }
+
+    @Bean
+    NewTopic newsFilingsRequestedTopic() {
+        return TopicBuilder.name(NEWS_FILINGS_REQUESTED).partitions(PARTITIONS).replicas(1).build();
+    }
+
+    @Bean
+    NewTopic newsFilingsRespondedTopic() {
+        return TopicBuilder.name(NEWS_FILINGS_RESPONDED).partitions(PARTITIONS).replicas(1).build();
     }
 }

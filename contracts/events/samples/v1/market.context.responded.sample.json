@@ -1,0 +1,52 @@
+{
+  "eventId": "b4e81c37-2d9a-4c05-8f6b-1e7a3d5c9b42",
+  "eventType": "market.context.responded",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T16:15:43+09:00",
+  "producedAt": "2026-10-20T16:15:43.410+09:00",
+  "correlationId": "collect-2026-10-20T16:00:30+09:00",
+  "payload": {
+    "jobId": "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13",
+    "seq": 1,
+    "symbol": "TEST01",
+    "tickers": ["TESTA", "FAKEB"],
+    "closeRates": [
+      {
+        "ticker": "TESTA",
+        "date": "20261019",
+        "closeAt": "2026-10-20T05:00:00+09:00",
+        "rate": "-1.25",
+        "fetchedAt": "2026-10-20T08:30:02+09:00"
+      }
+    ],
+    "background": [
+      {
+        "apiType": "exchange-rate-summary",
+        "target": null,
+        "status": "ok",
+        "response": "{\"dataHeader\": {\"resultCode\": \"0000\"}, \"dataBody\": {\"items\": [{\"name\": \"TEST\", \"value\": \" 1000.00 \"}]}}",
+        "fetchedAt": "2026-10-20T15:55:01+09:00"
+      },
+      {
+        "apiType": "market-summary",
+        "target": null,
+        "status": "too-large",
+        "fetchedAt": "2026-10-20T15:55:03+09:00",
+        "responseBytes": 40000
+      },
+      {
+        "apiType": "world-index",
+        "target": "S",
+        "status": "ok",
+        "response": "{\"dataHeader\": {\"resultCode\": \"0000\"}, \"dataBody\": {\"items\": [{\"name\": \"TEST INDEX\", \"close\": \" 100.00 \"}]}}",
+        "fetchedAt": "2026-10-20T15:55:05+09:00"
+      },
+      {
+        "apiType": "daily-price",
+        "target": "TEST01",
+        "status": "missing"
+      }
+    ],
+    "truncated": false
+  }
+}

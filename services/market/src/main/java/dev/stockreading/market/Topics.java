@@ -18,6 +18,8 @@ public class Topics {
     public static final String MARKET_INSIGHT = "market.insight";
     public static final String MARKET_HISTORY_REQUESTED = "market.history.requested";
     public static final String MARKET_HISTORY_RESPONDED = "market.history.responded";
+    public static final String MARKET_CONTEXT_REQUESTED = "market.context.requested";
+    public static final String MARKET_CONTEXT_RESPONDED = "market.context.responded";
     public static final int PARTITIONS = 3;
 
     @Bean
@@ -48,5 +50,15 @@ public class Topics {
     @Bean
     NewTopic marketHistoryRespondedTopic() {
         return TopicBuilder.name(MARKET_HISTORY_RESPONDED).partitions(PARTITIONS).replicas(1).build();
+    }
+
+    @Bean
+    NewTopic marketContextRequestedTopic() {
+        return TopicBuilder.name(MARKET_CONTEXT_REQUESTED).partitions(PARTITIONS).replicas(1).build();
+    }
+
+    @Bean
+    NewTopic marketContextRespondedTopic() {
+        return TopicBuilder.name(MARKET_CONTEXT_RESPONDED).partitions(PARTITIONS).replicas(1).build();
     }
 }

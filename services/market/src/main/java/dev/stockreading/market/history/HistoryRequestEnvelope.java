@@ -13,7 +13,9 @@ record HistoryRequestEnvelope(
         String correlationId,
         RequestPayload payload) {
 
+    /** intervalSeconds는 선택 필드다. 이전 형식 요청에는 없어서 null이다. */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    record RequestPayload(String jobId, int seq, String symbol, String since, String until, int maxPoints) {
+    record RequestPayload(
+            String jobId, int seq, String symbol, String since, String until, int maxPoints, Integer intervalSeconds) {
     }
 }
