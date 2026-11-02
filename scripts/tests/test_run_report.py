@@ -291,3 +291,25 @@ def test_real_repository_map_is_readable_and_has_the_live_row():
     assert len(live) == 1
     assert rr.parse_cell(live[0].cells["실제"])[0].phase == "live"
     assert rr.db_tests(REPO_ROOT).keys() >= {"market", "news", "briefing"}
+
+
+def _is_jdk21(java_home: Path) -> bool:
+    text = SCRIPT.read_text(encoding="utf-8")
+    func = "is_jdk21() {" + text.split("is_jdk21() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+    result = subprocess.run(["bash", "-c", func + 'is_jdk21 "$1"', "bash", str(java_home)], capture_output=True, timeout=10)
+    return result.returncode == 0
+
+
+def fake_java(root: Path, version: str) -> Path:
+    java = root / "bin" / "java"
+    write(java, f'#!/bin/sh\necho \'openjdk version "{version}" 2025-01-01\' >&2\n')
+    java.chmod(0o755)
+    return root
+
+
+def test_jdk_check_refuses_another_version_that_java_home_falls_back_to(tmp_path):
+    # /usr/libexec/java_home -v 21 은 21이 없으면 17 같은 다른 버전을 돌려준다.
+    assert _is_jdk21(fake_java(tmp_path / "jdk21", "21.0.9"))
+    assert not _is_jdk21(fake_java(tmp_path / "jdk17", "17.0.15"))
+    assert not _is_jdk21(fake_java(tmp_path / "jdk210", "210.0.1"))
+    assert not _is_jdk21(tmp_path / "missing")

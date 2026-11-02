@@ -219,11 +219,16 @@ mkdir -p "$TMP/results/main/py" "$TMP/results/db/py" "$TMP/results/live/py"
 : > "$TMP/results/stages.tsv"
 STARTED_AT=$SECONDS
 
+is_jdk21() {
+  # java_home -v 21 은 21이 없으면 다른 버전을 돌려주므로 실제 버전을 확인한다.
+  [ -n "$1" ] && [ -x "$1/bin/java" ] && "$1/bin/java" -version 2>&1 | head -1 | grep -qE 'version "21[."]'
+}
+
 JAVA_OK=1
 if [ -z "${JAVA_HOME_21:-}" ] && [ -x /usr/libexec/java_home ]; then
   JAVA_HOME_21=$(/usr/libexec/java_home -v 21 2>/dev/null || true)
 fi
-if [ -n "${JAVA_HOME_21:-}" ] && [ -x "$JAVA_HOME_21/bin/java" ]; then
+if is_jdk21 "${JAVA_HOME_21:-}"; then
   export JAVA_HOME_21 JAVA_HOME="$JAVA_HOME_21"
 else
   JAVA_OK=0
@@ -253,7 +258,7 @@ if [ "$JAVA_OK" = 1 ]; then
   if [ "$rc" = 0 ]; then stage java "Java 전체" ok "" $((SECONDS - t)) main/java
   else stage java "Java 전체" fail "gradlew 종료 코드 $rc" $((SECONDS - t)) main/java; fi
 else
-  stage java "Java 전체" fail "JDK 21 을 찾지 못함(JAVA_HOME_21)" 0
+  stage java "Java 전체" fail "JDK 21 을 찾지 못함(JAVA_HOME_21 이 없거나 21 이 아님)" 0
 fi
 
 log "2. 브리핑"
