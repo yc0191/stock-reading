@@ -75,6 +75,14 @@ def news_response(seq, ids=(), job_id=JOB_ID, articles=None):
         "articles": articles if articles is not None else [article(i) for i in ids]}})
 
 
+def context_response(seq=1, job_id=JOB_ID, tickers=(), close_rates=(), background=None, truncated=False):
+    return json.dumps({"eventType": "market.context.responded", "payload": {
+        "jobId": job_id, "seq": seq, "symbol": "TEST01", "tickers": list(tickers), "truncated": truncated,
+        "closeRates": list(close_rates),
+        "background": background if background is not None else [
+            {"apiType": "exchange-rate-summary", "target": None, "status": "missing"}]}})
+
+
 def start(core, now=T):
     core.on_move(move(), now)
     core.on_collection_completed(completed(), now)
@@ -89,10 +97,10 @@ def test_requests_match_the_contract_and_cover_the_required_ranges(core, rec):
     assert validate("news.articles.requested.v1.schema.json", news.value) == []
     assert history.key == news.key == "TEST01"
     h, n = history.value["payload"], news.value["payload"]
-    assert (h["jobId"], h["seq"], h["maxPoints"]) == (JOB_ID, 1, 5000)
+    assert (h["jobId"], h["seq"], h["maxPoints"], h["intervalSeconds"]) == (JOB_ID, 1, 60, 10)
     assert datetime.fromisoformat(h["since"]) == T - timedelta(minutes=5)
     assert datetime.fromisoformat(h["until"]) == T + DELTA
-    assert (n["seq"], n["maxArticles"]) == (1, 300)
+    assert (n["seq"], n["maxArticles"]) == (1, 50)
     assert datetime.fromisoformat(n["since"]) == T - timedelta(hours=24)
     assert datetime.fromisoformat(n["until"]) == T + DELTA
 
@@ -107,7 +115,7 @@ def test_completion_that_arrived_before_the_move_is_used(core, rec):
     core.on_collection_completed(completed(), T)
     core.on_move(move(), T + SEC)
 
-    assert len(rec.sent) == 2
+    assert len(rec.sent) == 3
 
 
 def test_only_the_ten_most_recent_completions_are_remembered(core, rec):
@@ -125,7 +133,7 @@ def test_completion_started_inside_the_move_window_is_rejected_then_next_one_is_
     assert rec.sent == []
 
     core.on_collection_completed(completed(started_at=T + DELTA), T)
-    assert len(rec.sent) == 2
+    assert len(rec.sent) == 3
 
 
 @pytest.mark.parametrize("incomplete", [["TEST01"], ["*"]])
@@ -140,7 +148,7 @@ def test_completion_missing_only_other_symbols_is_accepted(core, rec):
     core.on_move(move(), T)
     core.on_collection_completed(completed(incomplete=["TEST02"]), T)
 
-    assert len(rec.sent) == 2
+    assert len(rec.sent) == 3
 
 
 def test_completion_of_another_job_type_is_rejected(core, rec):
@@ -154,7 +162,7 @@ def test_legacy_move_without_detection_type_uses_as_of_the_same_way(core, rec):
     core.on_move(move(legacy=True), T)
     core.on_collection_completed(completed(), T)
 
-    assert len(rec.sent) == 2
+    assert len(rec.sent) == 3
 
 
 def test_same_event_id_twice_is_processed_once(core, rec):
@@ -181,8 +189,9 @@ def test_malformed_move_raises_value_error(core, message):
 
 def test_stable_news_and_market_response_complete_the_report_input(core, rec):
     start(core)
+    core.on_context_responded(context_response(), T + SEC)
     core.on_history_responded(history_response(1, points=[100, 101]), T + SEC)
-    assert rec.readied == []  # 시세만으로는 진행하지 않는다
+    assert rec.readied == []  # 시세와 배경 자료만으로는 진행하지 않는다
     core.on_articles_responded(news_response(1, ["a", "b"]), T + SEC)
     assert rec.readied == []  # 기사는 한 라운드로는 안정이 아니다
 
@@ -208,6 +217,7 @@ def test_news_is_requested_again_only_after_the_recheck_interval_with_a_new_seq(
 
 def test_zero_article_responses_count_as_received_and_can_be_stable(core, rec):
     start(core)
+    core.on_context_responded(context_response(), T)
     core.on_history_responded(history_response(1), T)
     core.on_articles_responded(news_response(1, []), T)
     core.on_tick(T + S.recheck_interval)
@@ -220,6 +230,7 @@ def test_zero_article_responses_count_as_received_and_can_be_stable(core, rec):
 
 def test_late_response_with_an_old_seq_is_ignored_and_logged(core, rec, caplog):
     start(core)
+    core.on_context_responded(context_response(), T)
     core.on_tick(T + S.response_timeout)  # 기사·시세 모두 seq 2로 재요청
     with caplog.at_level("INFO", logger="briefing.jobs"):
         core.on_history_responded(history_response(1, points=[1]), T + 11 * SEC)
@@ -271,6 +282,7 @@ def test_news_no_response_after_three_attempts(core, rec):
 
 def test_news_that_never_stabilizes_fails_after_five_rounds(core, rec):
     start(core)
+    core.on_context_responded(context_response(), T)
     core.on_history_responded(history_response(1), T)
     now = T
     for round_number in range(1, 6):
@@ -287,6 +299,7 @@ def test_news_that_never_stabilizes_fails_after_five_rounds(core, rec):
 
 def test_news_stabilizing_on_the_fifth_round_still_succeeds(core, rec):
     start(core)
+    core.on_context_responded(context_response(), T)
     core.on_history_responded(history_response(1), T)
     now = T
     for round_number, ids in enumerate([["a"], ["b"], ["c"], ["d"], ["d"]], start=1):
@@ -312,6 +325,7 @@ def test_collection_not_covered_after_the_wait_limit(core, rec):
 
 def test_llm_error_failure_goes_through_the_same_port(core, rec):
     start(core)
+    core.on_context_responded(context_response(), T)
     core.on_history_responded(history_response(1), T)
     core.on_articles_responded(news_response(1, ["a"]), T)
     core.on_tick(T + S.recheck_interval)
@@ -323,13 +337,15 @@ def test_llm_error_failure_goes_through_the_same_port(core, rec):
     assert (failure.reason, failure.attempts) == (FailureReason.LLM_ERROR, 3)
 
 
-def test_failure_reasons_are_exactly_the_five_defined(core):
+def test_failure_reasons_are_exactly_the_seven_defined(core):
     assert {r.value for r in FailureReason} == {
-        "collection_not_covered", "market_no_response", "news_no_response", "news_unstable", "llm_error"}
+        "collection_not_covered", "market_no_response", "news_no_response", "news_unstable", "llm_error",
+        "context_no_response", "filings_no_response"}
 
 
 def test_articles_outside_the_range_are_dropped_from_the_report_input(core, rec, caplog):
     start(core)
+    core.on_context_responded(context_response(), T)
     core.on_history_responded(history_response(1), T)
     mixed = [article("ok"), article("old", T - timedelta(hours=25)), article("late", T + DELTA + SEC),
              article("edge", T + DELTA)]

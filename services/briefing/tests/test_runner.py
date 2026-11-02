@@ -138,6 +138,13 @@ def history_message(seq):
         "truncated": False}))
 
 
+def context_message(seq, tickers=()):
+    return FakeMessage("market.context.responded", envelope("market.context.responded", {
+        "jobId": JOB_ID, "seq": seq, "symbol": "TEST01", "tickers": list(tickers), "closeRates": [],
+        "background": [{"apiType": "market-summary", "target": None, "status": "missing"}],
+        "truncated": False}))
+
+
 def articles_message(seq, published_at="2026-10-20T07:02:00Z"):
     return FakeMessage("news.articles.responded", envelope("news.articles.responded", {
         "jobId": JOB_ID, "seq": seq, "symbol": "TEST01",
@@ -182,14 +189,15 @@ def sent(producer, topic):
     return [(key, value) for t, key, value in producer.sent if t == topic]
 
 
-def test_open_declares_topics_creates_the_table_and_subscribes_to_the_four_input_topics(setup):
+def test_open_declares_topics_creates_the_table_and_subscribes_to_the_six_input_topics(setup):
     make, _, store, declared = setup
     _, consumer, producer = make()
 
     assert declared == ["localhost:9092"]
     assert store.created == 1
     assert consumer.subscribed == ["market.move", "collection.completed",
-                                   "market.history.responded", "news.articles.responded"]
+                                   "market.history.responded", "news.articles.responded",
+                                   "market.context.responded", "news.filings.responded"]
     assert consumer.config["enable.auto.commit"] is False
     assert producer.config["acks"] == "all"
 
@@ -208,7 +216,7 @@ def test_a_move_flows_to_a_briefing_keyed_by_symbol(setup):
     assert validate("news.articles.requested.v1.schema.json", articles[0][1]) == []
 
     # 기사 목록이 연속 두 번 같아야 안정으로 보므로, 재확인 간격이 지난 뒤 두 번째 라운드가 나간다.
-    feed(runner, consumer, history_message(1), articles_message(1))
+    feed(runner, consumer, history_message(1), context_message(1), articles_message(1))
     clock.advance(seconds=10)
     runner.run_once()
     assert len(sent(producer, "news.articles.requested")) == 2
@@ -223,6 +231,46 @@ def test_a_move_flows_to_a_briefing_keyed_by_symbol(setup):
     assert store.failures == []
 
 
+def filings_message(seq):
+    return FakeMessage("news.filings.responded", envelope("news.filings.responded", {
+        "jobId": JOB_ID, "seq": seq, "symbol": "TEST01",
+        "filings": [{"accessionNumber": "0000000001-26-000001", "tickers": ["TESTA"], "form": "8-K",
+                     "items": ["2.02"], "acceptedAt": "2026-10-20T05:30:28+09:00",
+                     "url": "https://www.sec.gov/Archives/edgar/data/1/test-8k.htm"}],
+        "truncated": False}))
+
+
+def test_a_us_etf_move_sends_filings_after_context_and_flows_to_a_briefing(setup):
+    make, clock, store, _ = setup
+    llm = FakeLlm(json.dumps({"causes": [{"statement": "공시가 영향을 줬을 수 있습니다.",
+                                          "refs": ["0000000001-26-000001", "a1"]}],
+                              "insufficientEvidence": False}))
+    runner, consumer, producer = make(LlmWriter(llm))
+
+    feed(runner, consumer, move_message(), completed_message(), history_message(1), articles_message(1))
+    assert sent(producer, "news.filings.requested") == []  # 티커를 받기 전에는 보내지 않는다
+    context = sent(producer, "market.context.requested")
+    assert [key for key, _ in context] == ["TEST01"]
+    assert validate("market.context.requested.v1.schema.json", context[0][1]) == []
+
+    feed(runner, consumer, context_message(1, tickers=["TESTA"]))
+    filings = sent(producer, "news.filings.requested")
+    assert [key for key, _ in filings] == ["TEST01"]
+    assert validate("news.filings.requested.v1.schema.json", filings[0][1]) == []
+    assert filings[0][1]["payload"]["tickers"] == ["TESTA"]
+
+    feed(runner, consumer, filings_message(1))
+    clock.advance(seconds=10)
+    runner.run_once()
+    feed(runner, consumer, articles_message(2))
+
+    (_, event), = sent(producer, "briefing.generated")
+    assert validate("briefing.generated.v1.schema.json", event) == []
+    assert [(e["kind"], e["ref"]) for e in event["payload"]["evidence"]] == [
+        ("filing", "0000000001-26-000001"), ("article", "a1")]
+    assert store.failures == []
+
+
 def test_every_message_offset_is_committed_before_it_is_handled(setup):
     make, _, _, _ = setup
     runner, consumer, producer = make()
@@ -233,7 +281,7 @@ def test_every_message_offset_is_committed_before_it_is_handled(setup):
     assert consumer.commits[0] is move
     assert consumer.events == [("commit", "market.move"), ("commit", "collection.completed")]
     # 확정은 처리보다 먼저다: 확정 시점에는 아직 요청이 하나도 나가지 않았다.
-    assert len(consumer.commits) == 2 and len(producer.sent) == 2
+    assert len(consumer.commits) == 2 and len(producer.sent) == 3
 
 
 def test_malformed_message_is_committed_and_skipped_without_stopping_the_loop(setup):
@@ -306,11 +354,12 @@ def test_collection_wait_limit_is_detected_by_the_timer(setup):
 
 def test_llm_writer_is_connected_and_marks_the_briefing_as_llm(setup):
     make, clock, _, _ = setup
-    llm = FakeLlm(json.dumps({"causes": [{"statement": "기사가 영향을 줬을 수 있습니다.", "articleIds": ["a1"]}],
+    llm = FakeLlm(json.dumps({"causes": [{"statement": "기사가 영향을 줬을 수 있습니다.", "refs": ["a1"]}],
                               "insufficientEvidence": False}))
     runner, consumer, producer = make(LlmWriter(llm))
 
-    feed(runner, consumer, move_message(), completed_message(), history_message(1), articles_message(1))
+    feed(runner, consumer, move_message(), completed_message(), history_message(1), context_message(1),
+         articles_message(1))
     clock.advance(seconds=10)
     runner.run_once()
     feed(runner, consumer, articles_message(2))
@@ -329,7 +378,8 @@ def test_report_failure_is_recorded_through_the_failure_store(setup):
             raise ReportError("LLM report failed after 3 attempts", 3)
 
     runner, consumer, producer = make(FailingWriter())
-    feed(runner, consumer, move_message(), completed_message(), history_message(1), articles_message(1))
+    feed(runner, consumer, move_message(), completed_message(), history_message(1), context_message(1),
+         articles_message(1))
     clock.advance(seconds=10)
     runner.run_once()
     feed(runner, consumer, articles_message(2))

@@ -17,8 +17,17 @@ class CoreSettings:
     max_rounds: int = 5
     collection_wait_limit: timedelta = timedelta(minutes=30)
     recent_completions: int = 10
-    max_history_points: int = 5000
-    max_articles: int = 300
+    # 시세 이력은 T−5분~T+Δ 구간을 이 간격으로 솎아 받는다. 기본값으로 10분 구간이 60점에 딱 맞는다.
+    history_interval: timedelta = timedelta(seconds=10)
+    max_history_points: int = 60
+    max_articles: int = 50
+    # 공시는 하루 한 번(장 시작 전) 받으므로 +Δ를 두지 않는다. 미국 금요일 장 마감 뒤 공시를 월요일 변동에서 놓치지 않게 72시간을 본다.
+    filings_window: timedelta = timedelta(hours=72)
+    max_filings: int = 20
+    # 배경 자료(환율·지수·시장종합·일봉)와 해외 등락률은 받은 시각이 이 기간보다 오래되면 없음으로 본다.
+    background_window: timedelta = timedelta(days=4)
+    max_background_bytes: int = 32 * 1024
+    max_tickers: int = 100
     # 같은 eventId 중복 처리를 위해 기억하는 작업 키 수. 메모리가 무한히 늘지 않게 한다.
     remembered_jobs: int = 10000
 

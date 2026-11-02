@@ -20,16 +20,25 @@ TABLE = "briefing.failed_jobs"
 DETAIL_MAX_LENGTH = 500
 
 _REASONS = ", ".join(f"'{reason.value}'" for reason in FailureReason)
+# 이름 없는 열 CHECK에 Postgres가 붙이는 이름과 같다. 이전에 만든 테이블도 이 이름으로 찾아 바꾼다.
+REASON_CHECK = "failed_jobs_reason_check"
 
 CREATE_TABLE_SQL = f"""
 CREATE TABLE IF NOT EXISTS {TABLE} (
     job_id     VARCHAR(64) PRIMARY KEY,
     symbol     VARCHAR(16) NOT NULL,
-    reason     VARCHAR(32) NOT NULL CHECK (reason IN ({_REASONS})),
+    reason     VARCHAR(32) NOT NULL CONSTRAINT {REASON_CHECK} CHECK (reason IN ({_REASONS})),
     detail     VARCHAR({DETAIL_MAX_LENGTH}) NOT NULL,
     attempts   INTEGER NOT NULL CHECK (attempts >= 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )
+"""
+
+# 사유가 늘면 이미 있는 테이블은 CREATE TABLE IF NOT EXISTS로 바뀌지 않으므로 제약을 지금 사유 목록으로 다시 건다.
+UPDATE_REASONS_SQL = f"""
+ALTER TABLE {TABLE}
+    DROP CONSTRAINT IF EXISTS {REASON_CHECK},
+    ADD CONSTRAINT {REASON_CHECK} CHECK (reason IN ({_REASONS}))
 """
 
 INSERT_SQL = f"""
@@ -67,6 +76,7 @@ class PostgresFailureStore:
 
     def create_table(self) -> None:
         self._execute(CREATE_TABLE_SQL, None)
+        self._execute(UPDATE_REASONS_SQL, None)
 
     def record(self, failure: Failure) -> None:
         params = (failure.job_id, failure.symbol, failure.reason.value, _truncate(failure.detail), failure.attempts)

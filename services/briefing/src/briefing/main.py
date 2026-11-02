@@ -1,4 +1,4 @@
-"""Kafka 실행부: market.move -> 시세·기사 조회 -> briefing.generated. 실행: python -m briefing.main
+"""Kafka 실행부: market.move -> 시세 이력·배경 자료·기사·공시 조회 -> briefing.generated. 실행: python -m briefing.main
 
 Kafka를 import하는 곳은 이 파일뿐이다. 근거 조회(jobs), 리포트(report), 실패 기록(failure_store)은
 메시지와 시각을 인자로 받기만 하고, 여기서 받은 메시지를 넘기고 그쪽이 낸 이벤트를 발행한다.
@@ -54,7 +54,8 @@ TOPIC_PARTITIONS = {
     FILINGS_RESPONDED_TOPIC: 3,      # news
     BRIEFING_GENERATED_TOPIC: 3,     # notifier
 }
-SUBSCRIBED_TOPICS = (MOVE_TOPIC, COLLECTION_COMPLETED_TOPIC, HISTORY_RESPONDED_TOPIC, ARTICLES_RESPONDED_TOPIC)
+SUBSCRIBED_TOPICS = (MOVE_TOPIC, COLLECTION_COMPLETED_TOPIC, HISTORY_RESPONDED_TOPIC, ARTICLES_RESPONDED_TOPIC,
+                     CONTEXT_RESPONDED_TOPIC, FILINGS_RESPONDED_TOPIC)
 
 # 로컬 브로커는 IPv4만 받는다. 이 설정이 없으면 클라이언트가 먼저 ::1로 접속을 시도하며 연결 오류를 로그에 남긴다.
 COMMON = {"broker.address.family": "v4"}
@@ -150,7 +151,8 @@ class BriefingRunner:
         self._thread = threading.Thread(target=self._loop, name="briefing-kafka", daemon=True)
         self._thread.start()
         log.info("briefing started: %s -> %s", ", ".join(SUBSCRIBED_TOPICS),
-                 ", ".join((HISTORY_REQUESTED_TOPIC, ARTICLES_REQUESTED_TOPIC, BRIEFING_GENERATED_TOPIC)))
+                 ", ".join((HISTORY_REQUESTED_TOPIC, CONTEXT_REQUESTED_TOPIC, ARTICLES_REQUESTED_TOPIC,
+                            FILINGS_REQUESTED_TOPIC, BRIEFING_GENERATED_TOPIC)))
 
     def request_stop(self) -> None:
         """루프에 멈추라고만 알린다. 시그널 처리기에서 부를 수 있도록 기다리지 않는다."""
@@ -211,6 +213,8 @@ class BriefingRunner:
             COLLECTION_COMPLETED_TOPIC: self.core.on_collection_completed,
             HISTORY_RESPONDED_TOPIC: self.core.on_history_responded,
             ARTICLES_RESPONDED_TOPIC: self.core.on_articles_responded,
+            CONTEXT_RESPONDED_TOPIC: self.core.on_context_responded,
+            FILINGS_RESPONDED_TOPIC: self.core.on_filings_responded,
         }.get(message.topic())
         if handler is None:
             log.warning("message from unexpected topic %s ignored", message.topic())
