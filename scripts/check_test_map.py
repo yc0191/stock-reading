@@ -2,15 +2,19 @@
 
 실행: python3 scripts/check_test_map.py [--root 저장소 루트]
 문제가 없으면 종료 코드 0, 고칠 곳이 있으면 고칠 내용을 출력하고 1로 끝난다.
+
+바꾼 파일로 확인할 테스트 찾기: python3 scripts/check_test_map.py --changed [기준 브랜치] [--staged]
+git 으로 바꾼 파일을 읽어 그 파일이 든 지도 행과 테스트를 출력한다. 알려 주기만 하므로 git 오류가 아니면 0으로 끝난다.
 지도의 형식과 고치는 방법은 docs/test-map/README.md 에 있다.
 """
 from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 MAP_DIR = Path("docs") / "test-map"
 JAVA_SERVICES = ("collector", "market", "news", "notifier")
@@ -250,10 +254,154 @@ def check(root: Path) -> list:
     return errors
 
 
+class GitError(Exception):
+    pass
+
+
+def git_paths(root: Path, *args: str) -> list:
+    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise GitError(f"git {' '.join(args)} 실패: {r.stderr.strip()}")
+    return [p for p in r.stdout.split("\0") if p]
+
+
+def changed_files(root: Path, base: str | None, staged: bool) -> tuple:
+    """바꾼 파일 목록과 무엇과 비교했는지를 돌려준다. 이름 바꾸기는 지운 파일과 새 파일로 나눠 둘 다 센다."""
+    diff = ("diff", "--name-only", "-z", "--no-renames")
+    untracked = ("ls-files", "--others", "--exclude-standard", "--full-name", "-z")
+    if staged:
+        return sorted(set(git_paths(root, *diff, "--cached"))), "스테이징한 변경"
+    if base:
+        merge_base = git_paths(root, "merge-base", base, "HEAD")[0].strip()
+        # 갈라진 지점과 작업 폴더를 비교해 커밋한 것과 아직 커밋하지 않은 것을 함께 본다.
+        paths = git_paths(root, *diff, merge_base) + git_paths(root, *untracked)
+        return sorted(set(paths)), f"{base} 에서 갈라진 뒤의 변경"
+    has_head = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "--quiet", "HEAD"],
+                              capture_output=True).returncode == 0
+    paths = git_paths(root, *diff, "HEAD") if has_head else git_paths(root, *diff, "--cached")
+    return sorted(set(paths + git_paths(root, *untracked))), "커밋 안 된 변경과 스테이징"
+
+
+def scope_of(path: str):
+    """경로가 어느 지도의 본 코드('main')·테스트('test') 범위인지 돌려준다. 지도 검사가 보지 않는 파일이면 None."""
+    p = PurePosixPath(path)
+    if "__pycache__" in p.parts:
+        return None
+    for service in JAVA_SERVICES:
+        for kind in ("main", "test"):
+            if path.startswith(f"services/{service}/src/{kind}/java/") and p.suffix == ".java":
+                return f"{service}.md", kind
+    if p.suffix == ".py":
+        if path.startswith("services/briefing/src/briefing/"):
+            return "briefing.md", "main"
+        if path.startswith("services/briefing/tests/"):
+            return "briefing.md", "test"
+        if path.startswith("scripts/tests/"):
+            return "scripts.md", "test"
+    if p.suffix in (".py", ".sh") and len(p.parts) == 2 and p.parts[0] == "scripts":
+        return "scripts.md", "main"
+    return None
+
+
+def names_in(root: Path, path: str) -> set:
+    """지도에 적히는 이름. Java 는 파일 안 최상위 타입(지운 파일이면 파일 이름), 파이썬·셸은 파일 이름."""
+    p = PurePosixPath(path)
+    if p.suffix != ".java":
+        return names_of(p.name)
+    f = root / path
+    found = set()
+    if f.is_file():
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            m = JAVA_TOP_LEVEL.match(line)
+            if m:
+                found.add(m.group(1))
+    return found or {p.stem}
+
+
+def test_tokens(cell: str) -> list:
+    tokens = []
+    for item in (part.strip() for part in cell.split(";")):
+        if item and not item.startswith(("없음", "해당 없음")):
+            tokens += TOKEN.findall(BRACKET.sub("", item))
+    return tokens
+
+
+def matching_rows(root: Path, maps: dict, path: str, map_file: str, kind: str) -> tuple:
+    """바꾼 파일이 '대상' 또는 테스트 칸에 든 (지도 파일, 행) 목록과, 테스트 도우미 줄에 있는지를 돌려준다."""
+    names = names_in(root, path)
+    group = map_file[:-3]
+    found = []
+    for other, (rows, helper) in maps.items():
+        for row in rows:
+            if kind == "main":
+                hit = other == map_file and any(t.strip() in names for t in row.cells["대상"].split(","))
+            else:
+                tokens = [tok for col in TEST_COLUMNS for tok in test_tokens(row.cells[col])]
+                hit = any((other == map_file and tok in names) or tok in {f"{group}/{n}" for n in names}
+                          for tok in tokens)
+            if hit:
+                found.append((other, row))
+    helper = maps.get(map_file, ([], None))[1] or []
+    return found, kind == "test" and any(h in names for h in helper)
+
+
+def changed_report(root: Path, base: str | None, staged: bool) -> list:
+    paths, compared = changed_files(root, base, staged)
+    if not paths:
+        return [f"바꾼 파일이 없습니다(비교: {compared})"]
+    maps = {}
+    for map_file in MAP_FILES:
+        path = root / MAP_DIR / map_file
+        if path.is_file():
+            maps[map_file] = parse_map(path, [], map_file)
+    hits = {}  # (지도 파일, 행 번호) -> (행, 그 행을 고르게 한 파일들)
+    helpers, not_in_map, outside = [], [], []
+    for path in paths:
+        scope = scope_of(path)
+        if scope is None:
+            outside.append(path)
+            continue
+        rows, is_helper = matching_rows(root, maps, path, *scope)
+        for map_file, row in rows:
+            hits.setdefault((map_file, row.line), (row, []))[1].append(path)
+        if is_helper:
+            helpers.append(f"{path} ({(MAP_DIR / scope[0]).as_posix()})")
+        elif not rows:
+            not_in_map.append(path)
+
+    out = [f"바꾼 파일 {len(paths)}개(비교: {compared})"]
+    if hits:
+        out += ["", "확인할 테스트(지도 행):"]
+    for (map_file, line), (row, by) in sorted(hits.items()):
+        out.append(f"- {(MAP_DIR / map_file).as_posix()}:{line} {row.cells['기능']}")
+        out.append(f"    바꾼 파일: {', '.join(by)}")
+        out += [f"    {col}: {row.cells[col]}" for col in TEST_COLUMNS]
+    if helpers:
+        out += ["", "테스트 도우미로 지도에 있는 파일(그 지도의 테스트를 함께 확인):"] + [f"- {h}" for h in helpers]
+    if not_in_map:
+        out += ["", "지도에 없는 바꾼 파일(지도에 올리기 전에는 지도 검사가 실패합니다):"] + [f"- {p}" for p in not_in_map]
+    if outside:
+        out += ["", "지도가 다루지 않는 바꾼 파일:"] + [f"- {p}" for p in outside]
+    return out
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="테스트 지도와 저장소를 비교한다")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent, help="저장소 루트")
+    parser.add_argument("--changed", nargs="?", const="", metavar="기준 브랜치",
+                        help="검사 대신 바꾼 파일이 든 지도 행과 테스트를 출력한다. 기준 브랜치를 주면 그 브랜치와의 차이를 본다")
+    parser.add_argument("--staged", action="store_true", help="--changed 와 함께: 스테이징한 변경만 본다(커밋 훅용)")
     args = parser.parse_args(argv)
+    if args.staged and (args.changed is None or args.changed):
+        parser.error("--staged 는 기준 브랜치 없는 --changed 와만 함께 씁니다")
+    if args.changed is not None:
+        try:
+            lines = changed_report(args.root.resolve(), args.changed or None, args.staged)
+        except GitError as e:
+            print(e)
+            return 2
+        print("\n".join(lines))
+        return 0
     errors = check(args.root.resolve())
     for error in errors:
         print(error)

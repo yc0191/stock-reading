@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 import check_test_map as ctm
@@ -244,3 +245,174 @@ def test_naming_a_test_from_another_map_does_not_link_it_in_its_own_map(tmp_path
     errors = ctm.check(root)
     assert len(errors) == 1
     assert "test_flow_live.py" in errors[0] and "scripts.md" in errors[0]
+
+
+# ------------------------------------------------------------------ --changed
+
+def git(root: Path, *args: str) -> str:
+    r = subprocess.run(["git", "-C", str(root), "-c", "user.name=test", "-c", "user.email=test@example.com",
+                        "-c", "commit.gpgsign=false", *args], capture_output=True, text=True, check=True)
+    return r.stdout
+
+
+def make_git_repo(root: Path) -> Path:
+    """make_repo 의 가짜 저장소를 git 저장소로 만들고 전부 커밋해 바꾼 파일이 없는 상태로 둔다."""
+    make_repo(root)
+    git(root, "init", "--quiet", "-b", "main")
+    git(root, "add", "-A")
+    git(root, "commit", "--quiet", "-m", "init")
+    return root
+
+
+def append(path: Path, text: str = "\n// 변경\n") -> None:
+    with path.open("a", encoding="utf-8") as f:
+        f.write(text)
+
+
+def changed(root: Path, *args: str, capsys) -> tuple:
+    rc = ctm.main(["--root", str(root), "--changed", *args])
+    return rc, capsys.readouterr().out
+
+
+COLLECTOR_MAIN = "services/collector/src/main/java/dev/x/collector"
+COLLECTOR_TEST = "services/collector/src/test/java/dev/x/collector"
+
+
+def test_changed_with_no_changes_prints_no_rows(tmp_path, capsys):
+    root = make_git_repo(tmp_path)
+
+    rc, out = changed(root, capsys=capsys)
+
+    assert rc == 0
+    assert "바꾼 파일이 없습니다" in out and "기능 " not in out and "Test" not in out
+
+
+def test_changed_main_file_prints_its_row_with_all_test_cells_and_conditions(tmp_path, capsys):
+    root = make_git_repo(tmp_path)
+    append(root / COLLECTOR_MAIN / "CollectorGamma.java")  # 커밋도 스테이징도 하지 않은 수정
+
+    rc, out = changed(root, capsys=capsys)
+
+    assert rc == 0
+    assert "docs/test-map/collector.md:7 기능 CollectorC" in out
+    assert f"바꾼 파일: {COLLECTOR_MAIN}/CollectorGamma.java" in out
+    assert "단위: 없음 - 아직 없음" in out and "가상: CollectorGammaTest" in out
+    assert "실제: CollectorGammaLiveTest [외부 API, 켜는 조건: GAMMA_LIVE=1]; 없음 - 나중에 채움 [서비스 흐름]" in out
+    assert "기능 CollectorA" not in out and "기능 CollectorB" not in out and "지도에 없는" not in out
+
+
+def test_changed_main_file_is_matched_by_the_types_inside_it(tmp_path, capsys):
+    # 파일 이름이 아니라 그 안의 최상위 타입 이름으로 '대상' 칸을 찾는다.
+    root = make_git_repo(tmp_path)
+    (root / "services/market/src/main/java/dev/x/market/sub/MarketBetaPort.java").write_text(
+        "package dev.x;\n\ninterface MarketBetaPort {\n    void call();\n}\n", encoding="utf-8")
+
+    rc, out = changed(root, capsys=capsys)
+
+    assert rc == 0
+    assert "docs/test-map/market.md:6 기능 MarketB" in out
+    assert "단위: MarketBetaTest" in out and "가상: MarketBetaFlowTest" in out
+
+
+def test_changed_staged_test_file_prints_the_rows_naming_it(tmp_path, capsys):
+    root = make_git_repo(tmp_path)
+    append(root / COLLECTOR_TEST / "CollectorGammaLiveTest.java")
+    git(root, "add", "-A")
+    append(root / "scripts/tests/test_load_config.py", "\n# 변경\n")
+
+    rc, out = changed(root, capsys=capsys)
+
+    assert rc == 0
+    assert "docs/test-map/collector.md:7 기능 CollectorC" in out
+    assert f"바꾼 파일: {COLLECTOR_TEST}/CollectorGammaLiveTest.java" in out
+    assert "docs/test-map/scripts.md:5 설정 로더" in out
+
+
+def test_changed_test_of_another_map_also_prints_the_rows_pointing_to_it(tmp_path, capsys):
+    root = make_git_repo(tmp_path)
+    replace(root / "docs/test-map/briefing.md", "없음 - 나중에 채움 [외부 API]",
+            "scripts/test_tool.py [외부 API, 켜는 조건: test-all.sh --live]")
+    git(root, "commit", "--quiet", "-am", "map")
+    append(root / "scripts/tests/test_tool.py", "\n# 변경\n")
+
+    rc, out = changed(root, capsys=capsys)
+
+    assert rc == 0
+    assert "docs/test-map/scripts.md:6 도구" in out
+    assert "docs/test-map/briefing.md:6 리포트" in out
+    assert "실제: scripts/test_tool.py [외부 API, 켜는 조건: test-all.sh --live]" in out
+
+
+def test_changed_files_not_in_the_map_are_listed_apart(tmp_path, capsys):
+    root = make_git_repo(tmp_path)
+    write(root / COLLECTOR_MAIN / "CollectorNew.java", "package dev.x;\n\nclass CollectorNew {\n}\n")
+    git(root, "add", "-A")
+    write(root / "scripts/new-tool.sh", "")  # 스테이징하지 않은 새 파일
+    write(root / "docs/guide.md", "# 안내\n")
+    append(root / COLLECTOR_MAIN / "CollectorAlpha.java")
+
+    rc, out = changed(root, capsys=capsys)
+
+    assert rc == 0
+    not_in_map, _, outside = out.partition("지도에 없는 바꾼 파일")[2].partition("지도가 다루지 않는 바꾼 파일")
+    assert f"{COLLECTOR_MAIN}/CollectorNew.java" in not_in_map and "scripts/new-tool.sh" in not_in_map
+    assert "docs/guide.md" in outside and "docs/guide.md" not in not_in_map
+    # 함께 바꾼 지도 안 파일의 행은 그대로 나온다.
+    assert "docs/test-map/collector.md:5 기능 CollectorA" in out and "단위: CollectorAlphaTest" in out
+
+
+def test_changed_helper_file_is_reported_as_a_helper(tmp_path, capsys):
+    root = make_git_repo(tmp_path)
+    append(root / COLLECTOR_TEST / "CollectorFakeServer.java")
+
+    rc, out = changed(root, capsys=capsys)
+
+    assert rc == 0
+    assert "테스트 도우미로 지도에 있는 파일" in out and "CollectorFakeServer.java (docs/test-map/collector.md)" in out
+    assert "지도에 없는 바꾼 파일" not in out
+
+
+def test_changed_against_a_base_branch_uses_the_difference_from_it(tmp_path, capsys):
+    root = make_git_repo(tmp_path)
+    git(root, "checkout", "--quiet", "-b", "work")
+    append(root / COLLECTOR_MAIN / "CollectorGamma.java")
+    (root / "services/briefing/src/briefing/report.py").unlink()  # 지운 파일도 그 행을 찾는다
+    git(root, "commit", "--quiet", "-am", "work")
+    git(root, "checkout", "--quiet", "main")
+    append(root / "scripts/load_config.py", "\n# 기준 브랜치에서 갈라진 뒤의 변경\n")
+    git(root, "commit", "--quiet", "-am", "main moved")
+    git(root, "checkout", "--quiet", "work")
+
+    rc, out = changed(root, capsys=capsys)
+    assert rc == 0 and "바꾼 파일이 없습니다" in out  # 기준 없이는 커밋한 변경을 보지 않는다
+
+    for form in (["--changed", "main"], ["--changed=main"]):
+        rc = ctm.main(["--root", str(root), *form])
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "main 에서 갈라진 뒤의 변경" in out
+        assert "docs/test-map/collector.md:7 기능 CollectorC" in out
+        assert "docs/test-map/briefing.md:6 리포트" in out
+        assert "설정 로더" not in out  # 기준 브랜치 쪽에서만 바뀐 파일은 넣지 않는다
+
+
+def test_changed_staged_shows_only_what_the_commit_will_contain(tmp_path, capsys):
+    root = make_git_repo(tmp_path)
+    append(root / COLLECTOR_MAIN / "CollectorGamma.java")
+    git(root, "add", "-A")
+    append(root / COLLECTOR_MAIN / "CollectorAlpha.java")
+    write(root / "scripts/new-tool.sh", "")
+
+    rc, out = changed(root, "--staged", capsys=capsys)
+
+    assert rc == 0
+    assert "스테이징한 변경" in out and "기능 CollectorC" in out
+    assert "기능 CollectorA" not in out and "new-tool.sh" not in out
+
+
+def test_changed_with_an_unknown_base_returns_two(tmp_path, capsys):
+    root = make_git_repo(tmp_path)
+
+    rc, out = changed(root, "no-such-branch", capsys=capsys)
+
+    assert rc == 2 and "no-such-branch" in out

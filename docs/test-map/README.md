@@ -101,6 +101,34 @@ services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests
 | `briefing.md` | `services/briefing/src/briefing`의 `.py` | `services/briefing/tests`의 `.py` |
 | `scripts.md` | `scripts/`의 `.py`, `.sh`(`scripts/tests` 제외) | `scripts/tests`의 `.py` |
 
+## 바꾼 파일로 확인할 테스트 찾기
+
+`--changed`를 주면 검사 대신 git으로 바꾼 파일을 읽어, 그 파일이 '대상' 또는 단위·가상·실제 칸에 든 지도 행을 출력합니다. 행마다 지도 파일과 줄, 기능 이름, 바꾼 파일, 세 칸의 테스트(켜는 조건 포함)가 나옵니다.
+
+```
+python3 scripts/check_test_map.py --changed                    # 커밋 안 된 변경, 스테이징, 아직 추가하지 않은 새 파일
+python3 scripts/check_test_map.py --changed develop-collector  # 기준 브랜치에서 갈라진 뒤의 변경(커밋 안 된 것 포함)
+python3 scripts/check_test_map.py --changed --staged           # 스테이징한 변경만(커밋 훅이 씀)
+```
+
+- 다른 지도가 `<지도 이름>/<테스트 이름>`으로 가리키는 테스트를 바꾸면 그 행도 함께 나옵니다.
+- 지도에 없는 본 코드·테스트는 '지도에 없는 바꾼 파일'로 따로 나옵니다. 지도에 올리기 전에는 지도 검사가 실패합니다.
+- 테스트 도우미 파일, 지도가 다루지 않는 파일(문서, 빌드 설정 등)도 따로 나옵니다.
+- 목록은 알려 주기만 합니다. git 오류(없는 기준 브랜치 등)가 아니면 종료 코드는 0입니다.
+
+## 커밋할 때 도는 지도 검사
+
+`.pre-commit-config.yaml`의 훅으로 커밋마다 두 가지가 돕니다. 최초 1회 `pre-commit install`로 설치합니다.
+
+| 훅 | 하는 일 | 실패하면 |
+|---|---|---|
+| `test-map-check` | `python3 scripts/check_test_map.py`(위 지도 검사) | 커밋이 막힙니다. 출력대로 지도를 고친 뒤 다시 커밋합니다 |
+| `test-map-changed` | `--changed --staged`로 이번 커밋이 영향을 주는 기능과 테스트를 화면에 보여 줌 | 막지 않습니다 |
+
+지도 검사는 스테이징 여부와 상관없이 작업 폴더의 파일을 봅니다. 커밋하지 않을 새 파일이 지도에 없어도 커밋이 막히므로, 그런 파일은 지우거나 옮겨 두고 커밋합니다.
+
+PR과 `develop-collector`·`main` 푸시 때는 GitHub Actions(`.github/workflows/test.yml`)가 Java 전체, 브리핑, 설정 로더·지도 검사 테스트를 돌립니다. 실제 DB와 실제 서비스 흐름 테스트는 켜는 환경변수가 없어 건너뛰므로 커밋 전에 `scripts/test-all.sh`로 돌립니다. PR 실행에서는 기준 브랜치와의 차이로 `--changed`를 돌린 목록이 실행 결과 요약에 붙습니다(실패로 만들지 않음).
+
 ## 지도를 고치는 방법
 
 | 바꾼 것 | 지도에서 할 일 |
