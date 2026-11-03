@@ -7,3 +7,19 @@ repos:
         entry: gitleaks git --pre-commit --staged --redact --verbose
         language: system
         pass_filenames: false
+      # 지도(docs/test-map/)와 코드·테스트가 어긋나면 커밋을 막는다.
+      - id: test-map-check
+        name: test map check
+        entry: python3 scripts/check_test_map.py
+        language: system
+        pass_filenames: false
+        always_run: true
+      # 이번 커밋이 영향을 주는 기능과 테스트를 보여 주기만 한다(git 오류가 아니면 0으로 끝나 커밋을 막지 않음).
+      # pre-commit 은 성공한 훅의 출력을 숨기므로 verbose 로 화면에 띄운다.
+      - id: test-map-changed
+        name: tests to check for this commit
+        entry: python3 scripts/check_test_map.py --changed --staged
+        language: system
+        pass_filenames: false
+        always_run: true
+        verbose: true

@@ -146,6 +146,31 @@ def test_news_search_settings_map_to_the_env_names_the_collector_reads():
     assert ignored == []
 
 
+def test_broker_url_and_live_symbol_map_to_the_env_names_test_all_reads():
+    # test-all.sh --live 가 실행할 때 읽는 이름과 같아야 한다.
+    names = {"broker-base-url": "BROKER_BASE_URL", "test-live-symbol": "TEST_ALL_LIVE_SYMBOL"}
+    parameters = [collector_param(short, f"v-{short}") for short in names]
+    updates, ignored = lc.to_env_updates(parameters, lc.COLLECTOR_PREFIX, lc.COLLECTOR_ENV_NAMES)
+    assert updates == {env: f"v-{short}" for short, env in names.items()}
+    assert ignored == []
+
+
+def test_main_writes_live_symbol_without_printing_it(tmp_path, capsys):
+    env = tmp_path / ".env"
+
+    def run(cmd, **kwargs):
+        params = full_parameters() if "/notifier" in cmd[cmd.index("--path") + 1] \
+            else [collector_param("test-live-symbol", "TEST01"), collector_param("broker-base-url", "https://broker.invalid")]
+        return subprocess.CompletedProcess(cmd, 0, json.dumps({"Parameters": params}), "")
+
+    assert lc.main(["--env-file", str(env)], run=run) == 0
+    text = env.read_text()
+    assert "TEST_ALL_LIVE_SYMBOL=TEST01" in text
+    assert "BROKER_BASE_URL=https://broker.invalid" in text
+    out = capsys.readouterr().out
+    assert "TEST01" not in out and "broker.invalid" not in out
+
+
 def test_queries_value_with_separators_is_written_as_is(tmp_path):
     # 검색어 설정은 '=', ',', ';' 를 쓰는 형식이라 값이 그대로 .env 에 들어가야 한다.
     env = tmp_path / ".env"

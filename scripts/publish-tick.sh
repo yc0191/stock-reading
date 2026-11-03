@@ -3,7 +3,7 @@
 # 사람이 필요할 때만 흐름을 시험하기 위한 도구다.
 #
 # 사용법: scripts/publish-tick.sh <jobType>   (예: collect-news, collect)
-# 환경변수: KAFKA_CONTAINER (기본 stock-kafka)
+# 환경변수: KAFKA_CONTAINER (기본 stock-kafka), KAFKA_BOOTSTRAP (컨테이너 안에서 붙을 주소, 기본 localhost:9092)
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
@@ -19,6 +19,8 @@ if ! [[ "$job_type" =~ ^[a-z][a-z-]*$ ]]; then
 fi
 
 container="${KAFKA_CONTAINER:-stock-kafka}"
+# 전체 실행 스크립트(test-all.sh --live)가 다른 포트로 띄운 일회용 Kafka 로 보낼 때 바꾼다.
+bootstrap="${KAFKA_BOOTSTRAP:-localhost:9092}"
 topic="schedule.tick"
 
 # 수집기의 TickPublisher 와 같은 형식: 초 단위로 자른 Asia/Seoul 시각, correlationId = jobType-scheduledFor
@@ -30,7 +32,7 @@ json="{\"eventId\":\"${event_id}\",\"eventType\":\"schedule.tick\",\"schemaVersi
 # 메시지 키는 jobType 이다(TickPublisher 와 동일). 콘솔 프로듀서는 "키|값" 한 줄을 받는다.
 printf '%s|%s\n' "$job_type" "$json" | docker exec -i "$container" \
   /opt/kafka/bin/kafka-console-producer.sh \
-  --bootstrap-server localhost:9092 \
+  --bootstrap-server "$bootstrap" \
   --topic "$topic" \
   --property parse.key=true \
   --property key.separator='|'

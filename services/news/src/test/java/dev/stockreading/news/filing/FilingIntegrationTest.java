@@ -15,7 +15,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * 실제 Postgres 대상 통합 테스트. 세 환경변수가 모두 있을 때만 실행하며, 대상은 비어 있는 새 DB(public 스키마)라고 가정한다.
+ * 실제 Postgres 대상 통합 테스트. 세 환경변수가 모두 있을 때만 실행하며, 대상은 비어 있는 새 DB이고, 테이블은 접속 계정의 기본 스키마(서비스 계정이면 자기 서비스 스키마)에 생긴다.
  * 평소 gradlew test 에서는 건너뛴다.
  */
 @EnabledIfEnvironmentVariable(named = "NEWS_IT_DB_URL", matches = ".+")
@@ -33,7 +33,7 @@ class FilingIntegrationTest {
         String user = System.getenv("NEWS_IT_DB_USER");
         String password = System.getenv("NEWS_IT_DB_PASSWORD");
 
-        // 서비스와 같은 classpath 마이그레이션을 적용한다(스키마는 기본값인 public).
+        // 서비스와 같은 classpath 마이그레이션을 적용한다(스키마는 접속 계정의 기본 스키마).
         Flyway.configure().dataSource(url, user, password).locations("classpath:db/migration").load().migrate();
 
         DriverManagerDataSource dataSource = new DriverManagerDataSource(url, user, password);
@@ -45,7 +45,7 @@ class FilingIntegrationTest {
 
     @Test
     void migrationCreatesTheFilingTablesNextToTheNewsTables() {
-        List<String> tables = jdbc.sql("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+        List<String> tables = jdbc.sql("SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()")
                 .query(String.class).list();
 
         assertThat(tables).contains("filing", "filing_ticker", "news_article", "news_article_symbol", "failed_event");

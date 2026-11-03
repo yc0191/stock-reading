@@ -237,7 +237,7 @@ python3 scripts/live_probe.py --profile <AWS 프로필> --base-url <시세 제�
 
 ## 설정 값 가져오기 (Parameter Store, 선택)
 
-메일 설정(SMTP 호스트·포트·계정, 발신·수신 주소) 6개를 AWS Systems Manager Parameter Store(시드니, `ap-southeast-2`)에 두고 `.env`로 가져옵니다. 수집기의 키 5개(`/stock-reading/dev/collector/` 아래)와 브리핑의 LLM 키(`/stock-reading/dev/briefing/anthropic-api-key` → `ANTHROPIC_API_KEY`)도 같은 방식으로 가져옵니다. 두 그룹은 선택이라 없어도 메일 설정 반영은 막지 않으며, LLM 키가 없으면 브리핑은 규칙 기반 리포트를 만듭니다. 서비스는 계속 환경변수만 읽습니다.
+메일 설정(SMTP 호스트·포트·계정, 발신·수신 주소) 6개를 AWS Systems Manager Parameter Store(시드니, `ap-southeast-2`)에 두고 `.env`로 가져옵니다. 수집기의 키(`/stock-reading/dev/collector/` 아래, 이름 대응은 `scripts/load_config.py`의 `COLLECTOR_ENV_NAMES`)와 브리핑의 LLM 키(`/stock-reading/dev/briefing/anthropic-api-key` → `ANTHROPIC_API_KEY`)도 같은 방식으로 가져옵니다. 두 그룹은 선택이라 없어도 메일 설정 반영은 막지 않으며, LLM 키가 없으면 브리핑은 규칙 기반 리포트를 만듭니다. 서비스는 계속 환경변수만 읽습니다.
 
 ```bash
 # 읽을 값 확인 (파일은 쓰지 않고 키 이름만 출력)
@@ -261,15 +261,25 @@ python3 scripts/load_config.py --only briefing
 
 ## 테스트
 
-| 대상 | 명령 | 개수 |
-|---|---|---|
-| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 764 (실서버 확인·실험용 5개, 부하 시험 1개, 시세처리기 DB 통합 16개, 뉴스 저장 DB 통합 7개는 건너뜀) |
-| Python (브리핑) | `services/briefing/.venv/bin/python -m pytest services/briefing` | 223 |
-| Python (설정 로더, 가설 검증 도구) | `services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests` | 72 |
+테스트 명령과 변경 범위별로 돌릴 테스트는 [`.claude/rules/testing.md`](../.claude/rules/testing.md), 기능마다 어떤 테스트가 있고 어떤 조건에서 켜지는지는 테스트 지도 [`docs/test-map/`](test-map/README.md)가 원본입니다. 테스트 개수는 실행할 때마다 바뀌므로 적지 않고, 아래 전체 실행의 결과 표로 확인합니다.
 
 `--no-build-cache`가 필요한 이유: 빌드 캐시가 켜져 있으면 입력이 같을 때 테스트를 실행하지 않고 이전 결과를 복원합니다.
 
-시세처리기의 DB 통합 테스트(`*IntegrationTest`)는 `MARKET_IT_DB_URL`, `MARKET_IT_DB_USER`, `MARKET_IT_DB_PASSWORD`가 모두 있을 때만 실행됩니다. 마이그레이션을 적용할 비어 있는 새 DB가 필요하므로 개발용 DB와 분리된 임시 컨테이너를 쓰고, 끝나면 지웁니다.
+### 전체 실행 (실제 DB 포함)
+
+```bash
+scripts/test-all.sh          # 단위·가상 테스트 + 실제 DB 테스트, 끝에 기능별 결과 표
+scripts/test-all.sh --plan   # 아무것도 띄우지 않고 실행 순서만 보기
+```
+
+- 실제 DB 테스트는 개발용 Postgres 컨테이너(`stock-postgres`) 안에 이 실행만의 테스트 전용 데이터베이스(`stock_test_run_<시각>_<pid>`)를 만들고, 서비스 스키마를 `.env`의 서비스 계정 소유로 만든 뒤 돌리고 지웁니다. 개발용 데이터베이스의 데이터는 건드리지 않습니다.
+- 컨테이너가 꺼져 있으면 켜고, 끝나도 끄지 않습니다. 서비스 계정은 만들거나 바꾸지 않습니다.
+- `.env`에 `MARKET_DB_USER`, `MARKET_DB_PASSWORD`, `NEWS_DB_USER`, `NEWS_DB_PASSWORD`, `BRIEFING_DB_USER`, `BRIEFING_DB_PASSWORD`가 있어야 합니다.
+- 결과 표는 지도의 기능마다 돌았음, 건너뜀(이유), 실패를 보여 주고, 하나라도 실패하면 종료 코드 1입니다. 이전 실행이 남긴 테스트 데이터베이스나 컨테이너가 보이면 지우지 않고 지우는 명령을 안내합니다.
+
+**오래된 DB 볼륨에는 news·브리핑 계정이 없을 수 있습니다.** 계정은 초기화 스크립트(`infra/compose/postgres/init/`)가 DB 볼륨을 처음 만들 때만 만들므로, news·브리핑 계정 스크립트가 생기기 전에 만든 볼륨에는 그 계정이 없습니다. 이때 전체 실행은 `서비스 계정 <이름> 이 없음`으로 실제 DB 단계를 실패로 표시합니다. 대처는 위 "DB 준비와 다시 만들기"처럼 볼륨을 지우고 다시 띄우는 것입니다(모든 서비스의 개발용 DB 데이터가 사라집니다).
+
+DB 통합 테스트 하나만 따로 돌릴 때는 켜는 환경변수(지도의 `켜는 조건`)에 비어 있는 새 데이터베이스를 넘깁니다. 마이그레이션을 적용할 새 DB가 필요하므로 개발용 DB와 분리된 임시 컨테이너를 쓰고, 끝나면 지웁니다. 예: 시세처리기
 
 ```bash
 # 임시 Postgres (호스트 포트는 비어 있는 값을 자동으로 받고, 비밀번호는 일회용 값을 쓴다)
@@ -282,7 +292,44 @@ MARKET_IT_DB_URL="jdbc:postgresql://127.0.0.1:$PORT/demo" MARKET_IT_DB_USER=post
 docker rm -f market-it-pg
 ```
 
-뉴스 저장의 DB 통합 테스트도 같은 방식이며 환경변수 이름만 `NEWS_IT_DB_URL`, `NEWS_IT_DB_USER`, `NEWS_IT_DB_PASSWORD`이고 대상은 `:services:news`입니다. 비어 있는 새 DB가 필요하므로 시세처리기와 같은 컨테이너를 이어 쓰지 말고 따로 띄웁니다.
+켜는 환경변수는 서비스마다 세 개씩입니다. 서비스끼리 같은 컨테이너를 이어 쓰지 말고 따로 띄웁니다.
+
+| 대상 | 켜는 환경변수 | 주소 형식 |
+|---|---|---|
+| 시세처리기 (`:services:market`) | `MARKET_IT_DB_URL`, `MARKET_IT_DB_USER`, `MARKET_IT_DB_PASSWORD` | `jdbc:postgresql://...` |
+| 뉴스 저장 (`:services:news`) | `NEWS_IT_DB_URL`, `NEWS_IT_DB_USER`, `NEWS_IT_DB_PASSWORD` | `jdbc:postgresql://...` |
+| 브리핑 (`pytest services/briefing`) | `BRIEFING_IT_DB_URL`, `BRIEFING_IT_DB_USER`, `BRIEFING_IT_DB_PASSWORD` | `postgresql://...`. `briefing` 스키마가 비어 있는 DB를 가정합니다 |
+
+### 실제 외부 호출 (`--live`)
+
+```bash
+TEST_ALL_AWS_PROFILE=<AWS 프로필> scripts/test-all.sh --live
+```
+
+`--live`는 위 전체 실행에 더해 실제 외부를 부르는 두 흐름을 돌립니다. 시세 토큰 1회, 시세 1회, LLM 1회, 메일 1통을 씁니다.
+
+1. 시세 흐름: 일회용 Kafka와 테스트 전용 데이터베이스로 시세처리기와 수집기(실제 시세, 종목 1개)를 띄우고 tick 1건으로 저장까지 확인합니다.
+2. 브리핑·메일: news, 테스트용 발송기, 브리핑(실제 LLM)을 띄우고 가짜 변동·기사·수집 완료를 넣어 LLM 리포트와 메일 발송 1통을 확인합니다.
+
+주의:
+
+- **사람이 직접 실행을 결정할 때만 씁니다.** 실제 호출 한도와 비용을 쓰고 실제 메일이 갑니다.
+- 메일 발송은 이 스크립트가 띄운 테스트용 발송기에만 켭니다. 제목 앞에 `[테스트]`를 붙이고 시간당 1통으로 묶으며, `.env`의 `NOTIFIER_SEND_ENABLED`는 바꾸지 않습니다.
+- LLM 리포트 본문은 받은 메일과 `build/test-all-live/briefing-<실행 이름>.txt`(권한 600, git 제외)에만 남습니다.
+- 키는 실행할 때마다 Parameter Store에서 새로 읽어 임시 폴더에만 두고, 끝나면 지웁니다. `.env`와 실행 환경변수의 같은 키는 쓰지 않습니다. 필수 키가 하나라도 비면 시세를 부르기 전에 실패로 끝납니다.
+- `TEST_ALL_AWS_PROFILE`이 필수입니다. 엉뚱한 계정을 읽지 않도록 기본 자격증명 방식으로 넘어가지 않습니다.
+
+필요한 키(목록의 원본은 `scripts/test-all.sh` 머리 주석과 `LIVE_KEYS`, 이름 대응은 `scripts/load_config.py`):
+
+| 환경변수 | Parameter Store |
+|---|---|
+| `BROKER_BASE_URL` | `/stock-reading/dev/collector/broker-base-url`. `https://<호스트>[:포트]` 형식이어야 합니다(스크립트가 검사) |
+| `TEST_ALL_LIVE_SYMBOL` | `/stock-reading/dev/collector/test-live-symbol`. 시세를 부를 종목 하나(6자리 숫자) |
+| `BROKER_APP_KEY`, `BROKER_APP_SECRET` | `/stock-reading/dev/collector/` 아래의 시세 앱키·시크릿 |
+| `ANTHROPIC_API_KEY` | `/stock-reading/dev/briefing/anthropic-api-key` |
+| `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `NOTIFIER_SENDER`, `NOTIFIER_RECIPIENT` (선택 `SMTP_PORT`) | `/stock-reading/dev/notifier/` 아래의 메일 설정 |
+
+`BRIEFING_LLM_MODEL`(선택)만은 실행 환경변수나 `.env`에서 읽습니다.
 
 ## 실행 기록 (테스트 기록)
 
