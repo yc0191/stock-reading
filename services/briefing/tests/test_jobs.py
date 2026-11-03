@@ -97,7 +97,7 @@ def test_requests_match_the_contract_and_cover_the_required_ranges(core, rec):
     assert validate("news.articles.requested.v1.schema.json", news.value) == []
     assert history.key == news.key == "TEST01"
     h, n = history.value["payload"], news.value["payload"]
-    assert (h["jobId"], h["seq"], h["maxPoints"], h["intervalSeconds"]) == (JOB_ID, 1, 60, 10)
+    assert (h["jobId"], h["seq"], h["maxPoints"], h["intervalSeconds"]) == (JOB_ID, 1, 61, 10)
     assert datetime.fromisoformat(h["since"]) == T - timedelta(minutes=5)
     assert datetime.fromisoformat(h["until"]) == T + DELTA
     assert (n["seq"], n["maxArticles"]) == (1, 50)
@@ -372,3 +372,10 @@ def test_core_does_not_import_kafka():
     for module in (briefing.config, briefing.events, briefing.jobs):
         source = open(module.__file__, encoding="utf-8").read()
         assert "confluent_kafka" not in source
+
+
+def test_default_history_window_fits_in_the_point_cap_so_it_is_not_always_truncated():
+    # 양끝을 포함한 구간이라 칸 수는 (구간 길이 / 간격) + 1이다. 상한이 이보다 작으면 마지막 칸이 늘 잘린다.
+    s = CoreSettings()
+    buckets = int((s.market_lookback + s.delta) / s.history_interval) + 1
+    assert buckets <= s.max_history_points

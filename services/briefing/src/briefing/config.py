@@ -17,9 +17,10 @@ class CoreSettings:
     max_rounds: int = 5
     collection_wait_limit: timedelta = timedelta(minutes=30)
     recent_completions: int = 10
-    # 시세 이력은 T−5분~T+Δ 구간을 이 간격으로 솎아 받는다. 기본값으로 10분 구간이 60점에 딱 맞는다.
+    # 시세 이력은 T−5분~T+Δ 구간을 이 간격으로 솎아 받는다. 구간은 양끝을 포함하므로 10분 구간을 10초로 나누면
+    # 61칸이다. 상한이 칸 수보다 작으면 마지막 칸이 늘 잘리고 LLM 입력에 잘림이 붙는다.
     history_interval: timedelta = timedelta(seconds=10)
-    max_history_points: int = 60
+    max_history_points: int = 61
     max_articles: int = 50
     # 공시는 하루 한 번(장 시작 전) 받으므로 +Δ를 두지 않는다. 미국 금요일 장 마감 뒤 공시를 월요일 변동에서 놓치지 않게 72시간을 본다.
     filings_window: timedelta = timedelta(hours=72)

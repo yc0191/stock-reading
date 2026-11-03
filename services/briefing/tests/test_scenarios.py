@@ -209,7 +209,7 @@ def test_us_etf_requests_history_context_and_articles_first_then_filings_with_th
     h = hist.value["payload"]
     assert datetime.fromisoformat(h["since"]) == T - timedelta(minutes=5)
     assert datetime.fromisoformat(h["until"]) == T + S.delta
-    assert (h["intervalSeconds"], h["maxPoints"]) == (10, 60)
+    assert (h["intervalSeconds"], h["maxPoints"]) == (10, 61)
     assert rec.of("news.articles.requested")[0].value["payload"]["maxArticles"] == 50
 
     core.on_context_responded(json.dumps(context()), T + SEC)
