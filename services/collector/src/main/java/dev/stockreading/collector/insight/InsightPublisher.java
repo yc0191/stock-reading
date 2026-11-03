@@ -176,7 +176,8 @@ class InsightPublisher {
                 ? null : PUBLISH_FAILED;
     }
 
-    private boolean publishOne(String apiType, String target, Supplier<String> fetch,
+    // 장중 조회(IntradayPublisher)도 같은 실패 처리와 발행을 쓰도록 패키지 안에 연다.
+    boolean publishOne(String apiType, String target, Supplier<String> fetch,
                                String correlationId, String scheduledFor) {
         String response;
         try {

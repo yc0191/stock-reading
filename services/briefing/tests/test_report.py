@@ -49,7 +49,7 @@ def report_input(articles=ARTICLES):
 
 
 def output(causes, insufficient=False):
-    return json.dumps({"causes": [{"statement": s, "articleIds": ids} for s, ids in causes],
+    return json.dumps({"causes": [{"statement": s, "refs": ids} for s, ids in causes],
                        "insufficientEvidence": insufficient}, ensure_ascii=False)
 
 
@@ -158,7 +158,7 @@ def test_broken_json_is_rejected_and_the_llm_is_called_again():
     '[]',
     '{"causes": []}',
     '{"causes": [{"statement": "영향을 줬을 수 있습니다."}], "insufficientEvidence": false}',
-    '{"causes": [{"statement": "영향을 줬을 수 있습니다.", "articleIds": []}], "insufficientEvidence": false}',
+    '{"causes": [{"statement": "영향을 줬을 수 있습니다.", "refs": []}], "insufficientEvidence": false}',
     '{"causes": [], "insufficientEvidence": false}',
     '{"causes": [], "insufficientEvidence": "no"}',
 ])
@@ -216,12 +216,16 @@ def test_statements_sent_with_insufficient_evidence_are_not_used():
 def test_llm_input_has_only_public_move_and_article_fields():
     data = build_llm_input(report_input())
 
-    assert set(data) == {"symbol", "direction", "changePercent", "moveAt", "priceHistory", "articles"}
+    assert set(data) == {"symbol", "direction", "changePercent", "moveAt", "priceHistoryStatus", "priceHistory",
+                         "articlesStatus", "articles", "filingsStatus", "filings", "overseasCloseRatesStatus",
+                         "overseasCloseRates", "overseasCloseRatesMissing", "background"}
     assert data["direction"] == "하락" and data["changePercent"] == -1.5
     assert data["moveAt"] == "2026-10-20T16:00:00+09:00"
     assert data["priceHistory"] == [{"at": "2026-10-20T15:59:00+09:00", "price": 10_000},
                                     {"at": "2026-10-20T16:00:00+09:00", "price": 9_850}]
-    assert set(data["articles"][0]) == {"articleId", "title", "summary", "source", "publishedAt", "minutesFromMove"}
+    assert set(data["articles"][0]) == {"ref", "articleId", "title", "summary", "source", "publishedAt",
+                                        "minutesFromMove"}
+    assert data["articles"][0]["ref"] == data["articles"][0]["articleId"] == "a1"
     # 개인 금액·수량, 계좌 같은 값은 키 이름으로도 들어가지 않는다.
     text = json.dumps(data).lower()
     for word in ("quantity", "amount", "holding", "account", "position", "email", "url"):

@@ -8,6 +8,8 @@ from typing import Any
 
 HISTORY_REQUESTED_TOPIC = "market.history.requested"
 ARTICLES_REQUESTED_TOPIC = "news.articles.requested"
+CONTEXT_REQUESTED_TOPIC = "market.context.requested"
+FILINGS_REQUESTED_TOPIC = "news.filings.requested"
 BRIEFING_GENERATED_TOPIC = "briefing.generated"
 
 

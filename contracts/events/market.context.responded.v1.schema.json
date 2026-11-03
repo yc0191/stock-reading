@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stock-reading.local/contracts/market.context.responded.v1",
+  "title": "market.context.responded v1",
+  "description": "market 서비스가 배경 자료 요청에 답한다. 미국 종목이 없는 종목은 tickers와 closeRates가 빈 배열이다. 배경 자료 원문은 저장된 응답 원문 그대로이며 해석하지 않는다. 보유 수량 같은 개인 정보는 담지 않는다. 메시지 키는 종목코드다.",
+  "type": "object",
+  "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "const": "market.context.responded" },
+    "schemaVersion": { "const": 1 },
+    "occurredAt": { "type": "string", "format": "date-time", "description": "응답을 만든 시각." },
+    "producedAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1, "description": "요청의 correlationId를 이어받는다." },
+    "payload": {
+      "type": "object",
+      "required": ["jobId", "seq", "symbol", "tickers", "closeRates", "background", "truncated"],
+      "properties": {
+        "jobId": { "type": "string", "format": "uuid", "description": "요청의 jobId." },
+        "seq": { "type": "integer", "minimum": 1, "description": "요청의 seq." },
+        "symbol": { "type": "string", "pattern": "^[0-9A-Z]{6}$" },
+        "tickers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Z0-9]{1,6}([.-][A-Z0-9]{1,2})?$" },
+          "description": "변동 종목에 담긴 미국 종목 티커(대응표 순서, maxTickers까지). 브리핑은 이 목록으로 공시를 요청한다."
+        },
+        "closeRates": {
+          "type": "array",
+          "description": "tickers 중 등락률을 찾은 종목의 직전 정규장 등락률. 후보가 없는 티커는 빠진다.",
+          "items": {
+            "type": "object",
+            "required": ["ticker", "date", "closeAt", "rate", "fetchedAt"],
+            "properties": {
+              "ticker": { "type": "string", "pattern": "^[A-Z0-9]{1,6}([.-][A-Z0-9]{1,2})?$" },
+              "date": { "type": "string", "minLength": 1, "description": "고른 해외 일봉의 일자 원문." },
+              "closeAt": { "type": "string", "format": "date-time", "description": "그 일자의 정규장 마감 시각. asOf 이하다." },
+              "rate": { "type": "string", "minLength": 1, "description": "등락률 원문. 공백 제거 외에는 가공하지 않는다." },
+              "fetchedAt": { "type": "string", "format": "date-time", "description": "이 값을 담은 응답을 받은 시각." }
+            }
+          }
+        },
+        "background": {
+          "type": "array",
+          "description": "배경 자료 종류(와 대상)마다 1건. 원인 근거가 아니라 변동 당시의 상태를 보여 주는 자료다.",
+          "items": {
+            "type": "object",
+            "required": ["apiType", "target", "status"],
+            "properties": {
+              "apiType": {
+                "type": "string",
+                "enum": ["exchange-rate-summary", "market-summary", "world-index", "daily-price"],
+                "description": "자료 종류. market.insight의 apiType과 같은 값이다(환율종합, 시장종합, 세계지수, 국내 일봉)."
+              },
+              "target": {
+                "type": ["string", "null"],
+                "description": "world-index는 대륙구분, daily-price는 변동 종목코드, 나머지는 null."
+              },
+              "status": {
+                "type": "string",
+                "enum": ["ok", "missing", "too-large"],
+                "description": "ok: 원문을 담음. missing: 받은 시각이 since~asOf 안인 자료가 없음. too-large: 원문이 maxResponseBytes를 넘어 뺌."
+              },
+              "response": { "type": "string", "minLength": 1, "description": "status가 ok일 때만. 저장된 응답 원문 그대로." },
+              "fetchedAt": { "type": "string", "format": "date-time", "description": "status가 ok 또는 too-large일 때. 고른 자료를 받은 시각(since <= fetchedAt <= asOf)." },
+              "responseBytes": { "type": "integer", "minimum": 1, "description": "status가 too-large일 때만. 뺀 원문의 크기(UTF-8 바이트)." },
+              "indexRates": {
+                "type": "array",
+                "description": "선택. world-index이고 status가 ok 또는 too-large일 때만. 고른 원문의 지수마다 market이 계산한 등락률이다. 원문의 전일대비·등락률은 장이 끝난 지수에서 0으로 오므로 쓰지 않고, 같은 대륙의 저장 원문 중 받은 시각이 since~asOf 안이고 영업일이 더 이른 가장 최근 행의 종가를 직전 종가로 삼아 (종가 - 직전 종가) / 직전 종가 * 100으로 구한다.",
+                "items": {
+                  "type": "object",
+                  "required": ["code", "name", "businessDay", "close", "prevBusinessDay", "prevClose", "rate"],
+                  "properties": {
+                    "code": { "type": "string", "minLength": 1, "description": "지수 코드 원문(공백 제거)." },
+                    "name": { "type": "string", "description": "지수 이름 원문(공백 제거)." },
+                    "businessDay": { "type": "string", "minLength": 1, "description": "고른 원문의 영업일 원문(공백 제거)." },
+                    "close": { "type": "string", "minLength": 1, "description": "고른 원문의 종가 원문(공백 제거)." },
+                    "prevBusinessDay": { "type": ["string", "null"], "description": "직전 행의 영업일. 직전 행이 없으면 null." },
+                    "prevClose": { "type": ["string", "null"], "description": "직전 행의 종가 원문(공백 제거). 직전 행이 없으면 null." },
+                    "rate": { "type": ["string", "null"], "description": "계산한 등락률(%, 소수 둘째 자리 반올림). 직전 행이 없거나 직전 종가가 0이면 null(없음)." }
+                  }
+                }
+              }
+            },
+            "allOf": [
+              {
+                "if": { "properties": { "status": { "const": "ok" } }, "required": ["status"] },
+                "then": { "required": ["response", "fetchedAt"], "not": { "required": ["responseBytes"] } }
+              },
+              {
+                "if": { "properties": { "status": { "const": "too-large" } }, "required": ["status"] },
+                "then": { "required": ["fetchedAt", "responseBytes"], "not": { "required": ["response"] } }
+              },
+              {
+                "if": { "properties": { "status": { "const": "missing" } }, "required": ["status"] },
+                "then": {
+                  "allOf": [
+                    { "not": { "required": ["response"] } },
+                    { "not": { "required": ["fetchedAt"] } },
+                    { "not": { "required": ["responseBytes"] } },
+                    { "not": { "required": ["indexRates"] } }
+                  ]
+                }
+              },
+              {
+                "if": { "properties": { "apiType": { "not": { "const": "world-index" } } }, "required": ["apiType"] },
+                "then": { "not": { "required": ["indexRates"] } }
+              },
+              {
+                "if": { "properties": { "apiType": { "const": "daily-price" } }, "required": ["apiType"] },
+                "then": { "properties": { "target": { "type": "string", "pattern": "^[0-9A-Z]{6}$" } } }
+              },
+              {
+                "if": { "properties": { "apiType": { "const": "world-index" } }, "required": ["apiType"] },
+                "then": { "properties": { "target": { "type": "string", "minLength": 1 } } }
+              },
+              {
+                "if": { "properties": { "apiType": { "enum": ["exchange-rate-summary", "market-summary"] } }, "required": ["apiType"] },
+                "then": { "properties": { "target": { "type": "null" } } }
+              }
+            ]
+          }
+        },
+        "truncated": { "type": "boolean", "description": "maxTickers 때문에 tickers가 잘렸으면 true." }
+      }
+    }
+  }
+}

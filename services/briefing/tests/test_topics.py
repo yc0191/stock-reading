@@ -46,6 +46,10 @@ def test_declares_every_topic_it_reads_or_writes_with_the_partition_count_the_ot
         "market.history.responded": 3,
         "news.articles.requested": 3,
         "news.articles.responded": 3,
+        "market.context.requested": 3,
+        "market.context.responded": 3,
+        "news.filings.requested": 3,
+        "news.filings.responded": 3,
         "briefing.generated": 3,
     }
 
@@ -76,7 +80,7 @@ def test_partition_counts_match_every_java_service_that_declares_the_same_topic(
     java = java_declarations()
     shared = {(service, topic) for service, topics in java.items() for topic in topics if topic in declared}
 
-    # 브리핑이 쓰는 토픽 7개가 모두 어느 Java 서비스에서 함께 선언되어야 비교가 의미 있다.
+    # 브리핑이 쓰는 토픽 11개가 모두 어느 Java 서비스에서 함께 선언되어야 비교가 의미 있다.
     assert {topic for _, topic in shared} == set(declared)
     for service, topic in shared:
         assert java[service][topic] == declared[topic], f"{topic}: briefing {declared[topic]} != {service}"

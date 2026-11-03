@@ -21,7 +21,8 @@
         "symbol": { "type": "string", "pattern": "^[0-9A-Z]{6}$" },
         "since": { "type": "string", "format": "date-time", "description": "조회 하한. since <= asOf." },
         "until": { "type": "string", "format": "date-time", "description": "조회 상한. asOf <= until." },
-        "maxPoints": { "type": "integer", "minimum": 1, "description": "응답에 담을 최대 건수." }
+        "maxPoints": { "type": "integer", "minimum": 1, "description": "응답에 담을 최대 건수." },
+        "intervalSeconds": { "type": "integer", "minimum": 1, "description": "선택. 솎는 간격(초). 있으면 since~until 구간을 이 간격마다 최대 한 점으로 솎은 뒤 maxPoints 안에서 돌려준다. 없으면 이전 형식처럼 솎지 않는다." }
       }
     }
   }

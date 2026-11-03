@@ -27,7 +27,7 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 
 시세처리기(market)는 `market.snapshot`을 `price_snapshot`(`as_of` 기준 날짜별 파티션, 응답 원문은 jsonb `raw`)에, `market.snapshot.failed`를 `quote_failure`에 저장합니다. 파티션은 저장 직전에 없으면 만들며(Asia/Seoul 자정 경계), 테이블 구조는 `services/market/src/main/resources/db/migration/`의 마이그레이션이 원본입니다. 원문 보존 기간은 아직 정하지 않았습니다.
 
-뉴스 저장(news)은 `news.collected`와 함께 공시 이벤트 `filing.collected`를 별도 consumer group(`news-filings`)으로 구독해 `filing`(접수번호 유니크)과 `filing_ticker`에 저장합니다. 같은 공시가 다른 이벤트로 다시 오면 새로 연결된 티커만 더하고, 재시도 후에도 실패한 이벤트는 뉴스와 같은 `failed_event`에 남깁니다. 종목·기간 조회는 `FilingQuery`(티커, 시작·끝 시각, 기준 시각)이며 기준 시각보다 늦게 접수된 공시는 돌려주지 않습니다(같으면 포함). 해외 종목의 직전 미국 정규장 마감 등락률은 시세처리기의 `OverseasCloseRateQuery`(티커, 기준 시각)가 저장된 해외 일봉 원문에서 읽어 고른 일자와 등락율 원문(`up_dwn_r_p2`)을 돌려줍니다. 고르는 규칙과 이유는 `OverseasCloseRateQuery`의 주석에 있습니다. 둘 다 아직 부르는 서비스는 없습니다.
+뉴스 저장(news)은 `news.collected`와 함께 공시 이벤트 `filing.collected`를 별도 consumer group(`news-filings`)으로 구독해 `filing`(접수번호 유니크)과 `filing_ticker`에 저장합니다. 같은 공시가 다른 이벤트로 다시 오면 새로 연결된 티커만 더하고, 재시도 후에도 실패한 이벤트는 뉴스와 같은 `failed_event`에 남깁니다. 종목·기간 조회는 `FilingQuery`(티커, 시작·끝 시각, 기준 시각)이며 기준 시각보다 늦게 접수된 공시는 돌려주지 않습니다(같으면 포함). 해외 종목의 직전 미국 정규장 마감 등락률은 시세처리기의 `OverseasCloseRateQuery`(티커, 기준 시각)가 저장된 해외 일봉 원문에서 읽어 고른 일자와 등락율 원문(`up_dwn_r_p2`)을 돌려줍니다. 고르는 규칙과 이유는 `OverseasCloseRateQuery`의 주석에 있습니다. 공시 조회는 news의 `news.filings.requested` 응답이, 해외 등락률은 시세처리기의 `market.context.requested` 응답이 씁니다(아래 브리핑 서비스).
 
 시세처리기는 스냅샷마다 급변동을 감지해 `market.move`를 발행합니다. 유형 1(`window`)은 최근 N분 이력의 가장 오래된 스냅샷 대비, 유형 2(`prevClose`)는 응답 원문의 전일 종가 필드 대비 변동률이 임계값 이상일 때이며, 한 번 발행한 뒤에는 마지막 발행 가격에서 임계값만큼 더 움직일 때만 다시 발행합니다(상태는 `move_state` 테이블에 둡니다). 설정은 `services/market/src/main/resources/application.yml`의 `market.*`이고 환경변수로 덮어쓸 수 있습니다.
 
@@ -40,6 +40,16 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 | `market.prev-close-field` | 유형 2가 원문에서 읽을 전일 종가 필드(점으로 중첩 경로). 제공자 고유 이름이라 공개 파일에 쓰지 않고 공유 `.env`의 `MARKET_PREV_CLOSE_FIELD`로만 넣습니다. 비어 있으면 유형 2를 끄고 시작할 때 경고를 한 번 남깁니다. 원문에 필드가 없거나 숫자가 아니면 유형 2는 그 스냅샷을 판단하지 않습니다 |
 | `market.prev-close-threshold-percent` | 유형 2 임계값(%) |
 
+시세처리기는 브리핑의 배경 자료 요청(`market.context.requested`)에 답합니다. 종류마다(환율종합, 시장종합, 세계지수 대륙별, 그 종목의 국내 일봉) 받은 시각이 기준 시각 이전인 것 중 최신 원문 1건을 주고, ETF에 담긴 미국 종목 목록과 종목마다 직전 정규장 등락률을 함께 줍니다. 세계지수는 장이 끝난 지수의 응답 등락률이 0.00으로 오므로 쓰지 않고, 같은 지수의 영업일이 더 이른 직전 저장 행 종가와 비교해 계산한 지수별 등락률(`indexRates`)을 함께 줍니다. 아래 값은 안전 상한이며 요청값의 원본은 브리핑 `config.py`입니다. 요청이 더 크면 이 값까지만 줍니다.
+
+| 설정 키 | 설명 |
+|---|---|
+| `market.holdings.us-by-etf` | ETF별 미국 종목 대응표. 수집기 `ETF_US_HOLDINGS`와 같은 값과 형식이며 `.env`에만 둡니다. 형식이 틀리면 시작 단계에서 실패하고, 비어 있으면 미국 종목이 없는 것으로 봅니다 |
+| `market.context.max-age` | 기준 시각보다 이 기간 넘게 이른 자료는 없음으로 봅니다 |
+| `market.context.max-response-bytes` | 원문 1건의 최대 크기(UTF-8 바이트). 넘으면 원문을 빼고 너무 큼으로 표시합니다 |
+| `market.context.max-tickers` | 응답에 담을 미국 종목의 최대 개수 |
+| `market.context.world-index-continents` | 배경 자료로 줄 세계지수 대륙구분. 수집기의 마감 후 수집 대륙과 맞춥니다 |
+
 이전 키 `market.move-threshold-percent`는 없어졌습니다. 마이그레이션(`services/market/src/main/resources/db/migration/`)은 서비스 기동 때 Flyway가 적용하며, 단위 테스트는 저장소를 대역으로 쓰므로 SQL은 로컬 Postgres에서 따로 확인해야 합니다.
 
 ## 브리핑 서비스 (Python)
@@ -47,16 +57,18 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 `market.move` 한 건마다 근거를 모아 리포트를 만들고 `briefing.generated`로 발행합니다.
 
 1. 그 변동에 쓸 수 있는 뉴스 수집 완료(`collection.completed`)를 기다립니다. 쓸 수 있는 완료는 `jobType`이 `collect-news`이고, `startedAt`이 변동 시각 T + Δ 이후이며, 그 종목과 `*`가 `incompleteSymbols`에 없는 것입니다. 변동보다 먼저 도착한 최근 완료도 메모리에 보관했다가 확인합니다.
-2. 시세처리기에 시세 이력(`market.history.requested`, T - 5분 ~ T + Δ)을, news 서비스에 기사(`news.articles.requested`, T - 24시간 ~ T + Δ, 양끝 포함)를 요청합니다. 응답이 제한 시간 안에 없으면 새 순번(`seq`)으로 다시 요청합니다.
-3. 기사는 일정 간격으로 다시 요청해, 연속 두 번 같은 기사 목록(순서 무시)이 오면 안정된 것으로 봅니다. 시세와 기사를 모두 받아야 다음으로 넘어갑니다.
-4. 발행 시각이 T - 24시간 ~ T + Δ 안인 기사만 근거로 씁니다. 범위 밖 기사는 버리고 경고 로그를 남깁니다(테스트로 검증).
-5. LLM이 근거 기사를 `articleId`로 인용한 문장을 만들고, 코드가 형식과 인용 번호를 검증합니다. 머리말과 "투자 조언이 아님" 문구는 코드가 넣습니다. `generatedBy`는 `llm`입니다. LLM 키가 없으면 기사를 나열하는 규칙 기반 리포트를 만들고 `generatedBy`는 `rule-based`입니다.
+2. 세 요청을 함께 보냅니다: 시세처리기에 시세 이력(`market.history.requested`, T - 5분 ~ T + Δ를 일정 간격으로 솎아서)과 배경 자료(`market.context.requested`)를, news 서비스에 기사(`news.articles.requested`, T - 24시간 ~ T + Δ, 양끝 포함)를 요청합니다. 기사는 그 종목과 시장 전체(`*`) 태그만 돌아오며, 다른 종목 태그 기사를 빼는 것은 news 조회가 보장합니다(브리핑은 다시 검사하지 않음).
+3. 배경 자료 응답에 미국 종목 목록이 있으면 그 종목들의 공시(`news.filings.requested`, 접수 시각 T - 72시간 ~ T)를 요청합니다. 공시는 하루 한 번 받으므로 + Δ를 두지 않습니다. 미국 종목이 없으면 공시를 요청하지 않고 해당 없음으로 둡니다.
+4. 응답이 제한 시간 안에 없으면 새 순번(`seq`)으로 다시 요청하는 규칙은 모든 요청에 같습니다. 기사는 일정 간격으로 다시 요청해, 연속 두 번 같은 기사 목록(순서 무시)이 오면 안정된 것으로 봅니다. 모든 응답을 받아야 다음으로 넘어갑니다.
+5. 받은 자료의 시각을 다시 검사합니다. 발행·접수 시각이 범위 밖인 기사·공시와, 받은 시각이 T 뒤이거나 기준 기간보다 오래된 배경 자료·해외 등락률은 버리고 경고 로그를 남깁니다(테스트로 검증). 변동마다 종목·티커 없이 작업 번호와 자료 종류별 건수·제외·잘림을 한 줄 수집 내역 로그(`collection job=...`)로 남깁니다.
+6. 기사(`articleId`), 공시(접수번호), 해외 등락률(`U1`…), 배경 자료(`B1`…)에 근거 번호를 붙여 LLM에 줍니다. 배경 자료에는 받은 시각과 변동보다 얼마나 전 값인지를 붙이고, 원인으로 단정하지 말라고 지시합니다. LLM이 근거 번호(`refs`)로 인용한 문장을 만들면 코드가 형식과 인용 번호를 검증하고, 목록 밖 번호가 있으면 거부합니다. 머리말과 "투자 조언이 아님" 문구는 코드가 넣습니다. `generatedBy`는 `llm`입니다. LLM 키가 없으면 기사와 공시를 나열하는 규칙 기반 리포트를 만듭니다. `generatedBy`는 `rule-based`입니다.
+7. `briefing.generated`의 근거에는 자료 종류(`kind`)와 근거 번호(`ref`)를 담습니다. 출처는 제공자 이름 대신 중립 표현을 쓰고, 공시와 해외 등락률의 근거 제목에는 어느 회사 자료인지 알 수 있게 미국 티커를 넣습니다(로그에는 넣지 않습니다).
 
 같은 종목의 변동이 여러 번 와도 이벤트마다 리포트를 만듭니다. 같은 `eventId`는 한 번만 처리합니다.
 
 ### 설정
 
-근거 조회 설정(Δ, 응답 제한 시간, 재시도 횟수, 재확인 간격, 대기 상한 등)은 `services/briefing/src/briefing/config.py`의 `CoreSettings` 기본값이며 환경변수로 바꿀 수 없습니다. 값과 뜻은 그 파일에 있습니다.
+근거 조회 설정(Δ, 자료별 시간 범위와 기준 기간, 시세 이력 간격, 자료별 최대 건수·크기, 응답 제한 시간, 재시도 횟수, 재확인 간격, 대기 상한 등)은 `services/briefing/src/briefing/config.py`의 `CoreSettings` 기본값이며 환경변수로 바꿀 수 없습니다. 값과 뜻은 그 파일에 있습니다.
 
 환경변수(`.env`)는 다음과 같습니다.
 
@@ -80,6 +92,8 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 | `market_no_response` | 시세 이력 응답을 총 시도 횟수 안에 받지 못함 |
 | `news_no_response` | 기사 응답을 총 시도 횟수 안에 받지 못함 |
 | `news_unstable` | 최대 라운드 수 안에 기사 목록이 안정되지 않음 |
+| `context_no_response` | 배경 자료 응답을 총 시도 횟수 안에 받지 못함 |
+| `filings_no_response` | 공시 응답을 총 시도 횟수 안에 받지 못함 |
 | `llm_error` | LLM 출력이 3번 모두 형식·인용 검증을 통과하지 못하거나 호출이 실패함 |
 
 기록 자체가 실패하면 짧은 간격으로 3번까지 시도하고, 그래도 안 되면 `job_id`, 종목, 사유만 ERROR 로그에 남기고 넘어갑니다.
@@ -89,6 +103,7 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 브리핑 전용 계정과 `briefing` 스키마는 `infra/compose/postgres/init/03-roles-briefing.sql`이 만듭니다. 테이블은 마이그레이션 도구 없이 브리핑이 시작할 때 `CREATE TABLE IF NOT EXISTS`로 만듭니다. DB에 연결할 수 없으면 브리핑은 시작하지 않습니다.
 
 - 초기화 스크립트는 DB 볼륨을 처음 만들 때만 실행됩니다. `.env`에 `BRIEFING_DB_USER`, `BRIEFING_DB_PASSWORD`를 넣고, 이미 볼륨이 있으면 볼륨을 지우고 다시 띄워야 브리핑 계정이 생깁니다. 비어 있으면 초기화 스크립트가 실패합니다.
+- 사유 목록 제약은 시작할 때마다 다시 걸어, 이전에 만든 테이블도 새 사유를 받습니다.
 - 테이블 모양이 바뀌면 `CREATE TABLE IF NOT EXISTS`는 기존 테이블을 고치지 않습니다. 배포 전까지는 DB를 지워도 되는 전제이므로 로컬 DB를 지우고 다시 만듭니다.
 
 ```bash
@@ -163,6 +178,12 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 | `COLLECTOR_INSIGHT_CRON` | 마감 후 조회 시각. 한국 시간 기준 cron(초 분 시 일 월 요일) |
 | `COLLECTOR_PRE_OPEN_ENABLED` | `true`일 때만 장 시작 전 수집 tick(`collect-pre-open`)을 발행합니다. 휴장일은 판정하지 않아 휴장일에도 발행됩니다. 공시는 이 tick에서만 받으므로 꺼 두면 공시를 수집하지 않습니다 |
 | `COLLECTOR_PRE_OPEN_CRON` | 장 시작 전 수집 시각. 한국 시간 기준 cron |
+| `COLLECTOR_INTRADAY_ENABLED` | `true`일 때만 장중 수집 tick(`collect-intraday`)을 발행합니다. 기본은 꺼짐이며, 켜기 전에 장중 실호출 확인이 필요합니다 |
+| `COLLECTOR_INTRADAY_CRON` | 장중 수집 주기. 한국 시간 기준 cron |
+| `COLLECTOR_INTRADAY_START` / `COLLECTOR_INTRADAY_END` | 장중 수집 시작·끝 시각(`HH:mm`, 양끝 포함). 이 밖의 tick은 조회하지 않습니다 |
+| `COLLECTOR_INTRADAY_STAGGER_MS` | 장중 조회 사이 대기(밀리초). 같은 초에 몰려 시세 조회가 호출 상한에 걸리지 않게 나눠 부릅니다 |
+
+장중 수집은 환율종합, 시장종합, 세계지수(아시아, 아메리카)를 시차를 두고 조회해 마감 후 조회와 같은 `market.insight`로 보냅니다. 시세 조회와 같은 호출 상한을 거치며, 휴장일은 판정하지 않습니다. 기본값은 `application.yml`의 `collector.intraday.*`입니다.
 
 마감 후 조회(일봉, 세계지수, 환율종합, 시장종합)는 `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 동작하며, 응답 원문을 `market.insight` 이벤트로 발행합니다. 일봉의 시장구분과 조회 건수, 세계지수의 대륙 목록은 `application.yml`의 `collector.insight.*`에 기본값이 있습니다.
 
@@ -237,8 +258,8 @@ python3 scripts/load_config.py --only briefing
 
 | 대상 | 명령 | 개수 |
 |---|---|---|
-| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 606 (실서버 확인·실험용 5개, 부하 시험 1개, 시세처리기 DB 통합 8개, 뉴스 저장 DB 통합 4개는 건너뜀) |
-| Python (브리핑) | `services/briefing/.venv/bin/python -m pytest services/briefing` | 147 |
+| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 729 (실서버 확인·실험용 5개, 부하 시험 1개, 시세처리기 DB 통합 16개, 뉴스 저장 DB 통합 7개는 건너뜀) |
+| Python (브리핑) | `services/briefing/.venv/bin/python -m pytest services/briefing` | 208 |
 | Python (설정 로더, 가설 검증 도구) | `services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests` | 72 |
 
 `--no-build-cache`가 필요한 이유: 빌드 캐시가 켜져 있으면 입력이 같을 때 테스트를 실행하지 않고 이전 결과를 복원합니다.
@@ -268,9 +289,15 @@ docker rm -f market-it-pg
 
 - **브리핑 DB 마이그레이션 방식:** 실패 기록 테이블은 마이그레이션 도구 없이 시작할 때 `CREATE TABLE IF NOT EXISTS`로 만들고, 모양이 바뀌면 로컬 DB를 지우고 다시 만듭니다. 데이터를 지울 수 없게 되기 전에 Java 서비스처럼 버전 관리되는 마이그레이션을 쓸지, Python 쪽 도구를 쓸지 정합니다.
 - **변동 알림의 읽은 위치를 언제 확정할지:** 지금은 `market.move`를 읽는 즉시 확정해, 브리핑이 재시작되면 처리 중이던 변동이 기록 없이 사라집니다. 처리를 끝낸 뒤 확정하도록 바꿀지(재시작 후 다시 처리하므로 중복 리포트를 막는 방법도 함께 필요) 정합니다.
+- **장중 수집을 켤지:** 장중 수집은 기본 꺼짐입니다. 켜기 전에 장중에 실제 호출로 응답 모양과 호출 상한 여유를 확인합니다.
+- **휴장일 판정:** 마감 후·장 시작 전·장중 수집 모두 휴장일을 판정하지 않아 휴장일에도 tick을 발행합니다. 판정할지와 휴장일 목록을 어디서 받을지 정합니다.
 - **같은 종목의 중복 변동 리포트를 줄이는 방식:** 지금은 같은 종목의 변동이 짧은 간격으로 여러 번 와도 이벤트마다 리포트를 만듭니다. 묶어서 한 번만 보낼지, 일정 시간 안의 변동은 건너뛸지 정합니다.
 
 ## 후속
+
+- **보유 종목과 뉴스 검색어 테이블:** 지금은 ETF별 미국 종목과 뉴스 검색어를 설정(`ETF_US_HOLDINGS`, `NEWS_SEARCH_QUERIES`)으로 줍니다. 보유 종목 테이블(시세처리기)과 종목에 연결된 검색어 테이블(news)로 옮깁니다.
+- **검색어와 태그 개선:** 태그는 검색어 설정에서 정해져 저장 때 고정됩니다. 다른 종목 태그지만 관련 있는 기사를 근거에 넣는 방법과 미국 종목 검색어를 정합니다. 당장은 검색어 설정에 관련 종목 태그를 함께 적어 운영합니다.
+- **LLM 2단계:** 1단계 LLM이 모은 자료의 중복을 없애고 거른 뒤, 2단계 LLM이 분석해 리포트를 씁니다.
 
 - **외부 접속을 받는 기능:** 브리핑의 Kafka 수신·발행은 "시작"과 "멈추기"로 부를 수 있게 나뉘어 있어 다른 프로그램(예: 어드민 화면)이 같은 실행부를 부를 수 있습니다. 어드민 화면이나 웹 서버는 아직 없습니다. 이런 화면처럼 외부 접속을 받는 기능을 만들 때는 [ADR-007](adr/007-outbound-only.md)(외부 접속을 받지 않는다)을 먼저 갱신하고, 접속 경로와 인증 방식을 정해야 합니다.
 

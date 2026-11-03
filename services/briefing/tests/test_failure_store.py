@@ -4,7 +4,13 @@ import sys
 import pytest
 
 from briefing.config import StoreSettings
-from briefing.failure_store import CREATE_TABLE_SQL, DETAIL_MAX_LENGTH, INSERT_SQL, PostgresFailureStore
+from briefing.failure_store import (
+    CREATE_TABLE_SQL,
+    DETAIL_MAX_LENGTH,
+    INSERT_SQL,
+    UPDATE_REASONS_SQL,
+    PostgresFailureStore,
+)
 from briefing.jobs import Failure, FailureReason
 
 JOB_ID = "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13"
@@ -163,19 +169,24 @@ def test_detail_within_limit_is_kept_as_is(sleeps):
     assert db.rows[JOB_ID][3] == exact
 
 
-def test_create_table_is_idempotent_and_allows_only_the_five_reasons(sleeps):
+def test_create_table_is_idempotent_and_allows_only_the_seven_reasons(sleeps):
     db = FakeDb()
 
     store_for(db, sleeps).create_table()
 
-    assert db.statements == [(CREATE_TABLE_SQL, None)]
+    assert db.statements == [(CREATE_TABLE_SQL, None), (UPDATE_REASONS_SQL, None)]
     assert "CREATE TABLE IF NOT EXISTS briefing.failed_jobs" in CREATE_TABLE_SQL
     assert "job_id     VARCHAR(64) PRIMARY KEY" in CREATE_TABLE_SQL
     for column in ("symbol", "reason", "detail", "attempts", "created_at"):
         assert f"\n    {column} " in CREATE_TABLE_SQL
     for reason in FailureReason:
         assert f"'{reason.value}'" in CREATE_TABLE_SQL
-    assert len(FailureReason) == 5
+        assert f"'{reason.value}'" in UPDATE_REASONS_SQL
+    assert len(FailureReason) == 7
+    # 사유가 늘기 전에 만든 테이블도 같은 이름의 제약을 지금 사유 목록으로 바꾼다.
+    assert "CONSTRAINT failed_jobs_reason_check CHECK" in CREATE_TABLE_SQL
+    assert "DROP CONSTRAINT IF EXISTS failed_jobs_reason_check" in UPDATE_REASONS_SQL
+    assert "ADD CONSTRAINT failed_jobs_reason_check CHECK" in UPDATE_REASONS_SQL
 
 
 def test_works_without_a_database_driver_installed():

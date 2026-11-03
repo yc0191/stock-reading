@@ -24,8 +24,9 @@ import tools.jackson.databind.ObjectMapper;
  *
  * <p>응답 맨 앞 레코드와 최상위 등락율은 장외 거래의 진행 중 막대일 수 있어 위치로 고르지 않는다.
  * 레코드 일자(dt)마다 그날 정규장 마감(뉴욕 16:00)을 계산해, 기준 시각 이하로 마감된 것 중 가장 최근 것을 고른다.
- * 행은 받은 시각으로 거르지 않지만(기준 시각 뒤에 받은 행도 읽음), 받을 때 아직 마감 전이던 레코드는 미완성이라 뺀다.
- * 같은 일자가 여러 행에 있으면 가장 늦게 받은 행의 값을 쓴다. 조기 폐장일도 16:00으로 계산한다.
+ * 기준 시각 뒤에 받은 행은 그 시각에 알 수 없던 자료라 읽지 않는다(브리핑이 같은 규칙으로 다시 검사한다).
+ * 받을 때 아직 마감 전이던 레코드는 미완성이라 뺀다. 같은 일자가 여러 행에 있으면 가장 늦게 받은 행의 값을 쓴다.
+ * 고른 장의 마감 시각이 하한보다 이르면 너무 오래된 값이라 없음으로 본다. 조기 폐장일도 16:00으로 계산한다.
  */
 @Component
 public class OverseasCloseRateQuery {
@@ -50,19 +51,25 @@ public class OverseasCloseRateQuery {
 
     /**
      * @param ticker 저장할 때의 target(티커)
-     * @param asOf   기준 시각. 이보다 늦게 마감한 장은 고르지 않는다(같으면 포함)
+     * @param asOf   기준 시각. 이보다 늦게 마감한 장과 늦게 받은 행은 쓰지 않는다(같으면 포함)
+     * @param since  마감 시각 하한. 고른 장이 이보다 일찍 마감했으면 빈 값을 돌려준다(같으면 포함)
      * @return 고른 레코드. 후보가 없으면 빈 값
      */
-    public Optional<OverseasCloseRate> find(String ticker, OffsetDateTime asOf) {
+    public Optional<OverseasCloseRate> find(String ticker, OffsetDateTime asOf, OffsetDateTime since) {
         Objects.requireNonNull(ticker, "ticker");
         Objects.requireNonNull(asOf, "asOf");
+        Objects.requireNonNull(since, "since");
 
         // 수집기는 종류 구분을 "-" 로 맞춰 저장하므로 "." 로 찾아도 같은 종목을 찾게 한다.
         String normalized = ticker.trim().toUpperCase(Locale.ROOT).replace('.', '-');
-        List<OverseasDailyRow> rows = repository.recentOverseasDailyPrices(normalized, ROWS_TO_READ);
+        List<OverseasDailyRow> rows = repository.recentOverseasDailyPrices(normalized, asOf, ROWS_TO_READ);
         OverseasCloseRate best = null;
         for (int i = 0; i < rows.size(); i++) {
             OverseasDailyRow row = rows.get(i);
+            // 저장소가 받은 시각 상한을 지키더라도 여기서 한 번 더 확인한다. 어기면 조용히 미래 자료가 근거로 나간다.
+            if (row.fetchedAt().isAfter(asOf)) {
+                continue;
+            }
             JsonNode records = readRecords(row.response(), i);
             for (JsonNode record : records) {
                 OverseasCloseRate candidate = candidate(normalized, record, row.fetchedAt());
@@ -75,7 +82,10 @@ public class OverseasCloseRateQuery {
                 }
             }
         }
-        return Optional.ofNullable(best);
+        if (best == null || best.closeAt().isBefore(since)) {
+            return Optional.empty();
+        }
+        return Optional.of(best);
     }
 
     // 더 최근 장이 우선이고, 같은 장이면 더 늦게 받은 값이 우선이다.
