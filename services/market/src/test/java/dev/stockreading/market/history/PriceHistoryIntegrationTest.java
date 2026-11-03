@@ -30,6 +30,7 @@ class PriceHistoryIntegrationTest {
 
     private static final OffsetDateTime SINCE = OffsetDateTime.parse("2026-03-10T10:00:00+09:00");
     private static final OffsetDateTime UNTIL = OffsetDateTime.parse("2026-03-10T10:05:00+09:00");
+    private static final OffsetDateTime THIN_SINCE = OffsetDateTime.parse("2026-03-10T11:00:00+09:00");
 
     private static JdbcClient jdbc;
     private static PriceHistoryRepository repository;
@@ -61,6 +62,10 @@ class PriceHistoryIntegrationTest {
         insert("ITH001", UNTIL.plusSeconds(1), 10_051);
         // 다른 종목의 행은 읽지 않아야 한다.
         insert("ITH002", SINCE.plusMinutes(1), 20_000);
+        // 간격 솎아내기용: 1초마다 한 점, 35초 동안. 가격은 순번이라 어느 점이 남았는지 알 수 있다.
+        for (int i = 0; i < 35; i++) {
+            insert("ITH003", THIN_SINCE.plusSeconds(i), 10_000 + i);
+        }
     }
 
     @Test
@@ -104,6 +109,32 @@ class PriceHistoryIntegrationTest {
         ArgumentCaptor<List<HistoryPayload.Point>> points = ArgumentCaptor.captor();
         verify(publisher).publish(eq("it-job"), eq(1), eq("ITH001"), points.capture(), eq(false), eq("it"));
         assertThat(points.getValue()).hasSize(4);
+    }
+
+    @Test
+    void thinnedQueryKeepsTheFirstPointOfEveryIntervalFromSince() {
+        List<PriceHistoryRepository.StoredPoint> points =
+                repository.findThinnedBetweenInclusive("ITH003", THIN_SINCE, THIN_SINCE.plusSeconds(34), 10, 100);
+
+        assertThat(points).extracting(PriceHistoryRepository.StoredPoint::price)
+                .containsExactly(10_000L, 10_010L, 10_020L, 10_030L);
+    }
+
+    @Test
+    void thinnedQueryStopsAtTheLimitFromTheFront() {
+        List<PriceHistoryRepository.StoredPoint> points =
+                repository.findThinnedBetweenInclusive("ITH003", THIN_SINCE, THIN_SINCE.plusSeconds(34), 10, 2);
+
+        assertThat(points).extracting(PriceHistoryRepository.StoredPoint::price).containsExactly(10_000L, 10_010L);
+    }
+
+    @Test
+    void unthinnedQueryStillReturnsEveryPointWithBothEndsIncluded() {
+        List<PriceHistoryRepository.StoredPoint> points =
+                repository.findBetweenInclusive("ITH003", THIN_SINCE.plusSeconds(5), THIN_SINCE.plusSeconds(9), 100);
+
+        assertThat(points).extracting(PriceHistoryRepository.StoredPoint::price)
+                .containsExactly(10_005L, 10_006L, 10_007L, 10_008L, 10_009L);
     }
 
     private static void insert(String symbol, OffsetDateTime asOf, long price) {

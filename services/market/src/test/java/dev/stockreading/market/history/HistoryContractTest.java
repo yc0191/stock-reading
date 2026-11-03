@@ -28,6 +28,25 @@ class HistoryContractTest {
     }
 
     @Test
+    void olderRequestWithoutIntervalIsReadAsNoThinning() throws IOException {
+        String sample = ContractSchemas.sample("market.history.requested.sample.json");
+
+        assertThat(mapper.readValue(sample, HistoryRequestEnvelope.class).payload().intervalSeconds()).isNull();
+    }
+
+    @Test
+    void requestWithIntervalMatchesSchemaAndIsReadableByTheConsumer() throws IOException {
+        String withInterval = ContractSchemas.sample("market.history.requested.sample.json")
+                .replace("\"maxPoints\": 5000", "\"maxPoints\": 60,\n    \"intervalSeconds\": 10");
+
+        assertThat(ContractSchemas.validate("market.history.requested.v1.schema.json", withInterval)).isEmpty();
+        assertThat(mapper.readValue(withInterval, HistoryRequestEnvelope.class).payload().intervalSeconds())
+                .isEqualTo(10);
+        assertThat(ContractSchemas.validate("market.history.requested.v1.schema.json",
+                withInterval.replace("\"intervalSeconds\": 10", "\"intervalSeconds\": 0"))).isNotEmpty();
+    }
+
+    @Test
     void responseSampleMatchesSchema() throws IOException {
         assertThat(ContractSchemas.validate("market.history.responded.v1.schema.json",
                 ContractSchemas.sample("market.history.responded.sample.json"))).isEmpty();

@@ -10,10 +10,18 @@ import org.springframework.kafka.config.TopicBuilder;
 public class Topics {
 
     public static final String BRIEFING_GENERATED = "briefing.generated";
+    public static final String DAILY_BRIEFING_GENERATED = "briefing.daily.generated";
     public static final int PARTITIONS = 3; // 생산자(브리핑 서비스)와 같아야 한다
+    // 데일리 브리핑은 판마다 하루 한 건이라 나눌 필요가 없다. 생산자(브리핑 main.py)와 같아야 한다.
+    public static final int DAILY_PARTITIONS = 1;
 
     @Bean
     NewTopic briefingGeneratedTopic() {
         return TopicBuilder.name(BRIEFING_GENERATED).partitions(PARTITIONS).replicas(1).build();
+    }
+
+    @Bean
+    NewTopic dailyBriefingGeneratedTopic() {
+        return TopicBuilder.name(DAILY_BRIEFING_GENERATED).partitions(DAILY_PARTITIONS).replicas(1).build();
     }
 }

@@ -131,6 +131,53 @@ class HistoryRequestListenerTest {
         verifyNoInteractions(repository, publisher);
     }
 
+    private static String withInterval(int maxPoints, int intervalSeconds) throws IOException {
+        return ContractSchemas.sample("market.history.requested.sample.json")
+                .replace("\"maxPoints\": 5000", "\"maxPoints\": " + maxPoints + ",\n    \"intervalSeconds\": " + intervalSeconds);
+    }
+
+    @Test
+    void requestWithAnIntervalReadsThinnedRowsUpToTheLimit() throws IOException {
+        when(repository.findThinnedBetweenInclusive(eq("TEST01"), eq(SINCE), eq(UNTIL), eq(10), eq(61)))
+                .thenReturn(rows(60));
+
+        listener.onRequest(withInterval(60, 10));
+
+        ArgumentCaptor<List<HistoryPayload.Point>> points = ArgumentCaptor.captor();
+        verify(publisher).publish(eq(JOB_ID), eq(1), eq("TEST01"), points.capture(), eq(false), eq(CORRELATION_ID));
+        assertThat(points.getValue()).hasSize(60);
+        verify(repository, org.mockito.Mockito.never()).findBetweenInclusive(anyString(), any(), any(), anyInt());
+    }
+
+    @Test
+    void thinnedRowsOverTheLimitAreCutFromTheEndAndMarkedTruncated() throws IOException {
+        when(repository.findThinnedBetweenInclusive(anyString(), any(), any(), eq(10), eq(3))).thenReturn(rows(3));
+
+        listener.onRequest(withInterval(2, 10));
+
+        ArgumentCaptor<List<HistoryPayload.Point>> points = ArgumentCaptor.captor();
+        verify(publisher).publish(eq(JOB_ID), eq(1), eq("TEST01"), points.capture(), eq(true), eq(CORRELATION_ID));
+        assertThat(points.getValue()).extracting(HistoryPayload.Point::price).containsExactly(10_000L, 10_001L);
+    }
+
+    @Test
+    void olderRequestWithoutAnIntervalIsNotThinned() throws IOException {
+        when(repository.findBetweenInclusive(anyString(), any(), any(), anyInt())).thenReturn(rows(2));
+
+        listener.onRequest(ContractSchemas.sample("market.history.requested.sample.json"));
+
+        verify(repository).findBetweenInclusive("TEST01", SINCE, UNTIL, 5001);
+        verify(repository, org.mockito.Mockito.never())
+                .findThinnedBetweenInclusive(anyString(), any(), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    void zeroIntervalIsRejectedWithoutQueryingOrAnswering() throws IOException {
+        assertThatThrownBy(() -> listener.onRequest(withInterval(60, 0))).isInstanceOf(IllegalArgumentException.class);
+
+        verifyNoInteractions(repository, publisher);
+    }
+
     @Test
     void doesNotAnswerWhenTheQueryFails() throws IOException {
         when(repository.findBetweenInclusive(anyString(), any(), any(), anyInt()))

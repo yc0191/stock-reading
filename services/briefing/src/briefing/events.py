@@ -8,7 +8,18 @@ from typing import Any
 
 HISTORY_REQUESTED_TOPIC = "market.history.requested"
 ARTICLES_REQUESTED_TOPIC = "news.articles.requested"
+CONTEXT_REQUESTED_TOPIC = "market.context.requested"
+FILINGS_REQUESTED_TOPIC = "news.filings.requested"
 BRIEFING_GENERATED_TOPIC = "briefing.generated"
+DAILY_BRIEFING_GENERATED_TOPIC = "briefing.daily.generated"
+
+# 데일리 브리핑의 판 종류(briefing.daily.generated 의 edition)와 그 판을 시작시키는 schedule.tick 의 jobType.
+EDITION_MORNING = "morning"
+EDITION_POST_CLOSE = "post-close"
+JOB_TYPE_BY_EDITION = {
+    EDITION_MORNING: "daily-briefing-morning",
+    EDITION_POST_CLOSE: "daily-briefing-post-close",
+}
 
 
 @dataclass(frozen=True)
@@ -47,3 +58,32 @@ def request_event(topic: str, kind: str, correlation_id: str, now: datetime, pay
         },
     )
 
+
+
+def daily_briefing_event(tick_event_id: str, correlation_id: str, scheduled_for: datetime, now: datetime,
+                         edition: str, range_start: datetime, range_end: datetime, text: str,
+                         missing_items: list[str], generated_by: str) -> OutboundEvent:
+    """데일리 브리핑 결과 봉투를 만든다. eventId는 (tick, 판)에서 정해져 같은 tick을 다시 처리해도 같다."""
+    if edition not in JOB_TYPE_BY_EDITION:
+        raise ValueError(f"unknown edition: {edition}")
+    event_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{DAILY_BRIEFING_GENERATED_TOPIC}:{tick_event_id}:{edition}")
+    return OutboundEvent(
+        topic=DAILY_BRIEFING_GENERATED_TOPIC,
+        key=edition,
+        value={
+            "eventId": str(event_id),
+            "eventType": DAILY_BRIEFING_GENERATED_TOPIC,
+            "schemaVersion": 1,
+            "occurredAt": format_timestamp(scheduled_for),
+            "producedAt": format_timestamp(now),
+            "correlationId": correlation_id,
+            "payload": {
+                "edition": edition,
+                "rangeStart": format_timestamp(range_start),
+                "rangeEnd": format_timestamp(range_end),
+                "text": text,
+                "missingItems": list(missing_items),
+                "generatedBy": generated_by,
+            },
+        },
+    )

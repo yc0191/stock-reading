@@ -17,7 +17,9 @@
         "source": "sample",
         "publishedAt": "2026-10-20T09:00:00+09:00",
         "articleId": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
-        "url": "https://news.example.com/articles/12345"
+        "url": "https://news.example.com/articles/12345",
+        "kind": "article",
+        "ref": "A1"
       }
     ]
   }

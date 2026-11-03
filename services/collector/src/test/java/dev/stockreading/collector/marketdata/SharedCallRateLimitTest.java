@@ -2,8 +2,12 @@ package dev.stockreading.collector.marketdata;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -23,9 +27,14 @@ import org.springframework.boot.test.context.ConfigDataApplicationContextInitial
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
+import org.springframework.kafka.core.KafkaTemplate;
 
 import dev.stockreading.collector.CollectorProperties;
+import dev.stockreading.collector.edgar.ExchangePort;
+import dev.stockreading.collector.event.ContractSchemas;
+import dev.stockreading.collector.holdings.HoldingsPort;
 import dev.stockreading.collector.insight.InsightProperties;
+import dev.stockreading.collector.insight.IntradayProperties;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -219,6 +228,68 @@ class SharedCallRateLimitTest {
                     FetchResult result = quotes.fetch(List.of("TEST01"));
 
                     // 기존 4종이 1초 상한 4를 다 써서 바로 이어진 시세 호출은 자리를 얻지 못한다.
+                    assertThat(server.insightCalls.get()).isEqualTo(4);
+                    assertThat(server.priceCalls.get()).isZero();
+                    assertThat(result.failures()).singleElement()
+                            .satisfies(f -> assertThat(f.type()).isEqualTo(FailureType.TICK_SKIPPED));
+                });
+    }
+
+    // 장중 조회는 insight 패키지 안에서만 보이므로 그 패키지까지 스캔하고, 바깥 의존은 가짜로 채운다.
+    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, InsightProperties.class,
+            IntradayProperties.class})
+    @ComponentScan(basePackages = {"dev.stockreading.collector.marketdata", "dev.stockreading.collector.insight"})
+    static class IntradayWiring {
+
+        @Bean
+        Clock clock() {
+            return CLOCK;
+        }
+
+        @Bean
+        ObjectMapper mapper() {
+            return JsonMapper.builder().build();
+        }
+
+        @Bean
+        HoldingsPort holdings() {
+            return mock(HoldingsPort.class);
+        }
+
+        @Bean
+        ExchangePort exchanges() {
+            return mock(ExchangePort.class);
+        }
+
+        @SuppressWarnings("unchecked")
+        @Bean
+        KafkaTemplate<String, String> kafka() {
+            KafkaTemplate<String, String> kafka = mock(KafkaTemplate.class);
+            when(kafka.send(anyString(), anyString(), anyString())).thenReturn(CompletableFuture.completedFuture(null));
+            return kafka;
+        }
+    }
+
+    @Test
+    void intradayCallsShareTheLimiterWithQuotes() throws IOException {
+        server = new FakeBrokerServer();
+        new ApplicationContextRunner()
+                .withInitializer(new ConfigDataApplicationContextInitializer())
+                .withUserConfiguration(IntradayWiring.class)
+                .withPropertyValues("COLLECTOR_MARKET_DATA_SOURCE=broker", "BROKER_BASE_URL=" + server.baseUrl(),
+                        "BROKER_APP_KEY=k", "BROKER_APP_SECRET=s", "BROKER_MAX_CALLS_PER_SECOND=4",
+                        "COLLECTOR_INTRADAY_STAGGER_MS=0")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).hasSingleBean(CallRateLimit.class);
+                    Object listener = context.getBean("intradayTickListener");
+                    Method onTick = listener.getClass().getDeclaredMethod("onTick", String.class);
+                    onTick.setAccessible(true);
+                    onTick.invoke(listener, ContractSchemas.sample("schedule.tick.sample.json")
+                            .replace("\"collect\"", "\"collect-intraday\""));
+                    FetchResult result = context.getBean(BrokerMarketData.class).fetch(List.of("TEST01"));
+
+                    // 장중 4건이 1초 상한 4를 다 써서 바로 이어진 시세 호출은 자리를 얻지 못한다.
                     assertThat(server.insightCalls.get()).isEqualTo(4);
                     assertThat(server.priceCalls.get()).isZero();
                     assertThat(result.failures()).singleElement()

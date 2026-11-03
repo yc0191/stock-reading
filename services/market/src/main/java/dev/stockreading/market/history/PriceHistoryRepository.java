@@ -35,6 +35,34 @@ class PriceHistoryRepository {
                 .list();
     }
 
+    /**
+     * [since, until] 구간(양끝 포함)을 since부터 intervalSeconds초 칸으로 나눠 칸마다 가장 이른 스냅샷 1건만 남기고,
+     * 시간 순으로 최대 limit건 돌려준다. 칸의 첫 점을 남겨 기준이 되는 구간 앞쪽 가격이 빠지지 않게 한다.
+     */
+    List<StoredPoint> findThinnedBetweenInclusive(
+            String symbol, OffsetDateTime since, OffsetDateTime until, int intervalSeconds, int limit) {
+        return jdbc.sql("""
+                        SELECT as_of, price FROM (
+                            SELECT DISTINCT ON (bucket) as_of, price FROM (
+                                SELECT as_of, price,
+                                       floor(extract(epoch FROM (as_of - CAST(:since AS timestamptz))) / :interval) AS bucket
+                                FROM price_snapshot
+                                WHERE symbol = :symbol AND as_of >= :since AND as_of <= :until
+                            ) AS rows_in_range
+                            ORDER BY bucket, as_of
+                        ) AS thinned
+                        ORDER BY as_of
+                        LIMIT :limit
+                        """)
+                .param("symbol", symbol)
+                .param("since", since)
+                .param("until", until)
+                .param("interval", intervalSeconds)
+                .param("limit", limit)
+                .query((rs, rowNum) -> new StoredPoint(rs.getObject("as_of", OffsetDateTime.class), rs.getLong("price")))
+                .list();
+    }
+
     record StoredPoint(OffsetDateTime asOf, long price) {
     }
 }

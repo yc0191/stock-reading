@@ -12,7 +12,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 class TopicsConfigTest {
 
     @Test
-    void declaresSnapshotMoveInsightAndHistoryTopicsWithThreePartitions() {
+    void declaresSnapshotMoveInsightHistoryAndContextTopicsWithThreePartitions() {
         new ApplicationContextRunner()
                 .withUserConfiguration(Topics.class)
                 .run(context -> {
@@ -20,7 +20,8 @@ class TopicsConfigTest {
                     Map<String, NewTopic> topics = context.getBeansOfType(NewTopic.class);
                     assertThat(topics.values()).extracting(NewTopic::name)
                             .containsExactlyInAnyOrder("market.snapshot", "market.snapshot.failed", "market.move",
-                                    "market.insight", "market.history.requested", "market.history.responded");
+                                    "market.insight", "market.history.requested", "market.history.responded",
+                                    "market.context.requested", "market.context.responded");
                     assertThat(topics.values()).extracting(NewTopic::numPartitions).containsOnly(3);
                 });
     }
