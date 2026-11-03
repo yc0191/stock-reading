@@ -266,7 +266,13 @@ MARKET_IT_DB_URL="jdbc:postgresql://127.0.0.1:$PORT/demo" MARKET_IT_DB_USER=post
 docker rm -f market-it-pg
 ```
 
-뉴스 저장은 환경변수 이름만 `NEWS_IT_DB_*`이고 대상은 `:services:news`입니다. 시세처리기와 같은 컨테이너를 이어 쓰지 말고 따로 띄웁니다.
+켜는 환경변수는 서비스마다 세 개씩입니다. 서비스끼리 같은 컨테이너를 이어 쓰지 말고 따로 띄웁니다.
+
+| 대상 | 켜는 환경변수 | 주소 형식 |
+|---|---|---|
+| 시세처리기 (`:services:market`) | `MARKET_IT_DB_URL`, `MARKET_IT_DB_USER`, `MARKET_IT_DB_PASSWORD` | `jdbc:postgresql://...` |
+| 뉴스 저장 (`:services:news`) | `NEWS_IT_DB_URL`, `NEWS_IT_DB_USER`, `NEWS_IT_DB_PASSWORD` | `jdbc:postgresql://...` |
+| 브리핑 (`pytest services/briefing`) | `BRIEFING_IT_DB_URL`, `BRIEFING_IT_DB_USER`, `BRIEFING_IT_DB_PASSWORD` | `postgresql://...`. `briefing` 스키마가 비어 있는 DB를 가정합니다 |
 
 ### 실제 외부 호출 (`--live`)
 
