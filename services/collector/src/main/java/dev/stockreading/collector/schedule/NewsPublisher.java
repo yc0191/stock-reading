@@ -129,8 +129,16 @@ class NewsPublisher {
                     invalid, correlationId);
         }
 
-        CompletableFuture.allOf(settled.toArray(new CompletableFuture[0])).whenComplete((ignored, error) ->
-                publishCompleted(correlationId, scheduledFor, collection.startedAt(), confirmed.get(), incomplete));
+        CompletableFuture<Void> allSettled = CompletableFuture.allOf(settled.toArray(new CompletableFuture[0]));
+        Runnable sendCompletion = () ->
+                publishCompleted(correlationId, scheduledFor, collection.startedAt(), confirmed.get(), incomplete);
+        if (allSettled.isDone()) {
+            sendCompletion.run();
+        } else {
+            // 전송 콜백은 Kafka 전송기의 네트워크 스레드에서 돈다. 거기서 처음 쓰는 토픽으로 보내면 토픽 정보를
+            // 받아 올 그 스레드가 스스로 막혀, 최대 대기 시간 동안 시세를 포함한 이 서비스의 모든 전송이 멈춘다.
+            allSettled.whenCompleteAsync((ignored, error) -> sendCompletion.run());
+        }
     }
 
     private void publishCompleted(String correlationId, String scheduledFor, OffsetDateTime startedAt,

@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -19,6 +20,9 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -136,7 +140,32 @@ class CollectionCompletedPublishTest {
         verify(kafka, never()).send(eq(Topics.COLLECTION_COMPLETED), anyString(), anyString());
 
         second.completeExceptionally(new IllegalStateException("timeout"));
-        verify(kafka, times(1)).send(eq(Topics.COLLECTION_COMPLETED), eq("collect-news"), anyString());
+        // 전송이 늦게 끝나면 완료 알림은 다른 스레드에서 나가므로 잠시 기다린다.
+        verify(kafka, timeout(5_000).times(1)).send(eq(Topics.COLLECTION_COMPLETED), eq("collect-news"), anyString());
+    }
+
+    // 전송 콜백은 Kafka 전송기의 네트워크 스레드에서 돈다. 그 스레드에서 처음 쓰는 토픽으로 보내면 토픽 정보를
+    // 받아 올 스레드가 스스로 막혀 최대 대기 시간(기본 60초) 동안 이 서비스의 모든 전송이 멈춘다.
+    @Test
+    void completionIsNotSentOnTheThreadThatSettlesTheArticleSends() throws InterruptedException {
+        collect(Set.of(), item("https://news.example.com/a", "TEST01"));
+        CompletableFuture<SendResult<String, String>> pending = new CompletableFuture<>();
+        when(kafka.send(eq(Topics.NEWS_COLLECTED), anyString(), anyString())).thenReturn(pending);
+        AtomicReference<Thread> sendingThread = new AtomicReference<>();
+        CountDownLatch completionSent = new CountDownLatch(1);
+        when(kafka.send(eq(Topics.COLLECTION_COMPLETED), anyString(), anyString())).thenAnswer(invocation -> {
+            sendingThread.set(Thread.currentThread());
+            completionSent.countDown();
+            return CompletableFuture.completedFuture(null);
+        });
+
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
+        Thread producerNetworkThread = new Thread(() -> pending.complete(null), "test-kafka-producer-network");
+        producerNetworkThread.start();
+        producerNetworkThread.join();
+
+        assertThat(completionSent.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(sendingThread.get()).isNotSameAs(producerNetworkThread);
     }
 
     @Test
