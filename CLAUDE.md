@@ -16,16 +16,12 @@
 
 ## 검증
 
-코드나 설정을 바꾼 뒤에는 변경한 범위의 테스트를 실행하고 통과를 확인합니다. 상세는 `.claude/rules/testing.md`입니다.
-
-- Java: `./gradlew cleanTest test --no-build-cache` (`JAVA_HOME_21` 필요)
-- 브리핑: `services/briefing/.venv/bin/python -m pytest services/briefing`
-- 설정 로더: `services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests`
+코드나 설정을 바꾼 뒤에는 변경한 범위의 테스트를 실행하고 통과를 확인합니다. 명령, 변경 범위별로 돌릴 테스트, 테스트 지도(`docs/test-map/`) 관리는 `.claude/rules/testing.md`를 따릅니다.
 
 ## 어기면 조용히 깨지는 설계 규칙
 
 - 원인 근거로 쓰는 뉴스는 변동 시각 24시간 전부터 변동 시각 + Δ(`services/briefing/src/briefing/config.py`의 `CoreSettings.delta`)까지 발행된 것뿐입니다. 범위 밖 뉴스는 버립니다.
-- 발송기는 드라이런이 기본입니다. `NOTIFIER_SEND_ENABLED`는 사람이 직접 바꾸며, 로그의 주소는 마스킹합니다.
+- 발송기는 드라이런이 기본입니다. `NOTIFIER_SEND_ENABLED`는 사람이 직접 바꾸며, 로그의 주소는 마스킹합니다. 예외는 사람이 직접 실행을 결정한 `scripts/test-all.sh --live`뿐이며, 이때도 그 스크립트가 띄운 테스트용 발송기에만 발송을 켜고 `.env`는 바꾸지 않습니다.
 - 토픽은 사용하는 서비스가 시작할 때 선언하고, 같은 토픽은 선언하는 모든 곳에서 파티션 수가 같아야 합니다. 어긋나면 일부 종목이 오류 없이 누락됩니다.
 - `schedule.tick`을 구독하는 리스너는 `jobType`마다 consumer group을 따로 둡니다. 이 토픽은 파티션이 1개라 같은 그룹이면 한쪽만 받아 tick이 오류 없이 누락됩니다.
 - 시세 제공자 조회는 토큰 발급을 빼고 모두 같은 호출 상한 장치(`CallRateLimit` 빈 하나)를 거칩니다. 따로 세면 조회가 겹칠 때 앱 전체 한도를 넘습니다.
