@@ -59,6 +59,56 @@ class EventContractTest {
     }
 
     @Test
+    void producedSnapshotWithRawMatchesSchemaAndOmitsRawWhenAbsent() throws IOException {
+        OffsetDateTime asOf = OffsetDateTime.now(SHARP_CLOCK);
+        String time = EventFactory.format(asOf);
+        Envelope<SnapshotPayload> withRaw = EventFactory.create(
+                SHARP_CLOCK, "market.snapshot", asOf, "collect-x",
+                new SnapshotPayload("TEST01", 10_250, time, "simulator", "{\"example\":\"fake\"}"));
+        Envelope<SnapshotPayload> withoutRaw = EventFactory.create(
+                SHARP_CLOCK, "market.snapshot", asOf, "collect-x",
+                new SnapshotPayload("TEST01", 10_250, time, "simulator"));
+
+        assertThat(ContractSchemas.validate("market.snapshot.v1.schema.json", mapper.writeValueAsString(withRaw))).isEmpty();
+        String omitted = mapper.writeValueAsString(withoutRaw);
+        assertThat(omitted).doesNotContain("raw");
+        assertThat(ContractSchemas.validate("market.snapshot.v1.schema.json", omitted)).isEmpty();
+    }
+
+    @Test
+    void committedSampleFailureMatchesSchema() throws IOException {
+        var errors = ContractSchemas.validate(
+                "market.snapshot.failed.v1.schema.json", ContractSchemas.sample("market.snapshot.failed.sample.json"));
+        assertThat(errors).isEmpty();
+    }
+
+    @Test
+    void producedFailureMatchesSchemaWithOnlyRequiredFieldsAndWithAllFields() throws IOException {
+        OffsetDateTime at = OffsetDateTime.now(SHARP_CLOCK);
+        String time = EventFactory.format(at);
+        Envelope<FailurePayload> minimal = EventFactory.create(
+                SHARP_CLOCK, "market.snapshot.failed", at, "collect-" + time,
+                new FailurePayload("TEST01", "TICK_SKIPPED", time, null, null, null, null, null, null, null, null, null));
+        Envelope<FailurePayload> full = EventFactory.create(
+                SHARP_CLOCK, "market.snapshot.failed", at, "collect-" + time,
+                new FailurePayload("TEST01", "HTTP_ERROR", time, 500, "E1001", 1450L, "HttpStatusException",
+                        new FailurePayload.TokenState(3_600_000L, 82_800_000L), 3, 2, 1, "{\"example\":\"fake\"}"));
+
+        String minimalJson = mapper.writeValueAsString(minimal);
+        assertThat(minimalJson).doesNotContain("httpStatus").doesNotContain("null");
+        assertThat(ContractSchemas.validate("market.snapshot.failed.v1.schema.json", minimalJson)).isEmpty();
+        assertThat(ContractSchemas.validate("market.snapshot.failed.v1.schema.json", mapper.writeValueAsString(full))).isEmpty();
+    }
+
+    @Test
+    void failureWithUnknownFailureTypeIsRejectedBySchema() throws IOException {
+        String broken = ContractSchemas.sample("market.snapshot.failed.sample.json")
+                .replace("\"HTTP_ERROR\"", "\"SOMETHING_ELSE\"");
+
+        assertThat(ContractSchemas.validate("market.snapshot.failed.v1.schema.json", broken)).isNotEmpty();
+    }
+
+    @Test
     void timestampWithoutSecondsIsRejectedProvingFormatAssertionsAreOn() throws IOException {
         String withoutSeconds = ContractSchemas.sample("schedule.tick.sample.json")
                 .replace("\"occurredAt\": \"2026-10-20T16:00:00+09:00\"", "\"occurredAt\": \"2026-10-20T16:00+09:00\"");

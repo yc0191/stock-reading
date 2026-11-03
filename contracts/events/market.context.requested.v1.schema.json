@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stock-reading.local/contracts/market.context.requested.v1",
+  "title": "market.context.requested v1",
+  "description": "브리핑이 market 서비스에 변동 종목 한 개의 배경 자료(환율종합, 시장종합, 세계지수 대륙별, 변동 종목의 국내 일봉)와 그 종목에 담긴 미국 종목의 직전 정규장 등락률을 요청한다. 읽기 전용 요청이라 같은 요청을 다시 보내도 부작용이 없다. 기간과 상한의 원본은 브리핑 설정이고, market은 요청값이 자기 안전 상한보다 크면 안전 상한까지만 준다. 메시지 키는 종목코드다.",
+  "type": "object",
+  "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "const": "market.context.requested" },
+    "schemaVersion": { "const": 1 },
+    "occurredAt": { "type": "string", "format": "date-time", "description": "요청을 만든 시각." },
+    "producedAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1, "description": "작업을 시작시킨 market.move의 correlationId를 이어받는다." },
+    "payload": {
+      "type": "object",
+      "required": ["jobId", "seq", "symbol", "asOf", "since", "maxResponseBytes", "maxTickers"],
+      "properties": {
+        "jobId": { "type": "string", "format": "uuid", "description": "작업 키. 작업을 시작시킨 market.move의 eventId다." },
+        "seq": { "type": "integer", "minimum": 1, "description": "요청 순번. 재전송은 새 순번을 쓰고, 응답이 같은 값을 되돌려준다." },
+        "symbol": { "type": "string", "pattern": "^[0-9A-Z]{6}$", "description": "변동 종목코드. 국내 일봉과 미국 종목 대응표를 이 값으로 찾는다." },
+        "asOf": { "type": "string", "format": "date-time", "description": "기준 시각(변동 시각). 배경 자료는 받은 시각 <= asOf 중 최신 1건, 등락률은 asOf 이하로 마감한 직전 정규장 1건을 고른다." },
+        "since": { "type": "string", "format": "date-time", "description": "배경 자료 받은 시각 하한. 종류별 최신 1건의 받은 시각이 since보다 이르면 없음으로 표시한다(since <= fetchedAt)." },
+        "maxResponseBytes": { "type": "integer", "minimum": 1, "description": "배경 자료 원문 1건의 최대 크기(UTF-8 바이트). 넘으면 원문을 빼고 너무 큼으로 표시한다." },
+        "maxTickers": { "type": "integer", "minimum": 1, "description": "응답에 담을 미국 종목 티커의 최대 개수. 넘으면 잘라서 잘림을 표시한다." }
+      }
+    }
+  }
+}

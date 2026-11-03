@@ -1,0 +1,25 @@
+{
+  "eventId": "3e9d1c52-8a47-4f60-b2d1-6c7a9e0f4b25",
+  "eventType": "market.snapshot.failed",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T16:00:02+09:00",
+  "producedAt": "2026-10-20T16:00:02.040+09:00",
+  "correlationId": "collect-2026-10-20T16:00:00+09:00",
+  "payload": {
+    "symbol": "TEST01",
+    "failureType": "HTTP_ERROR",
+    "scheduledFor": "2026-10-20T16:00:00+09:00",
+    "httpStatus": 500,
+    "responseCode": "E1001",
+    "elapsedMs": 1450,
+    "exceptionType": "HttpStatusException",
+    "tokenState": {
+      "ageMs": 3600000,
+      "remainingMs": 82800000
+    },
+    "concurrentCalls": 3,
+    "tickSucceeded": 2,
+    "tickFailed": 1,
+    "responseRaw": "{\"example\":\"fake-error-response\"}"
+  }
+}

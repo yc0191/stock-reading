@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stock-reading.local/contracts/market.snapshot.failed.v1",
+  "title": "market.snapshot.failed v1",
+  "description": "종목 하나의 시세 조회가 실패했거나 건너뛰었다는 사실의 기록. 키, 시크릿, 접근토큰 값과 인증 헤더는 절대 담지 않는다. 보유 종목·수량 같은 개인정보도 담지 않는다.",
+  "type": "object",
+  "required": [
+    "eventId",
+    "eventType",
+    "schemaVersion",
+    "occurredAt",
+    "producedAt",
+    "correlationId",
+    "payload"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "eventType": {
+      "const": "market.snapshot.failed"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "실패가 발생한 시각."
+    },
+    "producedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "correlationId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "실패가 난 tick의 correlationId."
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "symbol",
+        "failureType",
+        "scheduledFor"
+      ],
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "pattern": "^[0-9A-Z]{6}$"
+        },
+        "failureType": {
+          "type": "string",
+          "enum": [
+            "TOKEN_ISSUE_FAILED",
+            "HTTP_ERROR",
+            "RESULT_CODE_FAILED",
+            "EMPTY_PRICE",
+            "PRICE_PARSE_FAILED",
+            "CONNECTION_FAILED",
+            "TIMEOUT",
+            "TICK_SKIPPED"
+          ],
+          "description": "실패 종류. TOKEN_ISSUE_FAILED=토큰 발급 실패, HTTP_ERROR=HTTP 오류, RESULT_CODE_FAILED=응답의 결과 코드 실패, EMPTY_PRICE=빈 가격, PRICE_PARSE_FAILED=가격 해석 실패, CONNECTION_FAILED=연결 실패, TIMEOUT=시간 초과, TICK_SKIPPED=밀린 tick 건너뜀."
+        },
+        "scheduledFor": {
+          "type": "string",
+          "format": "date-time",
+          "description": "실패가 난 tick의 예정 시각."
+        },
+        "httpStatus": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599,
+          "description": "선택. HTTP 응답을 받은 경우의 상태 코드."
+        },
+        "responseCode": {
+          "type": "string",
+          "pattern": "^([0-9A-Za-z]{1,8}|invalid)$",
+          "description": "선택. 응답 처리 코드. 영숫자 8자 이하만 담고 형식이 맞지 않으면 invalid로 쓴다. 서버가 보낸 오류 문구는 담지 않는다."
+        },
+        "elapsedMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "선택. 호출 소요 시간(ms)."
+        },
+        "exceptionType": {
+          "type": "string",
+          "description": "선택. 예외 클래스 이름. 예외 메시지는 담지 않는다."
+        },
+        "tokenState": {
+          "type": "object",
+          "description": "선택. 실패 시점의 토큰 상태. 토큰 값은 담지 않는다.",
+          "properties": {
+            "ageMs": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "발급 후 경과 시간(ms)."
+            },
+            "remainingMs": {
+              "type": "integer",
+              "description": "만료까지 남은 시간(ms). 만료 후면 음수."
+            }
+          }
+        },
+        "concurrentCalls": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "선택. 같은 시각에 동시에 진행 중이던 호출 수."
+        },
+        "tickSucceeded": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "선택. 해당 tick의 성공 건수."
+        },
+        "tickFailed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "선택. 해당 tick의 실패 건수."
+        },
+        "responseRaw": {
+          "type": "string",
+          "description": "선택. 실패 응답 원문. trim 외에 가공하지 않는다. 키, 시크릿, 접근토큰 값과 인증 헤더는 담지 않는다."
+        }
+      }
+    }
+  }
+}

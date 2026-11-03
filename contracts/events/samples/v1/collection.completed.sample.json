@@ -1,0 +1,16 @@
+{
+  "eventId": "b3f1a6d2-84c7-4e0b-9a52-1d7c3e8f6a40",
+  "eventType": "collection.completed",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T16:15:42+09:00",
+  "producedAt": "2026-10-20T16:15:42.310+09:00",
+  "correlationId": "collect-news-2026-10-20T16:15:00+09:00",
+  "payload": {
+    "jobType": "collect-news",
+    "scheduledFor": "2026-10-20T16:15:00+09:00",
+    "startedAt": "2026-10-20T16:15:01+09:00",
+    "finishedAt": "2026-10-20T16:15:42+09:00",
+    "publishedCount": 12,
+    "incompleteSymbols": ["TEST02"]
+  }
+}

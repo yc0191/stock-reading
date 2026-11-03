@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stock-reading.local/contracts/news.collected.v1",
+  "title": "news.collected v1",
+  "description": "수집기가 검색 결과를 걸러 낸 기사 한 건을 발행한다. 본문과 개인 정보는 담지 않는다. 메시지 키는 기사 url이다. 임시 봉투 형식(ADR-010 초안).",
+  "type": "object",
+  "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "const": "news.collected" },
+    "schemaVersion": { "const": 1 },
+    "occurredAt": { "type": "string", "format": "date-time", "description": "기사 발행 시각(payload.publishedAt과 같다)." },
+    "producedAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1, "description": "수집을 시작시킨 schedule.tick의 correlationId를 이어받는다." },
+    "payload": {
+      "type": "object",
+      "required": ["title", "summary", "url", "publisher", "publishedAt", "symbols"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1, "maxLength": 500, "description": "평문 제목." },
+        "summary": { "type": "string", "maxLength": 2000, "description": "평문 요약. 빈 문자열을 허용한다." },
+        "url": { "type": "string", "format": "uri" },
+        "publisher": { "type": "string", "minLength": 1, "description": "출처 도메인." },
+        "publishedAt": { "type": "string", "format": "date-time" },
+        "symbols": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^([0-9A-Z]{6}|\\*)$" },
+          "description": "관련 종목코드(6자리). \"*\"는 시장 전체를 뜻한다."
+        },
+        "matchedQueries": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" },
+          "description": "기사가 걸린 검색어. 선택."
+        }
+      }
+    }
+  }
+}

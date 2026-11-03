@@ -21,7 +21,9 @@
         "price": { "type": "integer", "minimum": 0 },
         "changePercent": { "type": "number", "description": "(price - previousPrice) / previousPrice * 100, 소수점 2자리." },
         "thresholdPercent": { "type": "number", "minimum": 0 },
-        "asOf": { "type": "string", "format": "date-time" }
+        "asOf": { "type": "string", "format": "date-time", "description": "변동 시각. detectionType이 window(유형 1)면 움직임 시작 시각, prevClose(유형 2)면 임계값을 처음 넘은 시각. detectionType이 없는 이전 형식에서는 감지한 스냅샷의 asOf." },
+        "detectionType": { "type": "string", "enum": ["window", "prevClose"], "description": "선택. 감지 유형. window = 유형 1(최근 구간 대비 변동), prevClose = 유형 2(전일 종가 필드 대비 변동). 없으면 이전 형식." },
+        "moveStartedAt": { "type": "string", "format": "date-time", "description": "선택. 움직임이 시작된 시각. window는 비교 구간에서 움직임이 시작된 시각, prevClose는 임계값을 처음 넘은 시각." }
       }
     }
   }

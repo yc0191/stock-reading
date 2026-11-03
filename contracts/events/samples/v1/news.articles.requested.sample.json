@@ -1,0 +1,16 @@
+{
+  "eventId": "9f0c3a85-6e1d-4b72-a4f8-3c5d7e2b1a64",
+  "eventType": "news.articles.requested",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T16:15:43+09:00",
+  "producedAt": "2026-10-20T16:15:43.040+09:00",
+  "correlationId": "collect-2026-10-20T16:00:30+09:00",
+  "payload": {
+    "jobId": "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13",
+    "seq": 1,
+    "symbol": "TEST01",
+    "since": "2026-10-19T16:00:31+09:00",
+    "until": "2026-10-20T16:10:31+09:00",
+    "maxArticles": 300
+  }
+}

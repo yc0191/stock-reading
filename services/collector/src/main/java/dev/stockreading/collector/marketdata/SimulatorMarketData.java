@@ -8,10 +8,12 @@ import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /** 같은 결과가 재현되도록 시드를 고정한 랜덤 워크 가격 생성기. */
 @Component
+@ConditionalOnProperty(name = "collector.market-data.source", havingValue = "simulator", matchIfMissing = true)
 public class SimulatorMarketData implements MarketDataPort {
 
     static final long START_PRICE = 10_000L;
@@ -32,14 +34,14 @@ public class SimulatorMarketData implements MarketDataPort {
     }
 
     @Override
-    public List<PriceQuote> fetch(List<String> symbols) {
+    public FetchResult fetch(List<String> symbols) {
         OffsetDateTime now = OffsetDateTime.now(clock).truncatedTo(ChronoUnit.SECONDS);
-        return symbols.stream().map(symbol -> {
+        return FetchResult.ofQuotes(symbols.stream().map(symbol -> {
             long previous = lastPrice.getOrDefault(symbol, START_PRICE);
             double stepPercent = (random.nextDouble() * 2 - 1) * MAX_STEP_PERCENT;
             long next = Math.max(MIN_PRICE, Math.round(previous * (1 + stepPercent / 100.0)));
             lastPrice.put(symbol, next);
             return new PriceQuote(symbol, next, now);
-        }).toList();
+        }).toList());
     }
 }

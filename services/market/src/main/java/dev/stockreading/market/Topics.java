@@ -13,7 +13,13 @@ import org.springframework.kafka.config.TopicBuilder;
 public class Topics {
 
     public static final String MARKET_SNAPSHOT = "market.snapshot";
+    public static final String MARKET_SNAPSHOT_FAILED = "market.snapshot.failed";
     public static final String MARKET_MOVE = "market.move";
+    public static final String MARKET_INSIGHT = "market.insight";
+    public static final String MARKET_HISTORY_REQUESTED = "market.history.requested";
+    public static final String MARKET_HISTORY_RESPONDED = "market.history.responded";
+    public static final String MARKET_CONTEXT_REQUESTED = "market.context.requested";
+    public static final String MARKET_CONTEXT_RESPONDED = "market.context.responded";
     public static final int PARTITIONS = 3;
 
     @Bean
@@ -22,7 +28,37 @@ public class Topics {
     }
 
     @Bean
+    NewTopic marketSnapshotFailedTopic() {
+        return TopicBuilder.name(MARKET_SNAPSHOT_FAILED).partitions(PARTITIONS).replicas(1).build();
+    }
+
+    @Bean
     NewTopic marketMoveTopic() {
         return TopicBuilder.name(MARKET_MOVE).partitions(PARTITIONS).replicas(1).build();
+    }
+
+    @Bean
+    NewTopic marketInsightTopic() {
+        return TopicBuilder.name(MARKET_INSIGHT).partitions(PARTITIONS).replicas(1).build();
+    }
+
+    @Bean
+    NewTopic marketHistoryRequestedTopic() {
+        return TopicBuilder.name(MARKET_HISTORY_REQUESTED).partitions(PARTITIONS).replicas(1).build();
+    }
+
+    @Bean
+    NewTopic marketHistoryRespondedTopic() {
+        return TopicBuilder.name(MARKET_HISTORY_RESPONDED).partitions(PARTITIONS).replicas(1).build();
+    }
+
+    @Bean
+    NewTopic marketContextRequestedTopic() {
+        return TopicBuilder.name(MARKET_CONTEXT_REQUESTED).partitions(PARTITIONS).replicas(1).build();
+    }
+
+    @Bean
+    NewTopic marketContextRespondedTopic() {
+        return TopicBuilder.name(MARKET_CONTEXT_RESPONDED).partitions(PARTITIONS).replicas(1).build();
     }
 }

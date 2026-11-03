@@ -1,0 +1,29 @@
+spring:
+  application:
+    name: news
+  main:
+    web-application-type: none
+  config:
+    # 로컬 개발용 비밀값은 저장소 루트의 git 제외 .env에서 가져온다.
+    import: optional:file:./.env[.properties],optional:file:../../.env[.properties]
+  datasource:
+    url: jdbc:postgresql://localhost:5432/${POSTGRES_DB:stock}?currentSchema=news
+    username: ${NEWS_DB_USER:news_svc}
+    password: ${NEWS_DB_PASSWORD}
+  flyway:
+    schemas: news
+    default-schema: news
+    create-schemas: false
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: news
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      acks: all
+      # 기사 응답이 길어질 수 있어 전송 구간에서 압축한다. 소비자는 알아서 푼다.
+      compression-type: gzip
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer

@@ -18,4 +18,104 @@ spring:
 collector:
   # 가짜 종목 코드만 쓴다. 실제 종목은 커밋하지 않는다.
   symbols: TEST01,TEST02,TEST03
-  tick-interval-ms: 30000
+  # 1초 미만이면 scheduledFor(초 단위)가 겹쳐 중복 tick 으로 버려진다.
+  tick-interval-ms: ${COLLECTOR_TICK_INTERVAL_MS:1000}
+  # 이 시간 이상 밀린 tick 은 조회하지 않고 건너뜀으로 기록한다.
+  max-tick-age-ms: ${COLLECTOR_MAX_TICK_AGE_MS:3000}
+  schedule:
+    # 꺼 두면 타이머가 tick 을 발행하지 않는다. 로컬에서는 scripts/publish-tick.sh 로 수동 발행한다.
+    enabled: ${COLLECTOR_SCHEDULE_ENABLED:false}
+    # 뉴스 수집 주기(15분)
+    news-interval-ms: 900000
+  pre-open:
+    # 꺼 두면 장 시작 전 tick 을 발행하지 않는다. 휴장일은 판정하지 않는다.
+    # 이 tick 하나로 보유 미국 종목 해외 일봉, 세계지수 아메리카(C), SEC 공시를 받는다. 공시는 이때만 받는다.
+    enabled: ${COLLECTOR_PRE_OPEN_ENABLED:false}
+    # 한국 시간 기준 cron(초 분 시 일 월 요일)
+    cron: ${COLLECTOR_PRE_OPEN_CRON:0 30 8 * * MON-FRI}
+  intraday:
+    # 꺼 두면 장중 tick 을 발행하지 않는다. 휴장일은 판정하지 않는다.
+    # 이 tick 하나로 환율종합, 시장종합, 세계지수 아시아(S)·아메리카(C)를 시차를 두고 차례로 받는다.
+    enabled: ${COLLECTOR_INTRADAY_ENABLED:false}
+    # 한국 시간 기준 cron(초 분 시 일 월 요일). 주기를 정하고, 끝 시각은 아래 end 로 거른다.
+    cron: "${COLLECTOR_INTRADAY_CRON:0 */5 9-15 * * MON-FRI}"
+    # 한국 시간 HH:mm. 이 범위 밖의 tick 은 발행하지 않는다(양끝 포함).
+    start: "${COLLECTOR_INTRADAY_START:09:00}"
+    end: "${COLLECTOR_INTRADAY_END:15:30}"
+    # 장중 조회 사이 대기(밀리초). 같은 1초에 시세 조회 자리를 여럿 빼앗지 않게 나눠 보낸다. 0~60000.
+    stagger-ms: ${COLLECTOR_INTRADAY_STAGGER_MS:15000}
+  insight:
+    schedule:
+      # 꺼 두면 마감 후 tick 을 발행하지 않는다. 휴장일은 판정하지 않는다.
+      enabled: ${COLLECTOR_INSIGHT_SCHEDULE_ENABLED:false}
+      # 한국 시간 기준 cron(초 분 시 일 월 요일)
+      cron: ${COLLECTOR_INSIGHT_CRON:0 30 16 * * MON-FRI}
+    # 일봉 조회의 시장구분과 조회 건수
+    daily-market-class: "0"
+    daily-count: 30
+    # 세계지수 대륙구분: S(아시아), C(아메리카), E(유럽). 대륙마다 한 번씩 조회한다.
+    continents: C,S,E
+    # 보유 미국 종목의 해외 일봉 조회 건수
+    overseas-daily-count: 30
+    # 한 번에 해외 일봉을 조회할 종목 수 상한. 넘친 종목은 호출하지 않고 건너뛴 개수만 경고로 남긴다.
+    overseas-max-tickers: 100
+  daily-briefing:
+    # 꺼 두면 데일리 브리핑 시작 tick 을 발행하지 않는다. 휴장일은 판정하지 않는다.
+    # 각 판은 그 판의 자료 수집(장 시작 전 08:30, 장 마감 후 16:30)이 끝난 뒤에 오도록 둔다.
+    enabled: ${COLLECTOR_DAILY_BRIEFING_ENABLED:false}
+    # 한국 시간 기준 cron(초 분 시 일 월 요일). 한 판만 끄려면 그 판의 값을 "-" 로 준다.
+    morning-cron: ${COLLECTOR_DAILY_BRIEFING_MORNING_CRON:0 45 8 * * MON-FRI}
+    post-close-cron: ${COLLECTOR_DAILY_BRIEFING_POST_CLOSE_CRON:0 0 17 * * MON-FRI}
+  market-data:
+    # simulator | broker
+    source: ${COLLECTOR_MARKET_DATA_SOURCE:simulator}
+  broker:
+    # 주소와 키는 환경변수로만 받는다(키는 Parameter Store -> .env).
+    base-url: ${BROKER_BASE_URL:}
+    app-key: ${BROKER_APP_KEY:}
+    app-secret: ${BROKER_APP_SECRET:}
+    timeout-seconds: 10
+    # 초당 시세 호출 상한. 종목 수가 이보다 많으면 시작할 때 경고하고, 넘친 종목은 건너뜀으로 기록한다.
+    # 종목 수와 같게 두면 오래 돌 때 일부 호출을 놓치므로 종목 수의 1.2배 이상으로 둔다(docs/test-history/S03).
+    # 실제 서버가 5분 버틴 가장 높은 속도는 초당 12회였으므로 그 아래로 둔다(docs/test-history/S04).
+    max-calls-per-second: ${BROKER_MAX_CALLS_PER_SECOND:10}
+  news-search:
+    base-url: ${NEWS_SEARCH_BASE_URL:}
+    client-id: ${NEWS_SEARCH_CLIENT_ID:}
+    client-secret: ${NEWS_SEARCH_CLIENT_SECRET:}
+    # 인증 헤더 이름은 제공자가 정한 값이라 환경변수로 받는다.
+    id-header: ${NEWS_SEARCH_ID_HEADER:}
+    secret-header: ${NEWS_SEARCH_SECRET_HEADER:}
+    display: 20
+    timeout-seconds: 10
+    # "검색어=종목코드,종목코드;검색어2=*" 형식. 관심 종목이 드러나므로 값은 환경변수로만 준다.
+    queries: ${NEWS_SEARCH_QUERIES:}
+    # 하루(한국 시간) 검색 API 호출 상한. 제공자 한도보다 조금 낮게 둔다. 0 이하이면 시작 단계에서 실패한다.
+    daily-call-limit: ${NEWS_SEARCH_DAILY_CALL_LIMIT:19500}
+    # 검색어를 연달아 호출할 때 호출 사이의 대기(밀리초). 0이면 기다리지 않는다.
+    call-interval-ms: ${NEWS_SEARCH_CALL_INTERVAL_MS:60}
+  holdings:
+    # "ETF코드=티커,티커;ETF코드2=티커" 형식. 보유 ETF와 상위 종목이 드러나므로 값은 환경변수로만 준다.
+    # 형식이 틀리면 시작 단계에서 실패하고, 비어 있으면 보유 종목이 없는 것으로 본다.
+    us-by-etf: ${ETF_US_HOLDINGS:}
+  edgar:
+    base-url: https://data.sec.gov
+    ticker-map-url: https://www.sec.gov/files/company_tickers_exchange.json
+    archives-base-url: https://www.sec.gov/Archives/edgar/data
+    # SEC 가 요구하는 "회사명 연락이메일". 연락 이메일은 개인 정보라서 값은 환경변수로만 준다. 비어 있으면 호출하지 않는다.
+    user-agent: ${EDGAR_USER_AGENT:}
+    timeout-seconds: 10
+    # SEC 공정 접근 한도는 초당 10회다. 1~10 만 허용한다.
+    max-calls-per-second: 10
+    # 수집할 공시 형식(쉼표 구분). 비거나 형식이 틀리면 시작 단계에서 실패한다.
+    # 6-K 는 미국에 상장한 외국 기업이 8-K 대신 내는 공시라 넣는다. 10-Q/10-K 는 실적이 8-K 항목 2.02 로 먼저 나와 뺀다.
+    forms: ${EDGAR_FORMS:8-K,8-K/A,6-K}
+    # 접수 시각이 이 시간 안인 공시만 발행한다. 공시는 평일 장 시작 전에 하루 한 번만 받으므로
+    # 금요일→월요일 간격(72시간)보다 넉넉하게, 수집기가 며칠 꺼지거나 연휴가 끼어도 빠지지 않게 7일로 둔다.
+    lookback-hours: 168
+  dart:
+    base-url: https://opendart.fss.or.kr/api
+    # 비밀: 환경변수로만 받는다(Parameter Store -> .env).
+    api-key: ${DART_API_KEY:}
+    page-count: 100
+    timeout-seconds: 10

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stock-reading.local/contracts/collection.completed.v1",
+  "title": "collection.completed v1",
+  "description": "수집기가 한 번의 수집에서 기사 전송을 모두 확정한 뒤(성공·실패 포함) 한 건 발행한다. 브리핑은 startedAt이 변동 기준 시각 + Δ 이후이고 해당 종목과 \"*\"가 incompleteSymbols에 없는 완료만 근거 조회에 쓴다. 메시지 키는 jobType이다.",
+  "type": "object",
+  "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "const": "collection.completed" },
+    "schemaVersion": { "const": 1 },
+    "occurredAt": { "type": "string", "format": "date-time", "description": "수집이 끝난 시각(payload.finishedAt과 같다)." },
+    "producedAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1, "description": "수집을 시작시킨 schedule.tick의 correlationId를 이어받는다." },
+    "payload": {
+      "type": "object",
+      "required": ["jobType", "scheduledFor", "startedAt", "finishedAt", "publishedCount", "incompleteSymbols"],
+      "properties": {
+        "jobType": { "type": "string", "minLength": 1, "description": "끝난 수집의 종류. schedule.tick의 jobType과 같다(예: collect-news)." },
+        "scheduledFor": { "type": "string", "format": "date-time", "description": "수집이 실행되어야 했던 논리적 시각(schedule.tick의 scheduledFor)." },
+        "startedAt": { "type": "string", "format": "date-time", "description": "첫 검색 호출을 시작한 시각. 검색이 이 시각 이후에 일어났음을 보증한다." },
+        "finishedAt": { "type": "string", "format": "date-time", "description": "기사 전송을 모두 확정한 시각." },
+        "publishedCount": { "type": "integer", "minimum": 0, "description": "이번 수집에서 발행한 기사 수." },
+        "incompleteSymbols": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^([0-9A-Z]{6}|\\*)$" },
+          "description": "제대로 모으지 못했을 수 있는 종목코드. 검색어 호출 실패, 일일 호출 상한으로 건너뜀, 기사 전송 실패가 해당한다. 시장 전체 검색어가 그렇게 되면 \"*\"를 넣는다. 빈 배열이면 모두 모은 것이다."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "eventId": "e1a7c53b-6f2d-4b98-8c0e-3d5a9f1b7c24",
+  "eventType": "news.filings.responded",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T16:15:44+09:00",
+  "producedAt": "2026-10-20T16:15:44.320+09:00",
+  "correlationId": "collect-2026-10-20T16:00:30+09:00",
+  "payload": {
+    "jobId": "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13",
+    "seq": 1,
+    "symbol": "TEST01",
+    "filings": [
+      {
+        "accessionNumber": "0000000001-26-000001",
+        "tickers": ["TESTA"],
+        "form": "8-K",
+        "items": ["2.02", "9.01"],
+        "acceptedAt": "2026-10-20T05:30:28+09:00",
+        "url": "https://www.sec.gov/Archives/edgar/data/1/000000000126000001/test-8k.htm"
+      }
+    ],
+    "truncated": false
+  }
+}

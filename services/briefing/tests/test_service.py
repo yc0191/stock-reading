@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from briefing.evidence import load_sample_news
+from briefing.evidence import DEFAULT_DELTA, load_sample_news
 from briefing.service import handle_move
 from contracts import sample_text, validate
 
@@ -46,7 +46,7 @@ def test_redelivering_the_same_move_yields_the_same_briefing_event_id(news):
     assert first["eventId"] == second["eventId"]
 
 
-def test_evidence_never_includes_news_published_after_the_move(news):
+def test_evidence_never_includes_news_published_after_the_move_plus_delta(news):
     event = json.loads(handle_move(move_json(), news, NOW).value)
     titles = [item["title"] for item in event["payload"]["evidence"]]
 
@@ -54,7 +54,8 @@ def test_evidence_never_includes_news_published_after_the_move(news):
     assert not any("FUTURE" in title for title in titles)
     assert not any("OLD" in title for title in titles)
     for item in event["payload"]["evidence"]:
-        assert item["publishedAt"] <= event["payload"]["asOf"]
+        published = datetime.fromisoformat(item["publishedAt"])
+        assert published <= datetime.fromisoformat(event["payload"]["asOf"]) + DEFAULT_DELTA
 
 
 def test_move_without_any_evidence_still_produces_a_valid_honest_briefing():

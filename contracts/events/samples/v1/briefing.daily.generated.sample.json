@@ -1,0 +1,16 @@
+{
+  "eventId": "5c2e9a14-7b3d-4f61-a8e0-3d9b6c1f2a40",
+  "eventType": "briefing.daily.generated",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T17:00:00+09:00",
+  "producedAt": "2026-10-20T17:00:41.250+09:00",
+  "correlationId": "daily-briefing-post-close-2026-10-20T17:00:00+09:00",
+  "payload": {
+    "edition": "post-close",
+    "rangeStart": "2026-10-19T17:00:00+09:00",
+    "rangeEnd": "2026-10-20T17:00:00+09:00",
+    "text": "[마감 후 판] 10-20\n\n그날 한국 증시: 샘플 지수 +0.40%\n보유 ETF별 하루 등락:\n  - TEST01 -1.50%\n  - TEST02 자료 없음\n그날 급변동과 근거:\n  - TEST01 16:00 하락 -1.50%: Sample headline — sample\n※ 투자 조언이 아니며, 위 내용은 공개된 자료의 요약일 뿐 원인을 단정하지 않습니다.",
+    "missingItems": ["etf-daily-change:TEST02"],
+    "generatedBy": "llm"
+  }
+}

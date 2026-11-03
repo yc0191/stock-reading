@@ -23,9 +23,31 @@ spring:
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     producer:
       acks: all
+      # 시세 이력·기사 응답이 길어질 수 있어 전송 구간에서 압축한다. 소비자는 알아서 푼다.
+      compression-type: gzip
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
 market:
-  # 직전 스냅샷 대비 변동의 절댓값이 이 값(%) 이상이면 "변동"으로 본다.
-  move-threshold-percent: 1.00
+  # 유형 1(window): 최근 window-minutes분 이력의 가장 오래된 스냅샷 대비 변동의 절댓값이 이 값(%) 이상이면 "변동"으로 본다.
+  window-minutes: 5
+  window-threshold-percent: 1.00
+  # 유형 2(prevClose): 응답 원문(raw)의 전일 종가 필드 대비 변동의 절댓값이 이 값(%) 이상이면 "변동"으로 본다.
+  # prev-close-field는 시세 응답의 전일 종가 항목이다. 실제 응답 샘플 2개에서 현재가와 이 항목으로 계산한 등락률이 응답의 등락률과 같음을 확인했다.
+  # 제공자 고유 항목 이름은 공개 파일에 쓰지 않으므로 공유 .env의 MARKET_PREV_CLOSE_FIELD로만 넣는다. 비어 있으면 유형 2를 끈다.
+  prev-close-field: ${MARKET_PREV_CLOSE_FIELD:}
+  prev-close-threshold-percent: 3.00
+  holdings:
+    # 수집기와 같은 "ETF코드=티커,티커;ETF코드2=티커" 형식. 보유 ETF와 상위 종목이 드러나므로 값은 환경변수로만 준다.
+    # 형식이 틀리면 시작 단계에서 실패하고, 비어 있으면 미국 종목이 없는 것으로 본다.
+    us-by-etf: ${ETF_US_HOLDINGS:}
+  context:
+    # 배경 자료 응답(market.context)의 안전 상한. 요청값의 원본은 브리핑 설정이고, 요청이 이보다 크면 이 값까지만 준다.
+    # 받은 시각이 기준 시각보다 이 기간 넘게 이른 자료는 없음으로 본다(해외 등락률은 장 마감 시각, 세계지수 직전 종가는 받은 시각 기준).
+    max-age: P4D
+    # 배경 자료 원문 1건의 최대 크기(UTF-8 바이트). 넘으면 원문을 빼고 너무 큼으로 표시한다.
+    max-response-bytes: 32768
+    # 응답에 담을 미국 종목 티커의 최대 개수.
+    max-tickers: 100
+    # 배경 자료로 줄 세계지수 대륙구분. 수집기의 마감 후 수집 대륙과 맞춘다.
+    world-index-continents: C,S,E

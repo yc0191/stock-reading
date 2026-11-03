@@ -29,7 +29,15 @@
             "properties": {
               "title": { "type": "string", "minLength": 1 },
               "source": { "type": "string", "minLength": 1 },
-              "publishedAt": { "type": "string", "format": "date-time" }
+              "publishedAt": { "type": "string", "format": "date-time" },
+              "articleId": { "type": "string", "minLength": 1, "description": "선택. news.articles.responded의 articleId. 리포트가 근거를 인용할 때 쓰는 식별자다. 없으면 이전 형식이다." },
+              "url": { "type": "string", "format": "uri", "description": "선택. 기사 주소." },
+              "kind": {
+                "type": "string",
+                "enum": ["article", "filing", "overseas-close-rate", "exchange-rate-summary", "market-summary", "world-index", "daily-price"],
+                "description": "선택. 자료 종류. 기사, 공시, 미국 종목 직전 정규장 등락률, 배경 자료(환율종합, 시장종합, 세계지수, 국내 일봉) 순이다. 없으면 이전 형식(기사)이다."
+              },
+              "ref": { "type": "string", "minLength": 1, "description": "선택. 근거 번호. 브리핑이 LLM 입력에 붙여 준 번호 그대로이며 리포트 문장이 이 번호로 근거를 인용한다." }
             }
           }
         }

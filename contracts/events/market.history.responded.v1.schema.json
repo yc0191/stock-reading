@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stock-reading.local/contracts/market.history.responded.v1",
+  "title": "market.history.responded v1",
+  "description": "market 서비스가 시세 이력 요청에 답한다. 0건 응답도 정상 응답이다. 메시지 키는 종목코드다.",
+  "type": "object",
+  "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "const": "market.history.responded" },
+    "schemaVersion": { "const": 1 },
+    "occurredAt": { "type": "string", "format": "date-time", "description": "응답을 만든 시각." },
+    "producedAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1, "description": "요청의 correlationId를 이어받는다." },
+    "payload": {
+      "type": "object",
+      "required": ["jobId", "seq", "symbol", "points", "truncated"],
+      "properties": {
+        "jobId": { "type": "string", "format": "uuid", "description": "요청의 jobId." },
+        "seq": { "type": "integer", "minimum": 1, "description": "요청의 seq." },
+        "symbol": { "type": "string", "pattern": "^[0-9A-Z]{6}$" },
+        "points": {
+          "type": "array",
+          "description": "asOf 오름차순 시세 이력.",
+          "items": {
+            "type": "object",
+            "required": ["asOf", "price"],
+            "properties": {
+              "asOf": { "type": "string", "format": "date-time" },
+              "price": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "truncated": { "type": "boolean", "description": "maxPoints 때문에 잘렸으면 true." }
+      }
+    }
+  }
+}

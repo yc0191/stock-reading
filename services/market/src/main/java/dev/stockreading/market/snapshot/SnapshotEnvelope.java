@@ -14,6 +14,6 @@ public record SnapshotEnvelope(
         SnapshotPayload payload) {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record SnapshotPayload(String symbol, long price, String asOf, String source) {
+    public record SnapshotPayload(String symbol, long price, String asOf, String source, String raw) {
     }
 }

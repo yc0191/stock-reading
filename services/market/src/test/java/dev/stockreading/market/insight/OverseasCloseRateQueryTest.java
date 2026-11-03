@@ -1,0 +1,190 @@
+package dev.stockreading.market.insight;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import java.time.OffsetDateTime;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import tools.jackson.databind.json.JsonMapper;
+
+/** 시각은 모두 UTC로 쓴다. 2026-10월의 뉴욕 정규장 마감 16:00은 UTC 20:00이다. */
+class OverseasCloseRateQueryTest {
+
+    private static final String TICKER = "TESTA";
+    // 행을 받은 시각(테스트 값). 실제 수집은 평일 장 시작 전 한 번이다.
+    private static final OffsetDateTime FETCHED_1021 = OffsetDateTime.parse("2026-10-21T07:30:00Z");
+    private static final OffsetDateTime FETCHED_1022 = OffsetDateTime.parse("2026-10-22T07:30:00Z");
+    private static final OffsetDateTime FETCHED_1023 = OffsetDateTime.parse("2026-10-23T07:30:00Z");
+
+    // 마감 시각 하한을 보지 않는 테스트에 쓰는 충분히 이른 하한.
+    private static final OffsetDateTime FAR_PAST = OffsetDateTime.parse("2026-01-01T00:00:00Z");
+
+    private InsightRepository repository;
+    private OverseasCloseRateQuery query;
+
+    @BeforeEach
+    void setUp() {
+        repository = mock(InsightRepository.class);
+        query = new OverseasCloseRateQuery(repository, JsonMapper.builder().build());
+    }
+
+    @Test
+    void picksTheLatestClosedSessionNotTheFirstRecordOrTheTopLevelRate() {
+        // 맨 앞은 아직 진행 중인 10/21 장외 막대이고, 최상위 등락율도 그 막대 기준이다.
+        rows(new OverseasDailyRow(response(" 9.99", "20261021:  0.10", "20261020:  1.25", "20261019: -0.40"), FETCHED_1021));
+
+        OverseasCloseRate rate = query.find(TICKER, OffsetDateTime.parse("2026-10-21T08:00:00Z"), FAR_PAST).orElseThrow();
+
+        assertThat(rate.date()).isEqualTo("20261020");
+        assertThat(rate.rate()).isEqualTo("  1.25");
+        assertThat(rate.closeAt()).isEqualTo(OffsetDateTime.parse("2026-10-20T16:00:00-04:00"));
+        assertThat(rate.ticker()).isEqualTo(TICKER);
+        assertThat(rate.fetchedAt()).isEqualTo(FETCHED_1021);
+    }
+
+    @Test
+    void sessionClosingExactlyAtTheReferenceTimeIsIncludedButNotOneSecondLater() {
+        // 마감과 같은 시각에 받은 행과, 그 전에 받은 행. 기준 시각보다 늦게 받은 행은 쓰지 않으므로 둘 다 둔다.
+        rows(
+                new OverseasDailyRow(response(" 0.00", "20261020:  1.25", "20261019: -0.40"),
+                        OffsetDateTime.parse("2026-10-20T20:00:00Z")),
+                new OverseasDailyRow(response(" 0.00", "20261019: -0.40"), OffsetDateTime.parse("2026-10-20T08:00:00Z")));
+
+        assertThat(query.find(TICKER, OffsetDateTime.parse("2026-10-20T20:00:00Z"), FAR_PAST).orElseThrow().date())
+                .isEqualTo("20261020");
+        assertThat(query.find(TICKER, OffsetDateTime.parse("2026-10-20T19:59:59Z"), FAR_PAST).orElseThrow().date())
+                .isEqualTo("20261019");
+    }
+
+    @Test
+    void barThatWasStillOpenWhenFetchedIsNotUsedAndTheOlderSessionIsReturnedWithItsDate() {
+        // 10/21 장이 끝난 뒤가 기준이지만, 10/21 마감 뒤에 받은 행이 아직 없다.
+        rows(new OverseasDailyRow(response(" 0.10", "20261021:  0.10", "20261020:  1.25"), FETCHED_1021));
+
+        OverseasCloseRate rate = query.find(TICKER, OffsetDateTime.parse("2026-10-21T21:00:00Z"), FAR_PAST).orElseThrow();
+
+        assertThat(rate.date()).isEqualTo("20261020");
+        assertThat(rate.rate()).isEqualTo("  1.25");
+    }
+
+    @Test
+    void sameDateInSeveralRowsUsesTheLatestValueFetchedAtOrBeforeTheReferenceTime() {
+        rows(
+                new OverseasDailyRow(response(" 0.30", "20261023:  0.30", "20261022:  2.10", "20261021: -0.50"), FETCHED_1023),
+                new OverseasDailyRow(response(" 0.20", "20261022:  0.20", "20261021: -0.55", "20261020:  1.25"), FETCHED_1022));
+
+        // 두 행 모두 기준 시각 이하에 받았으면 같은 일자는 더 늦게 받은 값을 쓴다.
+        OverseasCloseRate rate = query.find(TICKER, OffsetDateTime.parse("2026-10-23T08:00:00Z"), FAR_PAST).orElseThrow();
+
+        assertThat(rate.date()).isEqualTo("20261022");
+        assertThat(rate.rate()).isEqualTo("  2.10");
+        assertThat(rate.fetchedAt()).isEqualTo(FETCHED_1023);
+    }
+
+    @Test
+    void rowFetchedAfterTheReferenceTimeIsNotACandidateEvenIfItHasTheSameSession() {
+        // 기준 시각(10/22 12:00Z) 뒤에 받은 10/23 행은 같은 10/21 장 값을 담고 있어도 쓰지 않는다.
+        rows(
+                new OverseasDailyRow(response(" 0.30", "20261022:  2.10", "20261021: -0.50"), FETCHED_1023),
+                new OverseasDailyRow(response(" 0.20", "20261021: -0.55", "20261020:  1.25"), FETCHED_1022));
+
+        OverseasCloseRate rate = query.find(TICKER, OffsetDateTime.parse("2026-10-22T12:00:00Z"), FAR_PAST).orElseThrow();
+
+        assertThat(rate.date()).isEqualTo("20261021");
+        assertThat(rate.rate()).isEqualTo(" -0.55");
+        assertThat(rate.fetchedAt()).isEqualTo(FETCHED_1022);
+    }
+
+    @Test
+    void rowFetchedExactlyAtTheReferenceTimeIsACandidate() {
+        rows(new OverseasDailyRow(response(" 0.20", "20261021: -0.55"), FETCHED_1022));
+
+        assertThat(query.find(TICKER, FETCHED_1022, FAR_PAST).orElseThrow().fetchedAt()).isEqualTo(FETCHED_1022);
+        assertThat(query.find(TICKER, FETCHED_1022.minusSeconds(1), FAR_PAST)).isEmpty();
+    }
+
+    @Test
+    void chosenSessionClosingBeforeTheLowerBoundGivesNothing() {
+        // 10/20 장 마감은 2026-10-20T20:00Z. 하한이 그보다 1초 늦으면 너무 오래된 값이라 없음이다.
+        rows(new OverseasDailyRow(response(" 0.20", "20261020:  1.25", "20261019: -0.40"), FETCHED_1021));
+        OffsetDateTime asOf = OffsetDateTime.parse("2026-10-21T08:00:00Z");
+
+        assertThat(query.find(TICKER, asOf, OffsetDateTime.parse("2026-10-20T20:00:00Z"))).isPresent();
+        assertThat(query.find(TICKER, asOf, OffsetDateTime.parse("2026-10-20T20:00:01Z"))).isEmpty();
+    }
+
+    @Test
+    void rowOrderFromTheStoreDoesNotDecideWhichSameDateValueWins() {
+        rows(
+                new OverseasDailyRow(response(" 0.20", "20261021: -0.55"), FETCHED_1022),
+                new OverseasDailyRow(response(" 0.30", "20261021: -0.50"), FETCHED_1023));
+
+        assertThat(query.find(TICKER, OffsetDateTime.parse("2026-10-23T08:00:00Z"), FAR_PAST).orElseThrow().rate())
+                .isEqualTo(" -0.50");
+    }
+
+    @Test
+    void recordsWithoutADateOrRateAndRowsThatAreNotJsonAreSkipped() {
+        rows(
+                new OverseasDailyRow("not json", FETCHED_1022),
+                new OverseasDailyRow("""
+                        {"dataBody":{"out2":[{"dt":"20261020"},{"dt":"bad","up_dwn_r_p2":" 1.00"},
+                         {"up_dwn_r_p2":" 2.00"},{"dt":"20261019","up_dwn_r_p2":" -0.40"}]}}""", FETCHED_1021));
+
+        assertThat(query.find(TICKER, OffsetDateTime.parse("2026-10-22T08:00:00Z"), FAR_PAST).orElseThrow().rate())
+                .isEqualTo(" -0.40");
+    }
+
+    @Test
+    void returnsNothingWhenNoSessionClosedBeforeTheReferenceTime() {
+        rows(new OverseasDailyRow(response(" 1.25", "20261020:  1.25"), OffsetDateTime.parse("2026-10-20T11:00:00Z")));
+
+        assertThat(query.find(TICKER, OffsetDateTime.parse("2026-10-20T12:00:00Z"), FAR_PAST)).isEmpty();
+    }
+
+    @Test
+    void readsOnlyTheRecentRowsOfTheTicker() {
+        rows();
+
+        assertThat(query.find(TICKER, FETCHED_1021, FAR_PAST)).isEmpty();
+        verify(repository).recentOverseasDailyPrices(TICKER, FETCHED_1021, OverseasCloseRateQuery.ROWS_TO_READ);
+        assertThat(OverseasCloseRateQuery.ROWS_TO_READ).isEqualTo(10);
+    }
+
+    @Test
+    void classShareWrittenWithADotIsLookedUpWithTheStoredDash() {
+        when(repository.recentOverseasDailyPrices(eq("TESTB-X"), any(), anyInt())).thenReturn(List.of(
+                new OverseasDailyRow(response(" 9.99", "20261020:  1.25"), FETCHED_1021)));
+
+        OverseasCloseRate rate = query.find("testb.x", OffsetDateTime.parse("2026-10-21T08:00:00Z"), FAR_PAST).orElseThrow();
+
+        assertThat(rate.ticker()).isEqualTo("TESTB-X");
+        verify(repository).recentOverseasDailyPrices("TESTB-X", OffsetDateTime.parse("2026-10-21T08:00:00Z"),
+                OverseasCloseRateQuery.ROWS_TO_READ);
+    }
+
+    private void rows(OverseasDailyRow... rows) {
+        when(repository.recentOverseasDailyPrices(eq(TICKER), any(), anyInt())).thenReturn(List.of(rows));
+    }
+
+    /** "일자:등락율" 목록으로 응답 원문을 만든다. 최상위에도 등락율이 있어 이를 쓰지 않는지 확인할 수 있다. */
+    private static String response(String topLevelRate, String... records) {
+        String out2 = Arrays.stream(records)
+                .map(r -> r.split(":", 2))
+                .map(r -> "{\"dt\":\"" + r[0] + "\",\"tm\":\"000000\",\"up_dwn_r_p2\":\"" + r[1] + "\"}")
+                .collect(Collectors.joining(","));
+        return "{\"dataHeader\":{\"resultCode\":\"200\"},\"dataBody\":{\"up_dwn_r_p2\":\"" + topLevelRate
+                + "\",\"out2\":[" + out2 + "]}}";
+    }
+}

@@ -25,4 +25,4 @@ Apache Kafka. KRaft 모드, 셀프 호스팅, 클라이언트는 Spring for Apac
 - 관리형(MSK) 대신 셀프 호스팅하는 이유: 비용, 운영 경험이 목적.
 
 ## 후속
-토픽·파티션 수 초기값은 부하 검증(ADR-005)으로 확인한다. 현재 시작값은 `market.snapshot`, `market.move`, `briefing.generated` 3 파티션, `schedule.tick` 1 파티션. 토픽 선언 방식은 ADR-013.
+토픽 이름과 파티션 수는 각 서비스의 `Topics`가 원본이고, 선언 규칙은 `CLAUDE.md`의 설계 규칙이다.

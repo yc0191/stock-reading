@@ -1,0 +1,66 @@
+# PR 과 develop-collector·main 푸시마다 실제 DB·실제 서비스 흐름을 뺀 테스트를 돌린다.
+# 그 테스트들은 켜는 환경변수가 없어 건너뛰며, 커밋 전에 scripts/test-all.sh 로 따로 돌린다.
+name: test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - develop-collector
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  java:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-java@v4.7.1
+        with:
+          distribution: temurin
+          java-version: 21
+      # gradle.properties 가 JDK 21 을 JAVA_HOME_21 에서 찾는다.
+      - run: echo "JAVA_HOME_21=$JAVA_HOME" >> "$GITHUB_ENV"
+      - run: ./gradlew cleanTest test --no-build-cache
+
+  briefing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-python@v5.6.0
+        with:
+          python-version: "3.13"
+      - run: |
+          python -m venv services/briefing/.venv
+          services/briefing/.venv/bin/python -m pip install -r services/briefing/requirements.txt
+      - run: services/briefing/.venv/bin/python -m pytest services/briefing
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          # 기준 브랜치와의 차이를 내려면 갈라진 지점까지의 이력이 필요하다.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5.6.0
+        with:
+          python-version: "3.13"
+      - run: |
+          python -m venv services/briefing/.venv
+          services/briefing/.venv/bin/python -m pip install -r services/briefing/requirements.txt
+      - run: services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests
+      # 이 PR 이 영향을 주는 기능과 테스트를 실행 결과 요약에 붙인다. 알려 주기만 하므로 실패로 만들지 않는다.
+      - name: tests to check for this PR
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          {
+            echo "### 이 PR 에서 확인할 테스트"
+            echo '```'
+            python3 scripts/check_test_map.py --changed "origin/$BASE_REF"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true

@@ -1,0 +1,678 @@
+"""변동 한 건의 근거 조회 작업. Kafka를 모르며 메시지와 시각을 인자로 받아 상태만 움직인다.
+
+흐름: market.move 수신 -> 쓸 수 있는 collection.completed 대기 -> 시세 이력·배경 자료·기사 요청 ->
+배경 자료 응답에 미국 종목 티커가 있으면 그 티커로 공시 요청 -> 모든 응답 수신(기사는 안정될 때까지 재확인)
+-> 받은 자료 재검사 -> 리포트 입력 완성, 또는 실패 기록.
+"""
+from __future__ import annotations
+
+import json
+import logging
+from collections import OrderedDict, deque
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from enum import Enum
+from typing import Protocol
+
+from briefing.config import DEFAULT_SETTINGS, CoreSettings
+from briefing.events import (
+    ARTICLES_REQUESTED_TOPIC,
+    CONTEXT_REQUESTED_TOPIC,
+    FILINGS_REQUESTED_TOPIC,
+    HISTORY_REQUESTED_TOPIC,
+    OutboundEvent,
+    format_timestamp,
+    parse_timestamp,
+    request_event,
+)
+from briefing.evidence import MARKET_WIDE, in_evidence_range
+
+log = logging.getLogger("briefing.jobs")
+
+COLLECT_NEWS = "collect-news"
+
+
+class FailureReason(str, Enum):
+    COLLECTION_NOT_COVERED = "collection_not_covered"
+    MARKET_NO_RESPONSE = "market_no_response"
+    NEWS_NO_RESPONSE = "news_no_response"
+    NEWS_UNSTABLE = "news_unstable"
+    CONTEXT_NO_RESPONSE = "context_no_response"
+    FILINGS_NO_RESPONSE = "filings_no_response"
+    LLM_ERROR = "llm_error"
+
+
+@dataclass(frozen=True)
+class Failure:
+    job_id: str
+    symbol: str
+    reason: FailureReason
+    detail: str
+    attempts: int
+
+
+@dataclass(frozen=True)
+class PricePoint:
+    as_of: datetime
+    price: int
+
+
+@dataclass(frozen=True)
+class Article:
+    article_id: str
+    title: str
+    summary: str
+    published_at: datetime
+    publisher: str
+    url: str
+
+
+@dataclass(frozen=True)
+class Filing:
+    accession_number: str
+    tickers: tuple[str, ...]
+    form: str
+    items: tuple[str, ...]
+    accepted_at: datetime
+    url: str
+
+
+@dataclass(frozen=True)
+class CloseRate:
+    ticker: str
+    date: str
+    close_at: datetime
+    rate: str
+    fetched_at: datetime
+
+
+@dataclass(frozen=True)
+class IndexRate:
+    code: str
+    name: str
+    business_day: str
+    close: str
+    prev_business_day: str | None
+    prev_close: str | None
+    rate: str | None
+
+
+BACKGROUND_OK = "ok"
+BACKGROUND_MISSING = "missing"
+BACKGROUND_TOO_LARGE = "too-large"
+
+
+@dataclass(frozen=True)
+class Background:
+    """배경 자료 한 종류(와 대상)의 최신 1건. 원문은 해석하지 않고 그대로 둔다."""
+
+    api_type: str
+    target: str | None
+    status: str
+    response: str | None = None
+    fetched_at: datetime | None = None
+    response_bytes: int | None = None
+    index_rates: tuple[IndexRate, ...] = ()
+
+
+@dataclass(frozen=True)
+class ReportInput:
+    job_id: str
+    symbol: str
+    correlation_id: str
+    as_of: datetime
+    previous_price: int
+    price: int
+    change_percent: float
+    price_points: tuple[PricePoint, ...]
+    articles: tuple[Article, ...]
+    history_truncated: bool = False
+    articles_truncated: bool = False
+    # 변동 종목에 담긴 미국 종목. 비어 있으면 공시·해외 등락률은 해당 없음이다.
+    tickers: tuple[str, ...] = ()
+    tickers_truncated: bool = False
+    close_rates: tuple[CloseRate, ...] = ()
+    filings: tuple[Filing, ...] = ()
+    filings_truncated: bool = False
+    background: tuple[Background, ...] = ()
+
+
+class RequestPort(Protocol):
+    def send(self, event: OutboundEvent) -> None: ...
+
+
+class FailurePort(Protocol):
+    def record(self, failure: Failure) -> None: ...
+
+
+class ReadyPort(Protocol):
+    def on_ready(self, report_input: ReportInput) -> None: ...
+
+
+@dataclass(frozen=True)
+class Completion:
+    started_at: datetime
+    job_type: str
+    incomplete_symbols: frozenset[str]
+
+    def covers(self, symbol: str, as_of: datetime, settings: CoreSettings) -> bool:
+        return (
+            self.job_type == COLLECT_NEWS
+            and self.started_at >= as_of + settings.delta
+            and symbol not in self.incomplete_symbols
+            and MARKET_WIDE not in self.incomplete_symbols
+        )
+
+
+class _Phase(Enum):
+    WAITING_COLLECTION = "waiting_collection"
+    FETCHING = "fetching"
+    DONE = "done"
+
+
+@dataclass
+class _Exchange:
+    """응답 한 번으로 끝나는 요청(시세 이력, 배경 자료, 공시)의 순번과 보낸 시각."""
+
+    seq: int = 0
+    sent_at: datetime | None = None
+    received: bool = False
+
+    def awaiting(self) -> bool:
+        return self.sent_at is not None and not self.received
+
+
+@dataclass(frozen=True)
+class _Context:
+    tickers: tuple[str, ...]
+    tickers_truncated: bool
+    close_rates: tuple[CloseRate, ...]
+    background: tuple[Background, ...]
+
+
+@dataclass
+class _Job:
+    job_id: str
+    symbol: str
+    correlation_id: str
+    as_of: datetime
+    previous_price: int
+    price: int
+    change_percent: float
+    created_at: datetime
+    phase: _Phase = _Phase.WAITING_COLLECTION
+    # 시세·배경 자료·공시: 가장 최근에 보낸 요청의 순번과 보낸 시각
+    market: _Exchange = field(default_factory=_Exchange)
+    market_points: tuple[PricePoint, ...] | None = None
+    market_truncated: bool = False
+    context: _Exchange = field(default_factory=_Exchange)
+    context_data: _Context | None = None
+    filings: _Exchange = field(default_factory=_Exchange)
+    filings_data: tuple[Filing, ...] = ()
+    filings_truncated: bool = False
+    # 기사: 라운드(안정 확인용 재조회)와 라운드 안의 시도(재전송)를 따로 센다
+    news_seq: int = 0
+    news_sent_at: datetime | None = None
+    news_round: int = 0
+    news_attempt: int = 0
+    news_requests: int = 0
+    news_awaiting: bool = False
+    news_recheck_at: datetime | None = None
+    news_previous_ids: frozenset[str] | None = None
+    news_articles: tuple[Article, ...] | None = None
+    news_truncated: bool = False
+    news_stable: bool = False
+
+
+@dataclass
+class BriefingCore:
+    requests: RequestPort
+    failures: FailurePort
+    ready: ReadyPort
+    settings: CoreSettings = DEFAULT_SETTINGS
+    _jobs: OrderedDict[str, _Job] = field(default_factory=OrderedDict, init=False)
+    _completions: deque[Completion] = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._completions = deque(maxlen=self.settings.recent_completions)
+
+    # ---- 입력 ----
+
+    def on_move(self, message: str | bytes, now: datetime) -> None:
+        """market.move 수신. 같은 eventId는 한 번만 처리한다. 형식이 잘못되면 ValueError."""
+        try:
+            move = json.loads(message)
+            if move["eventType"] != "market.move":
+                raise ValueError(f"unexpected eventType: {move['eventType']}")
+            payload = move["payload"]
+            job = _Job(
+                job_id=move["eventId"],
+                symbol=payload["symbol"],
+                correlation_id=move["correlationId"],
+                # 변동 시각 T는 payload.asOf 하나로만 읽는다(detectionType·moveStartedAt 유무와 무관).
+                as_of=parse_timestamp(payload["asOf"]),
+                previous_price=int(payload["previousPrice"]),
+                price=int(payload["price"]),
+                change_percent=float(payload["changePercent"]),
+                created_at=now,
+            )
+        except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise ValueError(f"malformed market.move event: {error!r}") from error
+
+        if job.job_id in self._jobs:
+            log.info("duplicate market.move %s ignored", job.job_id)
+            return
+        self._jobs[job.job_id] = job
+        while len(self._jobs) > self.settings.remembered_jobs:
+            self._jobs.popitem(last=False)
+
+        # 완료 알림이 변동 알림보다 먼저 도착했을 수 있어 보관분부터 확인한다.
+        if any(c.covers(job.symbol, job.as_of, self.settings) for c in self._completions):
+            self._start_fetching(job, now)
+
+    def on_collection_completed(self, message: str | bytes, now: datetime) -> None:
+        try:
+            event = json.loads(message)
+            if event["eventType"] != "collection.completed":
+                raise ValueError(f"unexpected eventType: {event['eventType']}")
+            payload = event["payload"]
+            completion = Completion(
+                started_at=parse_timestamp(payload["startedAt"]),
+                job_type=payload["jobType"],
+                incomplete_symbols=frozenset(payload["incompleteSymbols"]),
+            )
+        except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise ValueError(f"malformed collection.completed event: {error!r}") from error
+
+        self._completions.append(completion)
+        for job in list(self._jobs.values()):
+            if job.phase is _Phase.WAITING_COLLECTION:
+                if completion.covers(job.symbol, job.as_of, self.settings):
+                    self._start_fetching(job, now)
+                else:
+                    log.info("completion skipped for job %s (not usable)", job.job_id)
+
+    def on_history_responded(self, message: str | bytes, now: datetime) -> None:
+        payload = _response_payload(message, "market.history.responded")
+        job = self._fetching_job(payload)
+        if job is None:
+            return
+        if payload["seq"] != job.market.seq or job.market.received:
+            log.info("stale market response ignored: job=%s seq=%s latest=%s",
+                     job.job_id, payload["seq"], job.market.seq)
+            return
+        try:
+            points = tuple(
+                PricePoint(parse_timestamp(p["asOf"]), int(p["price"])) for p in payload["points"]
+            )
+            truncated = bool(payload.get("truncated", False))
+        except (KeyError, TypeError) as error:
+            raise ValueError(f"malformed market.history.responded event: {error!r}") from error
+        job.market.received = True
+        job.market_points, job.market_truncated = points, truncated
+        self._complete_if_ready(job)
+
+    def on_context_responded(self, message: str | bytes, now: datetime) -> None:
+        payload = _response_payload(message, "market.context.responded")
+        job = self._fetching_job(payload)
+        if job is None:
+            return
+        if payload["seq"] != job.context.seq or job.context.received:
+            log.info("stale context response ignored: job=%s seq=%s latest=%s",
+                     job.job_id, payload["seq"], job.context.seq)
+            return
+        try:
+            context = _Context(
+                tickers=tuple(payload["tickers"]),
+                tickers_truncated=bool(payload["truncated"]),
+                close_rates=tuple(
+                    CloseRate(r["ticker"], r["date"], parse_timestamp(r["closeAt"]), r["rate"],
+                              parse_timestamp(r["fetchedAt"]))
+                    for r in payload["closeRates"]
+                ),
+                background=tuple(_parse_background(b) for b in payload["background"]),
+            )
+        except (KeyError, TypeError) as error:
+            raise ValueError(f"malformed market.context.responded event: {error!r}") from error
+        job.context.received = True
+        job.context_data = context
+        # 미국 종목이 없으면 공시는 해당 없음이라 요청하지 않는다.
+        if context.tickers:
+            self._send_filings(job, now)
+        self._complete_if_ready(job)
+
+    def on_filings_responded(self, message: str | bytes, now: datetime) -> None:
+        payload = _response_payload(message, "news.filings.responded")
+        job = self._fetching_job(payload)
+        if job is None:
+            return
+        if payload["seq"] != job.filings.seq or job.filings.received:
+            log.info("stale filings response ignored: job=%s seq=%s latest=%s",
+                     job.job_id, payload["seq"], job.filings.seq)
+            return
+        try:
+            filings = tuple(
+                Filing(f["accessionNumber"], tuple(f["tickers"]), f["form"], tuple(f["items"]),
+                       parse_timestamp(f["acceptedAt"]), f["url"])
+                for f in payload["filings"]
+            )
+            truncated = bool(payload["truncated"])
+        except (KeyError, TypeError) as error:
+            raise ValueError(f"malformed news.filings.responded event: {error!r}") from error
+        job.filings.received = True
+        job.filings_data, job.filings_truncated = filings, truncated
+        self._complete_if_ready(job)
+
+    def on_articles_responded(self, message: str | bytes, now: datetime) -> None:
+        payload = _response_payload(message, "news.articles.responded")
+        job = self._fetching_job(payload)
+        if job is None:
+            return
+        if payload["seq"] != job.news_seq or not job.news_awaiting:
+            log.info("stale articles response ignored: job=%s seq=%s latest=%s",
+                     job.job_id, payload["seq"], job.news_seq)
+            return
+        try:
+            articles = tuple(
+                Article(a["articleId"], a["title"], a["summary"], parse_timestamp(a["publishedAt"]),
+                        a["publisher"], a["url"])
+                for a in payload["articles"]
+            )
+        except (KeyError, TypeError) as error:
+            raise ValueError(f"malformed news.articles.responded event: {error!r}") from error
+
+        job.news_awaiting = False
+        ids = frozenset(a.article_id for a in articles)
+        job.news_articles = articles
+        job.news_truncated = bool(payload.get("truncated", False))
+        if job.news_round >= 2 and ids == job.news_previous_ids:
+            job.news_stable = True
+            self._complete_if_ready(job)
+            return
+        if job.news_round >= self.settings.max_rounds:
+            self._fail(job, FailureReason.NEWS_UNSTABLE,
+                       f"article set kept changing for {job.news_round} rounds", job.news_requests)
+            return
+        job.news_previous_ids = ids
+        job.news_recheck_at = now + self.settings.recheck_interval
+
+    def on_tick(self, now: datetime) -> None:
+        """제한 시간이 지난 작업을 처리한다. 주기적으로, 또는 next_deadline 시각에 부른다."""
+        for job in list(self._jobs.values()):
+            if job.phase is _Phase.WAITING_COLLECTION:
+                if now - job.created_at >= self.settings.collection_wait_limit:
+                    self._fail(job, FailureReason.COLLECTION_NOT_COVERED,
+                               "no usable collection.completed within the wait limit", 0)
+            elif job.phase is _Phase.FETCHING:
+                # 같은 시각에 여럿이 끝나도 실패는 한 번만 기록된다. 앞의 판정이 작업을 끝내면 나머지는 건너뛴다.
+                for tick in (self._tick_market, self._tick_news, self._tick_context, self._tick_filings):
+                    if job.phase is not _Phase.FETCHING:
+                        break
+                    tick(job, now)
+
+    def next_deadline(self) -> datetime | None:
+        """다음에 on_tick을 불러야 하는 가장 이른 시각. 할 일이 없으면 None."""
+        deadlines: list[datetime] = []
+        for job in self._jobs.values():
+            if job.phase is _Phase.WAITING_COLLECTION:
+                deadlines.append(job.created_at + self.settings.collection_wait_limit)
+            elif job.phase is _Phase.FETCHING:
+                for exchange in (job.market, job.context, job.filings):
+                    if exchange.awaiting():
+                        deadlines.append(exchange.sent_at + self.settings.response_timeout)
+                if job.news_awaiting and job.news_sent_at is not None:
+                    deadlines.append(job.news_sent_at + self.settings.response_timeout)
+                elif job.news_recheck_at is not None and not job.news_stable:
+                    deadlines.append(job.news_recheck_at)
+        return min(deadlines) if deadlines else None
+
+    def fail_llm_error(self, report_input: ReportInput, detail: str, attempts: int) -> None:
+        """리포트 작성이 끝내 실패했을 때 llm-report 쪽에서 부른다."""
+        self.failures.record(Failure(report_input.job_id, report_input.symbol,
+                                     FailureReason.LLM_ERROR, detail, attempts))
+
+    # ---- 내부 ----
+
+    def _fetching_job(self, payload: dict) -> _Job | None:
+        job = self._jobs.get(payload["jobId"])
+        if job is None or job.phase is not _Phase.FETCHING:
+            log.info("response for unknown or finished job %s ignored", payload["jobId"])
+            return None
+        return job
+
+    def _start_fetching(self, job: _Job, now: datetime) -> None:
+        job.phase = _Phase.FETCHING
+        self._send_market(job, now)
+        self._send_context(job, now)
+        job.news_round = 1
+        self._send_news(job, now, attempt=1)
+
+    def _send_market(self, job: _Job, now: datetime) -> None:
+        seq = _next(job.market, now)
+        s = self.settings
+        self.requests.send(request_event(
+            HISTORY_REQUESTED_TOPIC, "market.history.requested", job.correlation_id, now, {
+                "jobId": job.job_id,
+                "seq": seq,
+                "symbol": job.symbol,
+                "since": format_timestamp(job.as_of - s.market_lookback),
+                "until": format_timestamp(job.as_of + s.delta),
+                "maxPoints": s.max_history_points,
+                "intervalSeconds": int(s.history_interval.total_seconds()),
+            }))
+
+    def _send_context(self, job: _Job, now: datetime) -> None:
+        seq = _next(job.context, now)
+        s = self.settings
+        self.requests.send(request_event(
+            CONTEXT_REQUESTED_TOPIC, "market.context.requested", job.correlation_id, now, {
+                "jobId": job.job_id,
+                "seq": seq,
+                "symbol": job.symbol,
+                "asOf": format_timestamp(job.as_of),
+                "since": format_timestamp(job.as_of - s.background_window),
+                "maxResponseBytes": s.max_background_bytes,
+                "maxTickers": s.max_tickers,
+            }))
+
+    def _send_filings(self, job: _Job, now: datetime) -> None:
+        seq = _next(job.filings, now)
+        s = self.settings
+        self.requests.send(request_event(
+            FILINGS_REQUESTED_TOPIC, "news.filings.requested", job.correlation_id, now, {
+                "jobId": job.job_id,
+                "seq": seq,
+                "symbol": job.symbol,
+                "tickers": list(job.context_data.tickers),
+                "since": format_timestamp(job.as_of - s.filings_window),
+                "until": format_timestamp(job.as_of),
+                "maxFilings": s.max_filings,
+            }))
+
+    def _send_news(self, job: _Job, now: datetime, attempt: int) -> None:
+        job.news_seq += 1
+        job.news_attempt = attempt
+        job.news_requests += 1
+        job.news_sent_at = now
+        job.news_awaiting = True
+        job.news_recheck_at = None
+        s = self.settings
+        self.requests.send(request_event(
+            ARTICLES_REQUESTED_TOPIC, "news.articles.requested", job.correlation_id, now, {
+                "jobId": job.job_id,
+                "seq": job.news_seq,
+                "symbol": job.symbol,
+                "since": format_timestamp(job.as_of - s.evidence_window),
+                "until": format_timestamp(job.as_of + s.delta),
+                "maxArticles": s.max_articles,
+            }))
+
+    def _tick_market(self, job: _Job, now: datetime) -> None:
+        self._tick_exchange(job, job.market, now, self._send_market, FailureReason.MARKET_NO_RESPONSE,
+                            "market.history.responded")
+
+    def _tick_context(self, job: _Job, now: datetime) -> None:
+        self._tick_exchange(job, job.context, now, self._send_context, FailureReason.CONTEXT_NO_RESPONSE,
+                            "market.context.responded")
+
+    def _tick_filings(self, job: _Job, now: datetime) -> None:
+        self._tick_exchange(job, job.filings, now, self._send_filings, FailureReason.FILINGS_NO_RESPONSE,
+                            "news.filings.responded")
+
+    def _tick_exchange(self, job: _Job, exchange: _Exchange, now: datetime, resend, reason: FailureReason,
+                       event_type: str) -> None:
+        if not exchange.awaiting() or now - exchange.sent_at < self.settings.response_timeout:
+            return
+        if exchange.seq >= self.settings.max_attempts:
+            self._fail(job, reason, f"no {event_type} within the time limit", exchange.seq)
+        else:
+            resend(job, now)
+
+    def _tick_news(self, job: _Job, now: datetime) -> None:
+        if job.news_awaiting:
+            if now - job.news_sent_at < self.settings.response_timeout:
+                return
+            if job.news_attempt >= self.settings.max_attempts:
+                self._fail(job, FailureReason.NEWS_NO_RESPONSE,
+                           "no news.articles.responded within the time limit", job.news_attempt)
+            else:
+                self._send_news(job, now, job.news_attempt + 1)
+        elif job.news_recheck_at is not None and not job.news_stable and now >= job.news_recheck_at:
+            job.news_round += 1
+            self._send_news(job, now, attempt=1)
+
+    def _complete_if_ready(self, job: _Job) -> None:
+        # 필요한 응답을 모두 받아야 완성한다. 일부만으로 진행하지 않는다.
+        context = job.context_data
+        if not job.market.received or not job.news_stable or context is None:
+            return
+        if context.tickers and not job.filings.received:
+            return
+        s = self.settings
+        # 응답 쪽이 이미 범위를 지켰어야 하므로, 여기서 걸리는 자료는 응답 쪽 결함 신호로 경고를 남긴다.
+        # 다른 종목 태그 기사는 news 조회가 걸러 주며(기사 응답에 태그가 없다) 여기서 다시 검사하지 않는다.
+        articles = []
+        for article in job.news_articles or ():
+            if in_evidence_range(article.published_at, job.as_of, s.evidence_window, s.delta):
+                articles.append(article)
+            else:
+                log.warning("dropping article %s outside the requested range (job=%s)",
+                            article.article_id, job.job_id)
+        filings = []
+        for filing in job.filings_data:
+            if in_evidence_range(filing.accepted_at, job.as_of, s.filings_window, timedelta(0)):
+                filings.append(filing)
+            else:
+                log.warning("dropping filing %s accepted outside the requested range (job=%s)",
+                            filing.accession_number, job.job_id)
+        close_rates = []
+        for rate in context.close_rates:
+            if _within_state_range(rate.fetched_at, job.as_of, s.background_window) \
+                    and _within_state_range(rate.close_at, job.as_of, s.background_window):
+                close_rates.append(rate)
+            else:
+                # 티커는 보유 종목을 드러내므로 로그에 쓰지 않는다.
+                log.warning("dropping an overseas close rate received or closed outside the range (job=%s)",
+                            job.job_id)
+        background = []
+        background_excluded = 0
+        for item in context.background:
+            if item.status != BACKGROUND_MISSING and not _within_state_range(
+                    item.fetched_at, job.as_of, s.background_window):
+                # 대상(국내 일봉의 종목코드)은 로그에 쓰지 않고 종류만 남긴다.
+                log.warning("dropping %s background received outside the range (job=%s)",
+                            item.api_type, job.job_id)
+                background_excluded += 1
+                background.append(Background(item.api_type, item.target, BACKGROUND_MISSING))
+            else:
+                background.append(item)
+
+        report_input = ReportInput(
+            job_id=job.job_id, symbol=job.symbol, correlation_id=job.correlation_id,
+            as_of=job.as_of, previous_price=job.previous_price, price=job.price,
+            change_percent=job.change_percent, price_points=job.market_points,
+            articles=tuple(articles), history_truncated=job.market_truncated,
+            articles_truncated=job.news_truncated, tickers=context.tickers,
+            tickers_truncated=context.tickers_truncated, close_rates=tuple(close_rates),
+            filings=tuple(filings), filings_truncated=job.filings_truncated, background=tuple(background))
+        _log_collection(report_input, _Excluded(
+            articles=len(job.news_articles or ()) - len(articles),
+            filings=len(job.filings_data) - len(filings),
+            close_rates=len(context.close_rates) - len(close_rates),
+            background=background_excluded))
+        job.phase = _Phase.DONE
+        self.ready.on_ready(report_input)
+
+    def _fail(self, job: _Job, reason: FailureReason, detail: str, attempts: int) -> None:
+        job.phase = _Phase.DONE
+        log.warning("job %s failed: %s", job.job_id, reason.value)
+        self.failures.record(Failure(job.job_id, job.symbol, reason, detail, attempts))
+
+
+@dataclass(frozen=True)
+class _Excluded:
+    """재검사에서 버린 건수."""
+
+    articles: int = 0
+    filings: int = 0
+    close_rates: int = 0
+    background: int = 0
+
+
+def _log_collection(i: ReportInput, excluded: _Excluded) -> None:
+    """변동 1건의 수집 내역을 한 줄로 남긴다. 종목코드와 티커는 보유 종목을 드러내므로 쓰지 않는다."""
+    us = bool(i.tickers)
+    statuses = [b.status for b in i.background]
+    log.info("collection job=%s history=%d historyTruncated=%s articles=%d articlesExcluded=%d articlesTruncated=%s "
+             "filings=%s filingsExcluded=%d filingsTruncated=%s tickers=%d tickersTruncated=%s "
+             "closeRates=%s closeRatesExcluded=%d closeRatesMissing=%s "
+             "background=%d backgroundMissing=%d backgroundTooLarge=%d backgroundExcluded=%d",
+             i.job_id, len(i.price_points), i.history_truncated, len(i.articles), excluded.articles,
+             i.articles_truncated,
+             len(i.filings) if us else "n/a", excluded.filings, i.filings_truncated, len(i.tickers),
+             i.tickers_truncated,
+             len(i.close_rates) if us else "n/a", excluded.close_rates,
+             len(i.tickers) - len(i.close_rates) if us else "n/a",
+             statuses.count(BACKGROUND_OK), statuses.count(BACKGROUND_MISSING),
+             statuses.count(BACKGROUND_TOO_LARGE), excluded.background)
+
+
+def _within_state_range(at: datetime | None, as_of: datetime, window: timedelta) -> bool:
+    """상태형 자료의 시각이 [T - window, T] 안인가(양끝 포함). T 뒤 값은 변동 당시 알 수 없던 값이다."""
+    return at is not None and as_of - window <= at <= as_of
+
+
+def _next(exchange: _Exchange, now: datetime) -> int:
+    exchange.seq += 1
+    exchange.sent_at = now
+    return exchange.seq
+
+
+def _parse_background(item: dict) -> Background:
+    fetched_at = item.get("fetchedAt")
+    return Background(
+        api_type=item["apiType"],
+        target=item["target"],
+        status=item["status"],
+        response=item.get("response"),
+        fetched_at=parse_timestamp(fetched_at) if fetched_at is not None else None,
+        response_bytes=item.get("responseBytes"),
+        # 선택 필드라 이전 형식 응답에는 없다.
+        index_rates=tuple(
+            IndexRate(r["code"], r["name"], r["businessDay"], r["close"], r.get("prevBusinessDay"),
+                      r.get("prevClose"), r.get("rate"))
+            for r in item.get("indexRates") or ()
+        ),
+    )
+
+
+def _response_payload(message: str | bytes, event_type: str) -> dict:
+    try:
+        event = json.loads(message)
+        if event["eventType"] != event_type:
+            raise ValueError(f"unexpected eventType: {event['eventType']}")
+        payload = event["payload"]
+        payload["jobId"], payload["seq"]  # noqa: B018 - 필수 필드 확인
+        return payload
+    except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ValueError(f"malformed {event_type} event: {error!r}") from error
