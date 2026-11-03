@@ -59,6 +59,13 @@ collector:
     overseas-daily-count: 30
     # 한 번에 해외 일봉을 조회할 종목 수 상한. 넘친 종목은 호출하지 않고 건너뛴 개수만 경고로 남긴다.
     overseas-max-tickers: 100
+  daily-briefing:
+    # 꺼 두면 데일리 브리핑 시작 tick 을 발행하지 않는다. 휴장일은 판정하지 않는다.
+    # 각 판은 그 판의 자료 수집(장 시작 전 08:30, 장 마감 후 16:30)이 끝난 뒤에 오도록 둔다.
+    enabled: ${COLLECTOR_DAILY_BRIEFING_ENABLED:false}
+    # 한국 시간 기준 cron(초 분 시 일 월 요일). 한 판만 끄려면 그 판의 값을 "-" 로 준다.
+    morning-cron: ${COLLECTOR_DAILY_BRIEFING_MORNING_CRON:0 45 8 * * MON-FRI}
+    post-close-cron: ${COLLECTOR_DAILY_BRIEFING_POST_CLOSE_CRON:0 0 17 * * MON-FRI}
   market-data:
     # simulator | broker
     source: ${COLLECTOR_MARKET_DATA_SOURCE:simulator}

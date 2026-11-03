@@ -1,6 +1,12 @@
+import json
+import re
+from datetime import datetime, timedelta
+
 import pytest
 
-from contracts import sample, validate
+from briefing.compose import KST
+from briefing.events import EDITION_MORNING, EDITION_POST_CLOSE, JOB_TYPE_BY_EDITION, daily_briefing_event
+from contracts import CONTRACTS_DIR, sample, validate
 
 
 def test_committed_move_sample_matches_its_schema():
@@ -367,3 +373,98 @@ def test_new_samples_use_fake_symbols_and_tickers_only():
         tickers += [t for filing in payload.get("filings", []) for t in filing["tickers"]]
         tickers += [rate["ticker"] for rate in payload.get("closeRates", [])]
         assert all(t.startswith(("TEST", "FAKE")) for t in tickers), topic
+
+
+DAILY_SCHEMA = "briefing.daily.generated.v1.schema.json"
+DAILY_SAMPLE = "briefing.daily.generated.sample.json"
+
+
+def test_committed_daily_briefing_sample_matches_its_schema():
+    assert validate(DAILY_SCHEMA, sample(DAILY_SAMPLE)) == []
+
+
+def test_daily_briefing_tolerates_unknown_fields():
+    future = sample(DAILY_SAMPLE)
+    future["newTopLevelHint"] = "x"
+    future["payload"]["venue"] = "future"
+
+    assert validate(DAILY_SCHEMA, future) == []
+
+
+def test_daily_briefing_rejects_missing_payload_field():
+    for field in sample(DAILY_SAMPLE)["payload"]:
+        broken = sample(DAILY_SAMPLE)
+        del broken["payload"][field]
+
+        assert validate(DAILY_SCHEMA, broken) != [], field
+
+
+@pytest.mark.parametrize("field, value", [
+    ("edition", "noon"),
+    ("text", ""),
+    ("rangeStart", "2026-10-19T17:00+09:00"),
+    ("missingItems", [""]),
+])
+def test_daily_briefing_rejects_invalid_payload_values(field, value):
+    broken = sample(DAILY_SAMPLE)
+    broken["payload"][field] = value
+
+    assert validate(DAILY_SCHEMA, broken) != []
+
+
+def test_daily_briefing_carries_no_personal_fields():
+    schema = json.loads((CONTRACTS_DIR / DAILY_SCHEMA).read_text(encoding="utf-8"))
+    names = set(schema["properties"]["payload"]["properties"])
+
+    # 보유 수량·금액·주소는 이 이벤트에 담지 않는다. 수신 주소는 발송기 설정에만 있다.
+    assert not {n for n in names if re.search(r"quantity|amount|holding|recipient|email|address|account|balance", n, re.I)}
+
+
+@pytest.mark.parametrize("edition, generated_by, missing", [
+    (EDITION_MORNING, "llm", []),
+    (EDITION_POST_CLOSE, "rule-based", ["us-filings"]),
+])
+def test_daily_briefing_event_built_by_the_producer_matches_the_schema(edition, generated_by, missing):
+    at = datetime(2026, 10, 20, 17, 0, tzinfo=KST)
+    event = daily_briefing_event(
+        tick_event_id="0b8c2d3e-4f50-4a6b-9c7d-1e2f3a4b5c6d", correlation_id="tick-correlation",
+        scheduled_for=at, now=at + timedelta(seconds=40), edition=edition,
+        range_start=at - timedelta(days=1), range_end=at, text="본문", missing_items=missing,
+        generated_by=generated_by)
+
+    assert event.topic == "briefing.daily.generated"
+    assert event.key == edition
+    assert validate(DAILY_SCHEMA, event.value) == []
+    assert event.value["correlationId"] == "tick-correlation"
+    assert event.value["occurredAt"] == "2026-10-20T17:00:00+09:00"
+
+
+def test_daily_briefing_event_id_is_the_same_for_the_same_tick_and_edition():
+    at = datetime(2026, 10, 20, 8, 45, tzinfo=KST)
+
+    def build(tick_id, edition, now):
+        return daily_briefing_event(tick_event_id=tick_id, correlation_id="c", scheduled_for=at, now=now,
+                                    edition=edition, range_start=at - timedelta(days=1), range_end=at,
+                                    text="본문", missing_items=[], generated_by="llm").value["eventId"]
+
+    first = build("tick-1", EDITION_MORNING, at)
+    assert build("tick-1", EDITION_MORNING, at + timedelta(minutes=5)) == first
+    assert build("tick-2", EDITION_MORNING, at) != first
+    assert build("tick-1", EDITION_POST_CLOSE, at) != first
+
+
+def test_daily_briefing_event_rejects_an_unknown_edition():
+    at = datetime(2026, 10, 20, 8, 45, tzinfo=KST)
+
+    with pytest.raises(ValueError):
+        daily_briefing_event(tick_event_id="t", correlation_id="c", scheduled_for=at, now=at, edition="noon",
+                             range_start=at, range_end=at, text="본문", missing_items=[], generated_by="llm")
+
+
+def test_daily_briefing_job_types_are_the_ones_listed_in_the_tick_schema():
+    schema = json.loads((CONTRACTS_DIR / "schedule.tick.v1.schema.json").read_text(encoding="utf-8"))
+    description = schema["properties"]["payload"]["properties"]["jobType"]["description"]
+
+    assert set(JOB_TYPE_BY_EDITION) == {"morning", "post-close"}
+    for job_type in JOB_TYPE_BY_EDITION.values():
+        assert job_type in description

@@ -38,7 +38,7 @@ def test_declares_every_topic_it_reads_or_writes_with_the_partition_count_the_ot
     main.ensure_topics("localhost:9092")
 
     declared = {topic.topic: topic.num_partitions for topic in FakeAdminClient.created}
-    # 수집기(collection.completed 1), 시세처리기·뉴스·발송기(나머지 3)의 Topics.java와 같아야 한다.
+    # 수집기(collection.completed 1), 발송기(briefing.daily.generated 1), 시세처리기·뉴스·발송기(나머지 3)의 Topics.java와 같아야 한다.
     assert declared == {
         "market.move": 3,
         "collection.completed": 1,
@@ -51,7 +51,18 @@ def test_declares_every_topic_it_reads_or_writes_with_the_partition_count_the_ot
         "news.filings.requested": 3,
         "news.filings.responded": 3,
         "briefing.generated": 3,
+        "briefing.daily.generated": 1,
     }
+
+
+def test_declares_the_daily_briefing_topic_with_the_partition_count_the_notifier_uses(monkeypatch):
+    monkeypatch.setattr(main, "AdminClient", FakeAdminClient)
+
+    main.ensure_topics("localhost:9092")
+
+    declared = {topic.topic: topic.num_partitions for topic in FakeAdminClient.created}
+    # 발송기 Topics.java 의 DAILY_PARTITIONS 와 같은 1이어야 한다.
+    assert declared["briefing.daily.generated"] == 1
 
 
 JAVA_SERVICES = Path(__file__).resolve().parents[2]
@@ -80,7 +91,7 @@ def test_partition_counts_match_every_java_service_that_declares_the_same_topic(
     java = java_declarations()
     shared = {(service, topic) for service, topics in java.items() for topic in topics if topic in declared}
 
-    # 브리핑이 쓰는 토픽 11개가 모두 어느 Java 서비스에서 함께 선언되어야 비교가 의미 있다.
+    # 브리핑이 쓰는 토픽 12개가 모두 어느 Java 서비스에서 함께 선언되어야 비교가 의미 있다.
     assert {topic for _, topic in shared} == set(declared)
     for service, topic in shared:
         assert java[service][topic] == declared[topic], f"{topic}: briefing {declared[topic]} != {service}"
