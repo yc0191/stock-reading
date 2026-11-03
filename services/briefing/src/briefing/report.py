@@ -58,7 +58,6 @@ BACKGROUND_NAMES = {"exchange-rate-summary": "환율종합", "market-summary": "
                     "world-index": "세계지수", "daily-price": "국내 일봉"}
 # 출처에는 자료를 준 회사 이름 대신 중립 표현을 쓴다.
 FILING_SOURCE = "미국 공시"
-US_STOCK_LABEL = "미국 종목"
 CLOSE_RATE_SOURCE = "해외 시세 자료"
 BACKGROUND_SOURCE = "시세 자료(배경)"
 # 코드가 붙이는 근거 번호의 머리글. 기사는 articleId, 공시는 접수번호를 그대로 쓴다.
@@ -227,14 +226,15 @@ def evidence_catalog(report_input: ReportInput) -> dict[str, EvidenceItem]:
     for a in i.articles:
         catalog[a.article_id] = EvidenceItem(KIND_ARTICLE, a.article_id, a.title, a.publisher, a.published_at,
                                              a.url, a.article_id)
-    # 제목은 briefing.generated로 발송기에 가므로 보유 종목을 드러내는 미국 티커를 넣지 않는다.
+    # 본문이 회사를 티커로 말하므로 근거 목록에서도 어느 회사 자료인지 구분되게 제목에 티커를 넣는다.
+    # 리포트는 작업자 메일로만 가고, 로그에는 제목을 남기지 않는다.
     for f in i.filings:
         items = f" 항목 {', '.join(f.items)}" if f.items else ""
         catalog[f.accession_number] = EvidenceItem(
-            KIND_FILING, f.accession_number, f"{US_STOCK_LABEL} {f.form} 공시{items}", FILING_SOURCE,
+            KIND_FILING, f.accession_number, f"{', '.join(f.tickers)} {f.form} 공시{items}", FILING_SOURCE,
             f.accepted_at, f.url)
     for ref, r in zip(_close_rate_refs(i), i.close_rates):
-        catalog[ref] = EvidenceItem(KIND_CLOSE_RATE, ref, f"{US_STOCK_LABEL} 직전 정규장 등락률 {r.rate}% ({r.date})",
+        catalog[ref] = EvidenceItem(KIND_CLOSE_RATE, ref, f"{r.ticker} 직전 정규장 등락률 {r.rate}% ({r.date})",
                                     CLOSE_RATE_SOURCE, r.close_at)
     for ref, b in zip(_background_refs(i), i.background):
         if ref is not None:

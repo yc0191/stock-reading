@@ -618,8 +618,8 @@ def test_rule_based_report_without_us_stocks_passes_the_schema(core, rec):
     assert [(e["kind"], e["ref"]) for e in event["payload"]["evidence"]] == [("article", "a1")]
 
 
-def test_evidence_titles_never_contain_us_tickers_but_the_llm_input_still_does(core, rec):
-    # briefing.generated는 발송기로 가므로 제목에서만 티커를 뺀다. LLM 입력은 그대로 둔다.
+def test_evidence_titles_name_the_us_ticker_so_each_company_can_be_told_apart(core, rec):
+    # 본문이 회사를 티커로 말하므로 근거 제목에도 같은 티커가 있어야 어느 회사 자료인지 맞춰 볼 수 있다.
     run_us(core)
     llm = FakeLlm(ALL_KINDS)
     stage, published, _ = report_stage(LlmWriter(llm))
@@ -627,16 +627,14 @@ def test_evidence_titles_never_contain_us_tickers_but_the_llm_input_still_does(c
     stage.on_ready(rec.readied[0])
 
     titles = {e["kind"]: e["title"] for e in published.sent[0].value["payload"]["evidence"]}
-    assert titles["filing"] == "미국 종목 8-K 공시 항목 2.02"
-    assert titles["overseas-close-rate"] == "미국 종목 직전 정규장 등락률 -1.25% (20261019)"
-    for title in titles.values():
-        assert not any(t in title for t in TICKERS)
+    assert titles["filing"] == "TESTA 8-K 공시 항목 2.02"
+    assert titles["overseas-close-rate"] == "TESTA 직전 정규장 등락률 -1.25% (20261019)"
     data = json.loads(llm.calls[0][1])
     assert data["filings"][0]["tickers"] == ["TESTA"]
     assert data["overseasCloseRates"][0]["ticker"] == "TESTA"
 
 
-def test_rule_based_report_titles_and_text_never_contain_us_tickers(core, rec):
+def test_rule_based_report_titles_and_text_name_the_us_ticker(core, rec):
     run_us(core)
     stage, published, _ = report_stage(RuleBasedWriter())
 
@@ -644,11 +642,8 @@ def test_rule_based_report_titles_and_text_never_contain_us_tickers(core, rec):
 
     payload = published.sent[0].value["payload"]
     (filing_entry,) = [e for e in payload["evidence"] if e["kind"] == "filing"]
-    assert filing_entry["title"] == "미국 종목 8-K 공시 항목 2.02"
-    assert "미국 종목 8-K 공시" in payload["text"]
-    for t in TICKERS:
-        assert t not in payload["text"]
-        assert all(t not in e["title"] for e in payload["evidence"])
+    assert filing_entry["title"] == "TESTA 8-K 공시 항목 2.02"
+    assert "TESTA 8-K 공시" in payload["text"]
 
 
 def test_sample_context_and_filings_responses_are_accepted_unchanged(core, rec):
