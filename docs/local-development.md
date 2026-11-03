@@ -258,7 +258,7 @@ python3 scripts/load_config.py --only briefing
 
 | 대상 | 명령 | 개수 |
 |---|---|---|
-| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 705 (실서버 확인·실험용 5개, 부하 시험 1개, 시세처리기 DB 통합 16개, 뉴스 저장 DB 통합 7개는 건너뜀) |
+| Java (수집기, 시세처리기, 발송기, 뉴스 저장) | `./gradlew cleanTest test --no-build-cache` | 729 (실서버 확인·실험용 5개, 부하 시험 1개, 시세처리기 DB 통합 16개, 뉴스 저장 DB 통합 7개는 건너뜀) |
 | Python (브리핑) | `services/briefing/.venv/bin/python -m pytest services/briefing` | 208 |
 | Python (설정 로더, 가설 검증 도구) | `services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests` | 72 |
 
