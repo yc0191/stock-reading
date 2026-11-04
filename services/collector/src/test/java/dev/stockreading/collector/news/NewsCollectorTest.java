@@ -319,4 +319,47 @@ class NewsCollectorTest {
         assertThat(result.get(0).symbols()).containsExactly("TEST01", "TEST02");
         verify(search).search(eq("테스트시황"), anyInt());
     }
+
+    // 재검색은 설정 검색어 대신 요청 검색어를 같은 collectWithStatus 로 넘긴다. 하루 상한은 정기 수집과 함께 센다.
+    @Test
+    void researchQueriesShareTheDailyLimitWithTheRegularCollection() {
+        NewsCollector limited = collectorWithLimit("테스트검색어=TEST02", 2);
+        when(search.search(anyString(), anyInt())).thenReturn(List.of());
+
+        limited.collectWithStatus();
+        NewsCollection research = limited.collectWithStatus(
+                List.of(query("테스트 재검색어 하나", "TEST01"), query("테스트 재검색어 둘", "TEST01")));
+
+        verify(search, times(2)).search(anyString(), anyInt());
+        assertThat(research.incompleteSymbols()).containsExactly("TEST01");
+    }
+
+    @Test
+    void researchQueriesUseTheSameFilterAsTheRegularCollection() {
+        when(search.search(eq("테스트 재검색어"), anyInt())).thenReturn(List.of(
+                item("테스트 재검색어", "어제보다 오래된 기사", "https://a.example.com/old", "2026-10-21T16:00:00+09:00"),
+                new NewsItem("검색어가 없는 기사", "무관한 요약", "https://a.example.com/off", "",
+                        OffsetDateTime.parse("2026-10-22T15:00:00+09:00"), "example.com",
+                        new LinkedHashSet<>(), new LinkedHashSet<>(Set.of("테스트 재검색어"))),
+                item("테스트 재검색어", "남는 기사", "https://a.example.com/ok", "2026-10-22T15:00:00+09:00")));
+
+        NewsCollection research = collector.collectWithStatus(List.of(query("테스트 재검색어", "TEST01")));
+
+        assertThat(research.items()).extracting(NewsItem::title).containsExactly("남는 기사");
+        assertThat(research.items().get(0).symbols()).containsExactly("TEST01");
+    }
+
+    @Test
+    void failedResearchQueryMarksTheRequestSymbolIncomplete() {
+        when(search.search(anyString(), anyInt())).thenThrow(new NewsSearchApiException("뉴스 검색 오류 http=500 code="));
+
+        NewsCollection research = collector.collectWithStatus(List.of(query("테스트 재검색어", "*")));
+
+        assertThat(research.items()).isEmpty();
+        assertThat(research.incompleteSymbols()).containsExactly("*");
+    }
+
+    private NewsCollector collectorWithLimit(String queries, int dailyLimit) {
+        return new NewsCollector(search, new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, queries, dailyLimit, 0), CLOCK, ms -> { });
+    }
 }

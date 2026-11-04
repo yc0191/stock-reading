@@ -16,6 +16,7 @@ import static org.mockito.Mockito.when;
 import java.io.IOException;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -144,6 +145,57 @@ class ArticlesRequestListenerTest {
         assertThat(bytes).isLessThanOrEqualTo(ArticlesRequestListener.MAX_ARTICLES_BYTES);
         // 버려지는 쪽은 오래된 기사다. 가장 최신 기사는 남는다.
         assertThat(articles.getValue().get(0).title()).isEqualTo("제목 0");
+    }
+
+    private static final String RESEARCH_JOB_ID = "7d4f9b52-8e6a-4c7b-b2da-1f5e3c9d7b24";
+
+    private static String researchRequest(int maxArticles) throws IOException {
+        return ContractSchemas.sample("news.articles.requested.sample.json")
+                .replace("\"maxArticles\": 300", "\"maxArticles\": " + maxArticles
+                        + ", \"researchJobId\": \"" + RESEARCH_JOB_ID + "\"");
+    }
+
+    @Test
+    void withAResearchJobIdOnlyThatJobsArticlesAreReadAndTheSymbolIsOnlyEchoed() throws IOException {
+        when(repository.findByResearchJob(eq(UUID.fromString(RESEARCH_JOB_ID)), eq(SINCE), eq(UNTIL), eq(301)))
+                .thenReturn(rows(2, "요약"));
+
+        listener.onRequest(researchRequest(300));
+
+        verify(repository, never()).findByRange(anyString(), any(), any(), anyInt());
+        ArgumentCaptor<List<ArticlesPayload.Article>> articles = ArgumentCaptor.captor();
+        verify(publisher).publish(eq(JOB_ID), eq(1), eq("TEST01"), articles.capture(), eq(false), eq(CORRELATION_ID));
+        assertThat(articles.getValue()).extracting(ArticlesPayload.Article::title).containsExactly("제목 0", "제목 1");
+    }
+
+    @Test
+    void researchJobQueryKeepsTheSameLimitAndTruncationRules() throws IOException {
+        when(repository.findByResearchJob(any(), eq(SINCE), eq(UNTIL), eq(3))).thenReturn(rows(3, "요약"));
+
+        listener.onRequest(researchRequest(2));
+
+        ArgumentCaptor<List<ArticlesPayload.Article>> articles = ArgumentCaptor.captor();
+        verify(publisher).publish(eq(JOB_ID), eq(1), eq("TEST01"), articles.capture(), eq(true), eq(CORRELATION_ID));
+        assertThat(articles.getValue()).extracting(ArticlesPayload.Article::title).containsExactly("제목 0", "제목 1");
+    }
+
+    @Test
+    void requestWithoutAResearchJobIdStillReadsBySymbol() throws IOException {
+        when(repository.findByRange(anyString(), any(), any(), anyInt())).thenReturn(List.of());
+
+        listener.onRequest(ContractSchemas.sample("news.articles.requested.sample.json"));
+
+        verify(repository).findByRange(eq("TEST01"), eq(SINCE), eq(UNTIL), anyInt());
+        verify(repository, never()).findByResearchJob(any(), any(), any(), anyInt());
+    }
+
+    @Test
+    void malformedResearchJobIdIsRejectedWithoutQueryingOrAnswering() throws IOException {
+        String request = researchRequest(300).replace(RESEARCH_JOB_ID, "not-a-uuid");
+
+        assertThatThrownBy(() -> listener.onRequest(request)).isInstanceOf(IllegalArgumentException.class);
+
+        verifyNoInteractions(repository, publisher);
     }
 
     @Test

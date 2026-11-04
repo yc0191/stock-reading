@@ -39,11 +39,14 @@ class NewsListener {
                 OffsetDateTime.parse(payload.publishedAt()),
                 payload.symbols(),
                 // matchedQueries는 선택 필드라 없으면 빈 목록으로 본다.
-                payload.matchedQueries() == null ? List.of() : payload.matchedQueries());
+                payload.matchedQueries() == null ? List.of() : payload.matchedQueries(),
+                // researchJobId는 재검색에서 찾은 기사에만 있는 선택 필드다.
+                payload.researchJobId() == null ? null : UUID.fromString(payload.researchJobId()));
 
         // 제목과 URL은 기사 내용이라 로그에 남기지 않고 식별자만 남긴다.
         boolean inserted = repository.save(article);
-        log.info("news {} eventId={} corr={}",
-                inserted ? "stored" : "merged into existing article", event.eventId(), event.correlationId());
+        log.info("news {} eventId={} researchJobId={} corr={}",
+                inserted ? "stored" : "merged into existing article", event.eventId(), payload.researchJobId(),
+                event.correlationId());
     }
 }
