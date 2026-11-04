@@ -1,7 +1,7 @@
 """리포트 입력(ReportInput)으로 briefing.generated를 만든다. Kafka는 모르고, 발행은 포트로 넘긴다.
 
-코드가 LLM 입력을 정하고 출력을 검증한다. LLM은 코드가 붙인 근거 번호(기사·공시·해외 등락률·배경 자료)를 인용한 문장만 만들고,
-머리말·면책 문구·변동률 계산은 코드가 맡는다.
+코드가 LLM 입력을 정하고 출력을 검증한다. LLM은 원인마다 제목, 구체 문장, 뜻 문장과 코드가 붙인 근거 번호(기사·공시·
+해외 등락률·배경 자료·비교 숫자)만 만들고, 머리말·확인하지 못한 것·면책 문구·변동률과 비교 숫자 계산은 코드가 맡는다.
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from briefing.move_figures import (
     MoveFigures,
     display,
     move_figures,
+    signed,
 )
 from briefing.llm import API_KEY_ENV, AnthropicClient, LlmCallError, LlmClient, llm_config
 from briefing.ports import Failure, FailurePort, FailureReason, RequestPort
@@ -35,6 +36,7 @@ from briefing.sources import (
     MARK_MISSING,
     MARK_NOT_APPLICABLE,
     MARK_PRESENT,
+    MARK_TOO_LARGE,
     MARK_TRUNCATED,
     Background,
 )
@@ -47,6 +49,10 @@ LLM_MAX_ATTEMPTS = 3
 RULE_BASED_LIMIT = 3
 
 LLM_INSUFFICIENT = "변동 시점 전후에 공개된 자료만으로는 변동 원인을 추정하기 어렵습니다."
+UNCHECKED_TITLE = "확인하지 못한 것:"
+UNCHECKED_NONE = "- 없음"
+RULE_BASED_NOTE = "원인은 추정하지 않고, 코드가 계산한 비교 사실과 변동 시점 전후의 자료를 나열합니다."
+COMPARISON_TITLE = "비교 사실:"
 LLM_DISCLAIMER = "※ 투자 조언이 아니며, 위 내용은 변동 시점 전후에 공개된 자료로 추정한 것일 뿐 원인을 단정하지 않습니다."
 
 # 자료 종류. briefing.generated evidence의 kind 값과 같다. 배경 자료는 apiType을 그대로 쓴다.
@@ -64,27 +70,33 @@ FIGURE_SOURCE = "시세 자료(배경)"
 COMPUTED_SOURCE = "시세 자료로 코드가 계산"
 CLOSE_COMPUTED_SOURCE = "해외 시세 자료로 코드가 계산"
 
-SYSTEM_PROMPT = """당신은 ETF 가격 변동과 같은 시기에 공개된 자료를 연결해 설명하는 도우미입니다.
-입력은 JSON이며 종목 코드, 변동 방향과 변동률, 변동 시각, 시세 이력, 기사, 미국 공시, 미국 종목 직전 정규장 등락률, 배경 자료를 담고 있습니다.
+SYSTEM_PROMPT = """당신은 ETF 가격 변동과 같은 시기에 공개된 자료를 연결해 원인 후보를 설명하는 도우미입니다.
+입력은 JSON이며 종목 코드, 변동 방향과 변동률, 변동 시각, 시세 이력, 기사, 미국 공시, 미국 종목 직전 정규장 등락률, 배경 자료, 숫자 항목(figures)을 담고 있습니다.
 근거로 쓸 수 있는 자료에는 ref(근거 번호)가 붙어 있습니다.
 - 기사의 minutesFromMove는 기사 발행 시각과 변동 시각의 차이(분)이며, 음수는 변동 전, 양수는 변동 후에 나온 기사입니다.
-- 공시의 hoursBeforeMove는 공시 접수 시각이 변동보다 몇 시간 전인지입니다.
+- 공시의 hoursBeforeMove는 공시 접수 시각이 변동보다 몇 시간 전인지입니다. 공시는 형식과 항목 번호만 있고 본문은 없습니다.
 - 해외 등락률은 변동 종목에 담긴 미국 종목의 직전 정규장 등락률(%)이며 hoursBeforeMove는 그 장 마감이 변동보다 몇 시간 전인지입니다.
 - 배경 자료(category가 "배경")는 환율·시장종합·세계지수·국내 일봉의 응답 원문(response)을 그대로 준 것이며, receivedAt은 받은 시각, minutesBeforeMove는 변동보다 몇 분 전에 받은 값인지입니다.
 - 세계지수 배경 자료의 indexRates는 코드가 지수마다 직전 영업일 종가와 비교해 계산한 등락률입니다. 원문의 전일대비·등락률은 장이 끝난 지수에서 0.00으로 오므로 0.00을 "변동 없음"으로 읽지 말고, 등락률은 indexRates의 계산된 rate를 씁니다. rate가 "없음"이면 그 지수의 등락률은 모르는 것입니다.
+- figures는 코드가 배경 원문에서 꺼낸 숫자(원/달러 환율, 코스피종합, 코스닥종합)와 코드가 계산한 비교 숫자입니다. "변동률 - 코스피종합 등락률"의 differencePoint는 변동 종목의 변동률에서 지수 등락률을 뺀 값(%p)으로, 음수면 시장 전체보다 더 내렸거나 덜 올랐다는 뜻이고 양수면 더 올랐거나 덜 내렸다는 뜻입니다. "미국 종목 직전 정규장 등락 집계"는 담긴 미국 종목 가운데 오른 수·내린 수·보합 수와 평균 등락률(%)입니다. status가 "없음"인 항목에는 ref가 없어 인용할 수 없습니다.
 - 상태 표시: "잘림"은 상한 때문에 일부만 받았다는 뜻, "없음"은 기간 안에 자료가 없다는 뜻, "너무 큼"은 원문이 커서 빠졌다는 뜻, "해당 없음"은 변동 종목에 미국 종목이 없어 공시·해외 등락률을 조회하지 않았다는 뜻입니다.
+
+쓰는 법:
+- 원인 후보마다 묶음 하나를 씁니다. title은 원인을 짧게 이름 붙인 제목입니다(예: "미국 반도체 종목 실적 부진").
+- detail은 무엇이 어땠는지 구체적으로 쓴 문장입니다. 기사 제목·요약과 공시(형식·항목)에 실제로 있는 내용만 씁니다. 어느 회사·어느 부분인지 같은 세부가 자료에 없으면 지어내지 않고 그 부분은 "자료에 없음"이라고 씁니다.
+- meaning은 그 원인과 관련된 숫자가 무슨 뜻인지 쓴 문장입니다. figures의 비교 숫자나 해외 등락률·세계지수 등락률을 ref로 인용해, 예를 들어 "변동률이 코스피종합 등락률보다 1.05%p 낮아 시장 전체보다 더 빠졌다"처럼 씁니다. 숫자는 입력에 있는 값을 그대로 옮기고, 맞는 숫자가 없으면 그 원인의 근거 자료가 무엇을 보여 주는지 씁니다.
+- refs에는 detail의 근거가 된 자료의 ref를, meaningRefs에는 meaning의 근거가 된 자료의 ref를 하나 이상씩 넣습니다. 입력에 없는 ref는 쓰지 않습니다.
 
 규칙:
 - 원인을 단정하지 않습니다. "~때문에 올랐다"가 아니라 "~가 영향을 줬을 수 있다"처럼 씁니다.
 - 배경 자료는 변동 당시의 상태를 보여 줄 뿐입니다. 배경 자료를 변동의 원인으로 단정하지 않고, 기사·공시와 함께 상황을 설명하는 데에만 씁니다.
-- 각 문장은 근거가 된 자료의 ref를 refs에 하나 이상 넣습니다. 입력에 없는 ref는 쓰지 않습니다.
 - 근거가 부족하면 insufficientEvidence를 true로 하고 causes는 빈 목록으로 둡니다. 억지로 원인을 만들지 않습니다.
 - 투자 조언(매수·매도·보유 권유, 가격 전망)을 하지 않습니다.
-- 숫자를 새로 계산하지 않습니다. 입력에 있는 값만 씁니다.
+- 숫자를 새로 계산하지 않습니다. 더하기·빼기·평균도 하지 않고 입력에 있는 값만 씁니다.
 - 문장은 한국어로 씁니다.
 
 출력은 다음 JSON 하나만 냅니다:
-{"causes":[{"statement":"...","refs":["..."]}],"insufficientEvidence":false}"""
+{"causes":[{"title":"...","detail":"...","refs":["..."],"meaning":"...","meaningRefs":["..."]}],"insufficientEvidence":false}"""
 
 OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -94,10 +106,13 @@ OUTPUT_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "statement": {"type": "string"},
+                    "title": {"type": "string"},
+                    "detail": {"type": "string"},
                     "refs": {"type": "array", "items": {"type": "string"}},
+                    "meaning": {"type": "string"},
+                    "meaningRefs": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["statement", "refs"],
+                "required": ["title", "detail", "refs", "meaning", "meaningRefs"],
                 "additionalProperties": False,
             },
         },
@@ -147,8 +162,16 @@ class InvalidOutput(ValueError):
 
 @dataclass(frozen=True)
 class Cause:
-    statement: str
+    """원인 하나의 묶음. detail은 refs를, meaning은 meaning_refs를 인용한다."""
+
+    title: str
+    detail: str
     refs: tuple[str, ...]
+    meaning: str
+    meaning_refs: tuple[str, ...]
+
+    def cited(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(self.refs + self.meaning_refs))
 
 
 @dataclass(frozen=True)
@@ -161,7 +184,7 @@ class LlmOutput:
 
 @dataclass(frozen=True)
 class RuleBasedWriter:
-    """기사와 공시를 종류마다 최근 순으로 나열한다. LLM 키가 없을 때 쓰는 기본 구현이다."""
+    """원인을 추정하지 않고 비교 사실과 최근 기사·공시를 나열한다. LLM 키가 없을 때 쓰는 기본 구현이다."""
 
     limit: int = RULE_BASED_LIMIT
 
@@ -174,15 +197,101 @@ class RuleBasedWriter:
             for item in sorted((e for e in catalog.values() if e.kind == kind),
                                key=lambda e: e.published_at, reverse=True)[: self.limit]
         )
-        lines = [headline(i.symbol, i.previous_price, i.price, i.change_percent, i.as_of)]
+        lines = [move_headline(i), "", RULE_BASED_NOTE]
+        facts = comparison_facts(i)
+        if facts:
+            lines.append(COMPARISON_TITLE)
+            lines.extend(f"- {fact}" for fact in facts)
         if evidence:
             lines.append("근거 후보:")
             for index, item in enumerate(evidence, start=1):
                 lines.append(f"  {index}. {_describe(item)}")
         else:
             lines.append(NO_EVIDENCE)
+        lines.append("")
+        lines.extend(unchecked_lines(i))
         lines.append(DISCLAIMER)
         return Report("\n".join(lines), GENERATED_BY_RULE, evidence)
+
+
+def comparison_facts(report_input: ReportInput) -> list[str]:
+    """코드가 계산한 비교 숫자를 문장으로 바꾼다. 값이 없는 비교는 쓰지 않는다."""
+    i = report_input
+    f = move_figures(i.change_percent, i.background, i.close_rates)
+    facts = []
+    for label, diff in (("코스피종합", f.vs_kospi), ("코스닥종합", f.vs_kosdaq)):
+        if diff is None:
+            continue
+        if diff == 0:
+            facts.append(f"변동률이 {label} 등락률과 같습니다 (차이 0.00%p, 시세 자료로 코드가 계산).")
+        else:
+            side = "높습니다" if diff > 0 else "낮습니다"
+            facts.append(f"변동률이 {label} 등락률보다 {abs(diff)}%p {side} (차이 {signed(diff)}%p, 시세 자료로 코드가 계산).")
+    us = f.us_close
+    if us is not None:
+        facts.append(f"담긴 미국 종목은 직전 정규장에서 {us.up}개 오르고 {us.down}개 내렸으며 {us.flat}개는 보합이었고, "
+                     f"평균 등락률은 {signed(us.average)}%입니다 (해외 시세 자료로 코드가 계산).")
+    return facts
+
+
+def move_headline(report_input: ReportInput) -> str:
+    """머리말: 종목, 시각, 방향과 변동률, 몇 분 사이 움직였는지."""
+    i = report_input
+    line = headline(i.symbol, i.previous_price, i.price, i.change_percent, i.as_of)
+    if i.detection_type == "prevClose":
+        return f"{line}, 전일 종가 대비"
+    if i.detected_at is None or i.detection_type != "window":
+        # 이전 형식은 움직인 구간을 알 수 없어 시간을 쓰지 않는다.
+        return line
+    minutes = int((i.detected_at - i.as_of).total_seconds() // 60)
+    return f"{line}, {minutes}분 사이" if minutes >= 1 else f"{line}, 1분 안에"
+
+
+_UNCHECKED_STATUS = {MARK_MISSING: "기간 안에 받은 자료 없음", MARK_TRUNCATED: "상한 때문에 일부만 받음",
+                     MARK_TOO_LARGE: "원문이 커서 빠짐"}
+# 세계지수의 대상은 대륙 코드라 작업자가 읽는 '확인하지 못한 것'에는 이름으로 적는다. 모르는 코드는 그대로 둔다.
+WORLD_INDEX_CONTINENT_NAMES = {"C": "아메리카", "S": "아시아", "E": "유럽"}
+
+
+def unchecked_items(report_input: ReportInput) -> list[str]:
+    """받지 못하거나 잘린 자료를 코드가 상태 표시로 적는다. 종목코드와 티커는 쓰지 않는다."""
+    i = report_input
+    us = bool(i.tickers)
+    items = []
+
+    def add(name: str, status: str) -> None:
+        if status in _UNCHECKED_STATUS:
+            items.append(f"{name}: {_UNCHECKED_STATUS[status]}")
+
+    add("시세 이력", _status(len(i.price_points), i.history_truncated))
+    add("기사", _status(len(i.articles), i.articles_truncated))
+    if not us:
+        items.append("미국 공시·미국 종목 등락률: 변동 종목에 미국 종목이 없어 조회하지 않음")
+    else:
+        add("미국 공시", _status(len(i.filings), i.filings_truncated))
+        if i.tickers_truncated:
+            items.append("미국 종목 목록: 상한 때문에 일부만 받음")
+        missing = len(set(i.tickers) - {r.ticker for r in i.close_rates})
+        if missing:
+            items.append(f"미국 종목 직전 정규장 등락률: {len(i.tickers)}개 가운데 {missing}개 받지 못함")
+    for b in i.background:
+        name = BACKGROUND_NAMES.get(b.api_type, b.api_type)
+        if b.target and b.api_type == "world-index":
+            name = f"{name} {WORLD_INDEX_CONTINENT_NAMES.get(b.target, b.target)}"
+        add(name, BACKGROUND_STATUS_MARKS.get(b.status, MARK_MISSING))
+    f = move_figures(i.change_percent, i.background, i.close_rates)
+    present = {b.api_type for b in i.background if b.status == BACKGROUND_OK}
+    if EXCHANGE_RATE_API in present and f.exchange_rate is None:
+        items.append("원/달러 환율: 환율종합 원문에서 값을 찾지 못함")
+    for label, figure in (("코스피종합", f.kospi), ("코스닥종합", f.kosdaq)):
+        if MARKET_SUMMARY_API in present and figure is None:
+            items.append(f"{label}: 시장종합 원문에서 값을 찾지 못함")
+    return items
+
+
+def unchecked_lines(report_input: ReportInput) -> list[str]:
+    items = unchecked_items(report_input)
+    return [UNCHECKED_TITLE] + ([f"- {item}" for item in items] if items else [UNCHECKED_NONE])
 
 
 # ---- LLM ----
@@ -425,8 +534,26 @@ def _background_input(ref: str | None, item: Background, as_of: datetime) -> dic
     return data
 
 
+def _sentence(item: dict, name: str) -> str:
+    value = item.get(name)
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidOutput(f"cause has no {name}")
+    return value.strip()
+
+
+def _cited(item: dict, name: str, allowed_ids: frozenset[str]) -> tuple[str, ...]:
+    ids = item.get(name)
+    if not isinstance(ids, list) or not ids or not all(isinstance(x, str) for x in ids):
+        raise InvalidOutput(f"cause cites no {name}")
+    unknown = [x for x in ids if x not in allowed_ids]
+    if unknown:
+        raise InvalidOutput(f"cause cites {len(unknown)} ref(s) that were not given")
+    return tuple(dict.fromkeys(ids))
+
+
 def parse_output(text: str, allowed_ids: frozenset[str]) -> LlmOutput:
-    """LLM 응답을 검증한다. 형식이 틀리거나 준 적 없는 근거 번호를 인용하면 InvalidOutput."""
+    """LLM 응답을 검증한다. 형식이 틀리거나, 빈 문장이 있거나, 문장이 근거를 인용하지 않거나,
+    준 적 없는 근거 번호를 인용하면 InvalidOutput."""
     try:
         data = json.loads(text)
     except json.JSONDecodeError as error:
@@ -438,15 +565,13 @@ def parse_output(text: str, allowed_ids: frozenset[str]) -> LlmOutput:
     for item in data["causes"]:
         if not isinstance(item, dict):
             raise InvalidOutput("cause is not an object")
-        statement, ids = item.get("statement"), item.get("refs")
-        if not isinstance(statement, str) or not statement.strip():
-            raise InvalidOutput("cause has no statement")
-        if not isinstance(ids, list) or not ids or not all(isinstance(x, str) for x in ids):
-            raise InvalidOutput("cause cites no refs")
-        unknown = [x for x in ids if x not in allowed_ids]
-        if unknown:
-            raise InvalidOutput(f"cause cites {len(unknown)} ref(s) that were not given")
-        causes.append(Cause(statement.strip(), tuple(dict.fromkeys(ids))))
+        causes.append(Cause(
+            title=_sentence(item, "title"),
+            detail=_sentence(item, "detail"),
+            refs=_cited(item, "refs", allowed_ids),
+            meaning=_sentence(item, "meaning"),
+            meaning_refs=_cited(item, "meaningRefs", allowed_ids),
+        ))
     if not data["insufficientEvidence"] and not causes:
         raise InvalidOutput("no causes although evidence was not marked insufficient")
     return LlmOutput(tuple(causes), data["insufficientEvidence"])
@@ -476,27 +601,36 @@ class LlmWriter:
 def _llm_report(report_input: ReportInput, output: LlmOutput) -> Report:
     i = report_input
     by_id = evidence_catalog(i)
-    lines = [headline(i.symbol, i.previous_price, i.price, i.change_percent, i.as_of)]
+    lines = [move_headline(i), ""]
     if output.insufficient_evidence:
         # 근거 부족이면 LLM이 함께 낸 문장도 쓰지 않는다. 억지 원인이 섞이지 않게 한다.
         lines.append(LLM_INSUFFICIENT)
+        lines.append("")
+        lines.extend(unchecked_lines(i))
         lines.append(LLM_DISCLAIMER)
         return Report("\n".join(lines), GENERATED_BY_LLM, ())
 
     cited: list[str] = []
     for cause in output.causes:
-        for ref in cause.refs:
+        for ref in cause.cited():
             if ref not in cited:
                 cited.append(ref)
+    # 근거 번호는 리포트 전체에서 하나로 매기고, 원인마다 그 원인이 인용한 자료를 다시 보여 준다.
     number = {ref: index for index, ref in enumerate(cited, start=1)}
-    for cause in output.causes:
-        refs = ", ".join(str(number[x]) for x in cause.refs)
-        lines.append(f"- {cause.statement} [근거 {refs}]")
-    lines.append("근거:")
-    for ref in cited:
-        lines.append(f"  {number[ref]}. {_describe(by_id[ref])}")
+    for index, cause in enumerate(output.causes, start=1):
+        lines.append(f"{index}. {cause.title}")
+        lines.append(f"- {cause.detail} [근거 {_numbers(cause.refs, number)}]")
+        lines.append(f"- {cause.meaning} [근거 {_numbers(cause.meaning_refs, number)}]")
+        for ref in cause.cited():
+            lines.append(f"  근거 {number[ref]}. {_describe(by_id[ref])}")
+        lines.append("")
+    lines.extend(unchecked_lines(i))
     lines.append(LLM_DISCLAIMER)
     return Report("\n".join(lines), GENERATED_BY_LLM, tuple(by_id[x] for x in cited))
+
+
+def _numbers(refs: tuple[str, ...], number: dict[str, int]) -> str:
+    return ", ".join(str(number[x]) for x in refs)
 
 
 def build_report_writer(env: Mapping[str, str],
@@ -546,7 +680,6 @@ class ReportStage:
     publisher: RequestPort
     failures: FailurePort
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(KST))
-
     def on_ready(self, report_input: ReportInput) -> None:
         try:
             report = self.writer.write(report_input)
@@ -578,4 +711,5 @@ _TIME_LABELS = {KIND_ARTICLE: "발행", KIND_FILING: "접수", KIND_CLOSE_RATE: 
 
 def _describe(item: EvidenceItem) -> str:
     label = _TIME_LABELS.get(item.kind, "받음")
-    return f"{item.title} — {item.source}, {label} {item.published_at.astimezone(KST):%m-%d %H:%M}"
+    text = f"{item.title} — {item.source}, {label} {item.published_at.astimezone(KST):%m-%d %H:%M}"
+    return f"{text} {item.url}" if item.url else text

@@ -66,6 +66,9 @@ class ReportInput:
     filings: tuple[Filing, ...] = ()
     filings_truncated: bool = False
     background: tuple[Background, ...] = ()
+    # market.move를 감지한 시각(봉투의 occurredAt)과 감지 유형. 머리말의 "몇 분 사이"에 쓴다. 이전 형식에는 없을 수 있다.
+    detected_at: datetime | None = None
+    detection_type: str | None = None
 
 
 class ReadyPort(Protocol):
@@ -111,6 +114,8 @@ class _Job:
     price: int
     change_percent: float
     created_at: datetime
+    detected_at: datetime | None = None
+    detection_type: str | None = None
     phase: _Phase = _Phase.WAITING_COLLECTION
     # 시세·배경 자료·공시: 가장 최근에 보낸 요청의 순번과 보낸 시각
     market: Exchange = field(default_factory=Exchange)
@@ -166,6 +171,8 @@ class BriefingCore:
                 price=int(payload["price"]),
                 change_percent=float(payload["changePercent"]),
                 created_at=now,
+                detected_at=parse_timestamp(move["occurredAt"]) if move.get("occurredAt") else None,
+                detection_type=payload.get("detectionType"),
             )
         except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
             raise ValueError(f"malformed market.move event: {error!r}") from error
@@ -505,7 +512,8 @@ class BriefingCore:
             articles=tuple(articles), history_truncated=job.market_truncated,
             articles_truncated=job.news_truncated, tickers=context.tickers,
             tickers_truncated=context.tickers_truncated, close_rates=tuple(close_rates),
-            filings=tuple(filings), filings_truncated=job.filings_truncated, background=tuple(background))
+            filings=tuple(filings), filings_truncated=job.filings_truncated, background=tuple(background),
+            detected_at=job.detected_at, detection_type=job.detection_type)
         _log_collection(report_input, _Excluded(
             articles=len(job.news_articles or ()) - len(articles),
             filings=len(job.filings_data) - len(filings),

@@ -260,7 +260,8 @@ def test_existing_inputs_stay_as_they_were():
 def test_a_cited_figure_reaches_the_event_and_passes_the_schema():
     class OneAnswer:
         def complete(self, system, user, output_schema):
-            return json.dumps({"causes": [{"statement": "시장 전체보다 더 내렸을 수 있습니다.", "refs": ["F4", "F2"]}],
+            return json.dumps({"causes": [{"title": "시장 전체 하락", "detail": "시장 전체가 내렸습니다.", "refs": ["F2"],
+                                           "meaning": "시장 전체보다 더 내렸을 수 있습니다.", "meaningRefs": ["F4", "F2"]}],
                                "insufficientEvidence": False}, ensure_ascii=False)
 
     i = report_input()
@@ -270,7 +271,7 @@ def test_a_cited_figure_reaches_the_event_and_passes_the_schema():
     assert validate("briefing.generated.v1.schema.json", event) == []
     entries = event["payload"]["evidence"]
     assert [(e["ref"], e["kind"], e["source"]) for e in entries] == [
-        ("F4", "market-summary", "시세 자료로 코드가 계산"), ("F2", "market-summary", "시세 자료(배경)")]
+        ("F2", "market-summary", "시세 자료(배경)"), ("F4", "market-summary", "시세 자료로 코드가 계산")]
     assert all("url" not in e for e in entries)
 
 

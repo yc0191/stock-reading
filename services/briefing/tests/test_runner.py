@@ -242,8 +242,10 @@ def filings_message(seq):
 
 def test_a_us_etf_move_sends_filings_after_context_and_flows_to_a_briefing(setup):
     make, clock, store, _ = setup
-    llm = FakeLlm(json.dumps({"causes": [{"statement": "공시가 영향을 줬을 수 있습니다.",
-                                          "refs": ["0000000001-26-000001", "a1"]}],
+    llm = FakeLlm(json.dumps({"causes": [{"title": "공시", "detail": "공시가 영향을 줬을 수 있습니다.",
+                                          "refs": ["0000000001-26-000001", "a1"],
+                                          "meaning": "공시와 기사가 변동 전에 나왔습니다.",
+                                          "meaningRefs": ["0000000001-26-000001"]}],
                               "insufficientEvidence": False}))
     runner, consumer, producer = make(LlmWriter(llm))
 
@@ -354,7 +356,8 @@ def test_collection_wait_limit_is_detected_by_the_timer(setup):
 
 def test_llm_writer_is_connected_and_marks_the_briefing_as_llm(setup):
     make, clock, _, _ = setup
-    llm = FakeLlm(json.dumps({"causes": [{"statement": "기사가 영향을 줬을 수 있습니다.", "refs": ["a1"]}],
+    llm = FakeLlm(json.dumps({"causes": [{"title": "기사", "detail": "기사가 영향을 줬을 수 있습니다.", "refs": ["a1"],
+                                          "meaning": "기사가 변동 전에 나왔습니다.", "meaningRefs": ["a1"]}],
                               "insufficientEvidence": False}))
     runner, consumer, producer = make(LlmWriter(llm))
 

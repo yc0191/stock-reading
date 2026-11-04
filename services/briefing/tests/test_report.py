@@ -19,8 +19,9 @@ from briefing.report import (
     RuleBasedWriter,
     build_llm_input,
     build_report_writer,
+    unchecked_items,
 )
-from briefing.sources import Article, PricePoint
+from briefing.sources import Article, Background, PricePoint
 from contracts import validate
 from fake_anthropic import FAKE_KEY, fake_sdk  # noqa: F401 - 픽스처
 
@@ -47,12 +48,19 @@ def report_input(articles=ARTICLES):
         articles=articles)
 
 
+def cause(title, detail, refs, meaning, meaning_refs):
+    return {"title": title, "detail": detail, "refs": refs, "meaning": meaning, "meaningRefs": meaning_refs}
+
+
 def output(causes, insufficient=False):
-    return json.dumps({"causes": [{"statement": s, "refs": ids} for s, ids in causes],
-                       "insufficientEvidence": insufficient}, ensure_ascii=False)
+    """(문장, 근거) 묶음은 같은 문장·근거로 구체 문장과 뜻 문장을 채운다. 5개짜리 묶음은 그대로 쓴다."""
+    items = [cause(s, s, ids, s, ids) if len(c) == 2 else cause(*c) for c in causes for s, ids in [c[:2]]]
+    return json.dumps({"causes": items, "insufficientEvidence": insufficient}, ensure_ascii=False)
 
 
-VALID = output([("금리 결정이 영향을 줬을 수 있습니다.", ["a1"]), ("자금 유출이 영향을 줬을 수 있습니다.", ["a2", "a1"])])
+VALID = output([("금리 결정", "금리 결정이 영향을 줬을 수 있습니다.", ["a1"], "같은 시기 금리 기사가 있었습니다.", ["a1"]),
+                ("자금 유출", "자금 유출이 영향을 줬을 수 있습니다.", ["a2", "a1"], "유출 기사가 변동 30분 전에 나왔습니다.",
+                 ["a2"])])
 
 
 class FakeLlm:
@@ -101,8 +109,13 @@ def test_valid_llm_output_is_published_with_code_written_headline_and_disclaimer
     payload = event.value["payload"]
     lines = payload["text"].splitlines()
     assert lines[0] == "[TEST01] 16:00 기준 하락 -1.50% (10,000 → 9,850)"
-    assert lines[1] == "- 금리 결정이 영향을 줬을 수 있습니다. [근거 1]"
-    assert lines[2] == "- 자금 유출이 영향을 줬을 수 있습니다. [근거 2, 1]"
+    assert lines[2] == "1. 금리 결정"
+    assert lines[3] == "- 금리 결정이 영향을 줬을 수 있습니다. [근거 1]"
+    assert lines[4] == "- 같은 시기 금리 기사가 있었습니다. [근거 1]"
+    assert lines[5].startswith("  근거 1. Rate decision — sample, 발행 10-20 14:30")
+    assert lines[7] == "2. 자금 유출"
+    assert lines[8] == "- 자금 유출이 영향을 줬을 수 있습니다. [근거 2, 1]"
+    assert lines[9] == "- 유출 기사가 변동 30분 전에 나왔습니다. [근거 2]"
     assert lines[-1] == LLM_DISCLAIMER
     assert payload["generatedBy"] == GENERATED_BY_LLM == "llm"
 
@@ -196,7 +209,9 @@ def test_insufficient_evidence_publishes_a_report_without_causes_or_evidence():
 
     assert failures == []
     payload = published[0].value["payload"]
-    assert payload["text"].splitlines()[1:] == [LLM_INSUFFICIENT, LLM_DISCLAIMER]
+    assert payload["text"].splitlines()[1:] == [
+        "", LLM_INSUFFICIENT, "", "확인하지 못한 것:", "- 기사: 기간 안에 받은 자료 없음",
+        "- 미국 공시·미국 종목 등락률: 변동 종목에 미국 종목이 없어 조회하지 않음", LLM_DISCLAIMER]
     assert payload["evidence"] == []
     assert validate("briefing.generated.v1.schema.json", published[0].value) == []
 
@@ -328,3 +343,107 @@ def test_key_never_appears_in_logs_errors_or_failure_records(fake_sdk, caplog):
     assert FAKE_KEY not in caplog.text
     assert FAKE_KEY not in failure.detail
     assert FAKE_KEY not in repr(writer)
+
+
+# ---- 원인 묶음 본문 ----
+
+def report_input_with(**changes):
+    from dataclasses import replace
+    return replace(report_input(), **changes)
+
+
+def test_each_cause_shows_title_detail_meaning_and_the_cited_article_link():
+    s, published, _ = stage(LlmWriter(FakeLlm(VALID)))
+
+    s.on_ready(report_input())
+
+    text = published[0].value["payload"]["text"]
+    assert "https://news.example.com/articles/a1" in text and "https://news.example.com/articles/a2" in text
+    # 두 원인 모두 a1을 인용하므로 a1은 원인마다 다시 보이고, 번호는 리포트 전체에서 같다.
+    assert text.count("  근거 1. Rate decision") == 2
+    assert text.count("  근거 2. Fund outflow") == 1
+    # 숫자만 나열하는 칸은 없다.
+    for heading in ("요약", "가격 흐름", "시장 상황", "직전 장"):
+        assert f"{heading}:" not in text
+
+
+def test_report_ends_with_what_could_not_be_checked_then_the_disclaimer():
+    s, published, _ = stage(LlmWriter(FakeLlm(VALID)))
+
+    s.on_ready(report_input_with(history_truncated=True, articles_truncated=True))
+
+    lines = published[0].value["payload"]["text"].splitlines()
+    unchecked = lines.index("확인하지 못한 것:")
+    assert lines[unchecked + 1:] == [
+        "- 시세 이력: 상한 때문에 일부만 받음",
+        "- 기사: 상한 때문에 일부만 받음",
+        "- 미국 공시·미국 종목 등락률: 변동 종목에 미국 종목이 없어 조회하지 않음",
+        LLM_DISCLAIMER,
+    ]
+
+
+def test_unchecked_world_index_items_use_continent_names_and_keep_unknown_codes():
+    background = tuple(Background("world-index", code, "missing") for code in ("C", "S", "E", "X"))
+
+    items = unchecked_items(report_input_with(background=background))
+
+    for line in ("세계지수 아메리카: 기간 안에 받은 자료 없음", "세계지수 아시아: 기간 안에 받은 자료 없음",
+                 "세계지수 유럽: 기간 안에 받은 자료 없음", "세계지수 X: 기간 안에 받은 자료 없음"):
+        assert line in items
+    for code in ("C", "S", "E"):
+        assert f"세계지수 {code}:" not in " ".join(items)
+
+
+@pytest.mark.parametrize("detected_seconds,detection,expected", [
+    (185, "window", "[TEST01] 16:00 기준 하락 -1.50% (10,000 → 9,850), 3분 사이"),
+    (20, "window", "[TEST01] 16:00 기준 하락 -1.50% (10,000 → 9,850), 1분 안에"),
+    (600, "prevClose", "[TEST01] 16:00 기준 하락 -1.50% (10,000 → 9,850), 전일 종가 대비"),
+    (None, None, "[TEST01] 16:00 기준 하락 -1.50% (10,000 → 9,850)"),
+])
+def test_headline_says_how_many_minutes_the_move_took(detected_seconds, detection, expected):
+    detected = AS_OF + timedelta(seconds=detected_seconds) if detected_seconds is not None else None
+    s, published, _ = stage(LlmWriter(FakeLlm(VALID)))
+
+    s.on_ready(report_input_with(detected_at=detected, detection_type=detection))
+
+    assert published[0].value["payload"]["text"].splitlines()[0] == expected
+
+
+@pytest.mark.parametrize("field,value", [
+    ("title", "  "), ("detail", ""), ("meaning", " "), ("refs", []), ("meaningRefs", []),
+    ("meaningRefs", ["a9"]), ("meaning", None),
+])
+def test_empty_sentences_and_uncited_or_unknown_refs_are_rejected(field, value):
+    bad = json.loads(VALID)
+    bad["causes"][0][field] = value
+    llm = FakeLlm(json.dumps(bad, ensure_ascii=False), VALID)
+    s, published, _ = stage(LlmWriter(llm))
+
+    s.on_ready(report_input())
+
+    assert len(llm.calls) == 2 and len(published) == 1
+
+
+def test_output_schema_asks_for_cause_bundles_with_refs_for_each_sentence():
+    item = OUTPUT_SCHEMA["properties"]["causes"]["items"]
+    assert set(item["required"]) == {"title", "detail", "refs", "meaning", "meaningRefs"}
+    assert OUTPUT_SCHEMA["properties"]["insufficientEvidence"] == {"type": "boolean"}
+
+
+def test_system_prompt_asks_for_concrete_details_from_the_material_and_meaning_of_given_numbers():
+    assert '"자료에 없음"' in SYSTEM_PROMPT
+    assert "기사 제목·요약과 공시" in SYSTEM_PROMPT
+    assert "figures" in SYSTEM_PROMPT and "differencePoint" in SYSTEM_PROMPT
+    assert "숫자를 새로 계산하지 않습니다" in SYSTEM_PROMPT
+    assert "meaningRefs" in SYSTEM_PROMPT
+
+
+def test_rule_based_report_has_the_same_shape_with_links_unchecked_items_and_disclaimer():
+    report = RuleBasedWriter().write(report_input())
+
+    lines = report.text.splitlines()
+    assert lines[0] == "[TEST01] 16:00 기준 하락 -1.50% (10,000 → 9,850)"
+    assert "원인은 추정하지 않고" in lines[2]
+    assert "https://news.example.com/articles/a3" in report.text
+    assert "확인하지 못한 것:" in lines
+    assert lines[-1].startswith("※ 투자 조언이 아니며")

@@ -520,7 +520,9 @@ def test_system_prompt_explains_background_zero_rates_and_status_marks():
 # ---- LLM 출력과 briefing.generated ----
 
 def output(causes, insufficient=False):
-    return json.dumps({"causes": [{"statement": s, "refs": refs} for s, refs in causes],
+    """(문장, 근거) 묶음을 원인 묶음으로 바꾼다. 구체 문장과 뜻 문장이 같은 근거를 인용한다."""
+    return json.dumps({"causes": [{"title": s, "detail": s, "refs": refs, "meaning": s, "meaningRefs": refs}
+                                  for s, refs in causes],
                        "insufficientEvidence": insufficient}, ensure_ascii=False)
 
 
@@ -672,3 +674,99 @@ def test_logs_of_a_full_run_never_contain_the_symbol_or_tickers(core, rec, caplo
 
     for secret in (SYMBOL, *TICKERS):
         assert secret not in caplog.text
+
+
+# ---- 원인 묶음 본문과 비교 숫자 ----
+
+def market_raw():
+    rows = [{"indx_nm": "KOSPI종합", "now_indx_p2": "  2222.22", "bdy_cmpr_p2": "    12.34", "up_dwn_r_p2": "  -0.45",
+             "bdy_cmpr_ccd": "5"},
+            {"indx_nm": "KOSDAQ종합", "now_indx_p2": "   777.77", "bdy_cmpr_p2": "     3.21", "up_dwn_r_p2": "   0.30",
+             "bdy_cmpr_ccd": "2"}]
+    return json.dumps({"dataBody": {"out2": rows}}, ensure_ascii=False)
+
+
+def figure_background():
+    return [background_item("market-summary", response=market_raw()),
+            background_item("world-index", "S", response=INDEX_RAW, index_rates=INDEX_RATES)]
+
+
+def run_with_figures(core):
+    run_us(core, context_event=context(background=figure_background()))
+
+
+def figure_ref(report_input, name):
+    from briefing.report import figure_entries
+    (entry,) = [e for e in figure_entries(report_input) if e.name == name]
+    return entry.ref
+
+
+def test_meaning_sentence_cites_the_market_comparison_and_the_report_shows_the_article_link(core, rec):
+    run_with_figures(core)
+    ready = rec.readied[0]
+    vs_kospi = figure_ref(ready, "변동률 - 코스피종합 등락률")
+    llm_out = json.dumps({"causes": [{
+        "title": "미국 종목 실적 공시", "detail": "TESTA가 8-K 항목 2.02를 냈으며 어느 부분이 부진했는지는 자료에 없음.",
+        "refs": [ACCESSION, "a1"], "meaning": "변동률이 코스피종합 등락률보다 낮아 시장 전체보다 더 빠졌습니다.",
+        "meaningRefs": [vs_kospi]}], "insufficientEvidence": False}, ensure_ascii=False)
+    stage, published, _ = report_stage(LlmWriter(FakeLlm(llm_out)))
+
+    stage.on_ready(ready)
+
+    event = published.sent[0].value
+    assert validate("briefing.generated.v1.schema.json", event) == []
+    text = event["payload"]["text"]
+    assert "1. 미국 종목 실적 공시" in text
+    assert "자료에 없음" in text
+    assert "시장 전체보다 더 빠졌습니다. [근거 3]" in text
+    assert "https://news.example.com/a1" in text and "https://www.sec.gov/Archives/test/" in text
+    evidence = event["payload"]["evidence"]
+    assert [e["ref"] for e in evidence] == [ACCESSION, "a1", vs_kospi]
+    assert evidence[2]["kind"] == "market-summary" and evidence[2]["publishedAt"].startswith("2026-10-20T15:55")
+
+
+def test_rule_based_report_states_code_computed_comparisons_without_guessing_causes(core, rec):
+    run_with_figures(core)
+    stage, published, _ = report_stage(RuleBasedWriter())
+
+    stage.on_ready(rec.readied[0])
+
+    event = published.sent[0].value
+    assert validate("briefing.generated.v1.schema.json", event) == []
+    text = event["payload"]["text"]
+    # 변동률 -1.5, 코스피종합 -0.45 → 차이 -1.05%p
+    assert "변동률이 코스피종합 등락률보다 1.05%p 낮습니다 (차이 -1.05%p" in text
+    assert "변동률이 코스닥종합 등락률보다 1.80%p 낮습니다" in text
+    assert "담긴 미국 종목은 직전 정규장에서 0개 오르고 1개 내렸으며 0개는 보합이었고, 평균 등락률은 -1.25%" in text
+    assert "https://news.example.com/a1" in text and "확인하지 못한 것:" in text
+    assert "1. " not in text.split("근거 후보:")[0]  # 원인 묶음 없음
+
+
+def test_unchecked_items_name_missing_truncated_and_too_large_data_without_tickers(core, rec):
+    run_us(core, context_event=context(truncated=True), filings_event=filings(truncated=True),
+           history_event=history(truncated=True))
+    stage, published, _ = report_stage(RuleBasedWriter())
+
+    stage.on_ready(rec.readied[0])
+
+    text = published.sent[0].value["payload"]["text"]
+    unchecked = text.split("확인하지 못한 것:")[1]
+    for line in ("- 시세 이력: 상한 때문에 일부만 받음", "- 미국 공시: 상한 때문에 일부만 받음",
+                 "- 미국 종목 목록: 상한 때문에 일부만 받음",
+                 "- 미국 종목 직전 정규장 등락률: 2개 가운데 1개 받지 못함",
+                 "- 시장종합: 원문이 커서 빠짐", "- 국내 일봉: 기간 안에 받은 자료 없음"):
+        assert line in unchecked
+    for ticker in TICKERS:
+        assert ticker not in unchecked
+
+
+def test_insufficient_evidence_keeps_the_headline_and_unchecked_items(core, rec):
+    run_us(core)
+    stage, published, _ = report_stage(LlmWriter(FakeLlm(output([], insufficient=True))))
+
+    stage.on_ready(rec.readied[0])
+
+    text = published.sent[0].value["payload"]["text"]
+    assert text.splitlines()[0].startswith("[TEST01]")
+    assert "추정하기 어렵습니다" in text and "- 시장종합: 원문이 커서 빠짐" in text
+    assert "근거 1" not in text
