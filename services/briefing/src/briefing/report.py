@@ -8,13 +8,23 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping, Protocol
 
 from briefing.compose import DISCLAIMER, KST, NO_EVIDENCE, direction_of, headline
 from briefing.events import BRIEFING_GENERATED_TOPIC, OutboundEvent, format_timestamp
 from briefing.jobs import ReportInput
+from briefing.move_failures import (
+    JOB_KIND_MOVE,
+    REASON_LLM_CALL_FAILED,
+    REASON_LLM_REJECTED,
+    STAGE_LLM,
+    DiscardMoveFailures,
+    MoveFailurePort,
+    MoveFailureRecord,
+    move_target,
+)
 from briefing.move_figures import (
     EXCHANGE_RATE_API,
     MARKET_SUMMARY_API,
@@ -137,19 +147,34 @@ class EvidenceItem:
 
 
 @dataclass(frozen=True)
+class LlmAttempt:
+    """실패한 LLM 시도 하나. 실패 기록에 그대로 담는다."""
+
+    attempt: int
+    llm_input: str
+    # LLM의 원래 응답. 호출 자체가 실패했으면 None이다.
+    response: str | None
+    rejection: str
+    error_type: str
+
+
+@dataclass(frozen=True)
 class Report:
     text: str
     generated_by: str
     evidence: tuple[EvidenceItem, ...]
+    # 끝내 성공했더라도 그 전에 실패한 LLM 시도들
+    failed_attempts: tuple[LlmAttempt, ...] = ()
 
 
 class ReportError(Exception):
     """리포트를 끝내 만들지 못했다. 메시지에는 짧은 사유만 담는다."""
 
-    def __init__(self, detail: str, attempts: int) -> None:
+    def __init__(self, detail: str, attempts: int, failed_attempts: tuple[LlmAttempt, ...] = ()) -> None:
         super().__init__(detail)
         self.detail = detail
         self.attempts = attempts
+        self.failed_attempts = failed_attempts
 
 
 class ReportWriter(Protocol):
@@ -586,16 +611,21 @@ class LlmWriter:
         user = json.dumps(build_llm_input(report_input), ensure_ascii=False)
         allowed = frozenset(evidence_catalog(report_input))
         reason = ""
+        failed: list[LlmAttempt] = []
         for attempt in range(1, self.max_attempts + 1):
+            response: str | None = None
             try:
-                output = parse_output(self.client.complete(SYSTEM_PROMPT, user, OUTPUT_SCHEMA), allowed)
+                response = self.client.complete(SYSTEM_PROMPT, user, OUTPUT_SCHEMA)
+                output = parse_output(response, allowed)
             except (LlmCallError, InvalidOutput) as error:
                 reason = str(error)
+                failed.append(LlmAttempt(attempt, user, response, reason, type(error).__name__))
                 log.warning("LLM report attempt %d/%d failed for job %s: %s",
                             attempt, self.max_attempts, report_input.job_id, reason)
                 continue
-            return _llm_report(report_input, output)
-        raise ReportError(f"LLM report failed after {self.max_attempts} attempts: {reason}", self.max_attempts)
+            return replace(_llm_report(report_input, output), failed_attempts=tuple(failed))
+        raise ReportError(f"LLM report failed after {self.max_attempts} attempts: {reason}", self.max_attempts,
+                          tuple(failed))
 
 
 def _llm_report(report_input: ReportInput, output: LlmOutput) -> Report:
@@ -680,6 +710,9 @@ class ReportStage:
     publisher: RequestPort
     failures: FailurePort
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(KST))
+    # 급변동 실패 기록을 넘기는 자리. 저장 방식을 정하기 전이라 기본은 받기만 하고 버린다.
+    move_failures: MoveFailurePort = field(default_factory=DiscardMoveFailures)
+
     def on_ready(self, report_input: ReportInput) -> None:
         try:
             report = self.writer.write(report_input)
@@ -687,8 +720,37 @@ class ReportStage:
             log.warning("job %s failed: %s", report_input.job_id, FailureReason.LLM_ERROR.value)
             self.failures.record(Failure(report_input.job_id, report_input.symbol, FailureReason.LLM_ERROR,
                                          error.detail, error.attempts))
+            now = self.clock()
+            self._record_attempts(report_input, error.failed_attempts, now)
+            self._record(report_input, FailureReason.LLM_ERROR.value, "ReportError", error.attempts, now, {
+                "detail": error.detail,
+                "failedAttempts": [_attempt_data(a) for a in error.failed_attempts],
+            })
             return
-        self.publisher.send(briefing_event(report_input, report, self.clock()))
+        now = self.clock()
+        self._record_attempts(report_input, report.failed_attempts, now)
+        self.publisher.send(briefing_event(report_input, report, now))
+
+    def _record_attempts(self, report_input: ReportInput, attempts: tuple[LlmAttempt, ...], now: datetime) -> None:
+        for a in attempts:
+            reason = REASON_LLM_CALL_FAILED if a.response is None else REASON_LLM_REJECTED
+            self._record(report_input, reason, a.error_type, a.attempt, now, _attempt_data(a))
+
+    def _record(self, report_input: ReportInput, reason: str, error_type: str, attempts: int, now: datetime,
+                extra: dict[str, Any]) -> None:
+        i = report_input
+        data: dict[str, Any] = {"missingItems": unchecked_items(i)}
+        data.update(extra)
+        self.move_failures.record(MoveFailureRecord(
+            job_kind=JOB_KIND_MOVE, job_id=i.job_id, target=move_target(i.symbol, format_timestamp(i.as_of)),
+            stage=STAGE_LLM, reason=reason, error_type=error_type, attempts=attempts, data=data, occurred_at=now))
+
+
+def _attempt_data(a: LlmAttempt) -> dict[str, Any]:
+    # 호출 자체가 실패해 응답이 없으면 그 사실을 값으로 남긴다(빈 값으로 두지 않는다).
+    return {"attempt": a.attempt, "llmInput": a.llm_input,
+            "llmResponse": a.response if a.response is not None else "(응답 없음: 호출 실패)",
+            "rejection": a.rejection}
 
 
 def _evidence_entry(item: EvidenceItem) -> dict[str, Any]:

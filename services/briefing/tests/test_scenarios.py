@@ -770,3 +770,152 @@ def test_insufficient_evidence_keeps_the_headline_and_unchecked_items(core, rec)
     assert text.splitlines()[0].startswith("[TEST01]")
     assert "추정하기 어렵습니다" in text and "- 시장종합: 원문이 커서 빠짐" in text
     assert "근거 1" not in text
+
+
+# ---- 급변동 실패 기록 (근거 조회) ----
+
+class FailureLog:
+    """MoveFailurePort 가짜. 받기만 한다."""
+
+    def __init__(self):
+        self.records = []
+
+    def record(self, record):
+        self.records.append(record)
+
+
+@pytest.fixture
+def failure_log():
+    return FailureLog()
+
+
+@pytest.fixture
+def logged_core(rec, failure_log):
+    return BriefingCore(rec, rec, rec, move_failures=failure_log)
+
+
+def filled(record):
+    from dataclasses import fields
+    return all(getattr(record, f.name) not in (None, "", {}, []) for f in fields(record))
+
+
+def test_a_request_resent_after_the_time_limit_is_recorded_even_when_the_job_succeeds(logged_core, rec, failure_log):
+    from briefing.move_failures import REASON_RESENT, STAGE_CONTEXT
+    start(logged_core)
+    logged_core.on_history_responded(history(), T + SEC)
+    logged_core.on_articles_responded(articles(1), T + SEC)
+    logged_core.on_tick(T + S.response_timeout)  # 배경 자료 응답이 없어 다시 보낸다
+    logged_core.on_context_responded(json.dumps(context(seq=2)), T + S.response_timeout + SEC)
+    logged_core.on_filings_responded(json.dumps(filings()), T + S.response_timeout + 2 * SEC)
+    logged_core.on_tick(T + SEC + S.recheck_interval)
+    logged_core.on_articles_responded(articles(2), T + SEC + S.recheck_interval)
+
+    assert len(rec.readied) == 1 and rec.failed == []
+    resent = [r for r in failure_log.records if r.reason == REASON_RESENT]
+    (record,) = resent
+    assert filled(record)
+    assert (record.stage, record.error_type, record.attempts) == (STAGE_CONTEXT, "ResponseTimeout", 2)
+    assert record.data["requestRange"]["since"] == (T - S.background_window).isoformat()
+    assert [r["seq"] for r in record.data["requests"][STAGE_CONTEXT]] == [1, 2]
+    assert "market.history" in record.data["received"] and STAGE_CONTEXT in record.data["notReceived"]
+    assert record.data["missingItems"] == record.data["notReceived"]
+    # 받은 응답은 내용 전부가 그대로 담기고, 받지 못한 응답은 이름으로만 남는다.
+    responses = record.data["receivedResponses"]
+    assert set(responses) == set(record.data["received"])
+    assert responses["market.history"] == json.loads(history())["payload"]
+    assert responses["news.articles"] == json.loads(articles(1))["payload"]
+    assert STAGE_CONTEXT not in responses
+
+
+def test_each_article_recheck_round_is_recorded_with_the_articles_received_in_it(logged_core, rec, failure_log):
+    from briefing.move_failures import REASON_RECHECK_ROUND, REASON_RESENT, STAGE_ARTICLES_RECHECK
+    run_us(logged_core)
+
+    assert len(rec.readied) == 1
+    (record,) = [r for r in failure_log.records if r.reason == REASON_RECHECK_ROUND]
+    assert filled(record) and record.stage == STAGE_ARTICLES_RECHECK
+    assert record.data["round"] == 2 and record.data["stable"] is True
+    assert [a["articleId"] for a in record.data["receivedArticles"]] == ["a1"]
+    assert record.data["receivedArticles"][0]["url"] == "https://news.example.com/a1"
+    assert record.data["receivedArticles"][0]["publisher"] == "news.example.com"
+    assert "summary" in record.data["receivedArticles"][0]
+    # 확인 라운드 기록에도 그때까지 받은 응답 내용이 모두 담긴다.
+    responses = record.data["receivedResponses"]
+    assert set(responses) == {"market.history", "market.context", "news.filings", "news.articles"}
+    assert responses["market.context"] == context()["payload"]
+    assert responses["news.filings"] == filings()["payload"]
+    assert responses["news.articles"] == json.loads(articles(2))["payload"]
+    # 다시 보낸 요청과 확인 라운드는 단계와 사유가 모두 다르다.
+    assert record.stage != "news.articles" and record.reason != REASON_RESENT
+
+
+def test_a_job_that_finally_fails_records_both_the_old_failure_and_a_full_move_failure(logged_core, rec, failure_log):
+    from briefing.move_failures import STAGE_FILINGS
+    start(logged_core)
+    logged_core.on_history_responded(history(), T + SEC)
+    logged_core.on_context_responded(json.dumps(context()), T + SEC)
+    stable_articles(logged_core)
+    for n in range(1, S.max_attempts + 1):
+        logged_core.on_tick(T + SEC + n * S.response_timeout)
+
+    (old,) = rec.failed
+    assert old.reason is FailureReason.FILINGS_NO_RESPONSE
+    final = failure_log.records[-1]
+    assert filled(final)
+    assert (final.stage, final.reason, final.attempts) == (STAGE_FILINGS, "filings_no_response", 3)
+    assert final.data["notReceived"] == [STAGE_FILINGS]
+    assert final.data["requestRange"]["tickers"] == list(TICKERS)
+    assert len(final.data["requests"][STAGE_FILINGS]) == 3
+    # 끝내 실패한 기록에도 받은 응답 내용 전부: 시세 점, 배경 자료 원문·지수별 계산값, 등락률, 기사
+    responses = final.data["receivedResponses"]
+    assert set(responses) == {"market.history", "market.context", "news.articles"}
+    assert responses["market.history"]["points"] == json.loads(history())["payload"]["points"]
+    world = [b for b in responses["market.context"]["background"] if b["apiType"] == "world-index"][0]
+    assert world["response"] == INDEX_RAW and world["indexRates"] == INDEX_RATES
+    assert responses["market.context"]["closeRates"] == [close_rate("TESTA")]
+    assert responses["news.articles"]["articles"] == [article("a1", T - timedelta(minutes=30))]
+    assert STAGE_FILINGS not in responses
+
+
+def test_waiting_for_collection_until_the_limit_is_recorded(logged_core, rec, failure_log):
+    from briefing.move_failures import STAGE_COLLECTION
+    logged_core.on_move(move(), T)
+    logged_core.on_tick(T + S.collection_wait_limit)
+
+    (record,) = failure_log.records
+    assert filled(record)
+    assert (record.stage, record.reason, record.attempts) == (STAGE_COLLECTION, "collection_not_covered", 0)
+    assert record.data["missingItems"] == ["collection.completed"]
+
+
+def test_unstable_articles_are_recorded_with_every_round_and_the_last_articles(logged_core, rec, failure_log):
+    from briefing.move_failures import REASON_RECHECK_ROUND, STAGE_ARTICLES_RECHECK
+    start(logged_core)
+    logged_core.on_history_responded(history(), T + SEC)
+    logged_core.on_context_responded(json.dumps(context(tickers=(), close_rates=[])), T + SEC)
+    now = T + SEC
+    for n in range(1, S.max_rounds + 1):
+        logged_core.on_articles_responded(articles(n, [article(f"a{n}", T - timedelta(minutes=n))]), now)
+        now += S.recheck_interval
+        logged_core.on_tick(now)
+
+    assert [f.reason for f in rec.failed] == [FailureReason.NEWS_UNSTABLE]
+    rounds = [r for r in failure_log.records if r.reason == REASON_RECHECK_ROUND]
+    assert [r.data["round"] for r in rounds] == list(range(2, S.max_rounds + 1))
+    final = failure_log.records[-1]
+    assert (final.stage, final.reason) == (STAGE_ARTICLES_RECHECK, "news_unstable")
+    assert [a["articleId"] for a in final.data["lastArticles"]] == [f"a{S.max_rounds}"]
+
+
+def test_move_failure_logs_never_contain_the_symbol_or_tickers(logged_core, rec, failure_log, caplog):
+    with caplog.at_level(logging.DEBUG, logger="briefing"):
+        start(logged_core)
+        logged_core.on_history_responded(history(), T + SEC)
+        logged_core.on_context_responded(json.dumps(context()), T + SEC)
+        stable_articles(logged_core)
+        for n in range(1, S.max_attempts + 1):
+            logged_core.on_tick(T + SEC + n * S.response_timeout)
+
+    assert failure_log.records
+    for secret in (SYMBOL, *TICKERS):
+        assert secret not in caplog.text

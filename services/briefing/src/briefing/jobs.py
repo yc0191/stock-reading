@@ -12,7 +12,7 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Protocol
+from typing import Any, Protocol
 
 from briefing.config import DEFAULT_SETTINGS, CoreSettings
 from briefing.events import (
@@ -25,6 +25,21 @@ from briefing.events import (
     request_event,
 )
 from briefing.evidence import MARKET_WIDE, in_evidence_range
+from briefing.move_failures import (
+    JOB_KIND_MOVE,
+    REASON_RECHECK_ROUND,
+    REASON_RESENT,
+    STAGE_ARTICLES,
+    STAGE_ARTICLES_RECHECK,
+    STAGE_COLLECTION,
+    STAGE_CONTEXT,
+    STAGE_FILINGS,
+    STAGE_HISTORY,
+    DiscardMoveFailures,
+    MoveFailurePort,
+    MoveFailureRecord,
+    move_target,
+)
 from briefing.ports import Failure, FailurePort, FailureReason, RequestPort
 from briefing.sources import (
     BACKGROUND_MISSING,
@@ -138,6 +153,11 @@ class _Job:
     news_articles: tuple[Article, ...] | None = None
     news_truncated: bool = False
     news_stable: bool = False
+    # 실패 기록용: 요청마다 보낸 순번·시각, 요청별 마지막 요청 범위
+    request_log: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    request_ranges: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # 실패 기록용: 요청별로 마지막에 받은 응답 payload 원문 그대로(기사는 가장 최근 라운드)
+    responses: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -146,6 +166,8 @@ class BriefingCore:
     failures: FailurePort
     ready: ReadyPort
     settings: CoreSettings = DEFAULT_SETTINGS
+    # 급변동 실패 기록을 넘기는 자리. 저장 방식을 정하기 전이라 기본은 받기만 하고 버린다.
+    move_failures: MoveFailurePort = field(default_factory=DiscardMoveFailures)
     _jobs: OrderedDict[str, _Job] = field(default_factory=OrderedDict, init=False)
     _completions: deque[Completion] = field(init=False)
 
@@ -227,6 +249,7 @@ class BriefingCore:
         except (KeyError, TypeError) as error:
             raise ValueError(f"malformed market.history.responded event: {error!r}") from error
         job.market.received = True
+        job.responses[STAGE_HISTORY] = payload
         job.market_points, job.market_truncated = points, truncated
         self._complete_if_ready(job)
 
@@ -253,6 +276,7 @@ class BriefingCore:
         except (KeyError, TypeError) as error:
             raise ValueError(f"malformed market.context.responded event: {error!r}") from error
         job.context.received = True
+        job.responses[STAGE_CONTEXT] = payload
         job.context_data = context
         # 미국 종목이 없으면 공시는 해당 없음이라 요청하지 않는다.
         if context.tickers:
@@ -278,6 +302,7 @@ class BriefingCore:
         except (KeyError, TypeError) as error:
             raise ValueError(f"malformed news.filings.responded event: {error!r}") from error
         job.filings.received = True
+        job.responses[STAGE_FILINGS] = payload
         job.filings_data, job.filings_truncated = filings, truncated
         self._complete_if_ready(job)
 
@@ -300,16 +325,19 @@ class BriefingCore:
             raise ValueError(f"malformed news.articles.responded event: {error!r}") from error
 
         job.news_awaiting = False
+        job.responses[STAGE_ARTICLES] = payload
         ids = frozenset(a.article_id for a in articles)
         job.news_articles = articles
         job.news_truncated = bool(payload.get("truncated", False))
+        if job.news_round >= 2:
+            self._record_recheck_round(job, articles, ids, now)
         if job.news_round >= 2 and ids == job.news_previous_ids:
             job.news_stable = True
             self._complete_if_ready(job)
             return
         if job.news_round >= self.settings.max_rounds:
             self._fail(job, FailureReason.NEWS_UNSTABLE,
-                       f"article set kept changing for {job.news_round} rounds", job.news_requests)
+                       f"article set kept changing for {job.news_round} rounds", job.news_requests, now)
             return
         job.news_previous_ids = ids
         job.news_recheck_at = now + self.settings.recheck_interval
@@ -320,7 +348,7 @@ class BriefingCore:
             if job.phase is _Phase.WAITING_COLLECTION:
                 if now - job.created_at >= self.settings.collection_wait_limit:
                     self._fail(job, FailureReason.COLLECTION_NOT_COVERED,
-                               "no usable collection.completed within the wait limit", 0)
+                               "no usable collection.completed within the wait limit", 0, now)
             elif job.phase is _Phase.FETCHING:
                 # 같은 시각에 여럿이 끝나도 실패는 한 번만 기록된다. 앞의 판정이 작업을 끝내면 나머지는 건너뛴다.
                 for tick in (self._tick_market, self._tick_news, self._tick_context, self._tick_filings):
@@ -369,7 +397,7 @@ class BriefingCore:
         seq = next_seq(job.market, now)
         s = self.settings
         self.requests.send(request_event(
-            HISTORY_REQUESTED_TOPIC, "market.history.requested", job.correlation_id, now, {
+            HISTORY_REQUESTED_TOPIC, "market.history.requested", job.correlation_id, now, self._sent(job, STAGE_HISTORY, now, {
                 "jobId": job.job_id,
                 "seq": seq,
                 "symbol": job.symbol,
@@ -377,13 +405,13 @@ class BriefingCore:
                 "until": format_timestamp(job.as_of + s.delta),
                 "maxPoints": s.max_history_points,
                 "intervalSeconds": int(s.history_interval.total_seconds()),
-            }))
+            })))
 
     def _send_context(self, job: _Job, now: datetime) -> None:
         seq = next_seq(job.context, now)
         s = self.settings
         self.requests.send(request_event(
-            CONTEXT_REQUESTED_TOPIC, "market.context.requested", job.correlation_id, now, {
+            CONTEXT_REQUESTED_TOPIC, "market.context.requested", job.correlation_id, now, self._sent(job, STAGE_CONTEXT, now, {
                 "jobId": job.job_id,
                 "seq": seq,
                 "symbol": job.symbol,
@@ -391,13 +419,13 @@ class BriefingCore:
                 "since": format_timestamp(job.as_of - s.background_window),
                 "maxResponseBytes": s.max_background_bytes,
                 "maxTickers": s.max_tickers,
-            }))
+            })))
 
     def _send_filings(self, job: _Job, now: datetime) -> None:
         seq = next_seq(job.filings, now)
         s = self.settings
         self.requests.send(request_event(
-            FILINGS_REQUESTED_TOPIC, "news.filings.requested", job.correlation_id, now, {
+            FILINGS_REQUESTED_TOPIC, "news.filings.requested", job.correlation_id, now, self._sent(job, STAGE_FILINGS, now, {
                 "jobId": job.job_id,
                 "seq": seq,
                 "symbol": job.symbol,
@@ -405,7 +433,7 @@ class BriefingCore:
                 "since": format_timestamp(job.as_of - s.filings_window),
                 "until": format_timestamp(job.as_of),
                 "maxFilings": s.max_filings,
-            }))
+            })))
 
     def _send_news(self, job: _Job, now: datetime, attempt: int) -> None:
         job.news_seq += 1
@@ -416,35 +444,37 @@ class BriefingCore:
         job.news_recheck_at = None
         s = self.settings
         self.requests.send(request_event(
-            ARTICLES_REQUESTED_TOPIC, "news.articles.requested", job.correlation_id, now, {
+            ARTICLES_REQUESTED_TOPIC, "news.articles.requested", job.correlation_id, now, self._sent(job, STAGE_ARTICLES, now, {
                 "jobId": job.job_id,
                 "seq": job.news_seq,
                 "symbol": job.symbol,
                 "since": format_timestamp(job.as_of - s.evidence_window),
                 "until": format_timestamp(job.as_of + s.delta),
                 "maxArticles": s.max_articles,
-            }))
+            })))
 
     def _tick_market(self, job: _Job, now: datetime) -> None:
         self._tick_exchange(job, job.market, now, self._send_market, FailureReason.MARKET_NO_RESPONSE,
-                            "market.history.responded")
+                            "market.history.responded", STAGE_HISTORY)
 
     def _tick_context(self, job: _Job, now: datetime) -> None:
         self._tick_exchange(job, job.context, now, self._send_context, FailureReason.CONTEXT_NO_RESPONSE,
-                            "market.context.responded")
+                            "market.context.responded", STAGE_CONTEXT)
 
     def _tick_filings(self, job: _Job, now: datetime) -> None:
         self._tick_exchange(job, job.filings, now, self._send_filings, FailureReason.FILINGS_NO_RESPONSE,
-                            "news.filings.responded")
+                            "news.filings.responded", STAGE_FILINGS)
 
     def _tick_exchange(self, job: _Job, exchange: Exchange, now: datetime, resend, reason: FailureReason,
-                       event_type: str) -> None:
+                       event_type: str, stage: str) -> None:
         if not exchange.awaiting() or now - exchange.sent_at < self.settings.response_timeout:
             return
         if exchange.seq >= self.settings.max_attempts:
-            self._fail(job, reason, f"no {event_type} within the time limit", exchange.seq)
+            self._fail(job, reason, f"no {event_type} within the time limit", exchange.seq, now)
         else:
             resend(job, now)
+            self._record(job, stage, REASON_RESENT, "ResponseTimeout", exchange.seq, now,
+                         {"timedOutSeq": exchange.seq - 1, "resentSeq": exchange.seq})
 
     def _tick_news(self, job: _Job, now: datetime) -> None:
         if job.news_awaiting:
@@ -452,9 +482,11 @@ class BriefingCore:
                 return
             if job.news_attempt >= self.settings.max_attempts:
                 self._fail(job, FailureReason.NEWS_NO_RESPONSE,
-                           "no news.articles.responded within the time limit", job.news_attempt)
+                           "no news.articles.responded within the time limit", job.news_attempt, now)
             else:
                 self._send_news(job, now, job.news_attempt + 1)
+                self._record(job, STAGE_ARTICLES, REASON_RESENT, "ResponseTimeout", job.news_attempt, now,
+                             {"round": job.news_round, "timedOutSeq": job.news_seq - 1, "resentSeq": job.news_seq})
         elif job.news_recheck_at is not None and not job.news_stable and now >= job.news_recheck_at:
             job.news_round += 1
             self._send_news(job, now, attempt=1)
@@ -522,10 +554,91 @@ class BriefingCore:
         job.phase = _Phase.DONE
         self.ready.on_ready(report_input)
 
-    def _fail(self, job: _Job, reason: FailureReason, detail: str, attempts: int) -> None:
+    def _fail(self, job: _Job, reason: FailureReason, detail: str, attempts: int, now: datetime) -> None:
         job.phase = _Phase.DONE
         log.warning("job %s failed: %s", job.job_id, reason.value)
         self.failures.record(Failure(job.job_id, job.symbol, reason, detail, attempts))
+        stage, error_type = _FINAL_FAILURES[reason]
+        extra: dict[str, Any] = {"detail": detail}
+        if reason is FailureReason.COLLECTION_NOT_COVERED:
+            extra["waitStartedAt"] = format_timestamp(job.created_at)
+            extra["waitLimitSeconds"] = int(self.settings.collection_wait_limit.total_seconds())
+            extra["recentCompletions"] = [
+                {"jobType": c.job_type, "startedAt": format_timestamp(c.started_at),
+                 "incompleteSymbolCount": len(c.incomplete_symbols)}
+                for c in self._completions]
+        if reason is FailureReason.NEWS_UNSTABLE:
+            extra["rounds"] = job.news_round
+            extra["lastArticles"] = _article_list(job.news_articles or ())
+        self._record(job, stage, reason.value, error_type, attempts, now, extra)
+
+    # ---- 급변동 실패 기록 ----
+
+    def _sent(self, job: _Job, stage: str, now: datetime, payload: dict[str, Any]) -> dict[str, Any]:
+        """보낸 요청을 실패 기록용으로 남기고 payload를 그대로 돌려준다."""
+        job.request_log.setdefault(stage, []).append({"seq": payload["seq"], "sentAt": format_timestamp(now)})
+        job.request_ranges[stage] = {k: v for k, v in payload.items() if k not in ("jobId", "seq")}
+        return payload
+
+    def _record(self, job: _Job, stage: str, reason: str, error_type: str, attempts: int, now: datetime,
+                extra: dict[str, Any]) -> None:
+        received, not_received = _response_states(job)
+        request_stage = STAGE_ARTICLES if stage == STAGE_ARTICLES_RECHECK else stage
+        data: dict[str, Any] = {
+            "requestRange": job.request_ranges.get(request_stage, {}),
+            "requestRanges": dict(job.request_ranges),
+            "requests": {k: list(v) for k, v in job.request_log.items()},
+            "received": received,
+            # 받은 응답의 내용 전부. 응답 payload를 가공하지 않고 담는다(배경 자료 원문, 지수별 계산값 포함).
+            "receivedResponses": {stage: job.responses[stage] for stage in received},
+            "notReceived": not_received,
+            # 수집 완료를 기다리다 끝났으면 요청은 하나도 나가지 않았고 빠진 것은 수집 완료 알림이다.
+            "missingItems": ["collection.completed"] if stage == STAGE_COLLECTION else not_received,
+        }
+        data.update(extra)
+        self.move_failures.record(MoveFailureRecord(
+            job_kind=JOB_KIND_MOVE, job_id=job.job_id, target=move_target(job.symbol, format_timestamp(job.as_of)),
+            stage=stage, reason=reason, error_type=error_type, attempts=attempts, data=data, occurred_at=now))
+
+    def _record_recheck_round(self, job: _Job, articles: tuple[Article, ...], ids: frozenset[str],
+                              now: datetime) -> None:
+        changed = ids != job.news_previous_ids
+        self._record(job, STAGE_ARTICLES_RECHECK, REASON_RECHECK_ROUND,
+                     "ArticleSetChanged" if changed else "ArticleSetUnchanged", job.news_round, now, {
+                         "round": job.news_round,
+                         "receivedArticles": _article_list(articles),
+                         "previousArticleIds": sorted(job.news_previous_ids or ()),
+                         "stable": not changed,
+                     })
+
+
+_FINAL_FAILURES: dict[FailureReason, tuple[str, str]] = {
+    FailureReason.COLLECTION_NOT_COVERED: (STAGE_COLLECTION, "CollectionNotCovered"),
+    FailureReason.MARKET_NO_RESPONSE: (STAGE_HISTORY, "ResponseTimeout"),
+    FailureReason.CONTEXT_NO_RESPONSE: (STAGE_CONTEXT, "ResponseTimeout"),
+    FailureReason.FILINGS_NO_RESPONSE: (STAGE_FILINGS, "ResponseTimeout"),
+    FailureReason.NEWS_NO_RESPONSE: (STAGE_ARTICLES, "ResponseTimeout"),
+    FailureReason.NEWS_UNSTABLE: (STAGE_ARTICLES_RECHECK, "ArticleSetUnstable"),
+}
+
+
+def _article_list(articles) -> list[dict[str, str]]:
+    return [{"articleId": a.article_id, "title": a.title, "summary": a.summary, "publisher": a.publisher,
+             "publishedAt": format_timestamp(a.published_at), "url": a.url} for a in articles]
+
+
+def _response_states(job: _Job) -> tuple[list[str], list[str]]:
+    """요청한 응답 가운데 받은 것과 받지 못한 것. 보내지 않은 요청은 어느 쪽에도 넣지 않는다."""
+    received: list[str] = []
+    not_received: list[str] = []
+    for stage, sent, got in (
+            (STAGE_HISTORY, job.market.sent_at is not None, job.market.received),
+            (STAGE_CONTEXT, job.context.sent_at is not None, job.context.received),
+            (STAGE_FILINGS, job.filings.sent_at is not None, job.filings.received),
+            (STAGE_ARTICLES, job.news_sent_at is not None, job.news_articles is not None)):
+        if sent:
+            (received if got else not_received).append(stage)
+    return received, not_received
 
 
 @dataclass(frozen=True)
