@@ -5,7 +5,7 @@ import java.util.List;
 
 import tools.jackson.databind.json.JsonMapper;
 
-/** 테스트용 칸 이름(가짜)으로 만든 검사. 실제 제공자 칸 이름은 공개 파일에 쓰지 않는다. */
+/** 테스트용 칸 이름(가짜)으로 만든 검사. application.yml 기본값과 무관하게 검사 로직만 본다. */
 final class PriceChecks {
 
     static final String BASE = "TEST_BASE";

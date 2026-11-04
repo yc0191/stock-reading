@@ -93,17 +93,17 @@ class DataSourceWiringTest {
     }
 
     @Test
-    void priceCheckIsOnWithPointThreePercentAndNoFieldNamesInPublicConfig() {
+    void priceCheckIsOnWithPointThreePercentAndConfirmedFieldNames() {
         runner().run(context -> {
             PriceCheckProperties check = context.getBean(PriceCheckProperties.class);
             assertThat(check.enabled()).isTrue();
             assertThat(check.tolerance()).isEqualByComparingTo("0.003");
-            // 칸 이름과 부호 값은 제공자 고유 항목이라 공유 .env 로만 받는다.
-            assertThat(check.baseFields()).isEmpty();
-            assertThat(check.signUp()).isEmpty();
-            assertThat(check.changeField()).isEmpty();
-            assertThat(check.rateField()).isEmpty();
-            assertThat(check.highField()).isEmpty();
+            // 칸 이름과 부호 값은 실제 응답에서 확인한 값이 기본값이다. 전체 값과 덮어쓰기는 PriceCheckDefaultsTest 가 본다.
+            assertThat(check.baseFields()).isNotEmpty();
+            assertThat(check.signUp()).isNotEmpty();
+            assertThat(check.changeField()).isNotBlank();
+            assertThat(check.rateField()).isNotBlank();
+            assertThat(check.highField()).isNotBlank();
         });
     }
 

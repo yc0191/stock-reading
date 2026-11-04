@@ -6,8 +6,8 @@ import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * 현재가를 같은 응답의 다른 칸과 맞춰 보는 검사의 설정. 칸 이름과 부호 구분 값은 제공자 고유 항목이라
- * 공개 파일에 쓰지 않고 환경변수로만 받는다. 이름이 비어 있는 검사는 판단하지 않는다.
+ * 현재가를 같은 응답의 다른 칸과 맞춰 보는 검사의 설정. 칸 이름과 부호 구분 값은 application.yml 에 확인한 값을
+ * 기본값으로 두고 환경변수로 덮어쓸 수 있다. 이름이 비어 있는 검사는 판단하지 않는다.
  *
  * @param enabled 끄면 검사하지 않고 모든 응답을 시세로 보낸다
  * @param tolerance 가격 비율로 준 허용 오차(0.003 = 0.3%). 0 이상 1 미만
