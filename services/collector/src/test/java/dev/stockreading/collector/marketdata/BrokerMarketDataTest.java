@@ -10,7 +10,11 @@ import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import dev.stockreading.collector.CollectorProperties;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -34,7 +38,7 @@ class BrokerMarketDataTest {
         var broker = new BrokerProperties(server.baseUrl(), KEY, SECRET, timeoutSeconds, maxCalls);
         var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK);
         return new BrokerMarketData(client, new CollectorProperties(symbols, 1_000, 3_000), broker,
-                CallRateLimiter.perSecond(maxCalls));
+                CallRateLimiter.perSecond(maxCalls), PriceChecks.fake());
     }
 
     @Test
@@ -94,7 +98,7 @@ class BrokerMarketDataTest {
         var broker = new BrokerProperties(server.baseUrl(), KEY, SECRET, 5, 10);
         var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK);
         CallRateLimit denyAll = maxWait -> false;
-        var marketData = new BrokerMarketData(client, new CollectorProperties(List.of("TEST01"), 1_000, 3_000), broker, denyAll);
+        var marketData = new BrokerMarketData(client, new CollectorProperties(List.of("TEST01"), 1_000, 3_000), broker, denyAll, PriceChecks.fake());
 
         FetchResult result = marketData.fetch(List.of("TEST01"));
 
@@ -157,5 +161,62 @@ class BrokerMarketDataTest {
 
         assertThat(failure.type()).isIn(FailureType.CONNECTION_FAILED, FailureType.TIMEOUT);
         assertThat(failure.exceptionType()).isNotBlank();
+    }
+
+    @Test
+    void mismatchedPriceBecomesFieldMismatchFailureWhileOtherSymbolsStillPublish() throws IOException {
+        var symbols = List.of("TEST01", "TEST02", "TEST03");
+        var marketData = marketData(10, 5, symbols);
+        String good = PriceChecks.body("9900", "10000", "100", "D", "-1.00", "10100", "9800");
+        // 깨진 응답에 토큰 값이 섞여 와도 원문에서는 가려져야 한다.
+        String broken = PriceChecks.body("12345", "10000", "100", "D", "-1.00", "10100", "9800")
+                .replace("}}", ",\"echo\":\"tok-secret-1\"}}");
+        server.priceBody = good;
+        server.priceBodyBySymbol.put("TEST02", broken);
+
+        FetchResult result = marketData.fetch(symbols);
+
+        assertThat(result.quotes()).extracting(PriceQuote::symbol).containsExactly("TEST01", "TEST03");
+        assertThat(result.failures()).hasSize(1);
+        QuoteFailure failure = result.failures().get(0);
+        assertThat(failure.symbol()).isEqualTo("TEST02");
+        assertThat(failure.type()).isEqualTo(FailureType.FIELD_MISMATCH);
+        assertThat(failure.exceptionType()).isEqualTo("FieldMismatch:CHANGE+RATE+HIGH_LOW");
+        assertThat(failure.httpStatus()).isEqualTo(200);
+        assertThat(failure.responseRaw()).isEqualTo(broken.replace("tok-secret-1", "***"));
+        assertThat(failure.elapsedMs()).isNotNull();
+    }
+
+    @Test
+    void comparisonFieldsThatCannotBeReadDoNotDropTheQuote() throws IOException {
+        var marketData = marketData(10, 5, List.of("TEST01"));
+        server.priceBody = PriceChecks.body("9900", "", "x", "D", "", "10100", "9800");
+
+        FetchResult result = marketData.fetch(List.of("TEST01"));
+
+        assertThat(result.quotes()).extracting(PriceQuote::price).containsExactly(9900L);
+        assertThat(result.failures()).isEmpty();
+    }
+
+    @Test
+    void rejectedQuoteLogsOnlyCheckNamesNotServerValues() throws IOException {
+        Logger root = (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+        var appender = new ListAppender<ILoggingEvent>();
+        appender.start();
+        root.addAppender(appender);
+        try {
+            var marketData = marketData(10, 5, List.of("TEST01"));
+            server.priceBody = PriceChecks.body("12345", "10000", "100", "D", "-1.00", "10100", "9800");
+
+            assertThat(marketData.fetch(List.of("TEST01")).failures()).hasSize(1);
+
+            List<String> lines = appender.list.stream().map(ILoggingEvent::getFormattedMessage)
+                    .filter(line -> line.contains("FIELD_MISMATCH")).toList();
+            assertThat(lines).hasSize(1);
+            assertThat(lines.get(0)).contains("FieldMismatch:CHANGE+RATE+HIGH_LOW")
+                    .doesNotContain("12345", "10000", "10100", "9800", "dataBody", PriceChecks.RATE);
+        } finally {
+            root.detachAppender(appender);
+        }
     }
 }

@@ -65,6 +65,19 @@ class SnapshotContractTest {
     }
 
     @Test
+    void fieldMismatchFailureMatchesSchemaAndIsReadableByConsumer() throws IOException {
+        String mismatch = ContractSchemas.sample("market.snapshot.failed.sample.json")
+                .replace("\"HTTP_ERROR\"", "\"FIELD_MISMATCH\"")
+                .replace("\"HttpStatusException\"", "\"FieldMismatch:CHANGE+RATE+HIGH_LOW\"");
+
+        assertThat(ContractSchemas.validate("market.snapshot.failed.v1.schema.json", mismatch)).isEmpty();
+        FailureEnvelope event = mapper.readValue(mismatch, FailureEnvelope.class);
+        assertThat(event.payload().failureType()).isEqualTo("FIELD_MISMATCH");
+        assertThat(event.payload().exceptionType()).isEqualTo("FieldMismatch:CHANGE+RATE+HIGH_LOW");
+        assertThat(event.payload().responseRaw()).isNotBlank();
+    }
+
+    @Test
     void failureConsumerIgnoresFieldsAddedInFutureVersions() throws IOException {
         String withExtraFields = ContractSchemas.sample("market.snapshot.failed.sample.json")
                 .replace("\"payload\": {", "\"newTopLevelHint\": \"x\",\n  \"payload\": {\n    \"venue\": \"future\",");

@@ -32,7 +32,7 @@ class MoveDetector {
         }
     }
 
-    /** 필드 이름은 공개 파일에 두지 않고 .env로만 받으므로, 비어 있으면 스냅샷마다 로그를 남기지 않고 유형 2를 끈다. */
+    /** 전일 종가 필드가 하루 안에서 깨져 오는 경우가 있어 기본값이 비어 있다. 비어 있으면 스냅샷마다 로그를 남기지 않고 유형 2를 끈다. */
     private boolean prevCloseEnabled() {
         String field = properties.prevCloseField();
         return field != null && !field.isBlank();

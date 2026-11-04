@@ -52,6 +52,26 @@ def test_move_with_unknown_detection_type_is_rejected():
     assert validate("market.move.v1.schema.json", broken) != []
 
 
+def test_failure_sample_matches_its_schema():
+    assert validate("market.snapshot.failed.v1.schema.json", sample("market.snapshot.failed.sample.json")) == []
+
+
+def test_field_mismatch_failure_with_raw_response_is_accepted():
+    mismatch = sample("market.snapshot.failed.sample.json")
+    mismatch["payload"]["failureType"] = "FIELD_MISMATCH"
+    mismatch["payload"]["exceptionType"] = "FieldMismatch:CHANGE+RATE"
+    mismatch["payload"]["responseRaw"] = '{"dataBody":{"price":"99999"}}'
+
+    assert validate("market.snapshot.failed.v1.schema.json", mismatch) == []
+
+
+def test_failure_with_unknown_failure_type_is_rejected():
+    broken = sample("market.snapshot.failed.sample.json")
+    broken["payload"]["failureType"] = "SOMETHING_ELSE"
+
+    assert validate("market.snapshot.failed.v1.schema.json", broken) != []
+
+
 EVIDENCE_CONTRACTS = [
     ("collection.completed.v1.schema.json", "collection.completed.sample.json"),
     ("market.history.requested.v1.schema.json", "market.history.requested.sample.json"),
