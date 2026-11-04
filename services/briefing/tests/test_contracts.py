@@ -468,3 +468,111 @@ def test_daily_briefing_job_types_are_the_ones_listed_in_the_tick_schema():
     assert set(JOB_TYPE_BY_EDITION) == {"morning", "post-close"}
     for job_type in JOB_TYPE_BY_EDITION.values():
         assert job_type in description
+
+
+DAILY_DATA_CONTRACTS = [
+    ("market.daily.requested.v1.schema.json", "market.daily.requested.sample.json"),
+    ("market.daily.responded.v1.schema.json", "market.daily.responded.sample.json"),
+]
+
+
+@pytest.mark.parametrize("schema_file, sample_file", DAILY_DATA_CONTRACTS)
+def test_daily_data_samples_match_their_schemas(schema_file, sample_file):
+    assert validate(schema_file, sample(sample_file)) == []
+
+
+@pytest.mark.parametrize("schema_file, sample_file", DAILY_DATA_CONTRACTS)
+def test_daily_data_events_tolerate_unknown_fields(schema_file, sample_file):
+    future = sample(sample_file)
+    future["newTopLevelHint"] = "x"
+    future["payload"]["venue"] = "future"
+
+    assert validate(schema_file, future) == []
+
+
+@pytest.mark.parametrize("schema_file, sample_file", DAILY_DATA_CONTRACTS)
+def test_daily_data_events_reject_missing_payload_field(schema_file, sample_file):
+    for field in sample(sample_file)["payload"]:
+        broken = sample(sample_file)
+        del broken["payload"][field]
+
+        assert validate(schema_file, broken) != [], field
+
+
+@pytest.mark.parametrize("schema_file, sample_file", DAILY_DATA_CONTRACTS)
+def test_daily_data_events_reject_wrong_event_type(schema_file, sample_file):
+    broken = sample(sample_file)
+    broken["eventType"] = "market.context.requested"
+
+    assert validate(schema_file, broken) != []
+
+
+def test_daily_data_request_and_response_share_job_id_and_correlation_id():
+    request = sample("market.daily.requested.sample.json")
+    response = sample("market.daily.responded.sample.json")
+
+    assert response["payload"]["jobId"] == request["payload"]["jobId"]
+    assert response["payload"]["seq"] == request["payload"]["seq"]
+    assert response["correlationId"] == request["correlationId"]
+    # 데일리 판 단위라 종목 하나(symbol)는 요청하지 않는다.
+    assert "symbol" not in request["payload"]
+
+
+def test_daily_data_request_rejects_bad_sequence_limit_and_timestamp():
+    for field, value in (("seq", 0), ("maxResponseBytes", 0), ("maxEtfs", 0), ("maxTickers", 0),
+                         ("asOf", "2026-10-20T17:00+09:00"), ("since", "2026-10-16")):
+        broken = sample("market.daily.requested.sample.json")
+        broken["payload"][field] = value
+
+        assert validate("market.daily.requested.v1.schema.json", broken) != [], field
+
+
+def test_daily_data_response_accepts_no_etfs_and_an_etf_without_us_stocks():
+    no_etfs = sample("market.daily.responded.sample.json")
+    no_etfs["payload"]["etfs"] = []
+    no_etfs["payload"]["closeRates"] = []
+
+    assert validate("market.daily.responded.v1.schema.json", no_etfs) == []
+    assert sample("market.daily.responded.sample.json")["payload"]["etfs"][1]["tickers"] == []
+
+
+def test_daily_data_response_rejects_malformed_etfs():
+    cases = []
+    for field in ("symbol", "date", "close", "prevClose", "rate", "fetchedAt", "tickers", "tickersTruncated"):
+        broken = sample("market.daily.responded.sample.json")
+        del broken["payload"]["etfs"][0][field]
+        cases.append((field, broken))
+    bad_symbol = sample("market.daily.responded.sample.json")
+    bad_symbol["payload"]["etfs"][0]["symbol"] = "*"
+    bad_ticker = sample("market.daily.responded.sample.json")
+    bad_ticker["payload"]["etfs"][0]["tickers"] = ["testa"]
+    empty_rate = sample("market.daily.responded.sample.json")
+    empty_rate["payload"]["etfs"][0]["rate"] = ""
+    cases += [("symbol *", bad_symbol), ("lower ticker", bad_ticker), ("empty rate", empty_rate)]
+
+    for name, broken in cases:
+        assert validate("market.daily.responded.v1.schema.json", broken) != [], name
+
+
+def test_daily_data_background_follows_the_context_rules_without_a_per_symbol_daily_price():
+    cases = [
+        ({"apiType": "world-index", "target": "S", "status": "missing"}, True),
+        ({"apiType": "exchange-rate-summary", "target": None, "status": "missing"}, True),
+        ({"apiType": "exchange-rate-summary", "target": "S", "status": "missing"}, False),
+        ({"apiType": "daily-price", "target": "TEST01", "status": "missing"}, False),
+        ({"apiType": "market-summary", "target": None, "status": "ok", "fetchedAt": "2026-10-20T16:30:06+09:00"},
+         False),
+        ({"apiType": "market-summary", "target": None, "status": "missing", "indexRates": []}, False),
+    ]
+    for item, valid in cases:
+        event = sample("market.daily.responded.sample.json")
+        event["payload"]["background"] = [item]
+        assert (validate("market.daily.responded.v1.schema.json", event) == []) is valid, item
+
+
+def test_daily_data_world_index_carries_computed_rates_next_to_the_raw_response():
+    world = sample("market.daily.responded.sample.json")["payload"]["background"][2]
+
+    assert world["apiType"] == "world-index"
+    assert world["response"]
+    assert world["indexRates"][0]["rate"] == "2.04"

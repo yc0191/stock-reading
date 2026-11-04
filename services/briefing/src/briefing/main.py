@@ -41,6 +41,8 @@ HISTORY_RESPONDED_TOPIC = "market.history.responded"
 ARTICLES_RESPONDED_TOPIC = "news.articles.responded"
 CONTEXT_RESPONDED_TOPIC = "market.context.responded"
 FILINGS_RESPONDED_TOPIC = "news.filings.responded"
+DAILY_DATA_REQUESTED_TOPIC = "market.daily.requested"
+DAILY_DATA_RESPONDED_TOPIC = "market.daily.responded"
 
 # 같은 토픽을 선언하는 다른 서비스(Topics.java)와 파티션 수가 같아야 한다. 어긋나면 일부 종목이 오류 없이 누락된다.
 TOPIC_PARTITIONS = {
@@ -56,6 +58,8 @@ TOPIC_PARTITIONS = {
     FILINGS_RESPONDED_TOPIC: 3,      # news
     BRIEFING_GENERATED_TOPIC: 3,     # notifier
     DAILY_BRIEFING_GENERATED_TOPIC: 1,  # notifier
+    DAILY_DATA_REQUESTED_TOPIC: 3,   # market
+    DAILY_DATA_RESPONDED_TOPIC: 3,   # market
 }
 SUBSCRIBED_TOPICS = (MOVE_TOPIC, COLLECTION_COMPLETED_TOPIC, HISTORY_RESPONDED_TOPIC, ARTICLES_RESPONDED_TOPIC,
                      CONTEXT_RESPONDED_TOPIC, FILINGS_RESPONDED_TOPIC)

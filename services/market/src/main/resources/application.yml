@@ -51,3 +51,6 @@ market:
     max-tickers: 100
     # 배경 자료로 줄 세계지수 대륙구분. 수집기의 마감 후 수집 대륙과 맞춘다.
     world-index-continents: C,S,E
+  daily:
+    # 데일리 판 자료 응답(market.daily)에 담을 보유 ETF의 최대 개수(안전 상한). 기간·원문 크기·티커 수·세계지수 대륙은 context 설정을 함께 쓴다.
+    max-etfs: 50
