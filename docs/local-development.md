@@ -72,7 +72,7 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 
 환경변수(`.env`)는 다음과 같습니다.
 
-환경변수가 없을 때 쓰는 값은 `main.py`와 `report.py`가 원본입니다.
+환경변수가 없을 때 쓰는 값은 `main.py`와 `llm.py`가 원본입니다.
 
 | 환경변수 | 설명 |
 |---|---|

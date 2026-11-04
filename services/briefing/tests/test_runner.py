@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from briefing import main
-from briefing.jobs import FailureReason
+from briefing.ports import FailureReason
 from briefing.report import GENERATED_BY_LLM, LlmWriter, Report, ReportError, RuleBasedWriter
 from contracts import sample, validate
 
@@ -103,7 +103,7 @@ class FakeLlm:
         self.outputs = list(outputs)
         self.calls = 0
 
-    def complete(self, system, user):
+    def complete(self, system, user, output_schema):
         self.calls += 1
         return self.outputs.pop(0)
 

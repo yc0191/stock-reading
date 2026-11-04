@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
 from briefing.config import DEFAULT_STORE_SETTINGS, StoreSettings
-from briefing.jobs import Failure, FailureReason
+from briefing.ports import Failure, FailureReason
 
 log = logging.getLogger("briefing.failure_store")
 

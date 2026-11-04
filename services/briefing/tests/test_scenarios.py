@@ -10,8 +10,16 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from briefing.config import CoreSettings
-from briefing.jobs import BriefingCore, FailureReason
+from briefing.jobs import BriefingCore
+from briefing.ports import FailureReason
 from briefing.report import (
+    SYSTEM_PROMPT,
+    LlmWriter,
+    ReportStage,
+    RuleBasedWriter,
+    build_llm_input,
+)
+from briefing.sources import (
     BACKGROUND_SOURCE,
     CLOSE_RATE_SOURCE,
     FILING_SOURCE,
@@ -20,11 +28,6 @@ from briefing.report import (
     MARK_PRESENT,
     MARK_TOO_LARGE,
     MARK_TRUNCATED,
-    SYSTEM_PROMPT,
-    LlmWriter,
-    ReportStage,
-    RuleBasedWriter,
-    build_llm_input,
 )
 from contracts import sample, validate
 
@@ -63,7 +66,7 @@ class FakeLlm:
         self.responses = list(responses)
         self.calls = []
 
-    def complete(self, system, user):
+    def complete(self, system, user, output_schema):
         self.calls.append((system, user))
         return self.responses.pop(0)
 

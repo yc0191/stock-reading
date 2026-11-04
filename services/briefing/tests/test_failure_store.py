@@ -11,7 +11,7 @@ from briefing.failure_store import (
     UPDATE_REASONS_SQL,
     PostgresFailureStore,
 )
-from briefing.jobs import Failure, FailureReason
+from briefing.ports import Failure, FailureReason
 
 JOB_ID = "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13"
 

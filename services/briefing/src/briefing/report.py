@@ -14,26 +14,28 @@ from typing import Any, Callable, Mapping, Protocol
 
 from briefing.compose import DISCLAIMER, KST, NO_EVIDENCE, direction_of, headline
 from briefing.events import BRIEFING_GENERATED_TOPIC, OutboundEvent, format_timestamp
-from briefing.jobs import (
-    BACKGROUND_MISSING,
+from briefing.jobs import ReportInput
+from briefing.llm import API_KEY_ENV, AnthropicClient, LlmCallError, LlmClient, llm_config
+from briefing.ports import Failure, FailurePort, FailureReason, RequestPort
+from briefing.sources import (
+    BACKGROUND_LABEL,
+    BACKGROUND_NAMES,
     BACKGROUND_OK,
-    BACKGROUND_TOO_LARGE,
+    BACKGROUND_SOURCE,
+    BACKGROUND_STATUS_MARKS,
+    CLOSE_RATE_SOURCE,
+    FILING_SOURCE,
+    MARK_MISSING,
+    MARK_NOT_APPLICABLE,
+    MARK_PRESENT,
+    MARK_TRUNCATED,
     Background,
-    Failure,
-    FailurePort,
-    FailureReason,
-    ReportInput,
-    RequestPort,
 )
 
 log = logging.getLogger("briefing.report")
 
 GENERATED_BY_RULE = "rule-based"
 GENERATED_BY_LLM = "llm"
-DEFAULT_MODEL = "claude-sonnet-5-5"
-MODEL_ENV = "BRIEFING_LLM_MODEL"
-API_KEY_ENV = "ANTHROPIC_API_KEY"
-KEY_PLACEHOLDERS = frozenset({"", "change-me"})
 LLM_MAX_ATTEMPTS = 3
 RULE_BASED_LIMIT = 3
 
@@ -45,21 +47,6 @@ KIND_ARTICLE = "article"
 KIND_FILING = "filing"
 KIND_CLOSE_RATE = "overseas-close-rate"
 
-# LLM 입력에 담는 자료 상태 표시
-MARK_PRESENT = "있음"
-MARK_MISSING = "없음"
-MARK_TRUNCATED = "잘림"
-MARK_TOO_LARGE = "너무 큼"
-MARK_NOT_APPLICABLE = "해당 없음"
-BACKGROUND_LABEL = "배경"
-BACKGROUND_STATUS_MARKS = {BACKGROUND_OK: MARK_PRESENT, BACKGROUND_MISSING: MARK_MISSING,
-                           BACKGROUND_TOO_LARGE: MARK_TOO_LARGE}
-BACKGROUND_NAMES = {"exchange-rate-summary": "환율종합", "market-summary": "시장종합",
-                    "world-index": "세계지수", "daily-price": "국내 일봉"}
-# 출처에는 자료를 준 회사 이름 대신 중립 표현을 쓴다.
-FILING_SOURCE = "미국 공시"
-CLOSE_RATE_SOURCE = "해외 시세 자료"
-BACKGROUND_SOURCE = "시세 자료(배경)"
 # 코드가 붙이는 근거 번호의 머리글. 기사는 articleId, 공시는 접수번호를 그대로 쓴다.
 CLOSE_RATE_REF_PREFIX = "U"
 BACKGROUND_REF_PREFIX = "B"
@@ -139,14 +126,6 @@ class ReportError(Exception):
 
 class ReportWriter(Protocol):
     def write(self, report_input: ReportInput) -> Report: ...
-
-
-class LlmClient(Protocol):
-    def complete(self, system: str, user: str) -> str: ...
-
-
-class LlmCallError(Exception):
-    """LLM 호출 실패. 키가 섞이지 않게 원래 예외의 종류 이름만 담는다."""
 
 
 class InvalidOutput(ValueError):
@@ -386,7 +365,7 @@ class LlmWriter:
         reason = ""
         for attempt in range(1, self.max_attempts + 1):
             try:
-                output = parse_output(self.client.complete(SYSTEM_PROMPT, user), allowed)
+                output = parse_output(self.client.complete(SYSTEM_PROMPT, user, OUTPUT_SCHEMA), allowed)
             except (LlmCallError, InvalidOutput) as error:
                 reason = str(error)
                 log.warning("LLM report attempt %d/%d failed for job %s: %s",
@@ -422,51 +401,15 @@ def _llm_report(report_input: ReportInput, output: LlmOutput) -> Report:
     return Report("\n".join(lines), GENERATED_BY_LLM, tuple(by_id[x] for x in cited))
 
 
-class AnthropicClient:
-    """공식 SDK로 Claude를 부른다. 키는 SDK 클라이언트 안에만 두고 이 객체의 필드나 repr에 남기지 않는다."""
-
-    def __init__(self, api_key: str, model: str, max_tokens: int = 16000) -> None:
-        import anthropic
-
-        self._anthropic = anthropic
-        self._client = anthropic.Anthropic(api_key=api_key)
-        self.model = model
-        self.max_tokens = max_tokens
-
-    def __repr__(self) -> str:
-        return f"AnthropicClient(model={self.model!r})"
-
-    def complete(self, system: str, user: str) -> str:
-        try:
-            response = self._client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-                output_config={"format": {"type": "json_schema", "schema": OUTPUT_SCHEMA}},
-            )
-        except self._anthropic.APIError as error:
-            # SDK 예외 문구에는 요청 정보가 섞일 수 있어 종류 이름만 남기고 원래 예외도 잇지 않는다.
-            raise LlmCallError(f"LLM call failed: {type(error).__name__}") from None
-        if response.stop_reason != "end_turn":
-            raise LlmCallError(f"LLM stopped with {response.stop_reason}")
-        texts = [block.text for block in response.content if block.type == "text"]
-        if not texts:
-            raise LlmCallError("LLM returned no text")
-        return texts[0]
-
-
 def build_report_writer(env: Mapping[str, str],
                         client_factory: Callable[[str, str], LlmClient] = AnthropicClient) -> ReportWriter:
     """시작할 때 한 번 부른다. 키가 없어도 시작을 막지 않고 규칙 기반으로 바꾼다."""
-    api_key = env.get(API_KEY_ENV, "").strip()
-    # .env.example 의 자리표시 값을 그대로 복사해도 키가 없는 것으로 본다. 그대로 쓰면 모든 변동이 llm_error 가 된다.
-    if api_key in KEY_PLACEHOLDERS:
+    config = llm_config(env)
+    if config is None:
         log.warning("%s is not set; briefing reports will be rule-based", API_KEY_ENV)
         return RuleBasedWriter()
-    model = env.get(MODEL_ENV, "").strip() or DEFAULT_MODEL
-    log.info("briefing reports will be written by the LLM (model=%s)", model)
-    return LlmWriter(client_factory(api_key, model))
+    log.info("briefing reports will be written by the LLM (model=%s)", config.model)
+    return LlmWriter(client_factory(config.api_key, config.model))
 
 
 # ---- 발행 ----

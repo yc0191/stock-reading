@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from briefing.config import CoreSettings
-from briefing.jobs import BriefingCore, FailureReason
+from briefing.jobs import BriefingCore
+from briefing.ports import FailureReason
 from contracts import sample, validate
 
 KST = timezone(timedelta(hours=9))
@@ -367,9 +368,9 @@ def test_next_deadline_reports_the_earliest_timer(core):
 
 
 def test_core_does_not_import_kafka():
-    import briefing.config, briefing.events, briefing.jobs  # noqa: E401
+    import briefing.config, briefing.events, briefing.jobs, briefing.llm, briefing.ports, briefing.sources  # noqa: E401
 
-    for module in (briefing.config, briefing.events, briefing.jobs):
+    for module in (briefing.config, briefing.events, briefing.jobs, briefing.llm, briefing.ports, briefing.sources):
         source = open(module.__file__, encoding="utf-8").read()
         assert "confluent_kafka" not in source
 

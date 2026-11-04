@@ -29,7 +29,8 @@ from briefing.events import (
     OutboundEvent,
 )
 from briefing.failure_store import PostgresFailureStore, psycopg_connector
-from briefing.jobs import BriefingCore, Failure
+from briefing.jobs import BriefingCore
+from briefing.ports import Failure
 from briefing.report import ReportStage, ReportWriter, build_report_writer
 
 log = logging.getLogger("briefing")

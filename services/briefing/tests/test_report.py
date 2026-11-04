@@ -1,35 +1,34 @@
 import json
 import logging
-import sys
-import types
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from briefing.jobs import Article, FailureReason, PricePoint, ReportInput
+from briefing.jobs import ReportInput
+from briefing.ports import FailureReason
+from briefing.llm import DEFAULT_MODEL, LlmCallError
 from briefing.report import (
-    DEFAULT_MODEL,
     GENERATED_BY_LLM,
     GENERATED_BY_RULE,
     LLM_DISCLAIMER,
     LLM_INSUFFICIENT,
+    OUTPUT_SCHEMA,
     SYSTEM_PROMPT,
-    AnthropicClient,
-    LlmCallError,
     LlmWriter,
     ReportStage,
     RuleBasedWriter,
     build_llm_input,
     build_report_writer,
 )
+from briefing.sources import Article, PricePoint
 from contracts import validate
+from fake_anthropic import FAKE_KEY, fake_sdk  # noqa: F401 - 픽스처
 
 KST = timezone(timedelta(hours=9))
 AS_OF = datetime(2026, 10, 20, 16, 0, 0, tzinfo=KST)
 NOW = datetime(2026, 10, 20, 16, 1, 0, tzinfo=KST)
 JOB_ID = "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13"
 # 실제 키 형태가 아닌 가짜 값. 로그·예외에 이 문자열이 나오면 안 된다.
-FAKE_KEY = "fake-anthropic-key-for-tests-0123456789"
 
 
 def article(article_id, minutes_before, title="Sample headline"):
@@ -62,9 +61,11 @@ class FakeLlm:
     def __init__(self, *responses):
         self.responses = list(responses)
         self.calls = []
+        self.schemas = []
 
-    def complete(self, system, user):
+    def complete(self, system, user, output_schema):
         self.calls.append((system, user))
+        self.schemas.append(output_schema)
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
@@ -251,6 +252,8 @@ def test_llm_receives_the_input_json_and_the_rules():
     system, user = llm.calls[0]
     assert json.loads(user) == build_llm_input(report_input())
     assert system == SYSTEM_PROMPT
+    # 공통 클라이언트는 출력 형식을 정하지 않는다. 급변동 형식은 작성기가 넘긴다.
+    assert llm.schemas == [OUTPUT_SCHEMA]
 
 
 def test_system_prompt_forbids_certainty_forced_causes_and_investment_advice():
@@ -311,41 +314,6 @@ def test_model_comes_from_env_with_sonnet_default():
 
 # ---- 키 노출 ----
 
-@pytest.fixture
-def fake_sdk(monkeypatch):
-    """anthropic 모듈을 가짜로 바꿔 실제 API를 부르지 않는다. 예외 문구에 일부러 키를 넣는다."""
-    module = types.ModuleType("anthropic")
-
-    class APIError(Exception):
-        pass
-
-    class APIConnectionError(APIError):
-        pass
-
-    class Messages:
-        def __init__(self, behaviour):
-            self.behaviour = behaviour
-            self.requests = []
-
-        def create(self, **kwargs):
-            self.requests.append(kwargs)
-            return self.behaviour(kwargs)
-
-    class Anthropic:
-        def __init__(self, api_key):
-            self.api_key = api_key
-            self.messages = Messages(module.behaviour)
-
-    def fail(_kwargs):
-        raise APIConnectionError(f"connection failed with x-api-key: {FAKE_KEY}")
-
-    module.APIError = APIError
-    module.Anthropic = Anthropic
-    module.behaviour = fail
-    monkeypatch.setitem(sys.modules, "anthropic", module)
-    return module
-
-
 def test_key_never_appears_in_logs_errors_or_failure_records(fake_sdk, caplog):
     with caplog.at_level(logging.DEBUG):
         writer = build_report_writer({"ANTHROPIC_API_KEY": FAKE_KEY})
@@ -358,37 +326,3 @@ def test_key_never_appears_in_logs_errors_or_failure_records(fake_sdk, caplog):
     assert FAKE_KEY not in caplog.text
     assert FAKE_KEY not in failure.detail
     assert FAKE_KEY not in repr(writer)
-
-
-def test_sdk_error_is_replaced_without_message_or_cause(fake_sdk):
-    client = AnthropicClient(FAKE_KEY, DEFAULT_MODEL)
-
-    with pytest.raises(LlmCallError) as caught:
-        client.complete("system", "user")
-
-    assert FAKE_KEY not in str(caught.value)
-    assert caught.value.__cause__ is None and caught.value.__suppress_context__
-
-
-def test_client_sends_model_system_and_json_schema_and_reads_the_text(fake_sdk):
-    def ok(_kwargs):
-        block = types.SimpleNamespace(type="text", text=VALID)
-        return types.SimpleNamespace(stop_reason="end_turn", content=[types.SimpleNamespace(type="thinking"), block])
-
-    fake_sdk.behaviour = ok
-    client = AnthropicClient(FAKE_KEY, "claude-sonnet-5-5")
-
-    assert client.complete("system", "user") == VALID
-    [request] = client._client.messages.requests
-    assert request["model"] == "claude-sonnet-5-5"
-    assert request["system"] == "system"
-    assert request["messages"] == [{"role": "user", "content": "user"}]
-    assert request["output_config"]["format"]["type"] == "json_schema"
-
-
-def test_client_treats_refusal_or_truncation_as_a_failed_attempt(fake_sdk):
-    fake_sdk.behaviour = lambda _kwargs: types.SimpleNamespace(stop_reason="refusal", content=[])
-    client = AnthropicClient(FAKE_KEY, DEFAULT_MODEL)
-
-    with pytest.raises(LlmCallError, match="refusal"):
-        client.complete("system", "user")

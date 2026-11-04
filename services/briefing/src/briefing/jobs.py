@@ -20,99 +20,30 @@ from briefing.events import (
     CONTEXT_REQUESTED_TOPIC,
     FILINGS_REQUESTED_TOPIC,
     HISTORY_REQUESTED_TOPIC,
-    OutboundEvent,
     format_timestamp,
     parse_timestamp,
     request_event,
 )
 from briefing.evidence import MARKET_WIDE, in_evidence_range
+from briefing.ports import Failure, FailurePort, FailureReason, RequestPort
+from briefing.sources import (
+    BACKGROUND_MISSING,
+    BACKGROUND_OK,
+    BACKGROUND_TOO_LARGE,
+    Article,
+    Background,
+    CloseRate,
+    Exchange,
+    Filing,
+    PricePoint,
+    next_seq,
+    parse_background,
+    response_payload,
+)
 
 log = logging.getLogger("briefing.jobs")
 
 COLLECT_NEWS = "collect-news"
-
-
-class FailureReason(str, Enum):
-    COLLECTION_NOT_COVERED = "collection_not_covered"
-    MARKET_NO_RESPONSE = "market_no_response"
-    NEWS_NO_RESPONSE = "news_no_response"
-    NEWS_UNSTABLE = "news_unstable"
-    CONTEXT_NO_RESPONSE = "context_no_response"
-    FILINGS_NO_RESPONSE = "filings_no_response"
-    LLM_ERROR = "llm_error"
-
-
-@dataclass(frozen=True)
-class Failure:
-    job_id: str
-    symbol: str
-    reason: FailureReason
-    detail: str
-    attempts: int
-
-
-@dataclass(frozen=True)
-class PricePoint:
-    as_of: datetime
-    price: int
-
-
-@dataclass(frozen=True)
-class Article:
-    article_id: str
-    title: str
-    summary: str
-    published_at: datetime
-    publisher: str
-    url: str
-
-
-@dataclass(frozen=True)
-class Filing:
-    accession_number: str
-    tickers: tuple[str, ...]
-    form: str
-    items: tuple[str, ...]
-    accepted_at: datetime
-    url: str
-
-
-@dataclass(frozen=True)
-class CloseRate:
-    ticker: str
-    date: str
-    close_at: datetime
-    rate: str
-    fetched_at: datetime
-
-
-@dataclass(frozen=True)
-class IndexRate:
-    code: str
-    name: str
-    business_day: str
-    close: str
-    prev_business_day: str | None
-    prev_close: str | None
-    rate: str | None
-
-
-BACKGROUND_OK = "ok"
-BACKGROUND_MISSING = "missing"
-BACKGROUND_TOO_LARGE = "too-large"
-
-
-@dataclass(frozen=True)
-class Background:
-    """배경 자료 한 종류(와 대상)의 최신 1건. 원문은 해석하지 않고 그대로 둔다."""
-
-    api_type: str
-    target: str | None
-    status: str
-    response: str | None = None
-    fetched_at: datetime | None = None
-    response_bytes: int | None = None
-    index_rates: tuple[IndexRate, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -135,14 +66,6 @@ class ReportInput:
     filings: tuple[Filing, ...] = ()
     filings_truncated: bool = False
     background: tuple[Background, ...] = ()
-
-
-class RequestPort(Protocol):
-    def send(self, event: OutboundEvent) -> None: ...
-
-
-class FailurePort(Protocol):
-    def record(self, failure: Failure) -> None: ...
 
 
 class ReadyPort(Protocol):
@@ -170,18 +93,6 @@ class _Phase(Enum):
     DONE = "done"
 
 
-@dataclass
-class _Exchange:
-    """응답 한 번으로 끝나는 요청(시세 이력, 배경 자료, 공시)의 순번과 보낸 시각."""
-
-    seq: int = 0
-    sent_at: datetime | None = None
-    received: bool = False
-
-    def awaiting(self) -> bool:
-        return self.sent_at is not None and not self.received
-
-
 @dataclass(frozen=True)
 class _Context:
     tickers: tuple[str, ...]
@@ -202,12 +113,12 @@ class _Job:
     created_at: datetime
     phase: _Phase = _Phase.WAITING_COLLECTION
     # 시세·배경 자료·공시: 가장 최근에 보낸 요청의 순번과 보낸 시각
-    market: _Exchange = field(default_factory=_Exchange)
+    market: Exchange = field(default_factory=Exchange)
     market_points: tuple[PricePoint, ...] | None = None
     market_truncated: bool = False
-    context: _Exchange = field(default_factory=_Exchange)
+    context: Exchange = field(default_factory=Exchange)
     context_data: _Context | None = None
-    filings: _Exchange = field(default_factory=_Exchange)
+    filings: Exchange = field(default_factory=Exchange)
     filings_data: tuple[Filing, ...] = ()
     filings_truncated: bool = False
     # 기사: 라운드(안정 확인용 재조회)와 라운드 안의 시도(재전송)를 따로 센다
@@ -293,7 +204,7 @@ class BriefingCore:
                     log.info("completion skipped for job %s (not usable)", job.job_id)
 
     def on_history_responded(self, message: str | bytes, now: datetime) -> None:
-        payload = _response_payload(message, "market.history.responded")
+        payload = response_payload(message, "market.history.responded")
         job = self._fetching_job(payload)
         if job is None:
             return
@@ -313,7 +224,7 @@ class BriefingCore:
         self._complete_if_ready(job)
 
     def on_context_responded(self, message: str | bytes, now: datetime) -> None:
-        payload = _response_payload(message, "market.context.responded")
+        payload = response_payload(message, "market.context.responded")
         job = self._fetching_job(payload)
         if job is None:
             return
@@ -330,7 +241,7 @@ class BriefingCore:
                               parse_timestamp(r["fetchedAt"]))
                     for r in payload["closeRates"]
                 ),
-                background=tuple(_parse_background(b) for b in payload["background"]),
+                background=tuple(parse_background(b) for b in payload["background"]),
             )
         except (KeyError, TypeError) as error:
             raise ValueError(f"malformed market.context.responded event: {error!r}") from error
@@ -342,7 +253,7 @@ class BriefingCore:
         self._complete_if_ready(job)
 
     def on_filings_responded(self, message: str | bytes, now: datetime) -> None:
-        payload = _response_payload(message, "news.filings.responded")
+        payload = response_payload(message, "news.filings.responded")
         job = self._fetching_job(payload)
         if job is None:
             return
@@ -364,7 +275,7 @@ class BriefingCore:
         self._complete_if_ready(job)
 
     def on_articles_responded(self, message: str | bytes, now: datetime) -> None:
-        payload = _response_payload(message, "news.articles.responded")
+        payload = response_payload(message, "news.articles.responded")
         job = self._fetching_job(payload)
         if job is None:
             return
@@ -448,7 +359,7 @@ class BriefingCore:
         self._send_news(job, now, attempt=1)
 
     def _send_market(self, job: _Job, now: datetime) -> None:
-        seq = _next(job.market, now)
+        seq = next_seq(job.market, now)
         s = self.settings
         self.requests.send(request_event(
             HISTORY_REQUESTED_TOPIC, "market.history.requested", job.correlation_id, now, {
@@ -462,7 +373,7 @@ class BriefingCore:
             }))
 
     def _send_context(self, job: _Job, now: datetime) -> None:
-        seq = _next(job.context, now)
+        seq = next_seq(job.context, now)
         s = self.settings
         self.requests.send(request_event(
             CONTEXT_REQUESTED_TOPIC, "market.context.requested", job.correlation_id, now, {
@@ -476,7 +387,7 @@ class BriefingCore:
             }))
 
     def _send_filings(self, job: _Job, now: datetime) -> None:
-        seq = _next(job.filings, now)
+        seq = next_seq(job.filings, now)
         s = self.settings
         self.requests.send(request_event(
             FILINGS_REQUESTED_TOPIC, "news.filings.requested", job.correlation_id, now, {
@@ -519,7 +430,7 @@ class BriefingCore:
         self._tick_exchange(job, job.filings, now, self._send_filings, FailureReason.FILINGS_NO_RESPONSE,
                             "news.filings.responded")
 
-    def _tick_exchange(self, job: _Job, exchange: _Exchange, now: datetime, resend, reason: FailureReason,
+    def _tick_exchange(self, job: _Job, exchange: Exchange, now: datetime, resend, reason: FailureReason,
                        event_type: str) -> None:
         if not exchange.awaiting() or now - exchange.sent_at < self.settings.response_timeout:
             return
@@ -640,39 +551,3 @@ def _log_collection(i: ReportInput, excluded: _Excluded) -> None:
 def _within_state_range(at: datetime | None, as_of: datetime, window: timedelta) -> bool:
     """상태형 자료의 시각이 [T - window, T] 안인가(양끝 포함). T 뒤 값은 변동 당시 알 수 없던 값이다."""
     return at is not None and as_of - window <= at <= as_of
-
-
-def _next(exchange: _Exchange, now: datetime) -> int:
-    exchange.seq += 1
-    exchange.sent_at = now
-    return exchange.seq
-
-
-def _parse_background(item: dict) -> Background:
-    fetched_at = item.get("fetchedAt")
-    return Background(
-        api_type=item["apiType"],
-        target=item["target"],
-        status=item["status"],
-        response=item.get("response"),
-        fetched_at=parse_timestamp(fetched_at) if fetched_at is not None else None,
-        response_bytes=item.get("responseBytes"),
-        # 선택 필드라 이전 형식 응답에는 없다.
-        index_rates=tuple(
-            IndexRate(r["code"], r["name"], r["businessDay"], r["close"], r.get("prevBusinessDay"),
-                      r.get("prevClose"), r.get("rate"))
-            for r in item.get("indexRates") or ()
-        ),
-    )
-
-
-def _response_payload(message: str | bytes, event_type: str) -> dict:
-    try:
-        event = json.loads(message)
-        if event["eventType"] != event_type:
-            raise ValueError(f"unexpected eventType: {event['eventType']}")
-        payload = event["payload"]
-        payload["jobId"], payload["seq"]  # noqa: B018 - 필수 필드 확인
-        return payload
-    except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise ValueError(f"malformed {event_type} event: {error!r}") from error

@@ -8,7 +8,7 @@ import os
 import pytest
 
 from briefing.failure_store import INSERT_SQL, TABLE, PostgresFailureStore, psycopg_connector
-from briefing.jobs import Failure, FailureReason
+from briefing.ports import Failure, FailureReason
 
 _VARS = ("BRIEFING_IT_DB_URL", "BRIEFING_IT_DB_USER", "BRIEFING_IT_DB_PASSWORD")
 
