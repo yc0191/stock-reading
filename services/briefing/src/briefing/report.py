@@ -48,6 +48,7 @@ from briefing.sources import (
     MARK_PRESENT,
     MARK_TOO_LARGE,
     MARK_TRUNCATED,
+    Article,
     Background,
 )
 
@@ -83,6 +84,7 @@ CLOSE_COMPUTED_SOURCE = "해외 시세 자료로 코드가 계산"
 SYSTEM_PROMPT = """당신은 ETF 가격 변동과 같은 시기에 공개된 자료를 연결해 원인 후보를 설명하는 도우미입니다.
 입력은 JSON이며 종목 코드, 변동 방향과 변동률, 변동 시각, 시세 이력, 기사, 미국 공시, 미국 종목 직전 정규장 등락률, 배경 자료, 숫자 항목(figures)을 담고 있습니다.
 근거로 쓸 수 있는 자료에는 ref(근거 번호)가 붙어 있습니다.
+- researchArticles는 근거가 부족해 다시 검색해 찾은 기사이며(있을 때만 담깁니다) 기사와 같은 방식으로 읽고 인용합니다.
 - 기사의 minutesFromMove는 기사 발행 시각과 변동 시각의 차이(분)이며, 음수는 변동 전, 양수는 변동 후에 나온 기사입니다.
 - 공시의 hoursBeforeMove는 공시 접수 시각이 변동보다 몇 시간 전인지입니다. 공시는 형식과 항목 번호만 있고 본문은 없습니다.
 - 해외 등락률은 변동 종목에 담긴 미국 종목의 직전 정규장 등락률(%)이며 hoursBeforeMove는 그 장 마감이 변동보다 몇 시간 전인지입니다.
@@ -165,6 +167,8 @@ class Report:
     evidence: tuple[EvidenceItem, ...]
     # 끝내 성공했더라도 그 전에 실패한 LLM 시도들
     failed_attempts: tuple[LlmAttempt, ...] = ()
+    # LLM이 근거 부족(insufficientEvidence true)을 냈다. 재검색 여부를 정하는 데 쓴다.
+    insufficient_evidence: bool = False
 
 
 class ReportError(Exception):
@@ -349,7 +353,7 @@ def evidence_catalog(report_input: ReportInput) -> dict[str, EvidenceItem]:
     """LLM이 인용할 수 있는 근거 번호와 자료. LLM 입력과 출력 검증이 같은 목록을 쓴다."""
     i = report_input
     catalog: dict[str, EvidenceItem] = {}
-    for a in i.articles:
+    for a in i.articles + i.research_articles:
         catalog[a.article_id] = EvidenceItem(KIND_ARTICLE, a.article_id, a.title, a.publisher, a.published_at,
                                              a.url, a.article_id)
     # 본문이 회사를 티커로 말하므로 근거 목록에서도 어느 회사 자료인지 구분되게 제목에 티커를 넣는다.
@@ -472,7 +476,7 @@ def build_llm_input(report_input: ReportInput) -> dict[str, Any]:
     i = report_input
     us = bool(i.tickers)
     rated = {r.ticker for r in i.close_rates}
-    return {
+    data: dict[str, Any] = {
         "symbol": i.symbol,
         "direction": direction_of(i.change_percent),
         "changePercent": round(i.change_percent, 2),
@@ -480,19 +484,7 @@ def build_llm_input(report_input: ReportInput) -> dict[str, Any]:
         "priceHistoryStatus": _status(len(i.price_points), i.history_truncated),
         "priceHistory": [{"at": _at(p.as_of), "price": p.price} for p in i.price_points],
         "articlesStatus": _status(len(i.articles), i.articles_truncated),
-        "articles": [
-            {
-                "ref": a.article_id,
-                "articleId": a.article_id,
-                "title": a.title,
-                "summary": a.summary,
-                "source": a.publisher,
-                "publishedAt": _at(a.published_at),
-                # 내림으로 계산해 음수는 언제나 변동 전에 나온 기사를 뜻하게 한다.
-                "minutesFromMove": int((a.published_at - i.as_of).total_seconds() // 60),
-            }
-            for a in i.articles
-        ],
+        "articles": [_article_input(a, i.as_of) for a in i.articles],
         "filingsStatus": _status(len(i.filings), i.filings_truncated, us),
         "filings": [
             {
@@ -523,6 +515,24 @@ def build_llm_input(report_input: ReportInput) -> dict[str, Any]:
         "background": [_background_input(ref, b, i.as_of) for ref, b in zip(_background_refs(i), i.background)],
         # 배경 원문에서 꺼낸 숫자와 코드가 계산한 비교 숫자. LLM은 계산하지 않고 ref로 인용만 한다.
         "figures": [_figure_input(e, i.as_of) for e in figure_entries(i)],
+    }
+    # 재검색 기사는 다시 쓸 때만 있다. 첫 작성의 입력 모양은 바꾸지 않는다.
+    if i.research_articles:
+        data["researchArticlesStatus"] = _status(len(i.research_articles), i.research_articles_truncated)
+        data["researchArticles"] = [_article_input(a, i.as_of) for a in i.research_articles]
+    return data
+
+
+def _article_input(a: Article, as_of: datetime) -> dict[str, Any]:
+    return {
+        "ref": a.article_id,
+        "articleId": a.article_id,
+        "title": a.title,
+        "summary": a.summary,
+        "source": a.publisher,
+        "publishedAt": _at(a.published_at),
+        # 내림으로 계산해 음수는 언제나 변동 전에 나온 기사를 뜻하게 한다.
+        "minutesFromMove": int((a.published_at - as_of).total_seconds() // 60),
     }
 
 
@@ -638,7 +648,7 @@ def _llm_report(report_input: ReportInput, output: LlmOutput) -> Report:
         lines.append("")
         lines.extend(unchecked_lines(i))
         lines.append(LLM_DISCLAIMER)
-        return Report("\n".join(lines), GENERATED_BY_LLM, ())
+        return Report("\n".join(lines), GENERATED_BY_LLM, (), insufficient_evidence=True)
 
     cited: list[str] = []
     for cause in output.causes:
@@ -714,6 +724,12 @@ class ReportStage:
     move_failures: MoveFailurePort = field(default_factory=DiscardMoveFailures)
 
     def on_ready(self, report_input: ReportInput) -> None:
+        report = self.write(report_input)
+        if report is not None:
+            self.publish(report_input, report)
+
+    def write(self, report_input: ReportInput) -> Report | None:
+        """리포트를 만든다. 끝내 못 만들면 llm_error로 기록하고 None."""
         try:
             report = self.writer.write(report_input)
         except ReportError as error:
@@ -726,10 +742,12 @@ class ReportStage:
                 "detail": error.detail,
                 "failedAttempts": [_attempt_data(a) for a in error.failed_attempts],
             })
-            return
-        now = self.clock()
-        self._record_attempts(report_input, report.failed_attempts, now)
-        self.publisher.send(briefing_event(report_input, report, now))
+            return None
+        self._record_attempts(report_input, report.failed_attempts, self.clock())
+        return report
+
+    def publish(self, report_input: ReportInput, report: Report) -> None:
+        self.publisher.send(briefing_event(report_input, report, self.clock()))
 
     def _record_attempts(self, report_input: ReportInput, attempts: tuple[LlmAttempt, ...], now: datetime) -> None:
         for a in attempts:

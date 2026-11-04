@@ -1,0 +1,15 @@
+{
+  "eventId": "3e7b1c90-5a24-4d68-b0f3-8c1d2e4a6b57",
+  "eventType": "news.research.requested",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T16:16:10+09:00",
+  "producedAt": "2026-10-20T16:16:10.210+09:00",
+  "correlationId": "collect-2026-10-20T16:00:30+09:00",
+  "payload": {
+    "jobId": "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13",
+    "seq": 1,
+    "jobKind": "move",
+    "symbol": "TEST01",
+    "queries": ["테스트 재검색어 하나", "테스트 재검색어 둘"]
+  }
+}

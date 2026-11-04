@@ -70,6 +70,8 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 6. 기사(`articleId`), 공시(접수번호), 해외 등락률(`U1`…), 배경 자료(`B1`…)에 근거 번호를 붙여 LLM에 줍니다. 배경 자료에는 받은 시각과 변동보다 얼마나 전 값인지를 붙이고, 원인으로 단정하지 말라고 지시합니다. 코드가 배경 원문에서 꺼낸 숫자(원/달러 환율, 코스피·코스닥)와 비교 숫자(변동률과 지수 등락률의 차이, 담긴 미국 종목 집계)에도 근거 번호(`F1`…)를 붙입니다. LLM은 원인마다 제목, 구체 문장, 뜻 문장과 각 문장의 근거 번호(`refs`, `meaningRefs`)를 내고, 코드가 형식과 인용 번호를 검증해 빈 문장이나 목록 밖 번호가 있으면 거부합니다. 본문은 머리말(종목, 시각, 방향과 변동률, 몇 분 사이 움직였는지) → 원인별 묶음(인용한 자료의 제목·출처·시각·링크 포함) → 확인하지 못한 것(받지 못하거나 잘린 자료) → "투자 조언이 아님" 문구 순이며, 머리말·확인하지 못한 것·면책 문구는 코드가 넣습니다. `generatedBy`는 `llm`입니다. LLM 키가 없으면 원인을 추정하지 않고 비교 사실과 기사·공시를 나열하는 같은 모양의 규칙 기반 리포트를 만듭니다. `generatedBy`는 `rule-based`입니다.
 7. `briefing.generated`의 근거에는 자료 종류(`kind`)와 근거 번호(`ref`)를 담습니다. 출처는 제공자 이름 대신 중립 표현을 쓰고, 공시와 해외 등락률의 근거 제목에는 어느 회사 자료인지 알 수 있게 미국 티커를 넣습니다(로그에는 넣지 않습니다).
 
+8. LLM이 근거 부족(`insufficientEvidence` true)을 내면 한 번 재검색합니다. 검색어만 내는 LLM을 따로 불러 검색어(최대 3개)를 받고, 수집기에 재검색(`news.research.requested`, 작업 종류 `move`, 태그는 그 종목)을 작업 하나당 한 번 요청합니다. 같은 재검색 작업 id(`researchJobId`)의 완료 알림을 대기 상한 안에서 기다린 뒤 그 작업 id로 기사를 조회하며(`news.articles.requested`의 `researchJobId`, 다시 요청·안정 판정 규칙은 4번과 같음), 받은 기사는 5번과 같은 시간 범위로 다시 거르고 이미 받은 기사는 빼서 기존 기사와 따로 둔 칸(`researchArticles`)에 담아 리포트를 한 번 더 씁니다. 재검색 기사도 근거 번호(`articleId`)와 링크 규칙이 기사와 같습니다. 검색어 LLM 실패, 검색어 없음, 수집기의 하루 상한·검색 실패(`incompleteSymbols`), 완료 알림 시간 초과, 기사 조회 무응답, 거른 뒤 남은 기사 없음이면 기존 근거로 리포트를 내며, 다시 써도 근거 부족이면 근거 부족 리포트를 냅니다. 새 실패 사유는 없고 로그와 한 줄 재검색 내역 로그(`research job=... researched=... articles=... articlesExcluded=... result=...`)에만 남깁니다. 검색어와 종목은 로그에 쓰지 않습니다. 단계마다의 재검색 기록(검색어 포함)은 아직 저장하지 않습니다. LLM 키가 없으면 재검색하지 않습니다.
+
 같은 종목의 변동이 여러 번 와도 이벤트마다 리포트를 만듭니다. 같은 `eventId`는 한 번만 처리합니다.
 
 ### 데일리 브리핑 (아침 판, 마감 후 판)
@@ -87,7 +89,7 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 
 ### 설정
 
-근거 조회 설정(Δ, 자료별 시간 범위와 기준 기간, 시세 이력 간격, 자료별 최대 건수·크기, 응답 제한 시간, 재시도 횟수, 재확인 간격, 대기 상한 등)은 `services/briefing/src/briefing/config.py`의 `CoreSettings` 기본값이며 환경변수로 바꿀 수 없습니다. 값과 뜻은 그 파일에 있습니다.
+근거 조회 설정(Δ, 자료별 시간 범위와 기준 기간, 시세 이력 간격, 자료별 최대 건수·크기, 응답 제한 시간, 재시도 횟수, 재확인 간격, 대기 상한 등)과 재검색 설정(검색어 최대 개수, 검색어 LLM 시도 횟수, 재검색 완료 알림 대기 상한)은 `services/briefing/src/briefing/config.py`의 `CoreSettings` 기본값이며 환경변수로 바꿀 수 없습니다. 값과 뜻은 그 파일에 있습니다.
 
 환경변수(`.env`)는 다음과 같습니다.
 
@@ -188,7 +190,7 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 
 ## 수집기의 외부 데이터 설정 (`collector`)
 
-수집기에는 공시, 시세, 뉴스 검색 클라이언트가 있습니다. 시세 기본은 가짜 데이터(시뮬레이터)이며, `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 외부 API를 씁니다. 뉴스는 `collect-news` tick마다 검색해 기사마다 `news.collected`를 발행하고, 기사 전송이 모두 확정된 뒤 `collection.completed`를 한 건 발행합니다([ADR-010](adr/010-event-format.md)). DART 공시는 아직 조회 클라이언트까지만 구현되어 있고 이벤트로 발행하지 않습니다. 미국 종목 공시(SEC EDGAR)는 아래 장 시작 전 수집에서 `filing.collected`로 발행합니다. 기본값은 `application.yml`의 `collector.*`가 원본입니다.
+수집기에는 공시, 시세, 뉴스 검색 클라이언트가 있습니다. 시세 기본은 가짜 데이터(시뮬레이터)이며, `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 외부 API를 씁니다. 뉴스는 `collect-news` tick마다 검색해 기사마다 `news.collected`를 발행하고, 기사 전송이 모두 확정된 뒤 `collection.completed`를 한 건 발행합니다([ADR-010](adr/010-event-format.md)). 브리핑의 재검색 요청을 받으면 요청한 검색어로 같은 방식으로 검색해 기사에 재검색 작업 id를 싣고, 끝나면 `jobType` `research-news`로 완료 알림을 보냅니다. DART 공시는 아직 조회 클라이언트까지만 구현되어 있고 이벤트로 발행하지 않습니다. 미국 종목 공시(SEC EDGAR)는 아래 장 시작 전 수집에서 `filing.collected`로 발행합니다. 기본값은 `application.yml`의 `collector.*`가 원본입니다.
 
 | 설정 | 설명 |
 |---|---|
@@ -201,6 +203,7 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 | `NEWS_SEARCH_ID_HEADER` / `NEWS_SEARCH_SECRET_HEADER` | 제공자가 정한 인증 헤더 이름 |
 | `NEWS_SEARCH_QUERIES` | `검색어=종목코드,종목코드;검색어2=*` 형식. 관심 종목이 드러나므로 `.env`에만 둡니다 |
 | `NEWS_SEARCH_CALL_INTERVAL_MS` | 검색어를 연달아 호출할 때 호출 사이의 대기(밀리초). 0이면 기다리지 않으며, 짧으면 제공자가 429로 거절할 수 있습니다([측정 기록](test-history/S01-real-api/call-interval.md)) |
+| `NEWS_RESEARCH_MAX_QUERIES` | 브리핑의 뉴스 재검색 요청(`news.research.requested`) 하나에서 실제로 검색할 검색어 수 상한(기본 3). 넘는 검색어는 버립니다. 검색어마다 하루 검색 호출 상한(`NEWS_SEARCH_DAILY_CALL_LIMIT`)을 한 번씩 쓰고, 상한에 걸리거나 검색이 실패하면 완료 알림의 `incompleteSymbols`에 요청 종목을 담습니다. 0 이하이면 시작 단계에서 실패합니다 |
 | `DART_API_KEY` | 공시 API 키 |
 | `ETF_US_HOLDINGS` | 관심 ETF별 미국 상위 종목 목록. `ETF코드=티커,티커;ETF코드2=티커` 형식이며 ETF 코드는 6자리 숫자·대문자, 티커는 영문 대문자·숫자 1~6자(종류 구분이 있으면 `.` 또는 `-` 뒤 1~2자)입니다. 형식이 틀리면 시작 단계에서 실패하고, 오류 메시지에는 값 대신 몇 번째 항목인지만 적습니다. 종류 구분은 `-`로 맞춰 씁니다(`.`로 적어도 같은 종목). 비어 있으면 보유 종목이 없는 것으로 봅니다. 보유 종목이 드러나므로 `.env`에만 둡니다 |
 | `EDGAR_USER_AGENT` | SEC EDGAR 요청의 User-Agent. SEC가 요구하는 `회사명 연락이메일` 형식입니다. 연락 이메일은 개인 정보이므로 `.env`에만 둡니다. 비어 있으면 공시를 조회하지 않습니다 |

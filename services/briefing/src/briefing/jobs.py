@@ -84,6 +84,11 @@ class ReportInput:
     # market.move를 감지한 시각(봉투의 occurredAt)과 감지 유형. 머리말의 "몇 분 사이"에 쓴다. 이전 형식에는 없을 수 있다.
     detected_at: datetime | None = None
     detection_type: str | None = None
+    # 기사 요청에 마지막으로 쓴 순번. 재검색 기사 조회는 이 뒤 순번을 써서 늦게 온 이전 응답과 섞이지 않게 한다.
+    news_seq: int = 0
+    # 근거 부족으로 다시 검색해 받은 기사. 기존 기사와 따로 두고, 근거 번호·링크 규칙은 기사와 같다.
+    research_articles: tuple[Article, ...] = ()
+    research_articles_truncated: bool = False
 
 
 class ReadyPort(Protocol):
@@ -545,7 +550,8 @@ class BriefingCore:
             articles_truncated=job.news_truncated, tickers=context.tickers,
             tickers_truncated=context.tickers_truncated, close_rates=tuple(close_rates),
             filings=tuple(filings), filings_truncated=job.filings_truncated, background=tuple(background),
-            detected_at=job.detected_at, detection_type=job.detection_type)
+            detected_at=job.detected_at, detection_type=job.detection_type,
+            news_seq=job.news_seq)
         _log_collection(report_input, _Excluded(
             articles=len(job.news_articles or ()) - len(articles),
             filings=len(job.filings_data) - len(filings),

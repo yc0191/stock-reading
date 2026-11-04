@@ -45,6 +45,22 @@ class NewsContractTest {
         assertThat(event.eventType()).isEqualTo("news.collected");
         assertThat(event.payload().symbols()).containsExactly("TEST01");
         assertThat(event.payload().matchedQueries()).containsExactly("테스트검색어");
+        assertThat(event.payload().researchJobId()).isNull();
+    }
+
+    @Test
+    void researchJobIdIsReadWhenPresentAndStaysOptional() throws IOException {
+        String withResearch = ContractSchemas.sample(SAMPLE).replace(
+                "\"symbols\": [\"TEST01\"]",
+                "\"symbols\": [\"TEST01\"],\n    \"researchJobId\": \"5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13\"");
+
+        assertThat(ContractSchemas.validate(SCHEMA, withResearch)).isEmpty();
+        NewsEnvelope event = mapper.readValue(withResearch, NewsEnvelope.class);
+        assertThat(event.payload().researchJobId()).isEqualTo("5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13");
+
+        Map<?, ?> schema = mapper.readValue(ContractSchemas.schema(SCHEMA), Map.class);
+        Map<?, ?> payload = (Map<?, ?>) ((Map<?, ?>) schema.get("properties")).get("payload");
+        assertThat(requiredOf(payload)).doesNotContain("researchJobId");
     }
 
     @Test

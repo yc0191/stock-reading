@@ -46,12 +46,14 @@ class TopicsConfigTest {
                             .containsEntry(Topics.NEWS_COLLECTED, 3)
                             .containsEntry(Topics.MARKET_INSIGHT, 3)
                             .containsEntry(Topics.COLLECTION_COMPLETED, 1)
-                            .containsEntry(Topics.FILING_COLLECTED, 3);
+                            .containsEntry(Topics.FILING_COLLECTED, 3)
+                            .containsEntry(Topics.NEWS_RESEARCH_REQUESTED, 3);
                     assertThat(Topics.MARKET_SNAPSHOT_FAILED).isEqualTo("market.snapshot.failed");
                     assertThat(Topics.NEWS_COLLECTED).isEqualTo("news.collected");
                     assertThat(Topics.MARKET_INSIGHT).isEqualTo("market.insight");
                     assertThat(Topics.COLLECTION_COMPLETED).isEqualTo("collection.completed");
                     assertThat(Topics.FILING_COLLECTED).isEqualTo("filing.collected");
+                    assertThat(Topics.NEWS_RESEARCH_REQUESTED).isEqualTo("news.research.requested");
                 });
     }
 }

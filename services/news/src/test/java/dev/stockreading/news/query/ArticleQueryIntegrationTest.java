@@ -7,6 +7,7 @@ import static org.mockito.Mockito.verify;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.UUID;
 
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
@@ -56,6 +57,47 @@ class ArticleQueryIntegrationTest {
         insert("q-other", SINCE.plusHours(3), "ITQ002");
         insert("q-until", UNTIL, "ITQ001");
         insert("q-after", UNTIL.plusSeconds(1), "ITQ001");
+
+        // 재검색 기사는 요청 종목(ITQ001)과 "*" 가 아닌 태그를 붙인다. 작업 id 로 읽을 때 종목 조건을 보지 않는지 확인하고,
+        // 종목으로 읽는 기존 테스트의 결과에는 섞이지 않게 한다.
+        insertResearch("r-before", SINCE.minusSeconds(1), RESEARCH_JOB, "ITR001");
+        insertResearch("r-since", SINCE, RESEARCH_JOB, "ITR001");
+        insertResearch("r-middle", SINCE.plusHours(4), RESEARCH_JOB, "ITR003");
+        insertResearch("r-other-job", SINCE.plusHours(5), OTHER_RESEARCH_JOB, "ITR001");
+        insertResearch("r-until", UNTIL, RESEARCH_JOB, "ITR002");
+        insertResearch("r-after", UNTIL.plusSeconds(1), RESEARCH_JOB, "ITR001");
+    }
+
+    private static final UUID RESEARCH_JOB = UUID.fromString("b1000000-0000-4000-8000-000000000001");
+    private static final UUID OTHER_RESEARCH_JOB = UUID.fromString("b2000000-0000-4000-8000-000000000002");
+
+    @Test
+    void researchJobQueryReturnsOnlyThatJobsArticlesInRangeWhateverTheirTags() {
+        List<ArticleQueryRepository.StoredArticle> found = repository.findByResearchJob(RESEARCH_JOB, SINCE, UNTIL, 100);
+
+        // 기간 양끝은 포함하고, 다른 작업의 기사와 정기 수집 기사(q-*)는 빠진다.
+        assertThat(found).extracting(ArticleQueryRepository.StoredArticle::title)
+                .containsExactly("r-until", "r-middle", "r-since");
+    }
+
+    @Test
+    void researchJobQueryKeepsTheNewestWithinTheLimit() {
+        assertThat(repository.findByResearchJob(RESEARCH_JOB, SINCE, UNTIL, 1))
+                .extracting(ArticleQueryRepository.StoredArticle::title).containsExactly("r-until");
+    }
+
+    @Test
+    void requestWithAResearchJobIdIsAnsweredWithThatJobsArticlesUnderTheRequestSymbol() {
+        ArticlesPublisher publisher = mock(ArticlesPublisher.class);
+        ArticlesRequestListener listener = new ArticlesRequestListener(repository, publisher, JsonMapper.builder().build());
+
+        listener.onRequest(request(100).replace("\"maxArticles\":100", "\"maxArticles\":100,\"researchJobId\":\""
+                + RESEARCH_JOB + "\""));
+
+        ArgumentCaptor<List<ArticlesPayload.Article>> articles = ArgumentCaptor.captor();
+        verify(publisher).publish(eq("it-job"), eq(1), eq("ITQ001"), articles.capture(), eq(false), eq("it"));
+        assertThat(articles.getValue()).extracting(ArticlesPayload.Article::title)
+                .containsExactly("r-until", "r-middle", "r-since");
     }
 
     @Test
@@ -101,6 +143,12 @@ class ArticleQueryIntegrationTest {
             jdbc.sql("INSERT INTO news_article_symbol (article_id, symbol) VALUES (:id, :symbol)")
                     .param("id", id).param("symbol", symbol).update();
         }
+    }
+
+    private static void insertResearch(String title, OffsetDateTime publishedAt, UUID jobId, String symbol) {
+        insert(title, publishedAt, symbol);
+        jdbc.sql("UPDATE news_article SET from_research = true, research_job_id = :jobId WHERE title = :title")
+                .param("jobId", jobId).param("title", title).update();
     }
 
     private static String request(int maxArticles) {

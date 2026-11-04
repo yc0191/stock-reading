@@ -10,6 +10,7 @@ HISTORY_REQUESTED_TOPIC = "market.history.requested"
 ARTICLES_REQUESTED_TOPIC = "news.articles.requested"
 CONTEXT_REQUESTED_TOPIC = "market.context.requested"
 FILINGS_REQUESTED_TOPIC = "news.filings.requested"
+RESEARCH_REQUESTED_TOPIC = "news.research.requested"
 BRIEFING_GENERATED_TOPIC = "briefing.generated"
 DAILY_BRIEFING_GENERATED_TOPIC = "briefing.daily.generated"
 
@@ -20,6 +21,10 @@ JOB_TYPE_BY_EDITION = {
     EDITION_MORNING: "daily-briefing-morning",
     EDITION_POST_CLOSE: "daily-briefing-post-close",
 }
+
+# 재검색을 부른 작업의 종류(news.research.requested 의 jobKind). 데일리 판은 판 종류 값을 그대로 쓴다.
+JOB_KIND_MOVE = "move"
+RESEARCH_JOB_KINDS = (JOB_KIND_MOVE, EDITION_MORNING, EDITION_POST_CLOSE)
 
 
 @dataclass(frozen=True)
@@ -58,6 +63,19 @@ def request_event(topic: str, kind: str, correlation_id: str, now: datetime, pay
         },
     )
 
+
+def research_request_event(job_id: str, seq: int, job_kind: str, symbol: str, queries: list[str],
+                           correlation_id: str, now: datetime) -> OutboundEvent:
+    """재검색 요청 봉투를 만든다. 응답 이벤트는 없고, 수집기는 기사와 완료 알림에 job_id를 researchJobId로 싣는다."""
+    if job_kind not in RESEARCH_JOB_KINDS:
+        raise ValueError(f"unknown job kind: {job_kind}")
+    return request_event(RESEARCH_REQUESTED_TOPIC, RESEARCH_REQUESTED_TOPIC, correlation_id, now, {
+        "jobId": job_id,
+        "seq": seq,
+        "jobKind": job_kind,
+        "symbol": symbol,
+        "queries": list(queries),
+    })
 
 
 def daily_briefing_event(tick_event_id: str, correlation_id: str, scheduled_for: datetime, now: datetime,
