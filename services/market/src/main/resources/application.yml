@@ -34,7 +34,8 @@ market:
   window-threshold-percent: 1.00
   # 유형 2(prevClose): 응답 원문(raw)의 전일 종가 필드 대비 변동의 절댓값이 이 값(%) 이상이면 "변동"으로 본다.
   # prev-close-field는 시세 응답의 전일 종가 항목이다. 실제 응답 샘플 2개에서 현재가와 이 항목으로 계산한 등락률이 응답의 등락률과 같음을 확인했다.
-  # 제공자 고유 항목 이름은 공개 파일에 쓰지 않으므로 공유 .env의 MARKET_PREV_CLOSE_FIELD로만 넣는다. 비어 있으면 유형 2를 끈다.
+  # 제공자 응답의 전일 종가 항목이 하루 안에서 깨져 오는 경우가 있어(2026-11-04 확인) 기본값을 비워 유형 2를 꺼 둔다.
+  # 켜려면 MARKET_PREV_CLOSE_FIELD 환경변수로 항목 경로(원문 루트 기준 점 경로)를 준다. 비어 있으면 시작할 때 경고한다.
   prev-close-field: ${MARKET_PREV_CLOSE_FIELD:}
   prev-close-threshold-percent: 3.00
   holdings:

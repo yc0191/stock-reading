@@ -15,8 +15,10 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
@@ -215,8 +217,11 @@ class IntradayTickListenerTest {
                 "dev.stockreading.collector.schedule.FilingTickListener");
         Set<String> groups = new HashSet<>();
         for (String name : listeners) {
-            KafkaListener annotation = Class.forName(name).getDeclaredMethod("onTick", String.class)
-                    .getAnnotation(KafkaListener.class);
+            // 리스너 메서드 이름과 인자는 서비스마다 다를 수 있어(TickListener 는 묶음 수신) 어노테이션으로 찾는다.
+            KafkaListener annotation = Arrays.stream(Class.forName(name).getDeclaredMethods())
+                    .map(method -> method.getAnnotation(KafkaListener.class))
+                    .filter(Objects::nonNull)
+                    .findFirst().orElseThrow();
             assertThat(annotation.topics()).containsExactly(Topics.SCHEDULE_TICK);
             assertThat(groups.add(annotation.groupId())).as(name + " 의 그룹").isTrue();
         }

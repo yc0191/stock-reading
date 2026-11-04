@@ -82,6 +82,26 @@ class QuoteFailureIntegrationTest {
                 .containsEntry("token_age_ms", null).containsEntry("response_raw", null);
     }
 
+    @Test
+    void fieldMismatchFailureIsStoredWithItsChecksAndResponse() {
+        listener.onFailure("""
+                {"eventId":"b3000000-0000-4000-8000-000000000001","eventType":"market.snapshot.failed","schemaVersion":1,
+                 "occurredAt":"2026-03-05T10:00:02+09:00","producedAt":"2026-03-05T10:00:02+09:00","correlationId":"it",
+                 "payload":{"symbol":"ITF003","failureType":"FIELD_MISMATCH","scheduledFor":"2026-03-05T10:00:00+09:00",
+                            "httpStatus":200,"exceptionType":"FieldMismatch:CHANGE+RATE",
+                            "responseRaw":"{\\"dataBody\\":{\\"price\\":\\"99999\\",\\"rate\\":\\"  -1.00\\"}}"}}
+                """);
+
+        Map<String, Object> row = jdbc.sql("""
+                        SELECT failure_type, exception_type, response_raw #>> '{dataBody,rate}' AS rate
+                        FROM quote_failure WHERE symbol = 'ITF003'
+                        """).query().singleRow();
+        assertThat(row).containsEntry("failure_type", "FIELD_MISMATCH")
+                .containsEntry("exception_type", "FieldMismatch:CHANGE+RATE")
+                // 원문 칸의 앞 공백까지 그대로 남는다.
+                .containsEntry("rate", "  -1.00");
+    }
+
     private static String message(String eventId, String symbol, String responseRaw) {
         var mapper = JsonMapper.builder().build();
         return """

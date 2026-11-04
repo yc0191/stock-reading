@@ -115,7 +115,8 @@ class NewsTickListenerTest {
     void usesItsOwnConsumerGroupSoItDoesNotCompeteWithTickListener() throws NoSuchMethodException {
         KafkaListener news = NewsTickListener.class.getDeclaredMethod("onTick", String.class)
                 .getAnnotation(KafkaListener.class);
-        KafkaListener market = TickListener.class.getDeclaredMethod("onTick", String.class)
+        // TickListener 는 쌓인 tick 을 묶음으로 받으므로 리스너 메서드가 onTicks(List) 다.
+        KafkaListener market = TickListener.class.getDeclaredMethod("onTicks", List.class)
                 .getAnnotation(KafkaListener.class);
 
         assertThat(news.groupId()).isNotEqualTo(market.groupId());

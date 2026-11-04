@@ -4,9 +4,13 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -16,6 +20,8 @@ final class FakeBrokerServer implements AutoCloseable {
 
     static final String OK_HEADER =
             "{\"resultCode\":\"200\",\"processCode\":\"0024\",\"processTime\":\"20261022101530123\"}";
+
+    private static final Pattern SYMBOL = Pattern.compile("\"shrt_cd\"\\s*:\\s*\"([^\"]+)\"");
 
     final AtomicInteger tokenCalls = new AtomicInteger();
     final AtomicInteger priceCalls = new AtomicInteger();
@@ -33,6 +39,8 @@ final class FakeBrokerServer implements AutoCloseable {
     volatile int priceStatus = 200;
     volatile String priceBody = "{\"dataHeader\":" + OK_HEADER + ",\"dataBody\":{\"now_prc\":\"10250\"}}";
     volatile long priceDelayMs;
+    // 종목 코드별 현재가 응답 본문. 없으면 priceBody 를 쓴다.
+    final Map<String, String> priceBodyBySymbol = new ConcurrentHashMap<>();
 
     private final HttpServer server;
 
@@ -51,7 +59,10 @@ final class FakeBrokerServer implements AutoCloseable {
             maxInFlight.accumulateAndGet(now, Math::max);
             try {
                 sleep(priceDelayMs);
-                reply(exchange, priceStatus, priceBody);
+                String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                Matcher symbol = SYMBOL.matcher(request);
+                String body = symbol.find() ? priceBodyBySymbol.getOrDefault(symbol.group(1), priceBody) : priceBody;
+                reply(exchange, priceStatus, body);
             } finally {
                 inFlight.decrementAndGet();
             }

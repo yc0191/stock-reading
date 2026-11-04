@@ -14,7 +14,9 @@ import java.io.IOException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
 import org.junit.jupiter.api.AfterEach;
@@ -342,8 +344,12 @@ class InsightTickListenerTest {
         KafkaListener insight = InsightTickListener.class.getDeclaredMethod("onTick", String.class)
                 .getAnnotation(KafkaListener.class);
         for (String other : List.of("TickListener", "NewsTickListener")) {
-            KafkaListener otherListener = Class.forName("dev.stockreading.collector.schedule." + other)
-                    .getDeclaredMethod("onTick", String.class).getAnnotation(KafkaListener.class);
+            // 리스너 메서드 이름과 인자는 서비스마다 다를 수 있어(TickListener 는 묶음 수신) 어노테이션으로 찾는다.
+            KafkaListener otherListener = Arrays.stream(
+                            Class.forName("dev.stockreading.collector.schedule." + other).getDeclaredMethods())
+                    .map(method -> method.getAnnotation(KafkaListener.class))
+                    .filter(Objects::nonNull)
+                    .findFirst().orElseThrow();
             assertThat(insight.groupId()).isNotEqualTo(otherListener.groupId());
         }
     }

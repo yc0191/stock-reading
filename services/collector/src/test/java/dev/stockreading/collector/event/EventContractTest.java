@@ -10,6 +10,7 @@ import java.time.ZoneId;
 
 import org.junit.jupiter.api.Test;
 
+import dev.stockreading.collector.marketdata.FailureType;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -98,6 +99,29 @@ class EventContractTest {
         assertThat(minimalJson).doesNotContain("httpStatus").doesNotContain("null");
         assertThat(ContractSchemas.validate("market.snapshot.failed.v1.schema.json", minimalJson)).isEmpty();
         assertThat(ContractSchemas.validate("market.snapshot.failed.v1.schema.json", mapper.writeValueAsString(full))).isEmpty();
+    }
+
+    @Test
+    void producedFieldMismatchFailureWithRawResponseMatchesSchema() throws IOException {
+        OffsetDateTime at = OffsetDateTime.now(SHARP_CLOCK);
+        String time = EventFactory.format(at);
+        Envelope<FailurePayload> mismatch = EventFactory.create(
+                SHARP_CLOCK, "market.snapshot.failed", at, "collect-" + time,
+                new FailurePayload("TEST01", FailureType.FIELD_MISMATCH.name(), time, null, null, 12L,
+                        "FieldMismatch:CHANGE+RATE", null, 2, 1, 1, "{\"dataBody\":{\"price\":\"99999\"}}"));
+
+        String json = mapper.writeValueAsString(mismatch);
+        assertThat(json).contains("\"failureType\":\"FIELD_MISMATCH\"").contains("responseRaw");
+        assertThat(ContractSchemas.validate("market.snapshot.failed.v1.schema.json", json)).isEmpty();
+    }
+
+    @Test
+    void everyFailureTypeIsAllowedBySchema() throws IOException {
+        for (FailureType type : FailureType.values()) {
+            String sample = ContractSchemas.sample("market.snapshot.failed.sample.json")
+                    .replace("\"HTTP_ERROR\"", "\"" + type.name() + "\"");
+            assertThat(ContractSchemas.validate("market.snapshot.failed.v1.schema.json", sample)).as(type.name()).isEmpty();
+        }
     }
 
     @Test

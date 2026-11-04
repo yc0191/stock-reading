@@ -78,6 +78,24 @@ class QuoteFailureListenerTest {
     }
 
     @Test
+    void fieldMismatchFailureIsStoredWithItsChecksAndRawResponse() throws IOException {
+        when(repository.insertIfAbsent(any(), any(), any(), any(), any(), any())).thenReturn(true);
+        String message = ContractSchemas.sample("market.snapshot.failed.sample.json")
+                .replace("\"HTTP_ERROR\"", "\"FIELD_MISMATCH\"")
+                .replace("\"HttpStatusException\"", "\"FieldMismatch:CHANGE+RATE\"");
+        assertThat(ContractSchemas.validate("market.snapshot.failed.v1.schema.json", message)).isEmpty();
+
+        listener.onFailure(message);
+
+        ArgumentCaptor<FailureEnvelope.FailurePayload> payload = ArgumentCaptor.forClass(FailureEnvelope.FailurePayload.class);
+        ArgumentCaptor<String> raw = ArgumentCaptor.forClass(String.class);
+        verify(repository).insertIfAbsent(eq(EVENT_ID), any(), any(), payload.capture(), any(), raw.capture());
+        assertThat(payload.getValue().failureType()).isEqualTo("FIELD_MISMATCH");
+        assertThat(payload.getValue().exceptionType()).isEqualTo("FieldMismatch:CHANGE+RATE");
+        assertThat(raw.getValue()).isEqualTo("{\"example\":\"fake-error-response\"}");
+    }
+
+    @Test
     void failureWithoutOptionalFieldsIsStored() throws IOException {
         when(repository.insertIfAbsent(any(), any(), any(), any(), any(), any())).thenReturn(true);
         String minimal = """

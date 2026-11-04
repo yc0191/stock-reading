@@ -79,6 +79,27 @@ collector:
     # 종목 수와 같게 두면 오래 돌 때 일부 호출을 놓치므로 종목 수의 1.2배 이상으로 둔다(docs/test-history/S03).
     # 실제 서버가 5분 버틴 가장 높은 속도는 초당 12회였으므로 그 아래로 둔다(docs/test-history/S04).
     max-calls-per-second: ${BROKER_MAX_CALLS_PER_SECOND:10}
+    # 현재가를 같은 응답의 전일대비·등락률·고저가와 맞춰 보고, 판단할 수 있는 검사 중 과반이 어긋나면
+    # 시세로 보내지 않고 FIELD_MISMATCH 실패로 남긴다(응답 원문 포함).
+    price-check:
+      enabled: ${BROKER_PRICE_CHECK_ENABLED:true}
+      # 가격 비율. 중간가 체결은 5원 단위 사이 값으로 오고 전일대비·등락률은 5원 단위로 계산돼 와서 0 이면 멀쩡한 값도 버린다.
+      tolerance: ${BROKER_PRICE_CHECK_TOLERANCE:0.003}
+      # 아래 칸 이름과 부호 구분 값의 기본값은 2026-11-04 장중 실제 응답에서 확인한 값이다. 현재가 칸 이름처럼
+      # 공개 API 식별자로 보고 기본값으로 두며, 제공자 응답이 바뀌면 환경변수로 덮어쓴다.
+      # 비어 있는 검사는 판단하지 않으며, 모두 비우면 검사 없이 통과한다(시작할 때 경고).
+      # 전일 종가로 쓸 수 있는 칸들(쉼표 구분). 하나라도 맞으면 전일대비·등락률 검사를 통과한다.
+      base-fields: ${BROKER_PRICE_CHECK_BASE_FIELDS:bdy_cls_prc,sprc,krx_bdy_clpr}
+      change-field: ${BROKER_PRICE_CHECK_CHANGE_FIELD:bdy_cmpr}
+      change-sign-field: ${BROKER_PRICE_CHECK_CHANGE_SIGN_FIELD:bdy_cmpr_ccd}
+      # 부호 구분 칸의 상승·보합·하락 값(쉼표 구분). 어느 쪽에도 없는 값이면 전일대비 검사를 판단하지 않는다.
+      # 2026-11-04 실데이터에는 2·3·5 만 나왔다. 상승의 1, 하락의 4 는 관례(상한·하한)로 넣은 미확인 값이다.
+      sign-up: ${BROKER_PRICE_CHECK_SIGN_UP:1,2}
+      sign-flat: ${BROKER_PRICE_CHECK_SIGN_FLAT:3}
+      sign-down: ${BROKER_PRICE_CHECK_SIGN_DOWN:4,5}
+      rate-field: ${BROKER_PRICE_CHECK_RATE_FIELD:up_dwn_r_p2}
+      high-field: ${BROKER_PRICE_CHECK_HIGH_FIELD:hgh_prc}
+      low-field: ${BROKER_PRICE_CHECK_LOW_FIELD:lw_prc}
   news-search:
     base-url: ${NEWS_SEARCH_BASE_URL:}
     client-id: ${NEWS_SEARCH_CLIENT_ID:}
