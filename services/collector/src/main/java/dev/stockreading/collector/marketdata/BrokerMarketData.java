@@ -21,17 +21,22 @@ class BrokerMarketData implements MarketDataPort {
 
     /** 상한 때문에 호출하지 못한 종목을 TICK_SKIPPED 와 구분하는 exceptionType 값. 계약에 정식 값이 생기면 대체한다. */
     static final String RATE_LIMITED = "RateLimited";
+    // 시세가 돌아왔다면 응답은 HTTP 200 이었다(그 밖의 상태는 BrokerClient 가 실패로 끝낸다).
+    private static final int HTTP_OK = 200;
     // tick 시각이 조금 어긋나도 곧 자리가 나는 호출은 기다렸다 보낸다.
     private static final Duration LIMITER_WAIT = Duration.ofMillis(300);
     private static final Logger log = LoggerFactory.getLogger(BrokerMarketData.class);
 
     private final BrokerClient client;
     private final CallRateLimit limiter;
+    private final PriceFieldCheck priceCheck;
     private final int maxCallsPerSecond;
     private final AtomicInteger inFlight = new AtomicInteger();
 
-    BrokerMarketData(BrokerClient client, CollectorProperties collector, BrokerProperties broker, CallRateLimit limiter) {
+    BrokerMarketData(BrokerClient client, CollectorProperties collector, BrokerProperties broker, CallRateLimit limiter,
+                     PriceFieldCheck priceCheck) {
         this.client = client;
+        this.priceCheck = priceCheck;
         this.maxCallsPerSecond = broker.maxCallsPerSecond();
         this.limiter = limiter;
         int symbolCount = collector.symbols() == null ? 0 : collector.symbols().size();
@@ -94,7 +99,19 @@ class BrokerMarketData implements MarketDataPort {
         int concurrent = inFlight.incrementAndGet();
         long start = System.nanoTime();
         try {
-            return new Outcome(client.currentPrice(symbol), null);
+            PriceQuote quote = client.currentPrice(symbol);
+            List<PriceFieldCheck.Check> failed = priceCheck.failedChecks(quote.price(), quote.raw());
+            if (failed.isEmpty()) {
+                return new Outcome(quote, null);
+            }
+            // 칸이 서로 맞지 않는 응답은 시세로 보내지 않고 원문과 함께 실패로 남긴다. 로그에는 값 없이 검사 이름만 쓴다.
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            String checks = PriceFieldCheck.exceptionType(failed);
+            log.warn("quote rejected symbol={} type={} checks={}", symbol, FailureType.FIELD_MISMATCH, checks);
+            BrokerClient.TokenState token = client.tokenState();
+            return new Outcome(null, new QuoteFailure(symbol, FailureType.FIELD_MISMATCH, HTTP_OK, null,
+                    elapsedMs, checks, token == null ? null : token.ageMs(), token == null ? null : token.remainingMs(),
+                    concurrent, quote.raw()));
         } catch (BrokerApiException e) {
             long elapsedMs = (System.nanoTime() - start) / 1_000_000;
             // 서버가 보낸 문구는 로그에 남기지 않는다. 메시지는 우리가 만든 문구와 처리 코드뿐이다.

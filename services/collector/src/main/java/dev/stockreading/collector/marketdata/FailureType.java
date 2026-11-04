@@ -9,5 +9,6 @@ public enum FailureType {
     PRICE_PARSE_FAILED,
     CONNECTION_FAILED,
     TIMEOUT,
-    TICK_SKIPPED
+    TICK_SKIPPED,
+    FIELD_MISMATCH
 }

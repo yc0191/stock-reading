@@ -60,9 +60,10 @@
             "PRICE_PARSE_FAILED",
             "CONNECTION_FAILED",
             "TIMEOUT",
-            "TICK_SKIPPED"
+            "TICK_SKIPPED",
+            "FIELD_MISMATCH"
           ],
-          "description": "실패 종류. TOKEN_ISSUE_FAILED=토큰 발급 실패, HTTP_ERROR=HTTP 오류, RESULT_CODE_FAILED=응답의 결과 코드 실패, EMPTY_PRICE=빈 가격, PRICE_PARSE_FAILED=가격 해석 실패, CONNECTION_FAILED=연결 실패, TIMEOUT=시간 초과, TICK_SKIPPED=밀린 tick 건너뜀."
+          "description": "실패 종류. TOKEN_ISSUE_FAILED=토큰 발급 실패, HTTP_ERROR=HTTP 오류, RESULT_CODE_FAILED=응답의 결과 코드 실패, EMPTY_PRICE=빈 가격, PRICE_PARSE_FAILED=가격 해석 실패, CONNECTION_FAILED=연결 실패, TIMEOUT=시간 초과, TICK_SKIPPED=밀린 tick 건너뜀, FIELD_MISMATCH=응답은 받았지만 현재가가 같은 응답의 다른 칸(전일대비, 등락률, 고가·저가)과 서로 맞지 않아 시세로 쓰지 않음. FIELD_MISMATCH이면 exceptionType에 걸린 검사 이름을, responseRaw에 응답 원문을 담는다."
         },
         "scheduledFor": {
           "type": "string",
@@ -87,7 +88,7 @@
         },
         "exceptionType": {
           "type": "string",
-          "description": "선택. 예외 클래스 이름. 예외 메시지는 담지 않는다."
+          "description": "선택. 예외 클래스 이름. 예외 메시지는 담지 않는다. TICK_SKIPPED는 건너뛴 사유(예: RateLimited), FIELD_MISMATCH는 걸린 검사 이름(예: FieldMismatch:CHANGE+RATE)을 담는다."
         },
         "tokenState": {
           "type": "object",

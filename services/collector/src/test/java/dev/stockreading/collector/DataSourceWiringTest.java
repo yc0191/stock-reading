@@ -19,6 +19,7 @@ import dev.stockreading.collector.insight.InsightProperties;
 import dev.stockreading.collector.insight.InsightSourcePort;
 import dev.stockreading.collector.marketdata.BrokerProperties;
 import dev.stockreading.collector.marketdata.MarketDataPort;
+import dev.stockreading.collector.marketdata.PriceCheckProperties;
 import dev.stockreading.collector.news.NewsCollector;
 import dev.stockreading.collector.news.NewsSearchPort;
 import dev.stockreading.collector.news.NewsSearchProperties;
@@ -30,7 +31,7 @@ class DataSourceWiringTest {
 
     @Configuration
     @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, NewsSearchProperties.class, DartProperties.class,
-            InsightProperties.class})
+            InsightProperties.class, PriceCheckProperties.class})
     @ComponentScan(basePackages = {
             "dev.stockreading.collector.marketdata",
             "dev.stockreading.collector.news",
@@ -88,6 +89,21 @@ class DataSourceWiringTest {
             assertThat(context.getBean(CollectorProperties.class).tickIntervalMs()).isEqualTo(1_000);
             assertThat(context.getBean(CollectorProperties.class).maxTickAgeMs()).isEqualTo(3_000);
             assertThat(context.getBean(BrokerProperties.class).maxCallsPerSecond()).isEqualTo(10);
+        });
+    }
+
+    @Test
+    void priceCheckIsOnWithPointThreePercentAndNoFieldNamesInPublicConfig() {
+        runner().run(context -> {
+            PriceCheckProperties check = context.getBean(PriceCheckProperties.class);
+            assertThat(check.enabled()).isTrue();
+            assertThat(check.tolerance()).isEqualByComparingTo("0.003");
+            // 칸 이름과 부호 값은 제공자 고유 항목이라 공유 .env 로만 받는다.
+            assertThat(check.baseFields()).isEmpty();
+            assertThat(check.signUp()).isEmpty();
+            assertThat(check.changeField()).isEmpty();
+            assertThat(check.rateField()).isEmpty();
+            assertThat(check.highField()).isEmpty();
         });
     }
 

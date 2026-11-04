@@ -168,6 +168,9 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 | `COLLECTOR_TICK_INTERVAL_MS` | `schedule.tick`(수집) 발행 간격(밀리초). 타이머(`COLLECTOR_SCHEDULE_ENABLED=true`)가 켜져 있을 때만 쓰입니다. `scheduledFor`가 초 단위라 1000보다 작게 두면 같은 초의 tick이 중복으로 버려집니다 |
 | `COLLECTOR_MAX_TICK_AGE_MS` | 현재보다 이만큼 이상 오래된 tick은 조회하지 않고 종목마다 `TICK_SKIPPED` 실패 이벤트로 기록합니다 |
 | `BROKER_MAX_CALLS_PER_SECOND` | 초당 시세 호출 상한. 종목 수가 이보다 많으면 시작할 때 경고하고, 넘친 종목은 그 tick에서 호출하지 않고 `TICK_SKIPPED` 실패 이벤트로 기록합니다. 상한 때문임은 `exceptionType=RateLimited`로 구분하며, 나중에 계약에 정식 실패 종류가 생기면 바꿀 수 있습니다. **종목 수와 같게 두면 오래 돌 때 일부 호출을 놓치고 처리도 느려지므로 종목 수의 1.2배 이상으로 두세요**([측정 기록](test-history/S03-quote-fixed-load/results.md), 가짜 서버로 쟀을 때. 1.1배까지는 가짜 서버 시험에서 놓침이 없었지만 처리 시간이 길었습니다, [R012](test-history/S03-quote-fixed-load/results.md)). 값을 올릴 때는 실제 서버가 5분을 버틴 가장 높은 속도가 초당 12회이고 13회부터 걸렸다는 점을 넘지 않게 합니다([S04](test-history/S04-quote-real-api/results.md)). 제공자의 공식 한도는 앱 전체 초당 40회, API별 초당 20회입니다 |
+| `BROKER_PRICE_CHECK_ENABLED` | 기본 `true`. 시세 응답마다 현재가를 같은 응답의 전일대비·등락률·고가·저가와 맞춰 보고, 판단할 수 있는 검사 중 과반이 어긋나면 시세 이벤트를 보내지 않고 `FIELD_MISMATCH` 실패 이벤트로 기록합니다. 어느 검사에 걸렸는지는 `exceptionType=FieldMismatch:CHANGE+RATE`처럼(`CHANGE` 전일대비, `RATE` 등락률, `HIGH_LOW` 고가·저가), 응답 원문은 `responseRaw`에 담깁니다(토큰 값은 가림). 비교 칸이 비었거나 숫자가 아닌 검사는 판단하지 않고, 판단할 검사가 하나도 없으면 통과시킵니다. 로그에는 종목 코드와 검사 이름만 남습니다. `false`면 검사하지 않습니다 |
+| `BROKER_PRICE_CHECK_TOLERANCE` | 위 검사의 허용 오차(가격 비율, 기본 `0.003` = 0.3%, 0 이상 1 미만이 아니면 시작 단계에서 실패). 호가 사이 가운데 값으로 체결되면 현재가가 호가 단위 사이 값으로 오는데 전일대비·등락률은 호가 단위 가격으로 계산돼 와서, 0이면 멀쩡한 값도 버립니다 |
+| `BROKER_PRICE_CHECK_BASE_FIELDS` / `BROKER_PRICE_CHECK_CHANGE_FIELD` / `BROKER_PRICE_CHECK_CHANGE_SIGN_FIELD` / `BROKER_PRICE_CHECK_SIGN_UP` / `BROKER_PRICE_CHECK_SIGN_FLAT` / `BROKER_PRICE_CHECK_SIGN_DOWN` / `BROKER_PRICE_CHECK_RATE_FIELD` / `BROKER_PRICE_CHECK_HIGH_FIELD` / `BROKER_PRICE_CHECK_LOW_FIELD` | 위 검사가 읽을 응답 칸 이름(전일 종가, 전일대비, 전일대비 부호 구분, 등락률, 고가, 저가)과 부호 구분 칸의 상승·보합·하락 값. 전일 종가 칸과 부호 값은 쉼표로 여러 개를 줄 수 있고, 전일 종가 칸 중 하나라도 맞으면 전일대비·등락률 검사를 통과합니다. 제공자 고유 이름이라 공개 파일에 쓰지 않고 공유 `.env`로만 넣습니다. 비어 있는 검사는 판단하지 않으며, 모두 비어 있으면 시작할 때 경고를 한 번 남기고 검사 없이 통과시킵니다 |
 | `NEWS_SEARCH_BASE_URL` / `NEWS_SEARCH_CLIENT_ID` / `NEWS_SEARCH_CLIENT_SECRET` | 뉴스 검색 제공자의 주소와 키 |
 | `NEWS_SEARCH_ID_HEADER` / `NEWS_SEARCH_SECRET_HEADER` | 제공자가 정한 인증 헤더 이름 |
 | `NEWS_SEARCH_QUERIES` | `검색어=종목코드,종목코드;검색어2=*` 형식. 관심 종목이 드러나므로 `.env`에만 둡니다 |
@@ -334,6 +337,16 @@ TEST_ALL_AWS_PROFILE=<AWS 프로필> scripts/test-all.sh --live
 ## 실행 기록 (테스트 기록)
 
 여러 검색어를 반복 수집하는 실행의 사양과 결과는 [`docs/test-history/`](test-history/README.md)에 남깁니다. 고정 입력 시험에는 가짜 검색 서버 `scripts/fake-news-search.py`를 씁니다. 시세 조회의 종목 수별 부하는 `QuoteFixedLoadTest`(`QUOTE_LOAD=1`일 때만 실행, 실행 방법은 [S03 사양](test-history/S03-quote-fixed-load/scenario.md))로 쟀습니다.
+
+시세 응답 칸 검사(`BROKER_PRICE_CHECK_*`)를 바꾸면 저장해 둔 실제 시세 원문으로 `PriceCheckReplayTest`를 돌려, 버리는 행이 분석으로 정한 목록과 같은지 확인합니다. 입력·기대 파일은 저장소 밖에 두고(저장소 안 경로는 거절), 칸 이름은 수집기와 같은 환경변수로 넘깁니다. 차이는 건수만 출력합니다.
+
+```bash
+# 입력: 한 줄에 eventId<TAB>price<TAB>raw JSON (시세 테이블에서 읽기만 해서 만듦)
+# 기대: eventId 한 줄씩인 파일, 또는 첫 칸이 snapshot_event_id 인 CSV
+export BROKER_PRICE_CHECK_BASE_FIELDS=...   # 나머지 BROKER_PRICE_CHECK_* 도 같은 방식
+PRICE_CHECK_REPLAY_INPUT=<저장소 밖>/raws.tsv PRICE_CHECK_REPLAY_EXPECTED=<저장소 밖>/expected.csv \
+  ./gradlew :services:collector:cleanTest :services:collector:test --no-build-cache --tests '*PriceCheckReplayTest'
+```
 
 ## 배포 전에 정할 것
 
