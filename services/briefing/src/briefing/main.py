@@ -26,6 +26,7 @@ from briefing.events import (
     DAILY_BRIEFING_GENERATED_TOPIC,
     FILINGS_REQUESTED_TOPIC,
     HISTORY_REQUESTED_TOPIC,
+    RESEARCH_REQUESTED_TOPIC,
     OutboundEvent,
 )
 from briefing.failure_store import PostgresFailureStore, psycopg_connector
@@ -54,6 +55,7 @@ TOPIC_PARTITIONS = {
     CONTEXT_RESPONDED_TOPIC: 3,      # market
     FILINGS_REQUESTED_TOPIC: 3,      # news
     FILINGS_RESPONDED_TOPIC: 3,      # news
+    RESEARCH_REQUESTED_TOPIC: 3,     # collector
     BRIEFING_GENERATED_TOPIC: 3,     # notifier
     DAILY_BRIEFING_GENERATED_TOPIC: 1,  # notifier
 }

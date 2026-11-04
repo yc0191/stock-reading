@@ -33,7 +33,8 @@
           "uniqueItems": true,
           "items": { "type": "string" },
           "description": "기사가 걸린 검색어. 선택."
-        }
+        },
+        "researchJobId": { "type": "string", "format": "uuid", "description": "재검색(news.research.requested)에서 찾은 기사이면 그 요청의 jobId. 없으면 정기 수집에서 온 기사다. 선택." }
       }
     }
   }

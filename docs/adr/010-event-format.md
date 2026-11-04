@@ -38,6 +38,8 @@ Avro + 스키마 레지스트리, Protobuf
 
 2026-11-02 변경: 배경 자료(`market.context.*`)와 공시(`news.filings.*`) 요청·응답 쌍을 더했다. 기존 응답에 얹지 않고 자료마다 한 쌍으로 둔 이유: 얹으면 이미 정한 v1 응답의 뜻이 바뀌고, 공시는 배경 자료 응답의 미국 종목 목록을 받은 뒤에야 요청할 수 있어 따로 받는다. ETF별 미국 종목 대응표는 해외 등락률을 저장한 시세처리기가 읽어 그 목록을 응답에 싣는다. 선택 필드도 더했다: `market.history.requested`의 `intervalSeconds`, `briefing.generated` 근거의 `kind`·`ref`, `market.context.responded` 세계지수 항목의 `indexRates`. 필드의 원본은 `contracts/events/`의 스키마다.
 
+2026-11-04 변경: 근거가 부족할 때의 뉴스 재검색을 위해 `news.research.requested` 새 요청 이벤트(브리핑 → 수집기)를 더했다. 응답 이벤트는 따로 두지 않는다. 수집기는 찾은 기사를 기존 `news.collected`로 news에 저장하게 하고, 끝나면 `collection.completed`를 한 건 보내며, 브리핑은 그 완료를 받은 뒤 기존 `news.articles.*` 쌍으로 다시 조회한다. 검색 결과를 수집기가 바로 돌려주지 않는 이유: 기사 저장과 시간 범위·건수 규칙을 news 한 곳에 두기 위해서다. 요청의 `jobId`는 급변동이면 `market.move`의 `eventId`, 데일리 판이면 그 판을 시작시킨 `schedule.tick`의 `eventId`다. 선택 필드 `researchJobId`를 `news.collected`, `collection.completed`, `news.articles.requested`에 더해 재검색 기사, 끝난 재검색, 그 재검색 기사만 조회하는 요청을 표시한다. 재검색 완료의 `jobType`은 `research-news`다.
+
 ## 실제로 겪은 함정
 - **시각 형식:** `OffsetDateTime.toString()`은 초가 0이면 초를 생략해 RFC 3339 `date-time`에 어긋난다. 표준 포매터를 쓰고, 해당 케이스 테스트를 둔다.
 - **형식 검증이 기본으로 꺼져 있다:** JSON 스키마 검증 라이브러리는 `date-time` 등 형식을 기본으로 검사하지 않는다(Java는 옵션을 켜야 하고, Python `jsonschema`는 선택 패키지가 없으면 조용히 통과). 형식 검사를 켜고, **잘못된 입력이 실제로 거부되는지** 음성 테스트로 확인한다.

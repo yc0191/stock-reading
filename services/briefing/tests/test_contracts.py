@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 import pytest
 
 from briefing.compose import KST
-from briefing.events import EDITION_MORNING, EDITION_POST_CLOSE, JOB_TYPE_BY_EDITION, daily_briefing_event
+from briefing.events import (EDITION_MORNING, EDITION_POST_CLOSE, JOB_TYPE_BY_EDITION, RESEARCH_JOB_KINDS,
+                             daily_briefing_event, research_request_event)
 from contracts import CONTRACTS_DIR, sample, validate
 
 
@@ -61,6 +62,7 @@ EVIDENCE_CONTRACTS = [
     ("market.context.responded.v1.schema.json", "market.context.responded.sample.json"),
     ("news.filings.requested.v1.schema.json", "news.filings.requested.sample.json"),
     ("news.filings.responded.v1.schema.json", "news.filings.responded.sample.json"),
+    ("news.research.requested.v1.schema.json", "news.research.requested.sample.json"),
 ]
 
 
@@ -106,6 +108,7 @@ def test_evidence_job_id_is_the_move_event_id():
         "market.context.responded.sample.json",
         "news.filings.requested.sample.json",
         "news.filings.responded.sample.json",
+        "news.research.requested.sample.json",
     ):
         assert sample(sample_file)["payload"]["jobId"] == move["eventId"], sample_file
         assert sample(sample_file)["correlationId"] == move["correlationId"], sample_file
@@ -151,6 +154,13 @@ def test_requests_reject_bad_sequence_symbol_and_limit():
         ("news.filings.requested", "tickers", ["TESTA", "TESTA"]),
         ("news.filings.requested", "tickers", ["testa"]),
         ("news.filings.requested", "maxFilings", 0),
+        ("news.research.requested", "seq", 0),
+        ("news.research.requested", "symbol", "test01"),
+        ("news.research.requested", "jobKind", "noon"),
+        ("news.research.requested", "queries", []),
+        ("news.research.requested", "queries", ["테스트1", "테스트2", "테스트3", "테스트4"]),
+        ("news.research.requested", "queries", ["테스트1", "테스트1"]),
+        ("news.research.requested", "queries", [""]),
     ]
     for topic, field, value in cases:
         broken = sample(f"{topic}.sample.json")
@@ -468,3 +478,75 @@ def test_daily_briefing_job_types_are_the_ones_listed_in_the_tick_schema():
     assert set(JOB_TYPE_BY_EDITION) == {"morning", "post-close"}
     for job_type in JOB_TYPE_BY_EDITION.values():
         assert job_type in description
+
+
+RESEARCH_SCHEMA = "news.research.requested.v1.schema.json"
+RESEARCH_JOB_ID = "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13"
+
+
+def test_research_sample_uses_fake_symbol_and_queries_only():
+    payload = sample("news.research.requested.sample.json")["payload"]
+
+    # 검색어는 LLM이 만들어 보유 종목을 드러낼 수 있으므로 샘플에는 가짜 값만 둔다.
+    assert payload["symbol"].startswith("TEST")
+    assert payload["queries"] and all("테스트" in query for query in payload["queries"])
+
+
+def test_research_request_has_no_response_event():
+    assert not list(CONTRACTS_DIR.glob("news.research.responded*"))
+
+
+@pytest.mark.parametrize("job_kind, symbol", [("move", "TEST01"), ("morning", "*"), ("post-close", "*")])
+def test_research_request_built_by_the_producer_matches_the_schema(job_kind, symbol):
+    at = datetime(2026, 10, 20, 16, 16, 10, tzinfo=KST)
+    event = research_request_event(job_id=RESEARCH_JOB_ID, seq=1, job_kind=job_kind, symbol=symbol,
+                                   queries=["테스트 재검색어"], correlation_id="move-correlation", now=at)
+
+    assert event.topic == "news.research.requested"
+    assert event.key == symbol
+    assert validate(RESEARCH_SCHEMA, event.value) == []
+    assert event.value["payload"]["jobKind"] == job_kind
+    assert event.value["correlationId"] == "move-correlation"
+
+
+def test_research_request_event_id_is_the_same_for_the_same_job_and_seq():
+    at = datetime(2026, 10, 20, 16, 16, 10, tzinfo=KST)
+
+    def build(job_id, seq, now):
+        return research_request_event(job_id=job_id, seq=seq, job_kind="move", symbol="TEST01",
+                                      queries=["테스트 재검색어"], correlation_id="c", now=now).value["eventId"]
+
+    first = build(RESEARCH_JOB_ID, 1, at)
+    assert build(RESEARCH_JOB_ID, 1, at + timedelta(seconds=5)) == first
+    assert build(RESEARCH_JOB_ID, 2, at) != first
+    assert build("0b8c2d3e-4f50-4a6b-9c7d-1e2f3a4b5c6d", 1, at) != first
+
+
+def test_research_request_event_rejects_an_unknown_job_kind():
+    at = datetime(2026, 10, 20, 16, 16, 10, tzinfo=KST)
+
+    assert set(RESEARCH_JOB_KINDS) == {"move", "morning", "post-close"}
+    with pytest.raises(ValueError):
+        research_request_event(job_id=RESEARCH_JOB_ID, seq=1, job_kind="noon", symbol="*",
+                               queries=["테스트 재검색어"], correlation_id="c", now=at)
+
+
+@pytest.mark.parametrize("schema_file, sample_file", [
+    ("news.collected.v1.schema.json", "news.collected.sample.json"),
+    ("collection.completed.v1.schema.json", "collection.completed.sample.json"),
+    ("news.articles.requested.v1.schema.json", "news.articles.requested.sample.json"),
+])
+def test_research_job_id_is_an_optional_uuid_on_existing_events(schema_file, sample_file):
+    schema = json.loads((CONTRACTS_DIR / schema_file).read_text(encoding="utf-8"))
+    assert "researchJobId" not in schema["properties"]["payload"]["required"]
+
+    older = sample(sample_file)
+    assert "researchJobId" not in older["payload"]
+    assert validate(schema_file, older) == []
+
+    with_research = sample(sample_file)
+    with_research["payload"]["researchJobId"] = RESEARCH_JOB_ID
+    assert validate(schema_file, with_research) == []
+
+    with_research["payload"]["researchJobId"] = "not-a-uuid"
+    assert validate(schema_file, with_research) != []
