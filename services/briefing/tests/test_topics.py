@@ -38,7 +38,7 @@ def test_declares_every_topic_it_reads_or_writes_with_the_partition_count_the_ot
     main.ensure_topics("localhost:9092")
 
     declared = {topic.topic: topic.num_partitions for topic in FakeAdminClient.created}
-    # 수집기(collection.completed 1), 발송기(briefing.daily.generated 1), 시세처리기·뉴스·발송기(나머지 3)의 Topics.java와 같아야 한다.
+    # 수집기(collection.completed 1, schedule.tick 1), 발송기(briefing.daily.generated 1), 시세처리기·뉴스·발송기(나머지 3)의 Topics.java와 같아야 한다.
     assert declared == {
         "market.move": 3,
         "collection.completed": 1,
@@ -54,6 +54,7 @@ def test_declares_every_topic_it_reads_or_writes_with_the_partition_count_the_ot
         "briefing.daily.generated": 1,
         "market.daily.requested": 3,
         "market.daily.responded": 3,
+        "schedule.tick": 1,
     }
 
 

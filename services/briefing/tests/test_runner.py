@@ -197,7 +197,8 @@ def test_open_declares_topics_creates_the_table_and_subscribes_to_the_six_input_
     assert store.created == 1
     assert consumer.subscribed == ["market.move", "collection.completed",
                                    "market.history.responded", "news.articles.responded",
-                                   "market.context.responded", "news.filings.responded"]
+                                   "market.context.responded", "news.filings.responded",
+                                   "market.daily.responded"]
     assert consumer.config["enable.auto.commit"] is False
     assert producer.config["acks"] == "all"
 

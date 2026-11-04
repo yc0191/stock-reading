@@ -42,3 +42,26 @@ class StoreSettings:
 
 DEFAULT_SETTINGS = CoreSettings()
 DEFAULT_STORE_SETTINGS = StoreSettings()
+
+
+@dataclass(frozen=True)
+class DailySettings:
+    """데일리 브리핑(아침 판, 마감 후 판)의 설정값."""
+
+    # 범위 시작은 예정 시각에서 직전 평일의 같은 시각이다. 그래도 이보다 오래 거슬러 가지 않는다.
+    max_lookback: timedelta = timedelta(days=7)
+    # 재요청 규칙은 급변동 근거 조회와 같다.
+    response_timeout: timedelta = timedelta(seconds=10)
+    max_attempts: int = 3
+    max_response_bytes: int = 32 * 1024
+    max_etfs: int = 50
+    max_tickers: int = 100
+    max_filings: int = 20
+    # 세계지수 대륙구분 중 미국 지수가 든 값(market 설정 world-index-continents의 아메리카).
+    us_index_target: str = "C"
+    llm_max_attempts: int = 3
+    # 같은 tick 중복 처리를 막기 위해 기억하는 eventId 수.
+    remembered_ticks: int = 1000
+
+
+DEFAULT_DAILY_SETTINGS = DailySettings()

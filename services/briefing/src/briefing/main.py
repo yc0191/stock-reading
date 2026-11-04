@@ -1,4 +1,5 @@
-"""Kafka 실행부: market.move -> 시세 이력·배경 자료·기사·공시 조회 -> briefing.generated. 실행: python -m briefing.main
+"""Kafka 실행부: market.move -> 시세 이력·배경 자료·기사·공시 조회 -> briefing.generated,
+schedule.tick(데일리 판) -> 데일리 자료·공시 조회 -> briefing.daily.generated. 실행: python -m briefing.main
 
 Kafka를 import하는 곳은 이 파일뿐이다. 근거 조회(jobs), 리포트(report), 실패 기록(failure_store)은
 메시지와 시각을 인자로 받기만 하고, 여기서 받은 메시지를 넘기고 그쪽이 낸 이벤트를 발행한다.
@@ -18,12 +19,16 @@ from confluent_kafka import Consumer, KafkaError, Producer
 from confluent_kafka.admin import AdminClient, NewTopic
 
 from briefing.compose import KST
-from briefing.config import DEFAULT_SETTINGS, CoreSettings
+from briefing.config import DEFAULT_DAILY_SETTINGS, DEFAULT_SETTINGS, CoreSettings, DailySettings
+from briefing.daily_jobs import DailyCore, DailyFailureRecordPort, DiscardDailyFailureRecords
+from briefing.daily_report import DailyLlmWriter, build_daily_writer
 from briefing.events import (
     ARTICLES_REQUESTED_TOPIC,
     BRIEFING_GENERATED_TOPIC,
     CONTEXT_REQUESTED_TOPIC,
     DAILY_BRIEFING_GENERATED_TOPIC,
+    EDITION_MORNING,
+    EDITION_POST_CLOSE,
     FILINGS_REQUESTED_TOPIC,
     HISTORY_REQUESTED_TOPIC,
     OutboundEvent,
@@ -43,6 +48,7 @@ CONTEXT_RESPONDED_TOPIC = "market.context.responded"
 FILINGS_RESPONDED_TOPIC = "news.filings.responded"
 DAILY_DATA_REQUESTED_TOPIC = "market.daily.requested"
 DAILY_DATA_RESPONDED_TOPIC = "market.daily.responded"
+SCHEDULE_TICK_TOPIC = "schedule.tick"
 
 # 같은 토픽을 선언하는 다른 서비스(Topics.java)와 파티션 수가 같아야 한다. 어긋나면 일부 종목이 오류 없이 누락된다.
 TOPIC_PARTITIONS = {
@@ -60,9 +66,15 @@ TOPIC_PARTITIONS = {
     DAILY_BRIEFING_GENERATED_TOPIC: 1,  # notifier
     DAILY_DATA_REQUESTED_TOPIC: 3,   # market
     DAILY_DATA_RESPONDED_TOPIC: 3,   # market
+    SCHEDULE_TICK_TOPIC: 1,          # collector
 }
 SUBSCRIBED_TOPICS = (MOVE_TOPIC, COLLECTION_COMPLETED_TOPIC, HISTORY_RESPONDED_TOPIC, ARTICLES_RESPONDED_TOPIC,
-                     CONTEXT_RESPONDED_TOPIC, FILINGS_RESPONDED_TOPIC)
+                     CONTEXT_RESPONDED_TOPIC, FILINGS_RESPONDED_TOPIC, DAILY_DATA_RESPONDED_TOPIC)
+# schedule.tick 은 파티션이 1개라 같은 그룹이면 한쪽 판만 tick 을 받아 다른 판이 오류 없이 빠진다. 판마다 그룹을 따로 둔다.
+TICK_CONSUMER_GROUPS = {
+    EDITION_MORNING: {"group.id": "briefing-daily-morning"},
+    EDITION_POST_CLOSE: {"group.id": "briefing-daily-post-close"},
+}
 
 # 로컬 브로커는 IPv4만 받는다. 이 설정이 없으면 클라이언트가 먼저 ::1로 접속을 시도하며 연결 오류를 로그에 남긴다.
 COMMON = {"broker.address.family": "v4"}
@@ -112,6 +124,8 @@ class KafkaPublisher:
             log.error("%d message(s) not delivered within %ds (topic=%s)", remaining, FLUSH_SECONDS, event.topic)
         elif event.topic == BRIEFING_GENERATED_TOPIC:
             log.info("published briefing for %s (correlationId=%s)", event.key, event.value["correlationId"])
+        elif event.topic == DAILY_BRIEFING_GENERATED_TOPIC:
+            log.info("published daily briefing %s (correlationId=%s)", event.key, event.value["correlationId"])
 
 
 def _on_delivery(error, message) -> None:
@@ -131,7 +145,10 @@ class BriefingRunner:
                  clock: Callable[[], datetime] = lambda: datetime.now(KST),
                  consumer_factory: Callable[[dict], Consumer] = Consumer,
                  producer_factory: Callable[[dict], Producer] = Producer,
-                 declare_topics: Callable[[str], None] = ensure_topics) -> None:
+                 declare_topics: Callable[[str], None] = ensure_topics,
+                 daily_writer: DailyLlmWriter | None = None,
+                 daily_details: DailyFailureRecordPort | None = None,
+                 daily_settings: DailySettings = DEFAULT_DAILY_SETTINGS) -> None:
         self.bootstrap = bootstrap
         self.writer = writer
         self.failures = failures
@@ -140,6 +157,11 @@ class BriefingRunner:
         self._consumer_factory = consumer_factory
         self._producer_factory = producer_factory
         self._declare_topics = declare_topics
+        self.daily_writer = daily_writer
+        self.daily_details = daily_details or DiscardDailyFailureRecords()
+        self.daily_settings = daily_settings
+        self.daily: DailyCore | None = None
+        self.tick_consumers: dict[str, Consumer] = {}
         self._consumer: Consumer | None = None
         self._producer: Producer | None = None
         self.core: BriefingCore | None = None
@@ -159,7 +181,8 @@ class BriefingRunner:
         self._thread.start()
         log.info("briefing started: %s -> %s", ", ".join(SUBSCRIBED_TOPICS),
                  ", ".join((HISTORY_REQUESTED_TOPIC, CONTEXT_REQUESTED_TOPIC, ARTICLES_REQUESTED_TOPIC,
-                            FILINGS_REQUESTED_TOPIC, BRIEFING_GENERATED_TOPIC)))
+                            FILINGS_REQUESTED_TOPIC, BRIEFING_GENERATED_TOPIC, DAILY_DATA_REQUESTED_TOPIC,
+                            DAILY_BRIEFING_GENERATED_TOPIC)))
 
     def request_stop(self) -> None:
         """루프에 멈추라고만 알린다. 시그널 처리기에서 부를 수 있도록 기다리지 않는다."""
@@ -190,6 +213,18 @@ class BriefingRunner:
         publisher = KafkaPublisher(self._producer)
         stage = ReportStage(self.writer, publisher, self.failures, clock=self.clock)
         self.core = BriefingCore(publisher, self.failures, stage, self.settings)
+        self.daily = DailyCore(publisher, self.failures, self.daily_writer, self.daily_details, self.daily_settings)
+        for edition, group in TICK_CONSUMER_GROUPS.items():
+            consumer = self._consumer_factory({
+                "bootstrap.servers": self.bootstrap,
+                **group,
+                # 그룹이 처음 생길 때 지난 tick 을 처음부터 읽으면 지난 판이 한꺼번에 다시 나간다. 그룹이 생긴 뒤의 tick 만 받는다.
+                "auto.offset.reset": "latest",
+                "enable.auto.commit": False,
+                **COMMON,
+            })
+            consumer.subscribe([SCHEDULE_TICK_TOPIC])
+            self.tick_consumers[edition] = consumer
         self._consumer = self._consumer_factory({
             "bootstrap.servers": self.bootstrap,
             "group.id": "briefing",
@@ -207,6 +242,13 @@ class BriefingRunner:
                 log.error("consumer error: %s", message.error())
             else:
                 self.handle_message(message)
+        for edition, consumer in self.tick_consumers.items():
+            tick = consumer.poll(0)
+            if tick is not None:
+                if tick.error():
+                    log.error("tick consumer error (%s): %s", edition, tick.error())
+                else:
+                    self.handle_tick(edition, consumer, tick)
         self._tick()
 
     def handle_message(self, message) -> None:
@@ -221,7 +263,8 @@ class BriefingRunner:
             HISTORY_RESPONDED_TOPIC: self.core.on_history_responded,
             ARTICLES_RESPONDED_TOPIC: self.core.on_articles_responded,
             CONTEXT_RESPONDED_TOPIC: self.core.on_context_responded,
-            FILINGS_RESPONDED_TOPIC: self.core.on_filings_responded,
+            FILINGS_RESPONDED_TOPIC: self._on_filings_responded,
+            DAILY_DATA_RESPONDED_TOPIC: self.daily.on_daily_data_responded,
         }.get(message.topic())
         if handler is None:
             log.warning("message from unexpected topic %s ignored", message.topic())
@@ -232,7 +275,24 @@ class BriefingRunner:
             log.error("skipping malformed message at %s[%d]@%d: %s",
                       message.topic(), message.partition(), message.offset(), error)
 
+    def handle_tick(self, edition: str, consumer: Consumer, message) -> None:
+        # 판 작업도 메모리에만 두므로 급변동 알림과 같은 이유로 읽은 위치를 처리 전에 확정한다.
+        consumer.commit(message=message, asynchronous=False)
+        try:
+            self.daily.on_schedule_tick(message.value(), self.clock(), edition)
+        except ValueError as error:
+            log.error("skipping malformed tick at %s[%d]@%d: %s",
+                      message.topic(), message.partition(), message.offset(), error)
+
+    def _on_filings_responded(self, message: str | bytes, now: datetime) -> None:
+        # 급변동 작업과 데일리 판 작업이 같은 토픽으로 공시 응답을 받는다. 각자 모르는 jobId는 넘긴다.
+        self.core.on_filings_responded(message, now)
+        self.daily.on_filings_responded(message, now)
+
     def close(self) -> None:
+        for consumer in self.tick_consumers.values():
+            consumer.close()
+        self.tick_consumers = {}
         if self._consumer is not None:
             self._consumer.close()
             self._consumer = None
@@ -242,8 +302,12 @@ class BriefingRunner:
 
     # ---- 내부 ----
 
+    def _next_deadline(self) -> datetime | None:
+        deadlines = [d for d in (self.core.next_deadline(), self.daily.next_deadline()) if d is not None]
+        return min(deadlines) if deadlines else None
+
     def _poll_timeout(self) -> float:
-        deadline = self.core.next_deadline()
+        deadline = self._next_deadline()
         if deadline is None:
             return MAX_POLL_SECONDS
         seconds = (deadline - self.clock()).total_seconds()
@@ -254,6 +318,9 @@ class BriefingRunner:
         deadline = self.core.next_deadline()
         if deadline is not None and now >= deadline:
             self.core.on_tick(now)
+        deadline = self.daily.next_deadline()
+        if deadline is not None and now >= deadline:
+            self.daily.on_tick(now)
 
     def _loop(self) -> None:
         try:
@@ -281,7 +348,7 @@ def build_runner(env: Mapping[str, str]) -> BriefingRunner:
     """환경변수로 실제 구성(Kafka, Postgres 실패 기록, LLM 또는 규칙 기반 작성기)을 만든다."""
     bootstrap = env.get("KAFKA_BOOTSTRAP", "localhost:9092")
     store = PostgresFailureStore(psycopg_connector(db_conninfo(env)))
-    return BriefingRunner(bootstrap, build_report_writer(env), store)
+    return BriefingRunner(bootstrap, build_report_writer(env), store, daily_writer=build_daily_writer(env))
 
 
 def main() -> None:
