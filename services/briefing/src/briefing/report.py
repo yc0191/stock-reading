@@ -15,6 +15,13 @@ from typing import Any, Callable, Mapping, Protocol
 from briefing.compose import DISCLAIMER, KST, NO_EVIDENCE, direction_of, headline
 from briefing.events import BRIEFING_GENERATED_TOPIC, OutboundEvent, format_timestamp
 from briefing.jobs import ReportInput
+from briefing.move_figures import (
+    EXCHANGE_RATE_API,
+    MARKET_SUMMARY_API,
+    MoveFigures,
+    display,
+    move_figures,
+)
 from briefing.llm import API_KEY_ENV, AnthropicClient, LlmCallError, LlmClient, llm_config
 from briefing.ports import Failure, FailurePort, FailureReason, RequestPort
 from briefing.sources import (
@@ -50,6 +57,12 @@ KIND_CLOSE_RATE = "overseas-close-rate"
 # 코드가 붙이는 근거 번호의 머리글. 기사는 articleId, 공시는 접수번호를 그대로 쓴다.
 CLOSE_RATE_REF_PREFIX = "U"
 BACKGROUND_REF_PREFIX = "B"
+FIGURE_REF_PREFIX = "F"
+
+# 배경 원문에서 꺼낸 숫자와 코드가 계산한 비교 숫자의 출처. 제공자 이름 대신 중립 표현을 쓴다.
+FIGURE_SOURCE = "시세 자료(배경)"
+COMPUTED_SOURCE = "시세 자료로 코드가 계산"
+CLOSE_COMPUTED_SOURCE = "해외 시세 자료로 코드가 계산"
 
 SYSTEM_PROMPT = """당신은 ETF 가격 변동과 같은 시기에 공개된 자료를 연결해 설명하는 도우미입니다.
 입력은 JSON이며 종목 코드, 변동 방향과 변동률, 변동 시각, 시세 이력, 기사, 미국 공시, 미국 종목 직전 정규장 등락률, 배경 자료를 담고 있습니다.
@@ -218,7 +231,90 @@ def evidence_catalog(report_input: ReportInput) -> dict[str, EvidenceItem]:
     for ref, b in zip(_background_refs(i), i.background):
         if ref is not None:
             catalog[ref] = EvidenceItem(b.api_type, ref, _background_title(b), BACKGROUND_SOURCE, b.fetched_at)
+    for figure in figure_entries(i):
+        if figure.ref is not None:
+            catalog[figure.ref] = EvidenceItem(figure.kind, figure.ref, figure.title, figure.source, figure.at)
     return catalog
+
+
+# ---- 배경 숫자와 비교 숫자 ----
+
+@dataclass(frozen=True)
+class FigureEntry:
+    """LLM 입력의 숫자 항목 하나. 값이 하나도 없으면 ref가 없고 인용할 수 없다."""
+
+    name: str
+    kind: str
+    ref: str | None
+    title: str
+    source: str
+    at: datetime | None
+    values: dict[str, str]
+
+
+def _figure_candidates(f: MoveFigures) -> list[tuple[str, str, str, datetime | None, dict[str, str]]]:
+    """(이름, kind, 출처, 기준 시각, 값) 목록. 순서가 근거 번호 순서다."""
+    rows: list[tuple[str, str, str, datetime | None, dict[str, str]]] = []
+    fx = f.exchange_rate
+    rows.append(("원/달러 환율", EXCHANGE_RATE_API, FIGURE_SOURCE, fx.fetched_at if fx else None, {
+        "value": display(fx.value if fx else None),
+        "change": display(fx.change if fx else None, sign=True),
+        "ratePercent": display(fx.rate if fx else None, sign=True),
+        "receivedTime": display(fx.received_time if fx else None),
+    }))
+    for label, index in (("코스피종합", f.kospi), ("코스닥종합", f.kosdaq)):
+        rows.append((label, MARKET_SUMMARY_API, FIGURE_SOURCE, index.fetched_at if index else None, {
+            "value": display(index.value if index else None),
+            "change": display(index.change if index else None, sign=True),
+            "ratePercent": display(index.rate if index else None, sign=True),
+        }))
+    for label, index, diff in (("변동률 - 코스피종합 등락률", f.kospi, f.vs_kospi),
+                               ("변동률 - 코스닥종합 등락률", f.kosdaq, f.vs_kosdaq)):
+        rows.append((label, MARKET_SUMMARY_API, COMPUTED_SOURCE, index.fetched_at if index else None,
+                     {"differencePoint": display(diff, sign=True)}))
+    us = f.us_close
+    rows.append(("미국 종목 직전 정규장 등락 집계", KIND_CLOSE_RATE, CLOSE_COMPUTED_SOURCE,
+                 us.latest_close_at if us else None, {
+                     "up": display(us.up if us else None),
+                     "down": display(us.down if us else None),
+                     "flat": display(us.flat if us else None),
+                     "averageRatePercent": display(us.average if us else None, sign=True),
+                 }))
+    return rows
+
+
+_VALUE_LABELS = {"value": "값", "change": "전일대비", "ratePercent": "등락률(%)", "receivedTime": "최종 수신",
+                 "differencePoint": "차이(%p)", "up": "오름", "down": "내림", "flat": "보합",
+                 "averageRatePercent": "평균 등락률(%)"}
+
+
+def figure_entries(report_input: ReportInput) -> list[FigureEntry]:
+    """배경 원문에서 꺼낸 숫자와 비교 숫자. 값이 있는 항목에만 F1, F2 … 순번을 붙인다."""
+    i = report_input
+    f = move_figures(i.change_percent, i.background, i.close_rates)
+    entries = []
+    number = 0
+    for name, kind, source, at, values in _figure_candidates(f):
+        present = at is not None and any(v != MARK_MISSING for v in values.values())
+        ref = None
+        if present:
+            number += 1
+            ref = f"{FIGURE_REF_PREFIX}{number}"
+        title = f"{name} " + ", ".join(f"{_VALUE_LABELS[k]} {v}" for k, v in values.items())
+        entries.append(FigureEntry(name, kind, ref, title, source, at, values))
+    return entries
+
+
+def _figure_input(entry: FigureEntry, as_of: datetime) -> dict[str, Any]:
+    data: dict[str, Any] = {"name": entry.name, "status": MARK_PRESENT if entry.ref else MARK_MISSING}
+    if entry.ref is None:
+        return data
+    data["ref"] = entry.ref
+    data["source"] = entry.source
+    data.update(entry.values)
+    data["basedOn"] = _at(entry.at)
+    data["minutesBeforeMove"] = int((as_of - entry.at).total_seconds() // 60)
+    return data
 
 
 def _status(count: int, truncated: bool, applicable: bool = True) -> str:
@@ -291,6 +387,8 @@ def build_llm_input(report_input: ReportInput) -> dict[str, Any]:
         ],
         "overseasCloseRatesMissing": [t for t in i.tickers if t not in rated],
         "background": [_background_input(ref, b, i.as_of) for ref, b in zip(_background_refs(i), i.background)],
+        # 배경 원문에서 꺼낸 숫자와 코드가 계산한 비교 숫자. LLM은 계산하지 않고 ref로 인용만 한다.
+        "figures": [_figure_input(e, i.as_of) for e in figure_entries(i)],
     }
 
 

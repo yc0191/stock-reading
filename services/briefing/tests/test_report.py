@@ -219,7 +219,9 @@ def test_llm_input_has_only_public_move_and_article_fields():
 
     assert set(data) == {"symbol", "direction", "changePercent", "moveAt", "priceHistoryStatus", "priceHistory",
                          "articlesStatus", "articles", "filingsStatus", "filings", "overseasCloseRatesStatus",
-                         "overseasCloseRates", "overseasCloseRatesMissing", "background"}
+                         "overseasCloseRates", "overseasCloseRatesMissing", "background", "figures"}
+    # 배경 자료가 없으면 꺼낸 숫자와 비교 숫자는 모두 없음이고 번호가 붙지 않는다.
+    assert all(f == {"name": f["name"], "status": "없음"} for f in data["figures"])
     assert data["direction"] == "하락" and data["changePercent"] == -1.5
     assert data["moveAt"] == "2026-10-20T16:00:00+09:00"
     assert data["priceHistory"] == [{"at": "2026-10-20T15:59:00+09:00", "price": 10_000},
