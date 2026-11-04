@@ -38,6 +38,8 @@ Avro + 스키마 레지스트리, Protobuf
 
 2026-11-02 변경: 배경 자료(`market.context.*`)와 공시(`news.filings.*`) 요청·응답 쌍을 더했다. 기존 응답에 얹지 않고 자료마다 한 쌍으로 둔 이유: 얹으면 이미 정한 v1 응답의 뜻이 바뀌고, 공시는 배경 자료 응답의 미국 종목 목록을 받은 뒤에야 요청할 수 있어 따로 받는다. ETF별 미국 종목 대응표는 해외 등락률을 저장한 시세처리기가 읽어 그 목록을 응답에 싣는다. 선택 필드도 더했다: `market.history.requested`의 `intervalSeconds`, `briefing.generated` 근거의 `kind`·`ref`, `market.context.responded` 세계지수 항목의 `indexRates`. 필드의 원본은 `contracts/events/`의 스키마다.
 
+2026-11-05 변경: 데일리 브리핑 판 자료 요청·응답 쌍(`market.daily.*`)을 더했다. 판은 종목 하나가 아니라 보유 ETF 전체를 다루므로 종목마다 `market.context.*`를 여러 번 보내지 않고 한 쌍으로 한 번에 받는다. 보유 ETF는 따로 정한 목록이 없어 시세처리기가 범위 안에 국내 일봉이 저장된 종목으로 정하고, 해외 등락률·세계지수 계산과 받은 시각 하한은 `market.context.*`와 같은 규칙을 쓴다. 이 쌍의 `jobId`는 판을 시작시킨 `schedule.tick`의 `eventId`다.
+
 ## 실제로 겪은 함정
 - **시각 형식:** `OffsetDateTime.toString()`은 초가 0이면 초를 생략해 RFC 3339 `date-time`에 어긋난다. 표준 포매터를 쓰고, 해당 케이스 테스트를 둔다.
 - **형식 검증이 기본으로 꺼져 있다:** JSON 스키마 검증 라이브러리는 `date-time` 등 형식을 기본으로 검사하지 않는다(Java는 옵션을 켜야 하고, Python `jsonschema`는 선택 패키지가 없으면 조용히 통과). 형식 검사를 켜고, **잘못된 입력이 실제로 거부되는지** 음성 테스트로 확인한다.
