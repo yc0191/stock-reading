@@ -31,6 +31,11 @@ class CoreSettings:
     max_tickers: int = 100
     # 같은 eventId 중복 처리를 위해 기억하는 작업 키 수. 메모리가 무한히 늘지 않게 한다.
     remembered_jobs: int = 10000
+    # 근거 부족 시 재검색: 검색어 LLM이 낼 수 있는 검색어 수, 검색어 LLM 시도 횟수, 재검색 완료 알림을 기다리는 상한.
+    # 재검색 기사 조회는 위의 응답 제한 시간·시도 횟수·재확인 간격·라운드 상한을 그대로 쓴다.
+    max_research_queries: int = 3
+    research_query_attempts: int = 3
+    research_wait_limit: timedelta = timedelta(minutes=5)
 
 
 @dataclass(frozen=True)

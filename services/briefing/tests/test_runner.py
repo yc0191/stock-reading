@@ -9,6 +9,7 @@ import pytest
 from briefing import main
 from briefing.ports import FailureReason
 from briefing.report import GENERATED_BY_LLM, LlmWriter, Report, ReportError, RuleBasedWriter
+from briefing.research import QueryWriter
 from contracts import sample, validate
 
 KST = timezone(timedelta(hours=9))
@@ -161,7 +162,7 @@ def setup():
     created = {}
     declared = []
 
-    def make(writer=None):
+    def make(writer=None, **runner_options):
         def consumer_factory(config):
             created["consumer"] = FakeConsumer(config)
             return created["consumer"]
@@ -172,7 +173,7 @@ def setup():
 
         runner = main.BriefingRunner("localhost:9092", writer or RuleBasedWriter(), store, clock=clock,
                                      consumer_factory=consumer_factory, producer_factory=producer_factory,
-                                     declare_topics=declared.append)
+                                     declare_topics=declared.append, **runner_options)
         runner.open()
         return runner, created["consumer"], created["producer"]
 
@@ -425,12 +426,65 @@ def test_start_and_stop_run_the_loop_in_the_background():
     assert store.created == 1
 
 
+def research_completed_message(incomplete=()):
+    return FakeMessage("collection.completed", envelope("collection.completed", {
+        "jobType": "research-news", "scheduledFor": "2026-10-20T16:15:43+09:00",
+        "startedAt": "2026-10-20T16:15:44+09:00", "finishedAt": "2026-10-20T16:15:50+09:00",
+        "publishedCount": 1, "incompleteSymbols": list(incomplete), "researchJobId": JOB_ID}))
+
+
+def research_articles_message(seq):
+    return FakeMessage("news.articles.responded", envelope("news.articles.responded", {
+        "jobId": JOB_ID, "seq": seq, "symbol": "TEST01",
+        "articles": [{"articleId": "r1", "title": "다시 찾은 기사", "summary": "",
+                      "publishedAt": "2026-10-20T06:00:00Z", "publisher": "news.example.com",
+                      "url": "https://news.example.com/articles/r1"}],
+        "truncated": False}))
+
+
+def test_insufficient_evidence_flows_through_research_request_completion_and_rewrite(setup):
+    make, clock, store, declared = setup
+    report_llm = FakeLlm(json.dumps({"causes": [], "insufficientEvidence": True}),
+                         json.dumps({"causes": [{"statement": "다시 찾은 기사가 영향을 줬을 수 있습니다.",
+                                                 "refs": ["r1"]}], "insufficientEvidence": False}))
+    query_llm = FakeLlm(json.dumps({"queries": ["가짜검색어"]}))
+    runner, consumer, producer = make(LlmWriter(report_llm), query_writer=QueryWriter(query_llm))
+
+    feed(runner, consumer, move_message(), completed_message(), history_message(1), context_message(1),
+         articles_message(1))
+    clock.advance(seconds=10)
+    runner.run_once()
+    feed(runner, consumer, articles_message(2))
+
+    (key, request), = sent(producer, "news.research.requested")
+    assert key == "TEST01"
+    assert validate("news.research.requested.v1.schema.json", request) == []
+    assert sent(producer, "briefing.generated") == []
+
+    # 재검색 완료는 근거 조회 작업이 아니라 재검색 쪽으로 가서 researchJobId를 단 기사 조회가 나간다.
+    feed(runner, consumer, research_completed_message())
+    (_, research_request), = [(k, v) for k, v in sent(producer, "news.articles.requested")
+                              if "researchJobId" in v["payload"]]
+    assert research_request["payload"]["seq"] == 3
+    feed(runner, consumer, research_articles_message(3))
+    clock.advance(seconds=10)
+    runner.run_once()  # 재검색 쪽 제한 시각도 실행부가 깨워 확인 라운드를 보낸다
+    feed(runner, consumer, research_articles_message(4))
+
+    (_, event), = sent(producer, "briefing.generated")
+    assert [e["articleId"] for e in event["payload"]["evidence"]] == ["r1"]
+    assert report_llm.calls == 2 and query_llm.calls == 1
+    assert store.failures == []
+    assert len(runner.core._completions) == 1  # 재검색 완료는 정기 수집 완료 목록에 쌓이지 않는다
+
+
 def test_build_runner_falls_back_to_rule_based_without_a_key_and_hides_the_db_password():
     runner = main.build_runner({"KAFKA_BOOTSTRAP": "broker:9092", "ANTHROPIC_API_KEY": "change-me",
                                 "BRIEFING_DB_PASSWORD": "p w'x"})
 
     assert runner.bootstrap == "broker:9092"
     assert isinstance(runner.writer, RuleBasedWriter)
+    assert runner.query_writer is None
     assert "p w'x" not in repr(runner)
 
 

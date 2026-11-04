@@ -32,7 +32,15 @@ from briefing.events import (
 from briefing.failure_store import PostgresFailureStore, psycopg_connector
 from briefing.jobs import BriefingCore
 from briefing.ports import Failure
+from briefing.llm import AnthropicClient
 from briefing.report import ReportStage, ReportWriter, build_report_writer
+from briefing.research import (
+    DiscardResearchRecords,
+    QueryWriter,
+    ResearchRecordPort,
+    ResearchReportStage,
+    build_query_writer,
+)
 
 log = logging.getLogger("briefing")
 
@@ -129,7 +137,9 @@ class BriefingRunner:
                  clock: Callable[[], datetime] = lambda: datetime.now(KST),
                  consumer_factory: Callable[[dict], Consumer] = Consumer,
                  producer_factory: Callable[[dict], Producer] = Producer,
-                 declare_topics: Callable[[str], None] = ensure_topics) -> None:
+                 declare_topics: Callable[[str], None] = ensure_topics,
+                 query_writer: QueryWriter | None = None,
+                 research_records: ResearchRecordPort | None = None) -> None:
         self.bootstrap = bootstrap
         self.writer = writer
         self.failures = failures
@@ -138,9 +148,12 @@ class BriefingRunner:
         self._consumer_factory = consumer_factory
         self._producer_factory = producer_factory
         self._declare_topics = declare_topics
+        self.query_writer = query_writer
+        self.research_records = research_records or DiscardResearchRecords()
         self._consumer: Consumer | None = None
         self._producer: Producer | None = None
         self.core: BriefingCore | None = None
+        self.research: ResearchReportStage | None = None
         self._running = threading.Event()
         self._thread: threading.Thread | None = None
         self.error: BaseException | None = None
@@ -157,7 +170,7 @@ class BriefingRunner:
         self._thread.start()
         log.info("briefing started: %s -> %s", ", ".join(SUBSCRIBED_TOPICS),
                  ", ".join((HISTORY_REQUESTED_TOPIC, CONTEXT_REQUESTED_TOPIC, ARTICLES_REQUESTED_TOPIC,
-                            FILINGS_REQUESTED_TOPIC, BRIEFING_GENERATED_TOPIC)))
+                            FILINGS_REQUESTED_TOPIC, RESEARCH_REQUESTED_TOPIC, BRIEFING_GENERATED_TOPIC)))
 
     def request_stop(self) -> None:
         """루프에 멈추라고만 알린다. 시그널 처리기에서 부를 수 있도록 기다리지 않는다."""
@@ -187,7 +200,9 @@ class BriefingRunner:
         self._producer = self._producer_factory({"bootstrap.servers": self.bootstrap, "acks": "all", **COMMON})
         publisher = KafkaPublisher(self._producer)
         stage = ReportStage(self.writer, publisher, self.failures, clock=self.clock)
-        self.core = BriefingCore(publisher, self.failures, stage, self.settings)
+        self.research = ResearchReportStage(stage, self.query_writer, publisher, self.research_records,
+                                            self.settings, self.clock)
+        self.core = BriefingCore(publisher, self.failures, self.research, self.settings)
         self._consumer = self._consumer_factory({
             "bootstrap.servers": self.bootstrap,
             "group.id": "briefing",
@@ -215,9 +230,12 @@ class BriefingRunner:
         self._consumer.commit(message=message, asynchronous=False)
         handler = {
             MOVE_TOPIC: self.core.on_move,
-            COLLECTION_COMPLETED_TOPIC: self.core.on_collection_completed,
+            # 재검색 완료 알림과 재검색 기사 응답은 재검색 쪽이 먼저 가져가고, 아니면 근거 조회 작업으로 넘긴다.
+            COLLECTION_COMPLETED_TOPIC: lambda m, now: self.research.research.on_collection_completed(m, now)
+            or self.core.on_collection_completed(m, now),
             HISTORY_RESPONDED_TOPIC: self.core.on_history_responded,
-            ARTICLES_RESPONDED_TOPIC: self.core.on_articles_responded,
+            ARTICLES_RESPONDED_TOPIC: lambda m, now: self.research.research.on_articles_responded(m, now)
+            or self.core.on_articles_responded(m, now),
             CONTEXT_RESPONDED_TOPIC: self.core.on_context_responded,
             FILINGS_RESPONDED_TOPIC: self.core.on_filings_responded,
         }.get(message.topic())
@@ -240,8 +258,12 @@ class BriefingRunner:
 
     # ---- 내부 ----
 
+    def _next_deadline(self) -> datetime | None:
+        deadlines = [d for d in (self.core.next_deadline(), self.research.next_deadline()) if d is not None]
+        return min(deadlines) if deadlines else None
+
     def _poll_timeout(self) -> float:
-        deadline = self.core.next_deadline()
+        deadline = self._next_deadline()
         if deadline is None:
             return MAX_POLL_SECONDS
         seconds = (deadline - self.clock()).total_seconds()
@@ -252,6 +274,9 @@ class BriefingRunner:
         deadline = self.core.next_deadline()
         if deadline is not None and now >= deadline:
             self.core.on_tick(now)
+        deadline = self.research.next_deadline()
+        if deadline is not None and now >= deadline:
+            self.research.on_tick(now)
 
     def _loop(self) -> None:
         try:
@@ -279,7 +304,9 @@ def build_runner(env: Mapping[str, str]) -> BriefingRunner:
     """환경변수로 실제 구성(Kafka, Postgres 실패 기록, LLM 또는 규칙 기반 작성기)을 만든다."""
     bootstrap = env.get("KAFKA_BOOTSTRAP", "localhost:9092")
     store = PostgresFailureStore(psycopg_connector(db_conninfo(env)))
-    return BriefingRunner(bootstrap, build_report_writer(env), store)
+    # 재검색 기록은 저장 테이블이 생기기 전까지 버린다(DiscardResearchRecords).
+    return BriefingRunner(bootstrap, build_report_writer(env), store,
+                          query_writer=build_query_writer(env, AnthropicClient))
 
 
 def main() -> None:
