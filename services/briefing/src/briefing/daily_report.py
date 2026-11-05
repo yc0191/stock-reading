@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping
 from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
 from briefing.events import EDITION_MORNING, EDITION_POST_CLOSE
-from briefing.llm import API_KEY_ENV, AnthropicClient, LlmCallError, LlmClient, llm_config
+from briefing.llm import API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCallError, LlmClient, llm_config
 from briefing.sources import (
     BACKGROUND_LABEL,
     BACKGROUND_MISSING,
@@ -475,11 +475,13 @@ class DailyBody:
     text: str
     generated_by: str
     insufficient_evidence: bool = False
+    # 본문이 인용한 근거 번호(규칙 기반이면 없음)
+    cited: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class LlmAttempt:
-    """거부되거나 실패한 LLM 시도 하나. 실패 상세 기록에 그대로 넘긴다."""
+    """거부되거나 실패한 LLM 시도 하나. 작업 기록에 그대로 넘긴다."""
 
     attempt: int
     error_type: str
@@ -492,6 +494,8 @@ class LlmAttempt:
 class DailyWriteResult:
     body: DailyBody | None
     rejected: tuple[LlmAttempt, ...]
+    # 받아들인 시도(끝내 실패했으면 None)
+    accepted: AcceptedAttempt | None = None
 
 
 @dataclass(frozen=True)
@@ -515,8 +519,11 @@ class DailyLlmWriter:
                 log.warning("daily LLM attempt %d/%d failed for job %s: %s",
                             attempt, self.max_attempts, i.job_id, error)
                 continue
+            cited = () if output.insufficient_evidence else tuple(
+                dict.fromkeys(ref for p in output.points for ref in p.refs))
             return DailyWriteResult(DailyBody(llm_text(i, sections, output), GENERATED_BY_LLM,
-                                              output.insufficient_evidence), tuple(rejected))
+                                              output.insufficient_evidence, cited), tuple(rejected),
+                                    AcceptedAttempt(attempt, user, raw))
         return DailyWriteResult(None, tuple(rejected))
 
 

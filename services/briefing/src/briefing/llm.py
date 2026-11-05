@@ -14,6 +14,15 @@ class LlmClient(Protocol):
     def complete(self, system: str, user: str, output_schema: dict[str, Any]) -> str: ...
 
 
+@dataclass(frozen=True)
+class AcceptedAttempt:
+    """받아들인 LLM 시도 하나. 작업 기록에 입력과 원래 응답을 그대로 남긴다."""
+
+    attempt: int
+    llm_input: str
+    response: str
+
+
 class LlmCallError(Exception):
     """LLM 호출 실패. 키가 섞이지 않게 원래 예외의 종류 이름만 담는다."""
 

@@ -2,7 +2,6 @@
 
 실제 Kafka·DB·LLM·뉴스 검색은 쓰지 않는다. 나가는 요청과 이벤트는 계약 스키마로 검증한다.
 """
-import dataclasses
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -19,7 +18,6 @@ from briefing.research import (
     InvalidQueries,
     NewsResearch,
     QueryWriter,
-    ResearchFailureRecord,
     ResearchReason,
     ResearchReportStage,
     ResearchStep,
@@ -29,6 +27,7 @@ from briefing.research import (
 )
 from contracts import sample, validate
 from fake_anthropic import FAKE_KEY, fake_sdk  # noqa: F401 - 픽스처
+from fake_job_log import FakeJobLog
 
 KST = timezone(timedelta(hours=9))
 T = datetime(2026, 10, 20, 16, 0, 31, tzinfo=KST)
@@ -75,25 +74,22 @@ class Requests:
         return [e for e in self.sent if e.topic == topic]
 
 
-class Failures:
-    def __init__(self):
-        self.failed = []
+class Records(FakeJobLog):
+    """작업 기록 가짜. items는 그 가운데 재검색 단계의 줄만 돌려준다."""
 
-    def record(self, failure):
-        self.failed.append(failure)
+    @property
+    def items(self):
+        steps = {step.value for step in ResearchStep}
+        return [e for e in self.entries if e.researched and e.stage in steps]
 
-
-class Records:
-    """ResearchRecordPort 가짜. 넘겨진 재검색 기록을 모은다."""
-
-    def __init__(self):
-        self.items = []
-
-    def record(self, entry):
-        self.items.append(entry)
+    @property
+    def failed(self):
+        """재검색이 아니라 작업 자체가 끝내 실패한 줄(이전의 실패 테이블 한 줄에 해당)"""
+        steps = {step.value for step in ResearchStep}
+        return [e for e in self.entries if e.entry_type == "failed" and e.stage not in steps]
 
     def of(self, reason):
-        return [r for r in self.items if r.reason is reason]
+        return [r for r in self.items if r.reason == reason.value]
 
 
 def report(causes=(), insufficient=False):
@@ -117,13 +113,14 @@ class Flow:
 
     def __init__(self, report_outputs, query_outputs, settings=S):
         self.clock = Clock(T)
-        self.requests, self.failures, self.records = Requests(), Failures(), Records()
+        self.requests, self.records = Requests(), Records()
+        self.failures = self.records
         self.report_llm, self.query_llm = FakeLlm(*report_outputs), FakeLlm(*query_outputs)
-        stage = ReportStage(LlmWriter(self.report_llm), self.requests, self.failures, clock=self.clock)
+        stage = ReportStage(LlmWriter(self.report_llm), self.requests, self.records, clock=self.clock)
         self.stage = ResearchReportStage(
             stage, QueryWriter(self.query_llm, settings.max_research_queries, settings.research_query_attempts),
             self.requests, self.records, settings, self.clock)
-        self.core = BriefingCore(self.requests, self.failures, self.stage, settings)
+        self.core = BriefingCore(self.requests, self.stage, settings, self.records)
         self.settings = settings
 
     def to_report(self, article_items=None, background=()):
@@ -293,13 +290,13 @@ def test_research_articles_request_follows_seq_timeout_and_total_attempts_then_r
     assert flow.failures.failed == []
 
     resent = flow.records.of(ResearchReason.ARTICLES_RESENT)
-    assert [(r.stage, r.attempts, r.awaited["seq"]) for r in resent] == [
+    assert [(r.stage, r.attempts, r.data["awaited"]["seq"]) for r in resent] == [
         (ResearchStep.ARTICLES, 1, 3), (ResearchStep.ARTICLES, 2, 4)]
-    assert resent[0].request["seq"] == 3 and resent[0].queries == tuple(QUERIES)
+    assert resent[0].data["request"]["seq"] == 3 and resent[0].data["queries"] == QUERIES
     (gave_up,) = flow.records.of(ResearchReason.ARTICLES_NO_RESPONSE)
-    assert (gave_up.stage, gave_up.attempts, gave_up.awaited["eventType"], gave_up.awaited["seq"]) == (
+    assert (gave_up.stage, gave_up.attempts, gave_up.data["awaited"]["eventType"], gave_up.data["awaited"]["seq"]) == (
         ResearchStep.ARTICLES, 3, "news.articles.responded", 5)
-    assert gave_up.received == ()
+    assert gave_up.data["received"] == []
     assert research.next_deadline() is None
 
 
@@ -350,15 +347,16 @@ def test_query_llm_failing_every_attempt_reports_existing_evidence_and_records_e
         (ResearchStep.QUERY, 1, ResearchReason.QUERY_REJECTED),
         (ResearchStep.QUERY, 2, ResearchReason.QUERY_REJECTED),
         (ResearchStep.QUERY, 3, ResearchReason.QUERY_CALL_FAILED)]
-    assert [r.raw_output for r in attempts] == ["검색어가 아닌 글", json.dumps({"terms": QUERIES}), None]
-    assert [r.rejection for r in attempts] == ["output is not valid JSON", "output does not have queries",
+    assert [r.data["llm"]["rawOutput"] for r in attempts] == ["검색어가 아닌 글", json.dumps({"terms": QUERIES}), None]
+    assert [r.data["llm"]["rejectReason"] for r in attempts] == ["output is not valid JSON", "output does not have queries",
                                                "LLM call failed: APIError"]
     assert [r.error_type for r in attempts] == ["InvalidQueries", "InvalidQueries", "LlmCallError"]
-    assert all(r.llm_input == flow.query_llm.calls[0][1] for r in attempts)
+    assert all(r.data["llm"]["input"] == flow.query_llm.calls[0][1] for r in attempts)
     (gave_up,) = flow.records.of(ResearchReason.QUERY_GAVE_UP)
-    assert (gave_up.stage, gave_up.attempts, gave_up.rejection) == (
+    assert (gave_up.stage, gave_up.attempts, gave_up.data["llm"]["rejectReason"]) == (
         ResearchStep.QUERY, 3, "LLM call failed: APIError")
-    assert (gave_up.job_kind, gave_up.job_id, gave_up.symbol, gave_up.move_at) == ("move", JOB_ID, SYMBOL, T)
+    assert (gave_up.job_kind, gave_up.job_id, gave_up.target) == (
+        "move", JOB_ID, {"symbol": SYMBOL, "moveAt": T.isoformat()})
     assert gave_up.occurred_at == flow.clock.now
 
 
@@ -369,8 +367,8 @@ def test_query_llm_with_no_queries_reports_existing_evidence_without_research():
     assert len(flow.query_llm.calls) == 1
     assert flow.requests.of("news.research.requested") == []
     assert len(flow.briefings()) == 1
-    (record,) = flow.records.items
-    assert (record.stage, record.reason, record.raw_output, record.rejection) == (
+    (record,) = flow.records.of(ResearchReason.NO_QUERIES)
+    assert (record.stage, record.reason, record.data["llm"]["rawOutput"], record.data["llm"]["rejectReason"]) == (
         ResearchStep.QUERY, ResearchReason.NO_QUERIES, queries("  ", ""), None)
 
 
@@ -392,16 +390,16 @@ def test_rejected_query_attempt_and_resent_request_are_recorded_even_when_resear
 
     assert len(flow.briefings()) == 1
     (rejected,) = flow.records.of(ResearchReason.QUERY_REJECTED)
-    assert (rejected.attempts, rejected.raw_output, rejected.rejection) == (
+    assert (rejected.attempts, rejected.data["llm"]["rawOutput"], rejected.data["llm"]["rejectReason"]) == (
         1, over_limit, "4 queries over the limit of 3")
-    assert rejected.llm_input == flow.query_llm.calls[0][1]
+    assert rejected.data["llm"]["input"] == flow.query_llm.calls[0][1]
     (resent,) = flow.records.of(ResearchReason.ARTICLES_RESENT)
-    assert (resent.stage, resent.attempts, resent.awaited["seq"], resent.request["seq"]) == (
+    assert (resent.stage, resent.attempts, resent.data["awaited"]["seq"], resent.data["request"]["seq"]) == (
         ResearchStep.ARTICLES, 1, 3, 3)
     # 확인 라운드는 무응답 재요청과 단계·사유가 다르고, 그 라운드에 받은 기사 목록을 담는다.
     (confirm,) = flow.records.of(ResearchReason.ARTICLES_CONFIRM_ROUND)
-    assert (confirm.stage, confirm.attempts, confirm.request["seq"]) == (ResearchStep.ARTICLES_CONFIRM, 2, 5)
-    assert confirm.received[0]["articles"] == [R1]
+    assert (confirm.stage, confirm.attempts, confirm.data["request"]["seq"]) == (ResearchStep.ARTICLES_CONFIRM, 2, 5)
+    assert confirm.data["received"][0]["articles"] == [R1]
     assert (confirm.stage, confirm.reason) != (resent.stage, resent.reason)
 
 
@@ -445,10 +443,10 @@ def test_query_llm_input_carries_the_background_data():
 
 
 def test_without_a_query_writer_insufficient_evidence_is_published_as_before():
-    clock, requests, failures, records = Clock(T), Requests(), Failures(), Records()
-    stage = ResearchReportStage(ReportStage(LlmWriter(FakeLlm(INSUFFICIENT)), requests, failures, clock=clock),
+    clock, requests, records = Clock(T), Requests(), Records()
+    stage = ResearchReportStage(ReportStage(LlmWriter(FakeLlm(INSUFFICIENT)), requests, records, clock=clock),
                                 None, requests, records, S, clock)
-    core = BriefingCore(requests, failures, stage, S)
+    core = BriefingCore(requests, stage, S, records)
     core.on_move(move(), T)
     core.on_collection_completed(regular_completed(), T)
     core.on_history_responded(history(), T)
@@ -474,11 +472,11 @@ def test_daily_limit_or_search_failure_reports_existing_evidence_without_queryin
     (briefing,) = flow.briefings()
     assert LLM_INSUFFICIENT in briefing.value["payload"]["text"]
     assert flow.failures.failed == []
-    (record,) = flow.records.items
-    assert (record.stage, record.reason, record.missing, record.queries) == (
-        ResearchStep.COMPLETION, ResearchReason.COLLECTION_INCOMPLETE, tuple(incomplete), tuple(QUERIES))
-    assert record.received[0]["researchJobId"] == JOB_ID
-    assert record.request["queries"] == QUERIES
+    (record,) = flow.records.of(ResearchReason.COLLECTION_INCOMPLETE)
+    assert (record.stage, record.reason, record.data["missing"], record.data["queries"]) == (
+        ResearchStep.COMPLETION, ResearchReason.COLLECTION_INCOMPLETE, incomplete, QUERIES)
+    assert record.data["received"][0]["researchJobId"] == JOB_ID
+    assert record.data["request"]["queries"] == QUERIES
 
 
 def test_research_completion_timeout_reports_existing_evidence():
@@ -494,9 +492,9 @@ def test_research_completion_timeout_reports_existing_evidence():
 
     assert len(flow.briefings()) == 1
     assert flow.failures.failed == []
-    (record,) = flow.records.items
+    (record,) = flow.records.of(ResearchReason.COMPLETION_TIMEOUT)
     assert (record.stage, record.reason) == (ResearchStep.COMPLETION, ResearchReason.COMPLETION_TIMEOUT)
-    assert record.awaited == {"eventType": "collection.completed", "jobType": "research-news",
+    assert record.data["awaited"] == {"eventType": "collection.completed", "jobType": "research-news",
                               "researchJobId": JOB_ID, "requestedAt": requested_at.isoformat()}
     # 늦게 온 완료 알림은 무시된다.
     flow.complete_research()
@@ -534,8 +532,8 @@ def test_no_research_article_left_after_dropping_reports_existing_evidence_with_
     (briefing,) = flow.briefings()
     assert LLM_INSUFFICIENT in briefing.value["payload"]["text"]
     (record,) = flow.records.of(ResearchReason.NO_USABLE_ARTICLES)
-    assert (record.stage, record.excluded, record.duplicates) == (ResearchStep.FILTER, 1, 1)
-    assert [a["articleId"] for a in record.received[0]["articles"]] == ["late", "a1"]
+    assert (record.stage, record.data["excluded"], record.data["duplicates"]) == (ResearchStep.FILTER, 1, 1)
+    assert [a["articleId"] for a in record.data["received"][0]["articles"]] == ["late", "a1"]
 
 
 def test_research_articles_that_keep_changing_report_existing_evidence():
@@ -553,7 +551,7 @@ def test_research_articles_that_keep_changing_report_existing_evidence():
     assert len(flow.briefings()) == 1
     assert len(flow.records.of(ResearchReason.ARTICLES_CONFIRM_ROUND)) == S.max_rounds - 1
     (record,) = flow.records.of(ResearchReason.ARTICLES_UNSTABLE)
-    assert (record.attempts, len(record.received)) == (S.max_rounds, S.max_rounds)
+    assert (record.attempts, len(record.data["received"])) == (S.max_rounds, S.max_rounds)
 
 
 # ---- 다시 쓰기 ----
@@ -570,7 +568,7 @@ def test_rewrite_citing_refs_outside_the_list_is_retried_and_three_failures_reco
     (failure,) = flow.failures.failed
     assert (failure.reason, failure.attempts) == (FailureReason.LLM_ERROR, 3)
     (record,) = flow.records.of(ResearchReason.REWRITE_FAILED)
-    assert record.stage is ResearchStep.REWRITE
+    assert record.stage == ResearchStep.REWRITE
 
 
 def test_rewrite_rejecting_one_unknown_ref_then_valid_is_published():
@@ -597,7 +595,7 @@ def test_still_insufficient_after_rewrite_is_published_as_insufficient_and_recor
     assert len(flow.query_llm.calls) == 1  # 다시 써도 부족하면 또 재검색하지 않는다
     assert len(flow.requests.of("news.research.requested")) == 1
     (record,) = flow.records.of(ResearchReason.STILL_INSUFFICIENT)
-    assert (record.stage, [a["articleId"] for a in record.received]) == (ResearchStep.REWRITE, ["r1"])
+    assert (record.stage, [a["articleId"] for a in record.data["received"]]) == (ResearchStep.REWRITE, ["r1"])
 
 
 # ---- 작업 하나당 1번 ----
@@ -618,7 +616,7 @@ def test_same_job_is_researched_only_once():
     assert research.start(target, ("다른 검색어",), T + SEC) is False
     assert len(requests.of("news.research.requested")) == 1
     (record,) = records.items
-    assert (record.reason, record.queries) == (ResearchReason.ALREADY_RESEARCHED, ("다른 검색어",))
+    assert (record.reason, record.data["queries"]) == (ResearchReason.ALREADY_RESEARCHED, ["다른 검색어"])
 
 
 def test_duplicate_move_does_not_research_again():
@@ -650,22 +648,33 @@ def test_research_takes_the_job_kind_so_a_daily_edition_can_request_with_the_mar
     assert (request.value["payload"]["jobKind"], request.value["payload"]["symbol"]) == ("morning", "*")
     (record,) = records.items
     # 데일리 판의 대상은 종목·변동 시각이 아니라 범위다.
-    assert (record.job_kind, record.symbol, record.move_at, record.range_since, record.range_until) == (
-        "morning", None, None, since, until)
+    assert (record.job_kind, record.researched) == ("morning", True)
+    assert record.target == {"rangeStart": since.isoformat(), "rangeEnd": until.isoformat()}
 
 
 # ---- 기록 값과 로그 ----
 
 def test_record_has_every_field_group_and_no_secret_or_personal_names():
-    names = [f.name for f in dataclasses.fields(ResearchFailureRecord)]
-    for needed in ("job_kind", "job_id", "symbol", "move_at", "range_since", "range_until", "stage", "reason",
-                   "error_type", "attempts", "queries", "request", "received", "awaited", "missing", "excluded",
-                   "llm_input", "raw_output", "rejection", "occurred_at"):
+    import dataclasses
+
+    from briefing.job_log import JobLogEntry
+
+    names = [f.name for f in dataclasses.fields(JobLogEntry)]
+    for needed in ("job_kind", "researched", "job_id", "target", "stage", "entry_type", "reason", "error_type",
+                   "attempts", "data", "occurred_at"):
         assert needed in names
-    for name in names:
+    flow = Flow([INSUFFICIENT, WITH_RESEARCH], [queries(*QUERIES)])
+    flow.to_report()
+    flow.complete_research()
+    flow.stable_research([R1])
+    keys = set()
+    for entry in flow.records.items:
+        keys.update(entry.data)
+    assert {"queries", "request", "received", "awaited", "missing", "excluded", "duplicates"} <= keys
+    for name in [*names, *keys]:
         for word in ("key", "secret", "password", "token", "recipient", "email", "address", "quantity",
                      "amount", "balance", "holding"):
-            assert word not in name
+            assert word not in name.lower()
 
 
 def test_logs_of_a_research_run_never_contain_queries_or_the_symbol(caplog):
@@ -700,6 +709,57 @@ def test_collection_log_marks_research_not_needed_when_evidence_is_sufficient(ca
     (line,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith("research job=")]
     assert "researched=False" in line and "result=not_needed" in line
 
+
+
+# ---- 작업 기록 한 작업 전체 ----
+
+def test_a_researched_job_that_finally_succeeds_keeps_every_line_under_one_job_id_and_ends_with_one_result():
+    over_limit = queries("하나", "둘", "셋", "넷")
+    flow = Flow([INSUFFICIENT, WITH_RESEARCH], [over_limit, queries(*QUERIES)])
+    flow.to_report()
+    flow.complete_research()
+    flow.stable_research([R1])
+
+    entries = flow.records.entries
+    assert {e.job_id for e in entries} == {JOB_ID} and {e.job_kind for e in entries} == {"move"}
+    assert [e.entry_type for e in entries if e.stage == "news.articles.recheck"] == ["check-round"]  # 첫 근거 조회
+    assert [(e.entry_type, e.reason) for e in entries if e.stage == "query"] == [
+        ("llm-rejected", "query_rejected"), ("llm-succeeded", "query_accepted")]
+    assert [e.entry_type for e in entries if e.stage == "articles-confirm"] == ["check-round"]
+    # 첫 보고서와 다시 쓴 보고서의 LLM 시도가 모두 남고, 다시 쓴 쪽은 재검색 줄이다.
+    succeeded = [e for e in entries if e.stage == "llm-report" and e.entry_type == "llm-succeeded"]
+    assert [e.researched for e in succeeded] == [False, True]
+    (result,) = flow.records.results()
+    assert result.researched is True and result.data["outcome"] == "published"
+    assert entries[-1] is result and flow.failures.failed == []
+    (briefing,) = flow.briefings()
+    assert result.data["text"] == briefing.value["payload"]["text"]
+
+
+def test_a_researched_job_is_not_published_when_its_log_cannot_be_saved(caplog):
+    flow = Flow([INSUFFICIENT, WITH_RESEARCH], [queries(*QUERIES)])
+    flow.to_report()
+    flow.complete_research()
+    flow.records.fail = True
+    with caplog.at_level(logging.ERROR, logger="briefing.job_log"):
+        flow.stable_research([R1])
+
+    assert flow.briefings() == []
+    assert "result event not published" in caplog.text
+    assert SYMBOL not in caplog.text and not [q for q in QUERIES if q in caplog.text]
+
+
+def test_job_log_values_carry_no_key_address_quantity_or_amount(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-secret-value")
+    flow = Flow([INSUFFICIENT, WITH_RESEARCH], [queries(*QUERIES)])
+    flow.to_report()
+    flow.complete_research()
+    flow.stable_research([R1])
+
+    dumped = json.dumps([[e.target, e.data, e.stage, e.reason, e.error_type] for e in flow.records.entries],
+                        ensure_ascii=False, default=str)
+    for forbidden in ("sk-test-secret-value", "@", "quantity", "amount", "holdings", "수량", "금액"):
+        assert forbidden not in dumped
 
 
 # ---- 구성 ----

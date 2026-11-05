@@ -3,7 +3,7 @@
 # 브리핑이 낸 시세·기사 요청과 briefing.generated 를 읽어 보여 준다. 사람이 흐름을 직접 확인하기 위한 도구다.
 #
 # 미리 띄워 둘 것: 로컬 인프라(Kafka, Postgres), 브리핑(python -m briefing.main), 시세처리기(market), 뉴스(news).
-# 시세처리기·뉴스가 꺼져 있으면 요청만 나가고, 제한 시간 뒤 브리핑이 실패 테이블에 기록한다.
+# 시세처리기·뉴스가 꺼져 있으면 요청만 나가고, 제한 시간 뒤 브리핑이 작업 기록 테이블에 기록한다.
 #
 # 사용법: scripts/manual-briefing-move.sh [symbol]   (기본 TEST01, 가짜 종목)
 # 환경변수: KAFKA_CONTAINER (기본 stock-kafka), WAIT_SECONDS (결과를 기다리는 시간, 기본 60)
@@ -58,4 +58,4 @@ show news.articles.requested
 show market.history.responded
 show news.articles.responded
 show briefing.generated
-echo "briefing.generated 가 없으면 실패 테이블(briefing.failed_jobs)에서 job_id=${move_id} 를 확인합니다."
+echo "briefing.generated 가 없으면 작업 기록 테이블(briefing.job_log)에서 job_id=${move_id} 를 확인합니다."

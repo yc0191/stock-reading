@@ -161,9 +161,9 @@ def test_bracket_belongs_only_to_the_name_right_before_it():
 def test_db_tests_are_chosen_from_the_map(tmp_path):
     make_maps(tmp_path, market_rows=MARKET_ROWS, scripts_rows=SCRIPTS_ROWS)
     write(tmp_path / "docs/test-map/briefing.md", map_text([
-        ("실패 기록", "failure_store.py", NA, "test_failure_store.py",
-         "test_failure_store_db.py [DB, 켜는 조건: BRIEFING_IT_DB_URL·BRIEFING_IT_DB_USER·BRIEFING_IT_DB_PASSWORD]")]))
-    assert rr.db_tests(tmp_path) == {"market": ["StoreDbTest"], "briefing": ["test_failure_store_db.py"]}
+        ("작업 기록", "job_log_store.py", NA, "test_job_log_store.py",
+         "test_job_log_store_db.py [DB, 켜는 조건: BRIEFING_IT_DB_URL·BRIEFING_IT_DB_USER·BRIEFING_IT_DB_PASSWORD]")]))
+    assert rr.db_tests(tmp_path) == {"market": ["StoreDbTest"], "briefing": ["test_job_log_store_db.py"]}
 
 
 # ---------------------------------------------------------------- 결과 표

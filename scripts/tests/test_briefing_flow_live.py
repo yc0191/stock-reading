@@ -44,9 +44,10 @@ def _read(path: str) -> str:
 
 def _failed_jobs(conn, since: str) -> list:
     with conn.cursor() as cur:
-        # 실패 이유(정해진 값)만 읽는다. 설명에는 값이 섞일 수 있어 읽지 않는다.
+        # 끝내 실패한 줄의 사유(정해진 값)만 읽는다. 관련 데이터에는 값이 섞일 수 있어 읽지 않는다.
         # 앞 단계(실제 DB 테스트)가 같은 DB 에 남긴 행은 빼고 이 실행이 기록한 것만 본다.
-        cur.execute("SELECT reason FROM briefing.failed_jobs WHERE created_at >= %s::timestamptz ORDER BY created_at",
+        cur.execute("SELECT reason FROM briefing.job_log WHERE entry_type = 'failed' "
+                    "AND created_at >= %s::timestamptz ORDER BY created_at",
                     (since,))
         return [row[0] for row in cur.fetchall()]
 

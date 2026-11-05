@@ -1,7 +1,7 @@
 """Kafka 실행부: market.move -> 시세 이력·배경 자료·기사·공시 조회 -> briefing.generated,
 schedule.tick(데일리 판) -> 데일리 자료·공시 조회 -> briefing.daily.generated. 실행: python -m briefing.main
 
-Kafka를 import하는 곳은 이 파일뿐이다. 근거 조회(jobs), 리포트(report), 실패 기록(failure_store)은
+Kafka를 import하는 곳은 이 파일뿐이다. 근거 조회(jobs), 리포트(report), 작업 기록(job_log_store)은
 메시지와 시각을 인자로 받기만 하고, 여기서 받은 메시지를 넘기고 그쪽이 낸 이벤트를 발행한다.
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ from confluent_kafka.admin import AdminClient, NewTopic
 
 from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DEFAULT_SETTINGS, CoreSettings, DailySettings
-from briefing.daily_jobs import DailyCore, DailyFailureRecordPort, DiscardDailyFailureRecords
+from briefing.daily_jobs import DailyCore
 from briefing.daily_report import DailyLlmWriter, build_daily_writer
 from briefing.events import (
     ARTICLES_REQUESTED_TOPIC,
@@ -34,15 +34,13 @@ from briefing.events import (
     RESEARCH_REQUESTED_TOPIC,
     OutboundEvent,
 )
-from briefing.failure_store import PostgresFailureStore, psycopg_connector
+from briefing.job_log import JobLogPort
+from briefing.job_log_store import PostgresJobLog, psycopg_connector
 from briefing.jobs import BriefingCore
-from briefing.ports import Failure
 from briefing.llm import AnthropicClient
 from briefing.report import ReportStage, ReportWriter, build_report_writer
 from briefing.research import (
-    DiscardResearchRecords,
     QueryWriter,
-    ResearchRecordPort,
     ResearchReportStage,
     build_query_writer,
 )
@@ -92,7 +90,7 @@ COMMON = {"broker.address.family": "v4"}
 MAX_POLL_SECONDS = 1.0
 FLUSH_SECONDS = 10
 
-# 실패 기록 DB. 다른 서비스(application.yml)와 같은 로컬 주소를 쓰고, 계정은 .env.example의 키를 따른다.
+# 작업 기록 DB. 다른 서비스(application.yml)와 같은 로컬 주소를 쓰고, 계정은 .env.example의 키를 따른다.
 DB_HOST = "localhost"
 DB_PORT = 5432
 DEFAULT_DB_NAME = "stock"
@@ -114,9 +112,8 @@ def ensure_topics(bootstrap: str) -> None:
                 raise
 
 
-class FailureStore(Protocol):
+class JobLogStore(JobLogPort, Protocol):
     def create_table(self) -> None: ...
-    def record(self, failure: Failure) -> None: ...
 
 
 class KafkaPublisher:
@@ -150,32 +147,28 @@ class BriefingRunner:
     main()뿐 아니라 다른 프로그램(예: 어드민 화면)도 같은 실행부를 시작·멈출 수 있게 분리했다.
     """
 
-    def __init__(self, bootstrap: str, writer: ReportWriter, failures: FailureStore, *,
+    def __init__(self, bootstrap: str, writer: ReportWriter, job_log: JobLogStore, *,
                  settings: CoreSettings = DEFAULT_SETTINGS,
                  clock: Callable[[], datetime] = lambda: datetime.now(KST),
                  consumer_factory: Callable[[dict], Consumer] = Consumer,
                  producer_factory: Callable[[dict], Producer] = Producer,
                  declare_topics: Callable[[str], None] = ensure_topics,
                  query_writer: QueryWriter | None = None,
-                 research_records: ResearchRecordPort | None = None,
                  daily_writer: DailyLlmWriter | None = None,
-                 daily_details: DailyFailureRecordPort | None = None,
                  daily_settings: DailySettings = DEFAULT_DAILY_SETTINGS) -> None:
         self.bootstrap = bootstrap
         self.writer = writer
-        self.failures = failures
+        self.job_log = job_log
         self.settings = settings
         self.clock = clock
         self._consumer_factory = consumer_factory
         self._producer_factory = producer_factory
         self._declare_topics = declare_topics
         self.daily_writer = daily_writer
-        self.daily_details = daily_details or DiscardDailyFailureRecords()
         self.daily_settings = daily_settings
         self.daily: DailyCore | None = None
         self.tick_consumers: dict[str, Consumer] = {}
         self.query_writer = query_writer
-        self.research_records = research_records or DiscardResearchRecords()
         self._consumer: Consumer | None = None
         self._producer: Producer | None = None
         self.core: BriefingCore | None = None
@@ -223,14 +216,14 @@ class BriefingRunner:
 
     def open(self) -> None:
         self._declare_topics(self.bootstrap)
-        self.failures.create_table()
+        self.job_log.create_table()
         self._producer = self._producer_factory({"bootstrap.servers": self.bootstrap, "acks": "all", **COMMON})
         publisher = KafkaPublisher(self._producer)
-        stage = ReportStage(self.writer, publisher, self.failures, clock=self.clock)
-        self.research = ResearchReportStage(stage, self.query_writer, publisher, self.research_records,
+        stage = ReportStage(self.writer, publisher, self.job_log, clock=self.clock)
+        self.research = ResearchReportStage(stage, self.query_writer, publisher, self.job_log,
                                             self.settings, self.clock)
-        self.core = BriefingCore(publisher, self.failures, self.research, self.settings)
-        self.daily = DailyCore(publisher, self.failures, self.daily_writer, self.daily_details, self.daily_settings)
+        self.core = BriefingCore(publisher, self.research, self.settings, self.job_log)
+        self.daily = DailyCore(publisher, self.daily_writer, self.job_log, self.daily_settings)
         for edition, group in TICK_CONSUMER_GROUPS.items():
             consumer = self._consumer_factory({
                 "bootstrap.servers": self.bootstrap,
@@ -369,10 +362,9 @@ def db_conninfo(env: Mapping[str, str]) -> str:
 
 
 def build_runner(env: Mapping[str, str]) -> BriefingRunner:
-    """환경변수로 실제 구성(Kafka, Postgres 실패 기록, LLM 또는 규칙 기반 작성기)을 만든다."""
+    """환경변수로 실제 구성(Kafka, Postgres 작업 기록, LLM 또는 규칙 기반 작성기)을 만든다."""
     bootstrap = env.get("KAFKA_BOOTSTRAP", "localhost:9092")
-    store = PostgresFailureStore(psycopg_connector(db_conninfo(env)))
-    # 재검색 기록은 저장 테이블이 생기기 전까지 버린다(DiscardResearchRecords).
+    store = PostgresJobLog(psycopg_connector(db_conninfo(env)))
     return BriefingRunner(bootstrap, build_report_writer(env), store, daily_writer=build_daily_writer(env),
                           query_writer=build_query_writer(env, AnthropicClient))
 

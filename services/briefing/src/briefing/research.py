@@ -3,7 +3,7 @@
 흐름: 보고서 LLM이 근거 부족을 냄 -> 검색어 LLM이 검색어를 냄 -> news.research.requested(작업 하나당 1번) ->
 같은 재검색 작업 id의 collection.completed 대기 -> news.articles.requested(researchJobId)를 안정될 때까지 재확인 ->
 기존 시간 범위로 다시 거르고 이미 받은 기사를 뺌 -> 재검색 기사를 더해 보고서를 한 번 더 씀.
-어디서 끝나든 실패는 새 실패 사유 없이 로그와 재검색 기록(ResearchRecordPort)에만 남기고 기존 근거로 보고서를 낸다.
+어디서 끝나든 실패는 새 실패 사유 없이 로그와 작업 기록(JobLogPort)에만 남기고 기존 근거로 보고서를 낸다.
 
 재검색(NewsResearch)과 검색어 LLM(QueryWriter)은 작업 종류와 작업 id로만 움직여 데일리 판도 부를 수 있다.
 지금 연결된 곳은 급변동(ResearchReportStage)뿐이다.
@@ -29,6 +29,18 @@ from briefing.events import (
     research_request_event,
 )
 from briefing.evidence import MARKET_WIDE
+from briefing.job_log import (
+    TYPE_CHECK_ROUND,
+    TYPE_FAILED,
+    TYPE_LLM_REJECTED,
+    TYPE_LLM_SUCCEEDED,
+    TYPE_RESENT,
+    DiscardJobLog,
+    JobLogEntry,
+    JobLogPort,
+    move_target,
+    range_target,
+)
 from briefing.jobs import ReportInput
 from briefing.llm import LlmCallError, LlmClient, llm_config
 from briefing.ports import RequestPort
@@ -114,6 +126,7 @@ class ResearchReason(str, Enum):
 
     QUERY_REJECTED = "query_rejected"              # 검색어 LLM 응답이 형식에 맞지 않아 거부한 시도
     QUERY_CALL_FAILED = "query_call_failed"        # 검색어 LLM 호출이 실패한 시도
+    QUERY_ACCEPTED = "query_accepted"              # 검색어 LLM 응답을 받아들인 시도
     QUERY_GAVE_UP = "query_gave_up"                # 모든 시도가 실패해 재검색하지 않음
     NO_QUERIES = "no_queries"                      # 검색어 LLM이 검색어를 내지 않음
     ALREADY_RESEARCHED = "already_researched"      # 같은 작업은 한 번만 재검색한다
@@ -128,51 +141,14 @@ class ResearchReason(str, Enum):
     STILL_INSUFFICIENT = "still_insufficient"      # 다시 써도 근거 부족
 
 
-@dataclass(frozen=True)
-class ResearchFailureRecord:
-    """재검색이 실패하거나 결과가 없을 때, 그리고 그 사이의 거부된 시도·재요청·확인 라운드마다 하나씩 만든다.
-
-    저장 테이블은 아직 없어 포트로 넘기기만 한다. 키·수신 주소·보유 수량·금액은 담지 않는다.
-    검색어는 로그에 쓰지 않지만 여기에는 담는다.
-    """
-
-    job_kind: str
-    job_id: str
-    # 대상: 급변동은 종목과 변동 시각, 데일리 판은 다루는 범위
-    symbol: str | None
-    move_at: datetime | None
-    range_since: datetime | None
-    range_until: datetime | None
-    stage: ResearchStep
-    reason: ResearchReason
-    error_type: str | None
-    attempts: int
-    occurred_at: datetime
-    queries: tuple[str, ...] = ()
-    # 그 단계에서 보낸 요청의 payload(기사 조회면 since·until 범위 포함)
-    request: Mapping[str, Any] | None = None
-    # 그 단계에서 받은 응답의 payload 전부(기사 조회면 받은 기사 항목 전체)
-    received: tuple[Mapping[str, Any], ...] = ()
-    # 받지 못한 응답: 무엇을 기다렸는지(응답 종류, 순번, 보낸 시각)
-    awaited: Mapping[str, Any] | None = None
-    missing: tuple[str, ...] = ()
-    excluded: int = 0
-    duplicates: int = 0
-    # 검색어 LLM 시도의 입력, 원래 응답, 거부 이유
-    llm_input: str | None = None
-    raw_output: str | None = None
-    rejection: str | None = None
-
-
-class ResearchRecordPort(Protocol):
-    def record(self, entry: ResearchFailureRecord) -> None: ...
-
-
-class DiscardResearchRecords:
-    """ResearchRecordPort 기본 구현. 저장 테이블이 생기기 전까지는 받은 기록을 버린다."""
-
-    def record(self, entry: ResearchFailureRecord) -> None:
-        pass
+# 재검색 사유별 기록 종류. 나머지 사유는 재검색이 끝내 실패했거나 쓸 기사가 없는 경우라 failed다.
+_ENTRY_TYPES = {
+    ResearchReason.QUERY_REJECTED: TYPE_LLM_REJECTED,
+    ResearchReason.QUERY_CALL_FAILED: TYPE_LLM_REJECTED,
+    ResearchReason.QUERY_ACCEPTED: TYPE_LLM_SUCCEEDED,
+    ResearchReason.ARTICLES_RESENT: TYPE_RESENT,
+    ResearchReason.ARTICLES_CONFIRM_ROUND: TYPE_CHECK_ROUND,
+}
 
 
 @dataclass(frozen=True)
@@ -198,14 +174,25 @@ class ResearchTarget:
 
 
 def _record(target: ResearchTarget, stage: ResearchStep, reason: ResearchReason, now: datetime,
-            attempts: int, **data: Any) -> ResearchFailureRecord:
+            attempts: int, *, error_type: str | None = None, queries: tuple[str, ...] = (),
+            request: Mapping[str, Any] | None = None, received: tuple[Mapping[str, Any], ...] = (),
+            awaited: Mapping[str, Any] | None = None, missing: tuple[str, ...] = (), excluded: int = 0,
+            duplicates: int = 0, llm_input: str | None = None, raw_output: str | None = None,
+            rejection: str | None = None) -> JobLogEntry:
+    """재검색 기록 한 줄. 요청 payload와 받은 응답 payload는 가공하지 않고 담는다. 검색어는 로그에 쓰지 않지만 여기에는 담는다."""
+    data: dict[str, Any] = {
+        "queries": list(queries), "request": request, "received": list(received), "awaited": awaited,
+        "missing": list(missing), "excluded": excluded, "duplicates": duplicates,
+    }
+    if llm_input is not None:
+        data["llm"] = {"input": llm_input, "rawOutput": raw_output, "rejectReason": rejection}
     daily = target.move_at is None
-    return ResearchFailureRecord(
-        job_kind=target.job_kind, job_id=target.job_id,
-        symbol=None if daily else target.tag, move_at=target.move_at,
-        range_since=target.since if daily else None, range_until=target.until if daily else None,
-        stage=stage, reason=reason, error_type=data.pop("error_type", None), attempts=attempts,
-        occurred_at=now, **data)
+    return JobLogEntry(
+        job_kind=target.job_kind, researched=True, job_id=target.job_id,
+        target=range_target(format_timestamp(target.since), format_timestamp(target.until)) if daily
+        else move_target(target.tag, format_timestamp(target.move_at)),
+        stage=stage.value, entry_type=_ENTRY_TYPES.get(reason, TYPE_FAILED), reason=reason.value,
+        error_type=error_type, attempts=attempts, data=data, occurred_at=now)
 
 
 # ---- 검색어 LLM ----
@@ -305,7 +292,7 @@ class _Research:
 @dataclass
 class NewsResearch:
     requests: RequestPort
-    records: ResearchRecordPort
+    job_log: JobLogPort
     done: ResearchDonePort
     settings: CoreSettings = DEFAULT_SETTINGS
     _jobs: OrderedDict[str, _Research] = field(default_factory=OrderedDict, init=False)
@@ -314,7 +301,7 @@ class NewsResearch:
         """재검색 요청을 보낸다. 같은 작업 id는 한 번만 보내고 두 번째부터 False."""
         if target.job_id in self._jobs:
             log.info("research already requested for job %s; not requesting again", target.job_id)
-            self.records.record(_record(target, ResearchStep.QUERY, ResearchReason.ALREADY_RESEARCHED, now, 0,
+            self.job_log.record(_record(target, ResearchStep.QUERY, ResearchReason.ALREADY_RESEARCHED, now, 0,
                                         queries=queries))
             return False
         event = research_request_event(target.job_id, RESEARCH_REQUEST_SEQ, target.job_kind, target.tag,
@@ -382,7 +369,7 @@ class NewsResearch:
         ids = frozenset(a.article_id for a in articles)
         if job.round >= 2:
             # 확인 라운드는 정상 동작이지만, 무엇을 받았는지 남기려고 라운드마다 기록한다.
-            self.records.record(_record(
+            self.job_log.record(_record(
                 job.target, ResearchStep.ARTICLES_CONFIRM, ResearchReason.ARTICLES_CONFIRM_ROUND, now, job.round,
                 queries=job.queries, request=job.last_request, received=(payload,)))
         if job.round >= 2 and ids == job.previous_ids:
@@ -437,7 +424,7 @@ class NewsResearch:
                 self._finish(job, now, None, ResearchStep.ARTICLES, ResearchReason.ARTICLES_NO_RESPONSE,
                              job.attempt, request=job.last_request, received=tuple(job.received), awaited=awaited)
                 return
-            self.records.record(_record(job.target, ResearchStep.ARTICLES, ResearchReason.ARTICLES_RESENT, now,
+            self.job_log.record(_record(job.target, ResearchStep.ARTICLES, ResearchReason.ARTICLES_RESENT, now,
                                         job.attempt, queries=job.queries, request=job.last_request,
                                         awaited=awaited))
             self._send(job, now, job.attempt + 1)
@@ -497,7 +484,7 @@ class NewsResearch:
         job.phase = _Phase.DONE
         if log_result:
             _log_research(job.target.job_id, True, 0, 0, 0, False, reason.value)
-        self.records.record(_record(job.target, stage, reason, now, attempts, queries=job.queries, **data))
+        self.job_log.record(_record(job.target, stage, reason, now, attempts, queries=job.queries, **data))
         self.done.on_research_done(job.target, result, now)
 
 
@@ -514,20 +501,20 @@ def _log_research(job_id: str, researched: bool, articles: int, excluded: int, d
 class ResearchReportStage:
     """BriefingCore의 ReadyPort 구현. 보고서가 근거 부족이면 한 번 재검색하고 다시 쓴다.
 
-    재검색이 없거나 실패하면 첫 보고서를 그대로 낸다. 실패는 새 실패 사유 없이 로그와 재검색 기록에만 남긴다.
+    재검색이 없거나 실패하면 첫 보고서를 그대로 낸다. 실패는 새 실패 사유 없이 로그와 작업 기록에만 남긴다.
     """
 
     stage: ReportStage
     queries: QueryWriter | None
     requests: RequestPort
-    records: ResearchRecordPort = field(default_factory=DiscardResearchRecords)
+    job_log: JobLogPort = field(default_factory=DiscardJobLog)
     settings: CoreSettings = DEFAULT_SETTINGS
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(KST))
     research: NewsResearch = field(init=False)
     _pending: dict[str, tuple[ReportInput, Report]] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
-        self.research = NewsResearch(self.requests, self.records, self, self.settings)
+        self.research = NewsResearch(self.requests, self.job_log, self, self.settings)
 
     def on_ready(self, report_input: ReportInput) -> None:
         report = self.stage.write(report_input)
@@ -542,40 +529,42 @@ class ResearchReportStage:
         target = self._target(report_input)
         result = self.queries.ask(build_llm_input(report_input))
         for attempt in result.attempts:
-            if attempt.rejection is not None:
+            if attempt.rejection is None:
+                self.job_log.record(self._attempt_record(target, attempt, now, ResearchReason.QUERY_ACCEPTED))
+            else:
                 log.warning("research search-term attempt %d/%d failed for job %s: %s",
                             attempt.attempt, self.queries.max_attempts, report_input.job_id, attempt.rejection)
-                self.records.record(self._attempt_record(target, attempt, now, (
+                self.job_log.record(self._attempt_record(target, attempt, now, (
                     ResearchReason.QUERY_CALL_FAILED if attempt.error_type == LlmCallError.__name__
                     else ResearchReason.QUERY_REJECTED)))
         if result.gave_up or not result.queries:
             reason = ResearchReason.QUERY_GAVE_UP if result.gave_up else ResearchReason.NO_QUERIES
             _log_research(report_input.job_id, False, 0, 0, 0, False, reason.value)
-            self.records.record(self._attempt_record(target, result.attempts[-1], now, reason))
-            self.stage.publish(report_input, report)
+            self.job_log.record(self._attempt_record(target, result.attempts[-1], now, reason))
+            self.stage.publish(report_input, report, researched=True)
             return
         self._pending[report_input.job_id] = (report_input, report)
         if not self.research.start(target, result.queries, now):
             del self._pending[report_input.job_id]
-            self.stage.publish(report_input, report)
+            self.stage.publish(report_input, report, researched=True)
 
     def on_research_done(self, target: ResearchTarget, result: ResearchArticles | None, now: datetime) -> None:
         report_input, first = self._pending.pop(target.job_id)
         if result is None:
-            self.stage.publish(report_input, first)
+            self.stage.publish(report_input, first, researched=True)
             return
         rewritten = replace(report_input, research_articles=result.articles,
                             research_articles_truncated=result.truncated)
-        report = self.stage.write(rewritten)
+        report = self.stage.write(rewritten, researched=True)
         if report is None:
-            self.records.record(_record(target, ResearchStep.REWRITE, ResearchReason.REWRITE_FAILED, now, 1,
+            self.job_log.record(_record(target, ResearchStep.REWRITE, ResearchReason.REWRITE_FAILED, now, 1,
                                         received=tuple(_article_entry(a) for a in result.articles)))
             return
         if report.insufficient_evidence:
             log.info("research job=%s rewritten report still has insufficient evidence", target.job_id)
-            self.records.record(_record(target, ResearchStep.REWRITE, ResearchReason.STILL_INSUFFICIENT, now, 1,
+            self.job_log.record(_record(target, ResearchStep.REWRITE, ResearchReason.STILL_INSUFFICIENT, now, 1,
                                         received=tuple(_article_entry(a) for a in result.articles)))
-        self.stage.publish(rewritten, report)
+        self.stage.publish(rewritten, report, researched=True)
 
     def next_deadline(self) -> datetime | None:
         return self.research.next_deadline()
@@ -592,7 +581,7 @@ class ResearchReportStage:
 
     @staticmethod
     def _attempt_record(target: ResearchTarget, attempt: QueryAttempt, now: datetime,
-                        reason: ResearchReason) -> ResearchFailureRecord:
+                        reason: ResearchReason) -> JobLogEntry:
         return _record(target, ResearchStep.QUERY, reason, now, attempt.attempt, error_type=attempt.error_type,
                        llm_input=attempt.llm_input, raw_output=attempt.raw_output, rejection=attempt.rejection)
 

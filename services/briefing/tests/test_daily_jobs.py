@@ -15,9 +15,6 @@ from briefing.daily_jobs import (
     STAGE_FILINGS,
     STAGE_LLM,
     DailyCore,
-    DailyFailureRecord,
-    DailyFailureRecordPort,
-    DiscardDailyFailureRecords,
     range_start,
 )
 from briefing.daily_report import (
@@ -31,9 +28,11 @@ from briefing.daily_report import (
     NO_DATA,
     DailyLlmWriter,
 )
+from briefing.job_log import DiscardJobLog, JobLogEntry
 from briefing.llm import LlmCallError
 from briefing.ports import FailureReason
 from contracts import validate
+from fake_job_log import FakeJobLog
 
 KST = timezone(timedelta(hours=9))
 TICK_ID = "8d3b5e17-6c2a-4f90-b1e4-7a9c0d2f3e68"
@@ -56,25 +55,26 @@ class Requests:
         return [e for e in self.sent if e.topic == name]
 
 
-class Failures:
-    def __init__(self):
-        self.records = []
+class Details(FakeJobLog):
+    """작업 기록 가짜. 넘어온 줄을 그대로 모은다."""
 
-    def record(self, failure):
-        self.records.append(failure)
-
-
-class Details:
-    """DailyFailureRecordPort 의 가짜. 넘어온 기록 값을 그대로 모은다."""
-
-    def __init__(self):
-        self.records: list[DailyFailureRecord] = []
-
-    def record(self, record):
-        self.records.append(record)
+    @property
+    def records(self):
+        return self.entries
 
     def by_reason(self, reason):
-        return [r for r in self.records if r.reason == reason]
+        return self.of_reason(reason)
+
+
+class Failures:
+    """끝내 실패한 줄만 보여 주는 창(이전의 실패 테이블 한 줄에 해당)."""
+
+    def __init__(self, details):
+        self.details = details
+
+    @property
+    def records(self):
+        return self.details.failed
 
 
 class FakeLlm:
@@ -152,10 +152,9 @@ def good_output(*refs):
 @pytest.fixture
 def core():
     def make(llm=None, settings=DailySettings()):
-        requests, failures = Requests(), Failures()
-        details: DailyFailureRecordPort = Details()
+        requests, details = Requests(), Details()
         writer = DailyLlmWriter(llm, settings.llm_max_attempts) if llm is not None else None
-        return DailyCore(requests, failures, writer, details, settings), requests, failures, details
+        return DailyCore(requests, writer, details, settings), requests, Failures(details), details
     return make
 
 
@@ -355,9 +354,11 @@ def test_daily_data_is_resent_with_a_new_seq_and_given_up_after_the_last_attempt
     assert requests.topic("news.filings.requested") == []
 
     [failure] = failures.records
-    assert failure.reason is FailureReason.CONTEXT_NO_RESPONSE
-    assert failure.symbol == "morning" and failure.job_id == TICK_ID and failure.attempts == 3
-    assert "missing:" in failure.detail and ITEM_FILINGS in failure.detail
+    assert failure.reason == FailureReason.CONTEXT_NO_RESPONSE
+    assert failure.job_kind == "morning" and failure.job_id == TICK_ID and failure.attempts == 3
+    [result] = details.results()
+    assert ITEM_FILINGS in result.data["missingItems"]
+    assert result.data["firstFailure"]["reason"] == "context_no_response"
 
     resent = details.by_reason(REASON_RESENT)
     assert [r.attempts for r in resent] == [1, 2] and {r.stage for r in resent} == {STAGE_DAILY_DATA}
@@ -377,7 +378,7 @@ def test_filings_no_response_still_sends_the_edition_and_records_one_failure(cor
     [event] = published(requests)
     assert event.value["payload"]["missingItems"] == [ITEM_FILINGS]
     [failure] = failures.records
-    assert failure.reason is FailureReason.FILINGS_NO_RESPONSE and failure.symbol == "morning"
+    assert failure.reason == FailureReason.FILINGS_NO_RESPONSE and failure.job_kind == "morning"
     [final] = details.by_reason("filings_no_response")
     assert final.stage == STAGE_FILINGS
     # 받은 응답은 내용 전부를 담는다.
@@ -399,7 +400,8 @@ def test_llm_writes_the_summary_and_cites_only_given_refs(core):
     assert payload["generatedBy"] == GENERATED_BY_LLM
     assert "요약:" in payload["text"] and "[근거 1, 2]" in payload["text"]
     assert "투자 조언" in payload["text"]
-    assert failures.records == [] and details.records == []
+    assert failures.records == []
+    assert [e.entry_type for e in details.records] == ["llm-succeeded", "result"]
     _, user, schema = llm.calls[0]
     assert "insufficientEvidence" in schema["required"]
     assert {i["name"] for i in json.loads(user)["items"]} >= {ITEM_US_INDEX, ITEM_FILINGS}
@@ -435,7 +437,7 @@ def test_llm_failing_every_time_falls_back_to_the_rule_based_body_and_records_ll
     assert payload["generatedBy"] == GENERATED_BY_RULE
     assert "요약:" not in payload["text"] and "TEST INDEX(TESTIX) 2.04%" in payload["text"]
     [failure] = failures.records
-    assert failure.reason is FailureReason.LLM_ERROR and failure.attempts == 3 and failure.symbol == "morning"
+    assert failure.reason == FailureReason.LLM_ERROR and failure.attempts == 3 and failure.job_kind == "morning"
     assert [r.attempts for r in details.by_reason(REASON_LLM_REJECTED)] == [1, 2, 3]
     assert details.by_reason(REASON_LLM_REJECTED)[0].error_type == "LlmCallError"
     assert details.by_reason(REASON_LLM_REJECTED)[0].data["llm"]["rawOutput"] is None
@@ -465,15 +467,16 @@ def test_llm_is_not_called_when_there_is_no_evidence_at_all(core):
     assert event.value["payload"]["generatedBy"] == GENERATED_BY_RULE
 
 
-def test_first_failure_is_the_reason_and_the_edition_gets_one_line(core):
+def test_every_failure_is_logged_but_the_result_line_names_the_first_one(core):
     llm = FakeLlm("x", "x", "x")
-    c, requests, failures, _ = core(llm)
+    c, requests, failures, details = core(llm)
     c.on_schedule_tick(tick(), MORNING_AT, "morning")
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     for n in (1, 2, 3):
         c.on_tick(MORNING_AT + timedelta(seconds=10 * n))
-    [failure] = failures.records
-    assert failure.reason is FailureReason.FILINGS_NO_RESPONSE
+    assert [f.reason for f in failures.records] == [FailureReason.FILINGS_NO_RESPONSE, FailureReason.LLM_ERROR]
+    [result] = details.results()
+    assert result.data["firstFailure"]["reason"] == FailureReason.FILINGS_NO_RESPONSE
     assert len(published(requests)) == 1
 
 
@@ -484,8 +487,10 @@ def test_missing_items_are_recorded_with_every_field_filled(core):
     c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
     c.on_daily_data_responded(daily_response(etfs=[], background=[]), POST_CLOSE_AT)
     [record] = details.by_reason(REASON_MISSING_ITEMS)
-    assert record.kind == "post-close" and record.job_id == TICK_ID and record.stage == STAGE_COMPOSE
-    assert record.range_start == datetime(2026, 10, 19, 17, 0, tzinfo=KST) and record.range_end == POST_CLOSE_AT
+    assert record.job_kind == "post-close" and record.job_id == TICK_ID and record.stage == STAGE_COMPOSE
+    assert record.target == {"rangeStart": datetime(2026, 10, 19, 17, 0, tzinfo=KST).isoformat(),
+                             "rangeEnd": POST_CLOSE_AT.isoformat()}
+    assert not record.researched
     assert record.data["missingItems"] == [ITEM_KR_TODAY, ITEM_ETFS]
     assert record.data["received"]["market.daily.responded"]["etfs"] == []
     assert record.occurred_at == POST_CLOSE_AT
@@ -507,9 +512,69 @@ def test_records_and_events_carry_no_keys_or_personal_data(core, caplog, monkeyp
     assert "TEST01" not in caplog.text and "TESTA" not in caplog.text
 
 
-def test_default_detail_port_keeps_nothing_and_logs_nothing(caplog):
-    record = DailyFailureRecord("morning", TICK_ID, MORNING_AT, MORNING_AT, STAGE_LLM, "x", None, 1,
-                                {"llm": {"input": "TEST-INPUT"}}, MORNING_AT)
+def test_default_log_port_keeps_nothing_and_logs_nothing(caplog):
+    entry = JobLogEntry("morning", False, TICK_ID, {}, STAGE_LLM, "failed", "x", None, 1,
+                        {"llm": {"input": "TEST-INPUT"}}, MORNING_AT)
     with caplog.at_level(logging.DEBUG):
-        assert DiscardDailyFailureRecords().record(record) is None
+        assert DiscardJobLog().record(entry) is True
+        assert DiscardJobLog().has_failed(TICK_ID) is False
     assert caplog.text == ""
+
+
+# ---- 결과 줄과 저장 실패 ----
+
+def test_every_edition_leaves_one_result_line_with_body_cited_evidence_missing_items_and_method(core):
+    llm = FakeLlm(good_output("B1", "0000000001-26-000001"))
+    c, requests, _, details = core(llm)
+    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_daily_data_responded(daily_response(), MORNING_AT)
+    c.on_filings_responded(filings_response(), MORNING_AT)
+
+    [event] = published(requests)
+    [result] = details.results()
+    assert (result.job_kind, result.job_id, result.reason, result.researched) == (
+        "morning", TICK_ID, "published", False)
+    assert result.data["text"] == event.value["payload"]["text"]
+    assert result.data["generatedBy"] == GENERATED_BY_LLM
+    assert result.data["missingItems"] == event.value["payload"]["missingItems"]
+    assert [e["ref"] for e in result.data["evidence"]] == ["B1", "0000000001-26-000001"]
+    assert all(e["describe"] for e in result.data["evidence"])
+    assert "firstFailure" not in result.data
+
+
+def test_the_accepted_llm_attempt_keeps_its_input_and_original_response(core):
+    answer = good_output("B1")
+    llm = FakeLlm("bad", answer)
+    c, requests, _, details = core(llm)
+    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_daily_data_responded(daily_response(), MORNING_AT)
+    c.on_filings_responded(filings_response(), MORNING_AT)
+
+    [accepted] = details.of_type("llm-succeeded")
+    assert accepted.attempts == 2 and accepted.error_type is None and accepted.stage == STAGE_LLM
+    assert accepted.data["llm"]["rawOutput"] == answer and accepted.data["llm"]["input"] == llm.calls[1][1]
+    assert accepted.data["llm"]["rejectReason"] is None
+
+
+def test_edition_is_not_published_when_its_log_could_not_be_saved(caplog):
+    requests, log_port = Requests(), Details(fail=True)
+    c = DailyCore(requests, None, log_port, DailySettings())
+    with caplog.at_level(logging.ERROR, logger="briefing.job_log"):
+        c.on_schedule_tick(tick(), MORNING_AT, "morning")
+        c.on_daily_data_responded(daily_response(), MORNING_AT)
+        c.on_filings_responded(filings_response(), MORNING_AT)
+
+    assert published(requests) == []
+    assert "result event not published" in caplog.text and "TEST01" not in caplog.text
+    assert c.next_deadline() is None  # 작업은 정리되어 더 기다리지 않는다
+
+
+def test_post_close_edition_also_leaves_its_lines_under_its_own_job_kind(core):
+    c, requests, _, details = core()
+    c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
+    for n in (1, 2, 3):
+        c.on_tick(POST_CLOSE_AT + timedelta(seconds=10 * n))
+
+    assert {e.job_kind for e in details.entries} == {"post-close"}
+    assert [e.entry_type for e in details.entries][-1] == "result"
+    assert len(published(requests)) == 1

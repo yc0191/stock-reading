@@ -2,7 +2,8 @@
 
 흐름: schedule.tick(판마다 따로 받음) -> 범위 계산 -> 데일리 자료 요청(market.daily.requested)
 -> 아침 판이고 미국 종목이 있으면 그 티커로 공시 요청 -> 받은 자료 재검사 -> 본문(LLM 또는 규칙 기반)
--> briefing.daily.generated 발행. 응답을 끝내 받지 못하거나 LLM이 끝내 실패해도 판은 반드시 나간다.
+-> briefing.daily.generated 발행. 응답을 끝내 받지 못하거나 LLM이 끝내 실패해도 판은 나간다.
+예외는 작업 기록을 끝내 저장하지 못했을 때뿐이며, 그때는 이 판의 결과 이벤트를 발행하지 않고 ERROR 로그만 남긴다.
 """
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Protocol
+from typing import Any
 
 from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
@@ -36,7 +37,21 @@ from briefing.events import (
     parse_timestamp,
     request_event,
 )
-from briefing.ports import Failure, FailurePort, FailureReason, RequestPort
+from briefing.job_log import (
+    STAGE_PUBLISH,
+    TYPE_FAILED,
+    TYPE_LLM_REJECTED,
+    TYPE_LLM_SUCCEEDED,
+    TYPE_MISSING_ITEMS,
+    TYPE_RESENT,
+    TYPE_RESULT,
+    DiscardJobLog,
+    JobLogEntry,
+    JobLogPort,
+    range_target,
+    record_result,
+)
+from briefing.ports import FailureReason, RequestPort
 from briefing.sources import (
     BACKGROUND_MISSING,
     Background,
@@ -55,7 +70,7 @@ DAILY_DATA_REQUESTED_TOPIC = "market.daily.requested"
 DAILY_DATA_RESPONDED = "market.daily.responded"
 FILINGS_RESPONDED = "news.filings.responded"
 
-# 실패 상세 기록의 단계와 사유. 끝내 실패한 사유는 FailureReason 값을 그대로 쓴다.
+# 작업 기록의 단계와 사유. 끝내 실패한 사유는 FailureReason 값을 그대로 쓴다.
 STAGE_DAILY_DATA = "daily-data-request"
 STAGE_FILINGS = "filings-request"
 STAGE_LLM = "llm"
@@ -63,6 +78,8 @@ STAGE_COMPOSE = "compose"
 REASON_RESENT = "no_response_resent"
 REASON_LLM_REJECTED = "llm_attempt_rejected"
 REASON_MISSING_ITEMS = "missing_items"
+REASON_LLM_ACCEPTED = "llm_attempt_accepted"
+REASON_PUBLISHED = "published"
 
 
 def range_start(scheduled_for: datetime, settings: DailySettings = DEFAULT_DAILY_SETTINGS) -> datetime:
@@ -72,36 +89,6 @@ def range_start(scheduled_for: datetime, settings: DailySettings = DEFAULT_DAILY
     while start.weekday() >= 5:
         start -= timedelta(days=1)
     return max(start, local - settings.max_lookback)
-
-
-@dataclass(frozen=True)
-class DailyFailureRecord:
-    """실패 하나의 상세 기록. 어떤 판의 어느 단계에서 왜 실패했는지와 관련 자료 전부를 담는다.
-
-    키·수신 주소·보유 수량·금액은 담지 않는다. 지금은 저장하지 않으며 실패 테이블은 나중에 정한다.
-    """
-
-    kind: str
-    job_id: str
-    range_start: datetime
-    range_end: datetime
-    stage: str
-    reason: str
-    error_type: str | None
-    attempts: int
-    data: dict[str, Any]
-    occurred_at: datetime
-
-
-class DailyFailureRecordPort(Protocol):
-    def record(self, record: DailyFailureRecord) -> None: ...
-
-
-class DiscardDailyFailureRecords:
-    """지금의 기본 구현. 실패 상세를 어디에도(DB, 파일, 로그) 남기지 않는다."""
-
-    def record(self, record: DailyFailureRecord) -> None:
-        return None
 
 
 @dataclass
@@ -142,9 +129,8 @@ class _DailyJob:
 @dataclass
 class DailyCore:
     requests: RequestPort
-    failures: FailurePort
     writer: DailyLlmWriter | None = None
-    details: DailyFailureRecordPort = field(default_factory=DiscardDailyFailureRecords)
+    job_log: JobLogPort = field(default_factory=DiscardJobLog)
     settings: DailySettings = DEFAULT_DAILY_SETTINGS
     _jobs: dict[str, _DailyJob] = field(default_factory=dict, init=False)
     _seen: OrderedDict[str, None] = field(default_factory=OrderedDict, init=False)
@@ -335,7 +321,7 @@ class DailyCore:
             # 응답 쪽 결함 신호. 종목코드와 티커는 로그에 쓰지 않는다.
             log.warning("daily job %s: dropped %d %s outside the range", job.job_id, count, kind)
 
-    # ---- 실패 기록 ----
+    # ---- 작업 기록 ----
 
     def _related_data(self, job: _DailyJob, **extra: Any) -> dict[str, Any]:
         data = {
@@ -353,19 +339,25 @@ class DailyCore:
         data.update(extra)
         return data
 
-    def _detail(self, job: _DailyJob, stage: str, reason: str, error_type: str | None, attempts: int,
-                now: datetime, **extra: Any) -> None:
-        self.details.record(DailyFailureRecord(job.edition, job.job_id, job.range_start, job.scheduled_for, stage,
-                                               reason, error_type, attempts, self._related_data(job, **extra), now))
+    def _entry(self, job: _DailyJob, stage: str, entry_type: str, reason: str, error_type: str | None, attempts: int,
+               now: datetime, data: dict[str, Any]) -> JobLogEntry:
+        return JobLogEntry(job.edition, False, job.job_id,
+                           range_target(format_timestamp(job.range_start), format_timestamp(job.scheduled_for)),
+                           stage, entry_type, reason, error_type, attempts, data, now)
+
+    def _detail(self, job: _DailyJob, stage: str, entry_type: str, reason: str, error_type: str | None,
+                attempts: int, now: datetime, **extra: Any) -> None:
+        self.job_log.record(self._entry(job, stage, entry_type, reason, error_type, attempts, now,
+                                        self._related_data(job, **extra)))
 
     def _resent(self, job: _DailyJob, exchange: Exchange, stage: str, event_type: str, now: datetime) -> None:
-        self._detail(job, stage, REASON_RESENT, "Timeout", exchange.seq, now,
+        self._detail(job, stage, TYPE_RESENT, REASON_RESENT, "Timeout", exchange.seq, now,
                      timedOut={"response": event_type, "seq": exchange.seq})
 
     def _give_up(self, job: _DailyJob, exchange: Exchange, stage: str, reason: FailureReason, event_type: str,
                  now: datetime) -> None:
         detail = f"no {event_type} within the time limit"
-        self._detail(job, stage, reason.value, "Timeout", exchange.seq, now,
+        self._detail(job, stage, TYPE_FAILED, reason.value, "Timeout", exchange.seq, now,
                      timedOut={"response": event_type, "seq": exchange.seq})
         self._first_failure(job, reason, detail, exchange.seq)
 
@@ -392,34 +384,48 @@ class DailyCore:
         )
         sections = build_sections(daily_input, self.settings)
         missing = missing_items(sections)
-        text, generated_by = None, GENERATED_BY_RULE
+        text, generated_by, cited = None, GENERATED_BY_RULE, ()
         if self.writer is not None and has_evidence(sections):
             result = self.writer.write(daily_input, sections)
             for attempt in result.rejected:
-                self._detail(job, STAGE_LLM, REASON_LLM_REJECTED, attempt.error_type, attempt.attempt, now,
+                self._detail(job, STAGE_LLM, TYPE_LLM_REJECTED, REASON_LLM_REJECTED, attempt.error_type,
+                             attempt.attempt, now,
                              missingItems=missing,
                              llm={"input": attempt.llm_input, "rawOutput": attempt.raw_output,
                                   "rejectReason": attempt.reason})
             if result.body is None:
                 detail = f"daily LLM failed after {len(result.rejected)} attempts"
                 last = result.rejected[-1] if result.rejected else None
-                self._detail(job, STAGE_LLM, FailureReason.LLM_ERROR.value,
+                self._detail(job, STAGE_LLM, TYPE_FAILED, FailureReason.LLM_ERROR.value,
                              last.error_type if last else None, len(result.rejected), now, missingItems=missing,
                              llm={"input": last.llm_input if last else None,
                                   "rawOutput": last.raw_output if last else None,
                                   "rejectReason": last.reason if last else None})
                 self._first_failure(job, FailureReason.LLM_ERROR, detail, len(result.rejected))
             else:
-                text, generated_by = result.body.text, result.body.generated_by
+                text, generated_by, cited = result.body.text, result.body.generated_by, result.body.cited
+                if result.accepted is not None:
+                    a = result.accepted
+                    self._detail(job, STAGE_LLM, TYPE_LLM_SUCCEEDED, REASON_LLM_ACCEPTED, None, a.attempt, now,
+                                 missingItems=missing,
+                                 llm={"input": a.llm_input, "rawOutput": a.response, "rejectReason": None})
         if text is None:
             text = rule_based_text(daily_input, sections)
         if missing:
-            self._detail(job, STAGE_COMPOSE, REASON_MISSING_ITEMS, None, 0, now, missingItems=missing)
+            self._detail(job, STAGE_COMPOSE, TYPE_MISSING_ITEMS, REASON_MISSING_ITEMS, None, 0, now,
+                         missingItems=missing)
+        by_ref = {e.ref: e for s in sections for e in s.entries}
+        result_data: dict[str, Any] = {
+            "outcome": "published", "text": text, "generatedBy": generated_by, "missingItems": missing,
+            "evidence": [{"ref": ref, "describe": by_ref[ref].describe} for ref in cited],
+        }
         if job.first_failure is not None:
             reason, detail, attempts = job.first_failure
-            if missing:
-                detail = f"{detail}; missing: {', '.join(missing)}"
-            self.failures.record(Failure(job.job_id, job.edition, reason, detail, attempts))
+            result_data["firstFailure"] = {"reason": reason.value, "detail": detail, "attempts": attempts}
+        result = self._entry(job, STAGE_PUBLISH, TYPE_RESULT, REASON_PUBLISHED, None, 0, now, result_data)
+        if not record_result(self.job_log, result):
+            del self._jobs[job.job_id]
+            return
         self.requests.send(daily_briefing_event(job.job_id, job.correlation_id, job.scheduled_for, now, job.edition,
                                                 job.range_start, job.scheduled_for, text, missing, generated_by))
         log.info("daily %s ready: job=%s generatedBy=%s missing=%d etfs=%s filings=%s excluded=%s",

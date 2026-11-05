@@ -8,6 +8,7 @@ import pytest
 
 from briefing import main
 from briefing.ports import FailureReason
+from fake_job_log import FakeJobLog
 from briefing.report import GENERATED_BY_LLM, LlmWriter, Report, ReportError, RuleBasedWriter
 from briefing.research import QueryWriter
 from contracts import sample, validate
@@ -76,16 +77,18 @@ class FakeProducer:
         return 0
 
 
-class FakeStore:
+class FakeStore(FakeJobLog):
     def __init__(self):
+        super().__init__()
         self.created = 0
-        self.failures = []
 
     def create_table(self):
         self.created += 1
 
-    def record(self, failure):
-        self.failures.append(failure)
+    @property
+    def failures(self):
+        """끝내 실패한 줄(이전의 실패 테이블 한 줄에 해당)"""
+        return self.failed
 
 
 class Clock:
@@ -375,7 +378,7 @@ def test_llm_writer_is_connected_and_marks_the_briefing_as_llm(setup):
     assert [e["articleId"] for e in event["payload"]["evidence"]] == ["a1"]
 
 
-def test_report_failure_is_recorded_through_the_failure_store(setup):
+def test_report_failure_is_recorded_through_the_job_log(setup):
     make, clock, store, _ = setup
 
     class FailingWriter:

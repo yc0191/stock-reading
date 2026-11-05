@@ -6,6 +6,7 @@ import pytest
 
 from briefing.jobs import ReportInput
 from briefing.ports import FailureReason
+from fake_job_log import FakeJobLog
 from briefing.llm import DEFAULT_MODEL, LlmCallError
 from briefing.report import (
     GENERATED_BY_LLM,
@@ -87,13 +88,9 @@ class Recorder:
     def send(self, event):
         self.items.append(event)
 
-    def record(self, failure):
-        self.items.append(failure)
-
-
 def stage(writer):
-    published, failures = Recorder(), Recorder()
-    return ReportStage(writer, published, failures, clock=lambda: NOW), published.items, failures.items
+    published, job_log = Recorder(), FakeJobLog()
+    return ReportStage(writer, published, job_log, clock=lambda: NOW), published.items, job_log
 
 
 # ---- 정상 응답 ----
@@ -103,7 +100,7 @@ def test_valid_llm_output_is_published_with_code_written_headline_and_disclaimer
 
     s.on_ready(report_input())
 
-    assert failures == []
+    assert failures.failed == []
     [event] = published
     assert event.topic == "briefing.generated" and event.key == "TEST01"
     payload = event.value["payload"]
@@ -152,7 +149,7 @@ def test_unknown_article_id_is_rejected_and_the_llm_is_called_again():
     s.on_ready(report_input())
 
     assert len(llm.calls) == 2
-    assert failures == []
+    assert failures.failed == []
     payload = published[0].value["payload"]
     assert [e["articleId"] for e in payload["evidence"]] == ["a1", "a2"]
     assert "지어낸 기사" not in payload["text"]
@@ -165,7 +162,7 @@ def test_broken_json_is_rejected_and_the_llm_is_called_again():
     s.on_ready(report_input())
 
     assert len(llm.calls) == 2
-    assert len(published) == 1 and failures == []
+    assert len(published) == 1 and failures.failed == []
 
 
 @pytest.mark.parametrize("bad", [
@@ -193,10 +190,10 @@ def test_three_failed_attempts_record_llm_error_and_publish_nothing():
 
     assert len(llm.calls) == 3
     assert published == []
-    [failure] = failures
-    assert failure.reason is FailureReason.LLM_ERROR
-    assert (failure.job_id, failure.symbol, failure.attempts) == (JOB_ID, "TEST01", 3)
-    assert "APIConnectionError" in failure.detail
+    [failure] = failures.failed
+    assert failure.reason == FailureReason.LLM_ERROR
+    assert (failure.job_id, failure.target["symbol"], failure.attempts) == (JOB_ID, "TEST01", 3)
+    assert "APIConnectionError" in failure.data["detail"]
 
 
 # ---- 근거 부족 ----
@@ -207,7 +204,7 @@ def test_insufficient_evidence_publishes_a_report_without_causes_or_evidence():
 
     s.on_ready(report_input(articles=()))
 
-    assert failures == []
+    assert failures.failed == []
     payload = published[0].value["payload"]
     assert payload["text"].splitlines()[1:] == [
         "", LLM_INSUFFICIENT, "", "확인하지 못한 것:", "- 기사: 기간 안에 받은 자료 없음",
@@ -338,10 +335,10 @@ def test_key_never_appears_in_logs_errors_or_failure_records(fake_sdk, caplog):
         s.on_ready(report_input())
 
     assert published == []
-    [failure] = failures
-    assert failure.reason is FailureReason.LLM_ERROR and failure.attempts == 3
+    [failure] = failures.failed
+    assert failure.reason == FailureReason.LLM_ERROR and failure.attempts == 3
     assert FAKE_KEY not in caplog.text
-    assert FAKE_KEY not in failure.detail
+    assert FAKE_KEY not in failure.data["detail"]
     assert FAKE_KEY not in repr(writer)
 
 
@@ -449,42 +446,33 @@ def test_rule_based_report_has_the_same_shape_with_links_unchecked_items_and_dis
     assert lines[-1].startswith("※ 투자 조언이 아니며")
 
 
-# ---- 급변동 실패 기록 (LLM) ----
+# ---- 작업 기록 (LLM) ----
 
-class FailureLog:
-    """MoveFailurePort 가짜. 받기만 한다."""
-
-    def __init__(self):
-        self.records = []
-
-    def record(self, record):
-        self.records.append(record)
+def stage_with_log(writer, job_log=None):
+    published, job_log = Recorder(), job_log or FakeJobLog()
+    s = ReportStage(writer, published, job_log, clock=lambda: NOW)
+    return s, published.items, job_log
 
 
-def stage_with_failures(writer):
-    published, failures, log_port = Recorder(), Recorder(), FailureLog()
-    s = ReportStage(writer, published, failures, clock=lambda: NOW, move_failures=log_port)
-    return s, published.items, failures.items, log_port.records
-
-
-def filled(record):
+def filled(record, allowed_empty=("error_type", "attempts")):
     from dataclasses import fields
-    return all(getattr(record, f.name) not in (None, "", {}, []) for f in fields(record))
+    return all(getattr(record, f.name) not in (None, "", {}, []) for f in fields(record)
+               if f.name not in allowed_empty)
 
 
 def test_rejected_llm_attempts_are_recorded_even_when_the_report_finally_succeeds():
-    from briefing.move_failures import REASON_LLM_REJECTED, STAGE_LLM, MoveFailureRecord
+    from briefing.job_log import REASON_LLM_REJECTED, STAGE_LLM, TYPE_LLM_REJECTED, JobLogEntry
     bad = output([("지어낸 기사가 영향을 줬을 수 있습니다.", ["a9"])])
     llm = FakeLlm(bad, VALID)
-    s, published, failures, records = stage_with_failures(LlmWriter(llm))
+    s, published, job_log = stage_with_log(LlmWriter(llm))
 
     s.on_ready(report_input())
 
-    assert len(published) == 1 and failures == []
-    (record,) = records
-    assert isinstance(record, MoveFailureRecord) and filled(record)
-    assert (record.job_kind, record.job_id, record.stage, record.reason, record.attempts) == (
-        "move", JOB_ID, STAGE_LLM, REASON_LLM_REJECTED, 1)
+    assert len(published) == 1 and job_log.failed == []
+    (record,) = job_log.of_type(TYPE_LLM_REJECTED)
+    assert isinstance(record, JobLogEntry) and filled(record)
+    assert (record.job_kind, record.researched, record.job_id, record.stage, record.reason, record.attempts) == (
+        "move", False, JOB_ID, STAGE_LLM, REASON_LLM_REJECTED, 1)
     assert record.target == {"symbol": "TEST01", "moveAt": "2026-10-20T16:00:00+09:00"}
     assert record.error_type == "InvalidOutput"
     assert record.data["llmInput"] == llm.calls[0][1]
@@ -492,31 +480,98 @@ def test_rejected_llm_attempts_are_recorded_even_when_the_report_finally_succeed
     assert "not given" in record.data["rejection"]
 
 
-def test_three_failed_llm_attempts_give_one_record_per_attempt_and_a_final_record():
-    from briefing.move_failures import REASON_LLM_CALL_FAILED, REASON_LLM_REJECTED
+def test_the_accepted_llm_attempt_is_recorded_with_its_input_and_original_response():
+    from briefing.job_log import REASON_LLM_ACCEPTED, TYPE_LLM_SUCCEEDED
+    bad = output([("지어낸 기사가 영향을 줬을 수 있습니다.", ["a9"])])
+    llm = FakeLlm(bad, VALID)
+    s, _, job_log = stage_with_log(LlmWriter(llm))
+
+    s.on_ready(report_input())
+
+    (accepted,) = job_log.of_type(TYPE_LLM_SUCCEEDED)
+    assert (accepted.reason, accepted.attempts, accepted.error_type) == (REASON_LLM_ACCEPTED, 2, None)
+    assert accepted.data["llmInput"] == llm.calls[1][1] and accepted.data["llmResponse"] == VALID
+    assert accepted.data["rejection"] is None
+
+
+def test_a_published_report_leaves_one_result_line_with_text_evidence_missing_items_and_generation_method():
+    from briefing.job_log import REASON_PUBLISHED
+    s, published, job_log = stage_with_log(LlmWriter(FakeLlm(VALID)))
+
+    s.on_ready(report_input())
+
+    (result,) = job_log.results()
+    payload = published[0].value["payload"]
+    assert (result.reason, result.job_id, result.researched) == (REASON_PUBLISHED, JOB_ID, False)
+    assert result.data["outcome"] == "published" and result.data["text"] == payload["text"]
+    assert result.data["generatedBy"] == "llm" and result.data["evidence"] == payload["evidence"]
+    assert result.data["missingItems"] == ["미국 공시·미국 종목 등락률: 변동 종목에 미국 종목이 없어 조회하지 않음"]
+    assert filled(result)
+
+
+def test_rule_based_report_also_leaves_a_result_line_but_no_llm_success_line():
+    from briefing.job_log import TYPE_LLM_SUCCEEDED
+    s, published, job_log = stage_with_log(RuleBasedWriter())
+
+    s.on_ready(report_input())
+
+    (result,) = job_log.results()
+    assert result.data["generatedBy"] == "rule-based" and len(published) == 1
+    assert job_log.of_type(TYPE_LLM_SUCCEEDED) == []
+
+
+def test_three_failed_llm_attempts_give_one_record_per_attempt_a_final_failure_and_a_failed_result():
+    from briefing.job_log import REASON_LLM_CALL_FAILED, REASON_LLM_REJECTED
     llm = FakeLlm("not json", output([("x", ["a9"])]), LlmCallError("LLM call failed: APIConnectionError"))
-    s, published, failures, records = stage_with_failures(LlmWriter(llm))
+    s, published, job_log = stage_with_log(LlmWriter(llm))
 
     s.on_ready(report_input())
 
     assert published == []
-    # 기존 실패 기록(failed_jobs)도 전처럼 한 줄 남는다.
-    assert [f.reason for f in failures] == [FailureReason.LLM_ERROR]
-    assert [r.reason for r in records] == [REASON_LLM_REJECTED, REASON_LLM_REJECTED, REASON_LLM_CALL_FAILED,
-                                           "llm_error"]
-    assert all(filled(r) for r in records)
-    assert records[2].data["llmResponse"].startswith("(응답 없음")
-    final = records[-1]
+    assert [r.reason for r in job_log.entries] == [REASON_LLM_REJECTED, REASON_LLM_REJECTED, REASON_LLM_CALL_FAILED,
+                                                   "llm_error", "llm_error"]
+    assert [r.entry_type for r in job_log.entries[-2:]] == ["failed", "result"]
+    assert all(filled(r) for r in job_log.entries)
+    assert job_log.entries[2].data["llmResponse"].startswith("(응답 없음")
+    final = job_log.entries[3]
     assert final.attempts == 3 and len(final.data["failedAttempts"]) == 3
     assert final.data["missingItems"] == ["미국 공시·미국 종목 등락률: 변동 종목에 미국 종목이 없어 조회하지 않음"]
+    assert job_log.entries[4].data["outcome"] == "failed"
+
+
+def test_report_is_not_published_when_its_log_could_not_be_saved(caplog):
+    s, published, job_log = stage_with_log(LlmWriter(FakeLlm(VALID)), FakeJobLog(fail=True))
+
+    with caplog.at_level(logging.ERROR, logger="briefing.job_log"):
+        s.on_ready(report_input())
+
+    assert published == []
+    assert "result event not published" in caplog.text
+    assert "TEST01" not in caplog.text
+
+
+def test_report_is_not_published_when_an_earlier_line_of_the_job_was_lost():
+    class LosesFirstLine(FakeJobLog):
+        def record(self, entry):
+            if not self.entries and not self._failed:
+                self._failed.add(entry.job_id)
+                return False
+            return super().record(entry)
+
+    bad = output([("지어낸 기사가 영향을 줬을 수 있습니다.", ["a9"])])
+    s, published, job_log = stage_with_log(LlmWriter(FakeLlm(bad, VALID)), LosesFirstLine())
+
+    s.on_ready(report_input())
+
+    assert published == [] and len(job_log.results()) == 1  # 결과 줄은 남기되 이벤트는 내보내지 않는다
 
 
 def test_failure_records_and_their_logs_carry_no_api_key(fake_sdk, caplog):
     with caplog.at_level(logging.DEBUG):
         writer = build_report_writer({"ANTHROPIC_API_KEY": FAKE_KEY})
-        s, _, _, records = stage_with_failures(writer)
+        s, _, job_log = stage_with_log(writer)
         s.on_ready(report_input())
 
-    assert len(records) == 4
-    assert FAKE_KEY not in repr(records)
+    assert len(job_log.entries) == 5
+    assert FAKE_KEY not in repr(job_log.entries)
     assert "TEST01" not in caplog.text
