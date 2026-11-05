@@ -1,12 +1,12 @@
-"""근거가 부족할 때의 뉴스 재검색. Kafka를 모르며 메시지와 시각을 인자로 받아 상태만 움직인다.
+"""근거가 부족하거나 약할 때의 뉴스 재검색. Kafka를 모르며 메시지와 시각을 인자로 받아 상태만 움직인다.
 
-흐름: 보고서 LLM이 근거 부족을 냄 -> 검색어 LLM이 검색어를 냄 -> news.research.requested(작업 하나당 1번) ->
+흐름: 보고서 LLM이 근거 부족(전체) 또는 근거 약함(항목 하나라도)을 냄 -> 검색어 LLM이 검색어를 냄 -> news.research.requested(작업 하나당 1번) ->
 같은 재검색 작업 id의 collection.completed 대기 -> news.articles.requested(researchJobId)를 안정될 때까지 재확인 ->
 기존 시간 범위로 다시 거르고 이미 받은 기사를 뺌 -> 재검색 기사를 더해 보고서를 한 번 더 씀.
 어디서 끝나든 실패는 새 실패 사유 없이 로그와 작업 기록(JobLogPort)에만 남기고 기존 근거로 보고서를 낸다.
 
-재검색(NewsResearch)과 검색어 LLM(QueryWriter)은 작업 종류와 작업 id로만 움직여 데일리 판도 부를 수 있다.
-지금 연결된 곳은 급변동(ResearchReportStage)뿐이다.
+재검색(NewsResearch)과 검색어 LLM(QueryWriter)은 작업 종류와 작업 id로만 움직여 급변동(ResearchReportStage)과
+데일리 판(daily_jobs.DailyCore)이 함께 쓴다. 데일리 판의 끝난 재검색은 other_done이 넘겨받는다.
 """
 from __future__ import annotations
 
@@ -56,6 +56,8 @@ MAX_QUERY_LENGTH = 100
 QUERY_SYSTEM_PROMPT = """당신은 ETF 가격 변동의 원인을 설명할 뉴스 기사를 찾기 위한 검색어를 정하는 도우미입니다.
 입력은 JSON이며 변동 종목 코드, 변동 방향과 변동률, 변동 시각, 이미 찾은 기사·공시·해외 등락률·배경 자료를 담고 있습니다.
 이미 찾은 자료만으로는 변동 원인을 설명하기에 근거가 부족했습니다.
+입력에 shortfalls가 있으면 보고서 LLM이 근거가 약하다고 한 항목마다 적은 부족한 점입니다. 그 부족한 점을 채울 기사를 찾을 검색어를 우선 고릅니다.
+입력이 데일리 판(판 종류와 항목 목록)이면 변동 대신 그 판이 다룬 범위의 시장 흐름을 설명할 기사를 찾습니다.
 
 규칙:
 - 뉴스 검색에 넣을 검색어만 냅니다. 설명이나 문장은 쓰지 않습니다.
@@ -139,6 +141,7 @@ class ResearchReason(str, Enum):
     NO_USABLE_ARTICLES = "no_usable_articles"      # 범위 밖 제외·중복을 빼니 남은 기사가 없음
     REWRITE_FAILED = "rewrite_failed"              # 다시 쓰기가 끝내 실패(llm_error로도 기록됨)
     STILL_INSUFFICIENT = "still_insufficient"      # 다시 써도 근거 부족
+    STILL_WEAK = "still_weak"                      # 다시 써도 근거가 약한 항목이 남음
 
 
 # 재검색 사유별 기록 종류. 나머지 사유는 재검색이 끝내 실패했거나 쓸 기사가 없는 경우라 failed다.
@@ -249,6 +252,41 @@ def build_query_writer(env: Mapping[str, str], client_factory: Callable[[str, st
         return None
     return QueryWriter(client_factory(config.api_key, config.model), settings.max_research_queries,
                        settings.research_query_attempts)
+
+
+def query_context(llm_input: Mapping[str, Any], shortfalls: tuple[str, ...]) -> dict[str, Any]:
+    """검색어 LLM 입력. 약한 항목의 부족한 점이 있으면 shortfalls로 함께 준다."""
+    context = dict(llm_input)
+    if shortfalls:
+        context["shortfalls"] = list(shortfalls)
+    return context
+
+
+def ask_queries(writer: QueryWriter, job_log: JobLogPort, target: ResearchTarget, context: Mapping[str, Any],
+                now: datetime) -> tuple[str, ...]:
+    """검색어 LLM을 불러 시도마다 기록하고, 재검색할 검색어를 돌려준다. 빈 튜플이면 재검색하지 않는다."""
+    result = writer.ask(context)
+    for attempt in result.attempts:
+        if attempt.rejection is None:
+            job_log.record(_query_record(target, attempt, now, ResearchReason.QUERY_ACCEPTED))
+        else:
+            log.warning("research search-term attempt %d/%d failed for job %s: %s",
+                        attempt.attempt, writer.max_attempts, target.job_id, attempt.rejection)
+            job_log.record(_query_record(target, attempt, now, (
+                ResearchReason.QUERY_CALL_FAILED if attempt.error_type == LlmCallError.__name__
+                else ResearchReason.QUERY_REJECTED)))
+    if result.gave_up or not result.queries:
+        reason = ResearchReason.QUERY_GAVE_UP if result.gave_up else ResearchReason.NO_QUERIES
+        _log_research(target.job_id, False, 0, 0, 0, False, reason.value)
+        job_log.record(_query_record(target, result.attempts[-1], now, reason))
+        return ()
+    return result.queries
+
+
+def _query_record(target: ResearchTarget, attempt: QueryAttempt, now: datetime,
+                  reason: ResearchReason) -> JobLogEntry:
+    return _record(target, ResearchStep.QUERY, reason, now, attempt.attempt, error_type=attempt.error_type,
+                   llm_input=attempt.llm_input, raw_output=attempt.raw_output, rejection=attempt.rejection)
 
 
 # ---- 재검색 요청·대기·기사 조회 ----
@@ -511,6 +549,8 @@ class ResearchReportStage:
     settings: CoreSettings = DEFAULT_SETTINGS
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(KST))
     research: NewsResearch = field(init=False)
+    # 급변동이 아닌 작업(데일리 판)의 끝난 재검색을 넘겨받는 곳. 재검색 흐름 하나를 함께 쓰려고 여기서 갈라 준다.
+    other_done: ResearchDonePort | None = None
     _pending: dict[str, tuple[ReportInput, Report]] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
@@ -520,35 +560,29 @@ class ResearchReportStage:
         report = self.stage.write(report_input)
         if report is None:
             return
-        if not report.insufficient_evidence or self.queries is None:
+        needs_research = report.insufficient_evidence or bool(report.weak_shortfalls)
+        if not needs_research or self.queries is None:
             if self.queries is not None:
                 _log_research(report_input.job_id, False, 0, 0, 0, False, "not_needed")
             self.stage.publish(report_input, report)
             return
         now = self.clock()
         target = self._target(report_input)
-        result = self.queries.ask(build_llm_input(report_input))
-        for attempt in result.attempts:
-            if attempt.rejection is None:
-                self.job_log.record(self._attempt_record(target, attempt, now, ResearchReason.QUERY_ACCEPTED))
-            else:
-                log.warning("research search-term attempt %d/%d failed for job %s: %s",
-                            attempt.attempt, self.queries.max_attempts, report_input.job_id, attempt.rejection)
-                self.job_log.record(self._attempt_record(target, attempt, now, (
-                    ResearchReason.QUERY_CALL_FAILED if attempt.error_type == LlmCallError.__name__
-                    else ResearchReason.QUERY_REJECTED)))
-        if result.gave_up or not result.queries:
-            reason = ResearchReason.QUERY_GAVE_UP if result.gave_up else ResearchReason.NO_QUERIES
-            _log_research(report_input.job_id, False, 0, 0, 0, False, reason.value)
-            self.job_log.record(self._attempt_record(target, result.attempts[-1], now, reason))
+        queries = ask_queries(self.queries, self.job_log, target,
+                              query_context(build_llm_input(report_input), report.weak_shortfalls), now)
+        if not queries:
             self.stage.publish(report_input, report, researched=True)
             return
         self._pending[report_input.job_id] = (report_input, report)
-        if not self.research.start(target, result.queries, now):
+        if not self.research.start(target, queries, now):
             del self._pending[report_input.job_id]
             self.stage.publish(report_input, report, researched=True)
 
     def on_research_done(self, target: ResearchTarget, result: ResearchArticles | None, now: datetime) -> None:
+        if target.job_kind != JOB_KIND_MOVE:
+            if self.other_done is not None:
+                self.other_done.on_research_done(target, result, now)
+            return
         report_input, first = self._pending.pop(target.job_id)
         if result is None:
             self.stage.publish(report_input, first, researched=True)
@@ -557,13 +591,19 @@ class ResearchReportStage:
                             research_articles_truncated=result.truncated)
         report = self.stage.write(rewritten, researched=True)
         if report is None:
-            self.job_log.record(_record(target, ResearchStep.REWRITE, ResearchReason.REWRITE_FAILED, now, 1,
-                                        received=tuple(_article_entry(a) for a in result.articles)))
+            record_rewrite(self.job_log, target, ResearchReason.REWRITE_FAILED, now, result.articles)
             return
         if report.insufficient_evidence:
             log.info("research job=%s rewritten report still has insufficient evidence", target.job_id)
-            self.job_log.record(_record(target, ResearchStep.REWRITE, ResearchReason.STILL_INSUFFICIENT, now, 1,
-                                        received=tuple(_article_entry(a) for a in result.articles)))
+            record_rewrite(self.job_log, target, ResearchReason.STILL_INSUFFICIENT, now, result.articles)
+            if not first.insufficient_evidence:
+                # 첫 보고서에는 쓸 만한 원인이 있었다. 다시 쓰다가 전부 잃으면 첫 보고서를 낸다.
+                self.stage.publish(report_input, first, researched=True)
+                return
+        elif report.weak_shortfalls:
+            log.info("research job=%s rewritten report still has %d weak item(s)", target.job_id,
+                     len(report.weak_shortfalls))
+            record_rewrite(self.job_log, target, ResearchReason.STILL_WEAK, now, result.articles)
         self.stage.publish(rewritten, report, researched=True)
 
     def next_deadline(self) -> datetime | None:
@@ -579,11 +619,12 @@ class ResearchReportStage:
             reply_symbol=i.symbol, since=i.as_of - s.evidence_window, until=i.as_of + s.delta,
             known_article_ids=frozenset(a.article_id for a in i.articles), after_seq=i.news_seq, move_at=i.as_of)
 
-    @staticmethod
-    def _attempt_record(target: ResearchTarget, attempt: QueryAttempt, now: datetime,
-                        reason: ResearchReason) -> JobLogEntry:
-        return _record(target, ResearchStep.QUERY, reason, now, attempt.attempt, error_type=attempt.error_type,
-                       llm_input=attempt.llm_input, raw_output=attempt.raw_output, rejection=attempt.rejection)
+
+def record_rewrite(job_log: JobLogPort, target: ResearchTarget, reason: ResearchReason, now: datetime,
+                   articles: tuple[Article, ...]) -> None:
+    """다시 쓰기의 결과 줄. 다시 쓰는 데 쓴 재검색 기사를 함께 담는다."""
+    job_log.record(_record(target, ResearchStep.REWRITE, reason, now, 1,
+                           received=tuple(_article_entry(a) for a in articles)))
 
 
 def _article_entry(a: Article) -> dict[str, Any]:

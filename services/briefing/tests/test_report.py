@@ -423,7 +423,7 @@ def test_empty_sentences_and_uncited_or_unknown_refs_are_rejected(field, value):
 
 def test_output_schema_asks_for_cause_bundles_with_refs_for_each_sentence():
     item = OUTPUT_SCHEMA["properties"]["causes"]["items"]
-    assert set(item["required"]) == {"title", "detail", "refs", "meaning", "meaningRefs"}
+    assert set(item["required"]) == {"title", "detail", "refs", "meaning", "meaningRefs", "weak", "shortfall"}
     assert OUTPUT_SCHEMA["properties"]["insufficientEvidence"] == {"type": "boolean"}
 
 

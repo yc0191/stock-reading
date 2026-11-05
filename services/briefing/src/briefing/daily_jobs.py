@@ -2,6 +2,7 @@
 
 흐름: schedule.tick(판마다 따로 받음) -> 범위 계산 -> 데일리 자료 요청(market.daily.requested)
 -> 아침 판이고 미국 종목이 있으면 그 티커로 공시 요청 -> 받은 자료 재검사 -> 본문(LLM 또는 규칙 기반)
+-> (LLM이 근거 부족 또는 약한 문장을 냈으면 뉴스 재검색 1번 -> 받은 기사를 더해 한 번 다시 쓰기)
 -> briefing.daily.generated 발행. 응답을 끝내 받지 못하거나 LLM이 끝내 실패해도 판은 나간다.
 예외는 작업 기록을 끝내 저장하지 못했을 때뿐이며, 그때는 이 판의 결과 이벤트를 발행하지 않고 ERROR 로그만 남긴다.
 """
@@ -11,18 +12,21 @@ import json
 import logging
 import uuid
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any
 
 from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
 from briefing.daily_report import (
+    Section,
     EDITIONS_WITH_FILINGS,
     GENERATED_BY_RULE,
     DailyInput,
     DailyLlmWriter,
     EtfDay,
+    GENERATED_BY_LLM,
+    build_llm_input,
     build_sections,
     has_evidence,
     missing_items,
@@ -51,7 +55,18 @@ from briefing.job_log import (
     range_target,
     record_result,
 )
+from briefing.evidence import MARKET_WIDE
 from briefing.ports import FailureReason, RequestPort
+from briefing.research import (
+    NewsResearch,
+    QueryWriter,
+    ResearchArticles,
+    ResearchReason,
+    ResearchTarget,
+    ask_queries,
+    query_context,
+    record_rewrite,
+)
 from briefing.sources import (
     BACKGROUND_MISSING,
     Background,
@@ -101,6 +116,17 @@ class _Sent:
     payload: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class _Draft:
+    """LLM(또는 규칙 기반)이 쓴 본문 하나. 재검색을 할지 정하는 표시를 함께 든다."""
+
+    text: str
+    generated_by: str
+    cited: tuple[str, ...]
+    insufficient_evidence: bool = False
+    weak_shortfalls: tuple[str, ...] = ()
+
+
 @dataclass
 class _DailyJob:
     job_id: str
@@ -123,6 +149,10 @@ class _DailyJob:
     excluded: dict[str, int] = field(default_factory=dict)
     sent: list[_Sent] = field(default_factory=list)
     first_failure: tuple[FailureReason, str, int] | None = None
+    # 재검색을 시도했는가(작업 기록 줄에 표시), 재검색 결과를 기다리는 중인가와 그동안 쥐고 있는 첫 결과
+    researched: bool = False
+    researching: bool = False
+    pending: tuple[DailyInput, tuple[Section, ...], _Draft] | None = None
 
     def waiting(self) -> bool:
         return (self.data.awaiting() and not self.data_given_up) or (self.filings.awaiting() and not self.filings_given_up)
@@ -134,6 +164,9 @@ class DailyCore:
     writer: DailyLlmWriter | None = None
     job_log: JobLogPort = field(default_factory=DiscardJobLog)
     settings: DailySettings = DEFAULT_DAILY_SETTINGS
+    # 둘 다 있을 때만 재검색한다. research는 급변동과 함께 쓰는 재검색 흐름이다.
+    queries: QueryWriter | None = None
+    research: NewsResearch | None = None
     _jobs: dict[str, _DailyJob] = field(default_factory=dict, init=False)
     _seen: OrderedDict[str, None] = field(default_factory=OrderedDict, init=False)
 
@@ -335,7 +368,7 @@ class DailyCore:
 
     def _entry(self, job: _DailyJob, stage: str, entry_type: str, reason: str, error_type: str | None, attempts: int,
                now: datetime, data: dict[str, Any]) -> JobLogEntry:
-        return JobLogEntry(job.edition, False, job.job_id,
+        return JobLogEntry(job.edition, job.researched, job.job_id,
                            range_target(format_timestamp(job.range_start), format_timestamp(job.scheduled_for)),
                            stage, entry_type, reason, error_type, attempts, data, now)
 
@@ -362,7 +395,7 @@ class DailyCore:
     # ---- 완성 ----
 
     def _finish(self, job: _DailyJob, now: datetime) -> None:
-        if job.waiting():
+        if job.waiting() or job.researching:
             return
         daily_input = DailyInput(
             job_id=job.job_id,
@@ -377,8 +410,15 @@ class DailyCore:
             filings_truncated=job.filings_truncated,
         )
         sections = build_sections(daily_input, self.settings)
+        draft = self._write(job, now, daily_input, sections)
+        if self._start_research(job, now, daily_input, sections, draft):
+            return
+        self._publish(job, now, daily_input, sections, draft)
+
+    def _write(self, job: _DailyJob, now: datetime, daily_input: DailyInput,
+               sections: tuple[Section, ...]) -> _Draft:
+        """본문을 쓴다. LLM이 없거나 끝내 실패하면 규칙 기반 본문이다. LLM 시도는 줄마다 남긴다."""
         missing = missing_items(sections)
-        text, generated_by, cited = None, GENERATED_BY_RULE, ()
         if self.writer is not None and has_evidence(sections):
             result = self.writer.write(daily_input, sections)
             for attempt in result.rejected:
@@ -397,21 +437,86 @@ class DailyCore:
                                   "rejectReason": last.reason if last else None})
                 self._first_failure(job, FailureReason.LLM_ERROR, detail, len(result.rejected))
             else:
-                text, generated_by, cited = result.body.text, result.body.generated_by, result.body.cited
+                body = result.body
                 if result.accepted is not None:
                     a = result.accepted
                     self._detail(job, STAGE_LLM, TYPE_LLM_SUCCEEDED, REASON_LLM_ACCEPTED, None, a.attempt, now,
                                  missingItems=missing,
                                  llm={"input": a.llm_input, "rawOutput": a.response, "rejectReason": None})
-        if text is None:
-            text = rule_based_text(daily_input, sections)
+                return _Draft(body.text, body.generated_by, body.cited, body.insufficient_evidence,
+                              body.weak_shortfalls)
+        return _Draft(rule_based_text(daily_input, sections), GENERATED_BY_RULE, ())
+
+    # ---- 재검색 ----
+
+    def _start_research(self, job: _DailyJob, now: datetime, daily_input: DailyInput,
+                        sections: tuple[Section, ...], draft: _Draft) -> bool:
+        """LLM이 근거 부족이나 약한 문장을 냈으면 검색어를 받아 재검색을 시작한다. 시작했으면 True."""
+        needs = draft.generated_by == GENERATED_BY_LLM and (draft.insufficient_evidence or draft.weak_shortfalls)
+        if not needs or self.queries is None or self.research is None:
+            return False
+        if not daily_input.etfs:
+            # 기사 조회 요청에는 종목코드가 필수라 보유 ETF 자료가 없으면 재검색하지 않는다.
+            return False
+        job.researched = True
+        target = ResearchTarget(
+            job_kind=job.edition, job_id=job.job_id, correlation_id=job.correlation_id, tag=MARKET_WIDE,
+            # 데일리 공시 요청처럼 정렬한 첫 ETF 코드. 재검색 조회는 종목 조건을 보지 않고 응답 짝짓기에만 쓴다.
+            reply_symbol=min(etf.symbol for etf in daily_input.etfs),
+            since=job.range_start, until=job.scheduled_for)
+        queries = ask_queries(self.queries, self.job_log, target,
+                              query_context(build_llm_input(daily_input, sections), draft.weak_shortfalls), now)
+        if not queries:
+            return False
+        job.researching = True
+        job.pending = (daily_input, sections, draft)
+        if not self.research.start(target, queries, now):
+            job.researching = False
+            job.pending = None
+            return False
+        return True
+
+    def on_research_done(self, target: ResearchTarget, result: ResearchArticles | None, now: datetime) -> None:
+        """재검색이 끝났다. 받은 기사로 한 번 다시 쓰고, 실패했거나 쓸 기사가 없으면 첫 결과를 낸다."""
+        job = self._jobs.get(target.job_id)
+        if job is None or not job.researching or job.pending is None:
+            return
+        daily_input, sections, first = job.pending
+        job.researching, job.pending = False, None
+        if result is None:
+            self._publish(job, now, daily_input, sections, first)
+            return
+        rewritten_input = replace(daily_input, research_articles=result.articles,
+                                  research_articles_truncated=result.truncated)
+        rewritten_sections = build_sections(rewritten_input, self.settings)
+        second = self._write(job, now, rewritten_input, rewritten_sections)
+        if second.generated_by != GENERATED_BY_LLM:
+            record_rewrite(self.job_log, target, ResearchReason.REWRITE_FAILED, now, result.articles)
+            self._publish(job, now, daily_input, sections, first)
+            return
+        if second.insufficient_evidence:
+            record_rewrite(self.job_log, target, ResearchReason.STILL_INSUFFICIENT, now, result.articles)
+            if not first.insufficient_evidence:
+                # 첫 결과에는 쓸 만한 요약이 있었다. 다시 쓰다가 전부 잃으면 첫 결과를 낸다.
+                self._publish(job, now, daily_input, sections, first)
+                return
+        elif second.weak_shortfalls:
+            record_rewrite(self.job_log, target, ResearchReason.STILL_WEAK, now, result.articles)
+        self._publish(job, now, rewritten_input, rewritten_sections, second)
+
+    # ---- 발행 ----
+
+    def _publish(self, job: _DailyJob, now: datetime, daily_input: DailyInput, sections: tuple[Section, ...],
+                 draft: _Draft) -> None:
+        missing = missing_items(sections)
         if missing:
             self._detail(job, STAGE_COMPOSE, TYPE_MISSING_ITEMS, REASON_MISSING_ITEMS, None, 0, now,
                          missingItems=missing)
         by_ref = {e.ref: e for s in sections for e in s.entries}
         result_data: dict[str, Any] = {
-            "outcome": "published", "text": text, "generatedBy": generated_by, "missingItems": missing,
-            "evidence": [{"ref": ref, "describe": by_ref[ref].describe} for ref in cited],
+            "outcome": "published", "text": draft.text, "generatedBy": draft.generated_by, "missingItems": missing,
+            "evidence": [{"ref": ref, "describe": by_ref[ref].describe} for ref in draft.cited],
+            "weakItems": list(draft.weak_shortfalls),
         }
         if job.first_failure is not None:
             reason, detail, attempts = job.first_failure
@@ -421,9 +526,10 @@ class DailyCore:
             del self._jobs[job.job_id]
             return
         self.requests.send(daily_briefing_event(job.job_id, job.correlation_id, job.scheduled_for, now, job.edition,
-                                                job.range_start, job.scheduled_for, text, missing, generated_by))
+                                                job.range_start, job.scheduled_for, draft.text, missing,
+                                                draft.generated_by))
         log.info("daily %s ready: job=%s generatedBy=%s missing=%d etfs=%s filings=%s excluded=%s",
-                 job.edition, job.job_id, generated_by, len(missing),
+                 job.edition, job.job_id, draft.generated_by, len(missing),
                  "n/a" if job.etfs is None else len(job.etfs),
                  "n/a" if job.filings_data is None else len(job.filings_data), sum(job.excluded.values()))
         del self._jobs[job.job_id]

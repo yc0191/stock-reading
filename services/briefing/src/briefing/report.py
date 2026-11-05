@@ -47,6 +47,8 @@ from briefing.llm_output import (
     output_cited_refs,
     output_item,
     output_sentence,
+    WEAK_NOTE_PREFIX,
+    output_weak_shortfall,
     parse_output_object,
 )
 from briefing.llm import API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCallError, LlmClient, llm_config
@@ -118,13 +120,14 @@ SYSTEM_PROMPT = """당신은 ETF 가격 변동과 같은 시기에 공개된 자
 규칙:
 - 원인을 단정하지 않습니다. "~때문에 올랐다"가 아니라 "~가 영향을 줬을 수 있다"처럼 씁니다.
 - 배경 자료는 변동 당시의 상태를 보여 줄 뿐입니다. 배경 자료를 변동의 원인으로 단정하지 않고, 기사·공시와 함께 상황을 설명하는 데에만 씁니다.
+- 원인마다 weak(근거 약함 여부)와 shortfall(부족한 점)을 냅니다. 그 원인을 뒷받침하는 자료가 약하면(시각이 맞지 않거나, 간접 정보뿐이거나, 세부가 자료에 없으면) weak를 true로 하고 shortfall에 어떤 자료가 더 있어야 하는지 한 문장으로 씁니다. 근거가 충분하면 weak를 false로, shortfall을 빈 문자열로 둡니다. shortfall은 찾아야 할 자료를 말할 뿐 원인을 단정하지 않습니다.
 - 근거가 부족하면 insufficientEvidence를 true로 하고 causes는 빈 목록으로 둡니다. 억지로 원인을 만들지 않습니다.
 - 투자 조언(매수·매도·보유 권유, 가격 전망)을 하지 않습니다.
 - 숫자를 새로 계산하지 않습니다. 더하기·빼기·평균도 하지 않고 입력에 있는 값만 씁니다.
 - 문장은 한국어로 씁니다.
 
 출력은 다음 JSON 하나만 냅니다:
-{"causes":[{"title":"...","detail":"...","refs":["..."],"meaning":"...","meaningRefs":["..."]}],"insufficientEvidence":false}"""
+{"causes":[{"title":"...","detail":"...","refs":["..."],"meaning":"...","meaningRefs":["..."],"weak":false,"shortfall":""}],"insufficientEvidence":false}"""
 
 OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -139,8 +142,10 @@ OUTPUT_SCHEMA: dict[str, Any] = {
                     "refs": {"type": "array", "items": {"type": "string"}},
                     "meaning": {"type": "string"},
                     "meaningRefs": {"type": "array", "items": {"type": "string"}},
+                    "weak": {"type": "boolean"},
+                    "shortfall": {"type": "string"},
                 },
-                "required": ["title", "detail", "refs", "meaning", "meaningRefs"],
+                "required": ["title", "detail", "refs", "meaning", "meaningRefs", "weak", "shortfall"],
                 "additionalProperties": False,
             },
         },
@@ -187,6 +192,8 @@ class Report:
     accepted: AcceptedAttempt | None = None
     # LLM이 근거 부족(insufficientEvidence true)을 냈다. 재검색 여부를 정하는 데 쓴다.
     insufficient_evidence: bool = False
+    # LLM이 근거가 약하다고 한 원인들의 부족한 점. 재검색 여부를 정하고 검색어 LLM 입력에 들어간다.
+    weak_shortfalls: tuple[str, ...] = ()
 
 
 class ReportError(Exception):
@@ -216,6 +223,8 @@ class Cause:
     refs: tuple[str, ...]
     meaning: str
     meaning_refs: tuple[str, ...]
+    # 근거가 약하다고 한 원인의 부족한 점. 약하지 않으면 None.
+    shortfall: str | None = None
 
     def cited(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(self.refs + self.meaning_refs))
@@ -600,6 +609,7 @@ def parse_output(text: str, allowed_ids: frozenset[str]) -> LlmOutput:
             refs=output_cited_refs(item, "refs", "cause", allowed_ids, InvalidOutput),
             meaning=output_sentence(item, "meaning", "cause", InvalidOutput),
             meaning_refs=output_cited_refs(item, "meaningRefs", "cause", allowed_ids, InvalidOutput),
+            shortfall=output_weak_shortfall(item, "cause", InvalidOutput),
         ))
     insufficient = check_items_present(data, "causes", "cause", InvalidOutput)
     return LlmOutput(tuple(causes), insufficient)
@@ -655,12 +665,15 @@ def _llm_report(report_input: ReportInput, output: LlmOutput) -> Report:
         lines.append(f"{index}. {cause.title}")
         lines.append(f"- {cause.detail} [근거 {_numbers(cause.refs, number)}]")
         lines.append(f"- {cause.meaning} [근거 {_numbers(cause.meaning_refs, number)}]")
+        if cause.shortfall:
+            lines.append(f"- {WEAK_NOTE_PREFIX}{cause.shortfall}")
         for ref in cause.cited():
             lines.append(f"  근거 {number[ref]}. {_describe(by_id[ref])}")
         lines.append("")
     lines.extend(unchecked_lines(i))
     lines.append(LLM_DISCLAIMER)
-    return Report("\n".join(lines), GENERATED_BY_LLM, tuple(by_id[x] for x in cited))
+    return Report("\n".join(lines), GENERATED_BY_LLM, tuple(by_id[x] for x in cited),
+                  weak_shortfalls=tuple(c.shortfall for c in output.causes if c.shortfall))
 
 
 def _numbers(refs: tuple[str, ...], number: dict[str, int]) -> str:
@@ -752,7 +765,8 @@ class ReportStage:
             target=move_target(i.symbol, format_timestamp(i.as_of)), stage=STAGE_PUBLISH, entry_type=TYPE_RESULT,
             reason=REASON_PUBLISHED, error_type=None, attempts=0, occurred_at=self.clock(),
             data={"outcome": "published", "text": report.text, "generatedBy": report.generated_by,
-                  "evidence": event.value["payload"]["evidence"], "missingItems": unchecked_items(i)})
+                  "evidence": event.value["payload"]["evidence"], "missingItems": unchecked_items(i),
+                  "weakItems": list(report.weak_shortfalls)})
         if record_result(self.job_log, result):
             self.publisher.send(event)
 

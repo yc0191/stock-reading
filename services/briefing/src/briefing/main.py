@@ -223,7 +223,10 @@ class BriefingRunner:
         self.research = ResearchReportStage(stage, self.query_writer, publisher, self.job_log,
                                             self.settings, self.clock)
         self.core = BriefingCore(publisher, self.research, self.settings, self.job_log)
-        self.daily = DailyCore(publisher, self.daily_writer, self.job_log, self.daily_settings)
+        # 데일리 판도 같은 재검색 흐름을 쓴다. 끝난 데일리 재검색은 급변동 쪽에서 갈라 데일리가 넘겨받는다.
+        self.daily = DailyCore(publisher, self.daily_writer, self.job_log, self.daily_settings,
+                               queries=self.query_writer, research=self.research.research)
+        self.research.other_done = self.daily
         for edition, group in TICK_CONSUMER_GROUPS.items():
             consumer = self._consumer_factory({
                 "bootstrap.servers": self.bootstrap,

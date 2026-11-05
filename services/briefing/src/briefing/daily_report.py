@@ -21,6 +21,8 @@ from briefing.llm_output import (
     output_cited_refs,
     output_item,
     output_sentence,
+    WEAK_NOTE_PREFIX,
+    output_weak_shortfall,
     parse_output_object,
 )
 from briefing.llm import API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCallError, LlmClient, llm_config
@@ -38,6 +40,7 @@ from briefing.sources import (
     MARK_PRESENT,
     MARK_TOO_LARGE,
     MARK_TRUNCATED,
+    Article,
     Background,
     CloseRate,
     Filing,
@@ -61,6 +64,8 @@ ITEM_FILINGS = "범위 안 미국 공시"
 ITEM_KR_REVIEW = "전날 한국 증시"
 ITEM_KR_TODAY = "그날 한국 증시"
 ITEM_ETFS = "보유 ETF별 하루 등락"
+# 근거가 부족해 다시 검색해 찾은 기사. 판 종류와 상관없이 다시 쓸 때만 맨 뒤에 붙는다.
+ITEM_RESEARCH = "재검색 기사"
 
 EDITION_ITEMS = {
     EDITION_MORNING: (ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_KR_REVIEW),
@@ -86,12 +91,14 @@ SYSTEM_PROMPT = """당신은 ETF 투자자에게 하루 시장 흐름을 짧게 
 - 미국 종목 등락률은 보유 ETF에 담긴 미국 종목의 직전 정규장 등락률(%)이며 hoursBeforeAsOf는 그 장 마감이 기준 시각보다 몇 시간 전인지입니다.
 - 공시의 hoursBeforeAsOf는 공시 접수 시각이 기준 시각보다 몇 시간 전인지입니다.
 - 보유 ETF별 하루 등락의 rate는 일봉 원문의 등락률(%)입니다.
+- 항목 "재검색 기사"는 근거가 부족해 다시 검색해 찾은 기사이며(있을 때만 담깁니다) 기사 번호(ref)로 인용합니다. minutesBeforeAsOf는 기사 발행 시각이 판 기준 시각보다 몇 분 전인지입니다.
 - 상태 표시: "있음"은 자료가 있다는 뜻, "없음"은 범위 안에 자료가 없다는 뜻, "잘림"은 상한 때문에 일부만 받았다는 뜻, "너무 큼"은 원문이 커서 빠졌다는 뜻, "해당 없음"은 보유 ETF에 미국 종목이 없어 조회하지 않았다는 뜻입니다.
 
 규칙:
 - 원인을 단정하지 않습니다. "~때문에 올랐다"가 아니라 "~가 영향을 줬을 수 있다"처럼 씁니다.
 - 각 문장은 근거가 된 자료의 ref를 refs에 하나 이상 넣습니다. 입력에 없는 ref는 쓰지 않습니다.
 - 상태가 "없음"인 항목을 추측으로 채우지 않습니다.
+- 문장마다 weak(근거 약함 여부)와 shortfall(부족한 점)을 냅니다. 그 문장을 뒷받침하는 자료가 약하면(범위가 맞지 않거나, 간접 정보뿐이거나, 세부가 자료에 없으면) weak를 true로 하고 shortfall에 어떤 자료가 더 있어야 하는지 한 문장으로 씁니다. 근거가 충분하면 weak를 false로, shortfall을 빈 문자열로 둡니다. shortfall은 찾아야 할 자료를 말할 뿐 원인을 단정하지 않으며 미국 종목의 티커를 쓰지 않습니다.
 - 요약할 근거가 부족하면 insufficientEvidence를 true로 하고 points는 빈 목록으로 둡니다.
 - 투자 조언(매수·매도·보유 권유, 가격 전망)을 하지 않습니다.
 - 숫자를 새로 계산하지 않습니다. 입력에 있는 값만 씁니다.
@@ -99,7 +106,7 @@ SYSTEM_PROMPT = """당신은 ETF 투자자에게 하루 시장 흐름을 짧게 
 - 문장은 한국어로 3~6개 정도로 씁니다.
 
 출력은 다음 JSON 하나만 냅니다:
-{"points":[{"statement":"...","refs":["..."]}],"insufficientEvidence":false}"""
+{"points":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"insufficientEvidence":false}"""
 
 OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -111,8 +118,10 @@ OUTPUT_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "statement": {"type": "string"},
                     "refs": {"type": "array", "items": {"type": "string"}},
+                    "weak": {"type": "boolean"},
+                    "shortfall": {"type": "string"},
                 },
-                "required": ["statement", "refs"],
+                "required": ["statement", "refs", "weak", "shortfall"],
                 "additionalProperties": False,
             },
         },
@@ -153,6 +162,9 @@ class DailyInput:
     background: tuple[Background, ...] | None
     filings: tuple[Filing, ...] | None
     filings_truncated: bool
+    # 재검색으로 찾은 기사. 다시 쓸 때만 있다. 첫 작성의 입력 모양은 바꾸지 않는다.
+    research_articles: tuple[Article, ...] = ()
+    research_articles_truncated: bool = False
 
     def tickers(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(t for etf in self.etfs or () for t in etf.tickers))
@@ -337,6 +349,21 @@ def _etfs_section(i: DailyInput, refs: Callable[[], str]) -> Section:
     return Section(ITEM_ETFS, MARK_TRUNCATED if i.etfs_truncated else MARK_PRESENT, tuple(lines), tuple(entries))
 
 
+def _research_section(i: DailyInput) -> Section:
+    lines, entries = [], []
+    for a in sorted(i.research_articles, key=lambda a: a.published_at, reverse=True):
+        lines.append(f"{a.title} — {a.publisher}, {_short(a.published_at)} 발행")
+        entries.append(Entry(a.article_id,
+                             {"ref": a.article_id, "articleId": a.article_id, "title": a.title,
+                              "summary": a.summary, "source": a.publisher, "publishedAt": _at(a.published_at),
+                              "minutesBeforeAsOf": _minutes_before(a.published_at, i.as_of)},
+                             f"{a.title} — {a.publisher}, {_short(a.published_at)} 발행 {a.url}"))
+    if i.research_articles_truncated:
+        lines.append(f"({MARK_TRUNCATED}: 상한까지만 받음)")
+    status = MARK_TRUNCATED if i.research_articles_truncated else MARK_PRESENT
+    return Section(ITEM_RESEARCH, status, tuple(lines), tuple(entries))
+
+
 def build_sections(i: DailyInput, settings: DailySettings = DEFAULT_DAILY_SETTINGS) -> tuple[Section, ...]:
     """판의 항목을 차례대로 만든다. 근거 번호는 이 순서로 붙는다."""
     counters = {ETF_REF_PREFIX: 0, CLOSE_RATE_REF_PREFIX: 0, BACKGROUND_REF_PREFIX: 0}
@@ -357,7 +384,10 @@ def build_sections(i: DailyInput, settings: DailySettings = DEFAULT_DAILY_SETTIN
         ITEM_KR_TODAY: lambda: _raw_background_section(ITEM_KR_TODAY, i, "market-summary", background_ref),
         ITEM_ETFS: lambda: _etfs_section(i, next_ref(ETF_REF_PREFIX)),
     }
-    return tuple(builders[name]() for name in EDITION_ITEMS[i.edition])
+    sections = [builders[name]() for name in EDITION_ITEMS[i.edition]]
+    if i.research_articles:
+        sections.append(_research_section(i))
+    return tuple(sections)
 
 
 def missing_items(sections: tuple[Section, ...]) -> list[str]:
@@ -387,6 +417,8 @@ class InvalidDailyOutput(InvalidLlmOutput):
 class Point:
     statement: str
     refs: tuple[str, ...]
+    # 근거가 약하다고 한 문장의 부족한 점. 약하지 않으면 None.
+    shortfall: str | None = None
 
 
 @dataclass(frozen=True)
@@ -418,7 +450,10 @@ def parse_output(text: str, allowed_refs: frozenset[str],
         # 본문은 메일로 나가므로 보유 종목이 드러나는 티커를 막는다. 사유에는 티커 값을 넣지 않는다.
         if tickers is not None and tickers.search(statement):
             raise InvalidDailyOutput("point mentions a US ticker")
-        points.append(Point(statement, refs))
+        shortfall = output_weak_shortfall(item, "point", InvalidDailyOutput)
+        if shortfall is not None and tickers is not None and tickers.search(shortfall):
+            raise InvalidDailyOutput("point shortfall mentions a US ticker")
+        points.append(Point(statement, refs, shortfall))
     insufficient = check_items_present(data, "points", "point", InvalidDailyOutput)
     return DailyOutput(tuple(points), insufficient)
 
@@ -434,6 +469,9 @@ def headline(i: DailyInput) -> list[str]:
 def _facts(sections: tuple[Section, ...]) -> list[str]:
     lines: list[str] = []
     for s in sections:
+        if s.name == ITEM_RESEARCH:
+            # 재검색 기사는 요약이 인용할 때만 근거 목록에 나온다. 항목으로 나열하지 않는다.
+            continue
         lines.append("")
         lines.append(f"■ {s.name}")
         lines.extend(f"  - {line}" for line in s.lines)
@@ -449,7 +487,6 @@ def llm_text(i: DailyInput, sections: tuple[Section, ...], output: DailyOutput) 
     lines = [*headline(i), *_facts(sections), "", "요약:"]
     if output.insufficient_evidence:
         # 근거 부족이면 LLM이 함께 낸 문장도 쓰지 않는다.
-        # TODO 근거가 부족할 때 뉴스 재검색을 부르는 자리(부르는 방식과 받은 기사를 읽는 칸은 common이 정함)
         lines.append(f"  {DAILY_INSUFFICIENT}")
         return "\n".join([*lines, "", DAILY_DISCLAIMER])
     by_ref = {e.ref: e for s in sections for e in s.entries}
@@ -457,6 +494,8 @@ def llm_text(i: DailyInput, sections: tuple[Section, ...], output: DailyOutput) 
     number = {ref: n for n, ref in enumerate(cited, start=1)}
     for p in output.points:
         lines.append(f"  - {p.statement} [근거 {', '.join(str(number[x]) for x in p.refs)}]")
+        if p.shortfall:
+            lines.append(f"    {WEAK_NOTE_PREFIX}{p.shortfall}")
     lines.append("근거:")
     lines.extend(f"  {number[ref]}. {by_ref[ref].describe}" for ref in cited)
     return "\n".join([*lines, "", DAILY_DISCLAIMER])
@@ -471,6 +510,8 @@ class DailyBody:
     insufficient_evidence: bool = False
     # 본문이 인용한 근거 번호(규칙 기반이면 없음)
     cited: tuple[str, ...] = ()
+    # 근거가 약하다고 한 문장들의 부족한 점. 재검색 여부를 정하고 검색어 LLM 입력에 들어간다.
+    weak_shortfalls: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -515,8 +556,9 @@ class DailyLlmWriter:
                 continue
             cited = () if output.insufficient_evidence else tuple(
                 dict.fromkeys(ref for p in output.points for ref in p.refs))
+            weak = () if output.insufficient_evidence else tuple(p.shortfall for p in output.points if p.shortfall)
             return DailyWriteResult(DailyBody(llm_text(i, sections, output), GENERATED_BY_LLM,
-                                              output.insufficient_evidence, cited), tuple(rejected),
+                                              output.insufficient_evidence, cited, weak), tuple(rejected),
                                     AcceptedAttempt(attempt, user, raw))
         return DailyWriteResult(None, tuple(rejected))
 

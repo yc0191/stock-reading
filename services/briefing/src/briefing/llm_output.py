@@ -52,3 +52,19 @@ def check_items_present(data: dict, items_key: str, noun: str, error: type[Inval
     if not insufficient and not data[items_key]:
         raise error(f"no {noun}s although evidence was not marked insufficient")
     return insufficient
+
+
+# 다시 써도 약한 항목에 본문이 붙이는 표시. 뒤에 부족한 점이 따른다.
+WEAK_NOTE_PREFIX = "근거 약함: "
+
+
+def output_weak_shortfall(item: dict, noun: str, error: type[InvalidLlmOutput]) -> str | None:
+    """항목의 근거 약함 표시를 읽는다. 약하면 부족한 점(문장)을, 아니면 None을 돌려준다.
+
+    weak 칸이 없는 출력은 약하지 않은 것으로 읽는다(출력 형식이 칸을 요구하므로 실제 응답에는 항상 있다).
+    약하다고 하면서 부족한 점이 비어 있으면 재검색할 단서가 없으므로 거부한다.
+    """
+    weak = item.get("weak", False)
+    if not isinstance(weak, bool):
+        raise error(f"{noun} weak is not a boolean")
+    return output_sentence(item, "shortfall", noun, error) if weak else None
