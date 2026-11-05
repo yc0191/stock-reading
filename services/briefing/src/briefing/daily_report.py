@@ -15,6 +15,14 @@ from typing import Any, Callable, Mapping
 from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
 from briefing.events import EDITION_MORNING, EDITION_POST_CLOSE
+from briefing.llm_output import (
+    InvalidLlmOutput,
+    check_items_present,
+    output_cited_refs,
+    output_item,
+    output_sentence,
+    parse_output_object,
+)
 from briefing.llm import API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCallError, LlmClient, llm_config
 from briefing.sources import (
     BACKGROUND_LABEL,
@@ -371,7 +379,7 @@ def build_llm_input(i: DailyInput, sections: tuple[Section, ...]) -> dict[str, A
 
 # ---- 출력 검증 ----
 
-class InvalidDailyOutput(ValueError):
+class InvalidDailyOutput(InvalidLlmOutput):
     pass
 
 
@@ -401,32 +409,18 @@ def parse_output(text: str, allowed_refs: frozenset[str],
     """LLM 응답을 검증한다. 형식이 틀리거나 준 적 없는 근거 번호를 인용하거나
     LLM 입력에 있던 미국 티커를 문장에 쓰면 InvalidDailyOutput."""
     tickers = _ticker_pattern(forbidden_tickers)
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as error:
-        raise InvalidDailyOutput("output is not valid JSON") from error
-    if not isinstance(data, dict) or not isinstance(data.get("points"), list) \
-            or not isinstance(data.get("insufficientEvidence"), bool):
-        raise InvalidDailyOutput("output does not have points and insufficientEvidence")
+    data = parse_output_object(text, "points", InvalidDailyOutput)
     points = []
-    for item in data["points"]:
-        if not isinstance(item, dict):
-            raise InvalidDailyOutput("point is not an object")
-        statement, refs = item.get("statement"), item.get("refs")
-        if not isinstance(statement, str) or not statement.strip():
-            raise InvalidDailyOutput("point has no statement")
-        if not isinstance(refs, list) or not refs or not all(isinstance(x, str) for x in refs):
-            raise InvalidDailyOutput("point cites no refs")
-        unknown = [x for x in refs if x not in allowed_refs]
-        if unknown:
-            raise InvalidDailyOutput(f"point cites {len(unknown)} ref(s) that were not given")
+    for raw in data["points"]:
+        item = output_item(raw, "point", InvalidDailyOutput)
+        statement = output_sentence(item, "statement", "point", InvalidDailyOutput)
+        refs = output_cited_refs(item, "refs", "point", allowed_refs, InvalidDailyOutput)
         # 본문은 메일로 나가므로 보유 종목이 드러나는 티커를 막는다. 사유에는 티커 값을 넣지 않는다.
         if tickers is not None and tickers.search(statement):
             raise InvalidDailyOutput("point mentions a US ticker")
-        points.append(Point(statement.strip(), tuple(dict.fromkeys(refs))))
-    if not data["insufficientEvidence"] and not points:
-        raise InvalidDailyOutput("no points although evidence was not marked insufficient")
-    return DailyOutput(tuple(points), data["insufficientEvidence"])
+        points.append(Point(statement, refs))
+    insufficient = check_items_present(data, "points", "point", InvalidDailyOutput)
+    return DailyOutput(tuple(points), insufficient)
 
 
 # ---- 본문 ----

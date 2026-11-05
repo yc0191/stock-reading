@@ -57,6 +57,8 @@ from briefing.sources import (
     PricePoint,
     next_seq,
     parse_background,
+    parse_close_rates,
+    parse_filings,
     response_payload,
 )
 
@@ -273,11 +275,7 @@ class BriefingCore:
             context = _Context(
                 tickers=tuple(payload["tickers"]),
                 tickers_truncated=bool(payload["truncated"]),
-                close_rates=tuple(
-                    CloseRate(r["ticker"], r["date"], parse_timestamp(r["closeAt"]), r["rate"],
-                              parse_timestamp(r["fetchedAt"]))
-                    for r in payload["closeRates"]
-                ),
+                close_rates=parse_close_rates(payload["closeRates"]),
                 background=tuple(parse_background(b) for b in payload["background"]),
             )
         except (KeyError, TypeError) as error:
@@ -300,11 +298,7 @@ class BriefingCore:
                      job.job_id, payload["seq"], job.filings.seq)
             return
         try:
-            filings = tuple(
-                Filing(f["accessionNumber"], tuple(f["tickers"]), f["form"], tuple(f["items"]),
-                       parse_timestamp(f["acceptedAt"]), f["url"])
-                for f in payload["filings"]
-            )
+            filings = parse_filings(payload["filings"])
             truncated = bool(payload["truncated"])
         except (KeyError, TypeError) as error:
             raise ValueError(f"malformed news.filings.responded event: {error!r}") from error

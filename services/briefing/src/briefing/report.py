@@ -41,6 +41,14 @@ from briefing.move_figures import (
     move_figures,
     signed,
 )
+from briefing.llm_output import (
+    InvalidLlmOutput,
+    check_items_present,
+    output_cited_refs,
+    output_item,
+    output_sentence,
+    parse_output_object,
+)
 from briefing.llm import API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCallError, LlmClient, llm_config
 from briefing.ports import FailureReason, RequestPort
 from briefing.sources import (
@@ -195,7 +203,7 @@ class ReportWriter(Protocol):
     def write(self, report_input: ReportInput) -> Report: ...
 
 
-class InvalidOutput(ValueError):
+class InvalidOutput(InvalidLlmOutput):
     pass
 
 
@@ -579,47 +587,22 @@ def _background_input(ref: str | None, item: Background, as_of: datetime) -> dic
     return data
 
 
-def _sentence(item: dict, name: str) -> str:
-    value = item.get(name)
-    if not isinstance(value, str) or not value.strip():
-        raise InvalidOutput(f"cause has no {name}")
-    return value.strip()
-
-
-def _cited(item: dict, name: str, allowed_ids: frozenset[str]) -> tuple[str, ...]:
-    ids = item.get(name)
-    if not isinstance(ids, list) or not ids or not all(isinstance(x, str) for x in ids):
-        raise InvalidOutput(f"cause cites no {name}")
-    unknown = [x for x in ids if x not in allowed_ids]
-    if unknown:
-        raise InvalidOutput(f"cause cites {len(unknown)} ref(s) that were not given")
-    return tuple(dict.fromkeys(ids))
-
-
 def parse_output(text: str, allowed_ids: frozenset[str]) -> LlmOutput:
     """LLM 응답을 검증한다. 형식이 틀리거나, 빈 문장이 있거나, 문장이 근거를 인용하지 않거나,
     준 적 없는 근거 번호를 인용하면 InvalidOutput."""
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as error:
-        raise InvalidOutput("output is not valid JSON") from error
-    if not isinstance(data, dict) or not isinstance(data.get("causes"), list) \
-            or not isinstance(data.get("insufficientEvidence"), bool):
-        raise InvalidOutput("output does not have causes and insufficientEvidence")
+    data = parse_output_object(text, "causes", InvalidOutput)
     causes = []
-    for item in data["causes"]:
-        if not isinstance(item, dict):
-            raise InvalidOutput("cause is not an object")
+    for raw in data["causes"]:
+        item = output_item(raw, "cause", InvalidOutput)
         causes.append(Cause(
-            title=_sentence(item, "title"),
-            detail=_sentence(item, "detail"),
-            refs=_cited(item, "refs", allowed_ids),
-            meaning=_sentence(item, "meaning"),
-            meaning_refs=_cited(item, "meaningRefs", allowed_ids),
+            title=output_sentence(item, "title", "cause", InvalidOutput),
+            detail=output_sentence(item, "detail", "cause", InvalidOutput),
+            refs=output_cited_refs(item, "refs", "cause", allowed_ids, InvalidOutput),
+            meaning=output_sentence(item, "meaning", "cause", InvalidOutput),
+            meaning_refs=output_cited_refs(item, "meaningRefs", "cause", allowed_ids, InvalidOutput),
         ))
-    if not data["insufficientEvidence"] and not causes:
-        raise InvalidOutput("no causes although evidence was not marked insufficient")
-    return LlmOutput(tuple(causes), data["insufficientEvidence"])
+    insufficient = check_items_present(data, "causes", "cause", InvalidOutput)
+    return LlmOutput(tuple(causes), insufficient)
 
 
 @dataclass(frozen=True)

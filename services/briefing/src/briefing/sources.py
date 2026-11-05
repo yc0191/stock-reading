@@ -135,3 +135,20 @@ def response_payload(message: str | bytes, event_type: str) -> dict:
         return payload
     except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ValueError(f"malformed {event_type} event: {error!r}") from error
+
+
+def parse_close_rates(items: list[dict]) -> tuple[CloseRate, ...]:
+    """해외 등락률 응답의 항목들을 값 객체로 바꾼다. 칸이 없으면 KeyError."""
+    return tuple(
+        CloseRate(r["ticker"], r["date"], parse_timestamp(r["closeAt"]), r["rate"], parse_timestamp(r["fetchedAt"]))
+        for r in items
+    )
+
+
+def parse_filings(items: list[dict]) -> tuple[Filing, ...]:
+    """공시 응답의 항목들을 값 객체로 바꾼다. 칸이 없으면 KeyError."""
+    return tuple(
+        Filing(f["accessionNumber"], tuple(f["tickers"]), f["form"], tuple(f["items"]),
+               parse_timestamp(f["acceptedAt"]), f["url"])
+        for f in items
+    )

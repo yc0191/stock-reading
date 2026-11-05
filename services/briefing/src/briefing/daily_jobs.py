@@ -60,6 +60,8 @@ from briefing.sources import (
     Filing,
     next_seq,
     parse_background,
+    parse_close_rates,
+    parse_filings,
     response_payload,
 )
 
@@ -180,11 +182,7 @@ class DailyCore:
                        tuple(e["tickers"]), bool(e["tickersTruncated"]))
                 for e in payload["etfs"]
             )
-            close_rates = tuple(
-                CloseRate(r["ticker"], r["date"], parse_timestamp(r["closeAt"]), r["rate"],
-                          parse_timestamp(r["fetchedAt"]))
-                for r in payload["closeRates"]
-            )
+            close_rates = parse_close_rates(payload["closeRates"])
             background = tuple(parse_background(b) for b in payload["background"])
             truncated = bool(payload["truncated"])
         except (KeyError, TypeError) as error:
@@ -212,11 +210,7 @@ class DailyCore:
                      job.job_id, payload["seq"], job.filings.seq)
             return
         try:
-            filings = tuple(
-                Filing(f["accessionNumber"], tuple(f["tickers"]), f["form"], tuple(f["items"]),
-                       parse_timestamp(f["acceptedAt"]), f["url"])
-                for f in payload["filings"]
-            )
+            filings = parse_filings(payload["filings"])
             truncated = bool(payload["truncated"])
         except (KeyError, TypeError) as error:
             raise ValueError(f"malformed {FILINGS_RESPONDED} event: {error!r}") from error
