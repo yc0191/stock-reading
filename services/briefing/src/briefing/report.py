@@ -305,7 +305,7 @@ def move_headline(report_input: ReportInput) -> str:
 
 _UNCHECKED_STATUS = {MARK_MISSING: "기간 안에 받은 자료 없음", MARK_TRUNCATED: "상한 때문에 일부만 받음",
                      MARK_TOO_LARGE: "원문이 커서 빠짐"}
-# 세계지수의 대상은 대륙 코드라 작업자가 읽는 '확인하지 못한 것'에는 이름으로 적는다. 모르는 코드는 그대로 둔다.
+# 세계지수의 대상은 대륙 코드라 사람이 읽는 '확인하지 못한 것'에는 이름으로 적는다. 모르는 코드는 그대로 둔다.
 WORLD_INDEX_CONTINENT_NAMES = {"C": "아메리카", "S": "아시아", "E": "유럽"}
 
 
@@ -384,7 +384,7 @@ def evidence_catalog(report_input: ReportInput) -> dict[str, EvidenceItem]:
         catalog[a.article_id] = EvidenceItem(KIND_ARTICLE, a.article_id, a.title, a.publisher, a.published_at,
                                              a.url, a.article_id)
     # 본문이 회사를 티커로 말하므로 근거 목록에서도 어느 회사 자료인지 구분되게 제목에 티커를 넣는다.
-    # 리포트는 작업자 메일로만 가고, 로그에는 제목을 남기지 않는다.
+    # 리포트는 받는 사람의 메일로만 가고, 로그에는 제목을 남기지 않는다.
     for f in i.filings:
         items = f" 항목 {', '.join(f.items)}" if f.items else ""
         catalog[f.accession_number] = EvidenceItem(
