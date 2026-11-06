@@ -12,6 +12,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -26,6 +27,7 @@ import org.mockito.ArgumentCaptor;
 
 import dev.stockreading.market.event.ContextPayload;
 import dev.stockreading.market.event.EventFactory;
+import dev.stockreading.market.holdings.EtfInfo;
 import dev.stockreading.market.holdings.HoldingsPort;
 import dev.stockreading.market.insight.OverseasCloseRate;
 import dev.stockreading.market.insight.OverseasCloseRateQuery;
@@ -106,6 +108,40 @@ class ContextRequestListenerTest {
         assertThat(payload.closeRates()).isEmpty();
         assertThat(payload.truncated()).isFalse();
         verifyNoInteractions(closeRateQuery);
+    }
+
+    @Test
+    void etfInfoIsCarriedWhenTheSymbolIsAnEtf() throws IOException {
+        givenEtfInfo();
+
+        ContextPayload full = answer(listener(), request());
+
+        assertThat(full.etf()).isEqualTo(new ContextPayload.EtfInfo("TEST ETF", "TEST INDEX", null, List.of(
+                new ContextPayload.EtfMember("US", "FAKEA", "FAKE CORP", "12.5", 1),
+                new ContextPayload.EtfMember("KR", "TEST09", null, null, 2),
+                new ContextPayload.EtfMember("US", "FAKEB", null, "1", 3)), false));
+    }
+
+    @Test
+    void etfMembersOverTheLimitAreCutByRankAndMarkedTruncated() throws IOException {
+        givenEtfInfo();
+
+        ContextPayload cut = answer(listener(), request().replace("\"maxTickers\": 100", "\"maxTickers\": 2"));
+
+        assertThat(cut.etf().members()).extracting(ContextPayload.EtfMember::symbol).containsExactly("FAKEA", "TEST09");
+        assertThat(cut.etf().membersTruncated()).isTrue();
+    }
+
+    private void givenEtfInfo() {
+        when(holdings.etfInfo("TEST01")).thenReturn(Optional.of(new EtfInfo("TEST ETF", "TEST INDEX", null, List.of(
+                new EtfInfo.Member("US", "FAKEA", "FAKE CORP", new BigDecimal("12.500"), 1),
+                new EtfInfo.Member("KR", "TEST09", null, null, 2),
+                new EtfInfo.Member("US", "FAKEB", null, new BigDecimal("1"), 3)))));
+    }
+
+    @Test
+    void symbolThatIsNotAnEtfHasNoEtfInfo() throws IOException {
+        assertThat(answer(listener(), request()).etf()).isNull();
     }
 
     @Test

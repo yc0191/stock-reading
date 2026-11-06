@@ -79,6 +79,21 @@ class ContextContractTest {
     }
 
     @Test
+    void producerEtfInfoMatchesSchemaAndIsLeftOutWhenTheSymbolIsNotAnEtf() throws IOException {
+        ContextPayload.EtfInfo info = new ContextPayload.EtfInfo("TEST ETF", "TEST INDEX", "TEST SECTOR", List.of(
+                new ContextPayload.EtfMember("US", "TESTA", "TEST CORP", "12.5", 1),
+                new ContextPayload.EtfMember("KR", "TEST09", null, null, 2)), true);
+        String with = serialize(new ContextPayload("5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13", 1, "TEST01", List.of(),
+                List.of(), List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false, info));
+        String without = serialize(new ContextPayload("5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13", 1, "TEST01", List.of(),
+                List.of(), List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false));
+
+        assertThat(ContractSchemas.validate("market.context.responded.v1.schema.json", with)).isEmpty();
+        assertThat(ContractSchemas.validate("market.context.responded.v1.schema.json", without)).isEmpty();
+        assertThat(mapper.readTree(without).get("payload").has("etf")).isFalse();
+    }
+
+    @Test
     void responseWithoutUsTickersIsValid() throws IOException {
         String json = serialize(new ContextPayload(JOB_ID, 1, "TEST01", List.of(), List.of(),
                 List.of(ContextPayload.Background.missing("daily-price", "TEST01")), false));

@@ -29,8 +29,20 @@ class CoreSettings:
     background_window: timedelta = timedelta(days=4)
     max_background_bytes: int = 32 * 1024
     max_tickers: int = 100
+    # LLM 입력에 넣는 ETF 구성 종목 수. 비중 순위가 높은 종목부터 이 수까지 넣는다.
+    max_etf_members: int = 10
     # 같은 eventId 중복 처리를 위해 기억하는 작업 키 수. 메모리가 무한히 늘지 않게 한다.
     remembered_jobs: int = 10000
+    # 근거 부족 시 재검색: 검색어 LLM이 낼 수 있는 검색어 수, 검색어 LLM 시도 횟수, 재검색 완료 알림을 기다리는 상한.
+    # 재검색 기사 조회는 위의 응답 제한 시간·시도 횟수·재확인 간격·라운드 상한을 그대로 쓴다.
+    max_research_queries: int = 3
+    research_query_attempts: int = 3
+    research_wait_limit: timedelta = timedelta(minutes=5)
+    # 근거가 약한 문장 단위 재검색: 문장 하나를 찾는 최대 횟수(처음 찾기 포함), 작업 하나가 보낼 수 있는 재검색 요청 합계,
+    # 작업 하나의 재검색 전체 시간. 요청 합계를 넘는 문장은 찾지 않고 '근거 약함'을 남기고, 전체 시간이 지나면 그때의 본문으로 낸다.
+    research_rounds_per_sentence: int = 2
+    max_research_requests: int = 10
+    research_total_limit: timedelta = timedelta(minutes=15)
 
 
 @dataclass(frozen=True)
@@ -42,3 +54,28 @@ class StoreSettings:
 
 DEFAULT_SETTINGS = CoreSettings()
 DEFAULT_STORE_SETTINGS = StoreSettings()
+
+
+@dataclass(frozen=True)
+class DailySettings:
+    """데일리 브리핑(아침 판, 마감 후 판)의 설정값."""
+
+    # 범위 시작은 예정 시각에서 직전 평일의 같은 시각이다. 그래도 이보다 오래 거슬러 가지 않는다.
+    max_lookback: timedelta = timedelta(days=7)
+    # 재요청 규칙은 급변동 근거 조회와 같다.
+    response_timeout: timedelta = timedelta(seconds=10)
+    max_attempts: int = 3
+    max_response_bytes: int = 32 * 1024
+    max_etfs: int = 50
+    max_tickers: int = 100
+    max_filings: int = 20
+    # LLM 입력에 넣는 ETF 구성 종목 수(ETF마다). 비중 순위가 높은 종목부터 넣는다.
+    max_etf_members: int = 10
+    # 세계지수 대륙구분 중 미국 지수가 든 값(market 설정 world-index-continents의 아메리카).
+    us_index_target: str = "C"
+    llm_max_attempts: int = 3
+    # 같은 tick 중복 처리를 막기 위해 기억하는 eventId 수.
+    remembered_ticks: int = 1000
+
+
+DEFAULT_DAILY_SETTINGS = DailySettings()

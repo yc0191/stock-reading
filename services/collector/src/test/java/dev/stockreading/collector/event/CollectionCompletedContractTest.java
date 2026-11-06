@@ -3,8 +3,16 @@ package dev.stockreading.collector.event;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
+
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 class CollectionCompletedContractTest {
 
@@ -42,6 +50,40 @@ class CollectionCompletedContractTest {
         assertRejected(sample().replace("    \"startedAt\": \"2026-10-20T16:15:01+09:00\",\n", ""));
         assertRejected(sample().replace("    \"incompleteSymbols\": [\"TEST02\"]\n", "    \"publishedCount\": 12\n")
                 .replace("    \"publishedCount\": 12,\n", ""));
+    }
+
+    @Test
+    void researchCompletionCarriesItsJobIdAsAnOptionalUuid() throws IOException {
+        String research = sample()
+                .replace("\"jobType\": \"collect-news\"", "\"jobType\": \"research-news\"")
+                .replace("\"incompleteSymbols\": [\"TEST02\"]",
+                        "\"incompleteSymbols\": [\"TEST02\"],\n    \"researchJobId\": \"5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13\"");
+
+        assertThat(research).contains("researchJobId", "research-news");
+        assertThat(ContractSchemas.validate(SCHEMA, research)).isEmpty();
+        assertRejected(research.replace("5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13", "not-a-uuid"));
+    }
+
+    @Test
+    void producedCompletionCarriesResearchJobIdOnlyWhenPresent() throws IOException {
+        ObjectMapper mapper = JsonMapper.builder().build();
+        Clock clock = Clock.fixed(Instant.parse("2026-10-20T07:15:42Z"), ZoneId.of("Asia/Seoul"));
+        OffsetDateTime at = OffsetDateTime.now(clock);
+        String time = EventFactory.format(at);
+        CollectionCompletedPayload regular = new CollectionCompletedPayload(
+                "collect-news", time, time, time, 0, List.of());
+        CollectionCompletedPayload research = new CollectionCompletedPayload(
+                "research-news", time, time, time, 0, List.of("TEST01"), "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13");
+
+        String regularJson = mapper.writeValueAsString(
+                EventFactory.create(clock, "collection.completed", at, "c", regular));
+        String researchJson = mapper.writeValueAsString(
+                EventFactory.create(clock, "collection.completed", at, "c", research));
+
+        assertThat(regularJson).doesNotContain("researchJobId");
+        assertThat(ContractSchemas.validate(SCHEMA, regularJson)).isEmpty();
+        assertThat(researchJson).contains("\"researchJobId\":\"5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13\"");
+        assertThat(ContractSchemas.validate(SCHEMA, researchJson)).isEmpty();
     }
 
     private static String sample() throws IOException {

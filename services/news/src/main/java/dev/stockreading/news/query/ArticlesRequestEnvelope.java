@@ -14,6 +14,7 @@ record ArticlesRequestEnvelope(
         RequestPayload payload) {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    record RequestPayload(String jobId, int seq, String symbol, String since, String until, int maxArticles) {
+    record RequestPayload(String jobId, int seq, String symbol, String since, String until, int maxArticles,
+            String researchJobId) {
     }
 }

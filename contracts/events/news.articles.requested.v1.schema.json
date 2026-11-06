@@ -21,7 +21,8 @@
         "symbol": { "type": "string", "pattern": "^[0-9A-Z]{6}$" },
         "since": { "type": "string", "format": "date-time", "description": "조회 하한. since <= publishedAt." },
         "until": { "type": "string", "format": "date-time", "description": "조회 상한. publishedAt <= until." },
-        "maxArticles": { "type": "integer", "minimum": 1, "description": "응답에 담을 최대 건수. 최신순으로 자른다." }
+        "maxArticles": { "type": "integer", "minimum": 1, "description": "응답에 담을 최대 건수. 최신순으로 자른다." },
+        "researchJobId": { "type": "string", "format": "uuid", "description": "있으면 이 jobId의 재검색에서 처음 찾은 기사만 돌려주고 symbol 조건은 보지 않는다(symbol은 메시지 키와 응답 짝짓기에만 쓴다). 기간·건수 규칙은 같다. 선택." }
       }
     }
   }

@@ -25,6 +25,21 @@ class ArticlesContractTest {
         assertThat(event.payload().seq()).isEqualTo(1);
         assertThat(event.payload().symbol()).isEqualTo("TEST01");
         assertThat(event.payload().maxArticles()).isEqualTo(300);
+        assertThat(event.payload().researchJobId()).isNull();
+    }
+
+    @Test
+    void researchJobIdIsReadWhenPresentAndMustBeAUuid() throws IOException {
+        String sample = ContractSchemas.sample("news.articles.requested.sample.json");
+        String withResearch = sample.replace(
+                "\"maxArticles\": 300", "\"maxArticles\": 300,\n    \"researchJobId\": \"5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13\"");
+
+        assertThat(withResearch).isNotEqualTo(sample);
+        assertThat(ContractSchemas.validate("news.articles.requested.v1.schema.json", withResearch)).isEmpty();
+        assertThat(mapper.readValue(withResearch, ArticlesRequestEnvelope.class).payload().researchJobId())
+                .isEqualTo("5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13");
+        assertThat(ContractSchemas.validate("news.articles.requested.v1.schema.json",
+                withResearch.replace("5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13\"\n", "not-a-uuid\"\n"))).isNotEmpty();
     }
 
     @Test

@@ -87,6 +87,29 @@ class NewsListenerTest {
     }
 
     @Test
+    void articleFromRegularCollectionHasNoResearchJobId() {
+        when(repository.save(any())).thenReturn(true);
+
+        listener.onNews(event(EVENT_ID, "https://news.example.com/article/1", "[\"TEST01\"]", "[\"테스트검색어\"]", ""));
+
+        assertThat(savedArticles(1).get(0).researchJobId()).isNull();
+    }
+
+    @Test
+    void researchJobIdIsPassedToStorageSoTheArticleIsMarkedAsFoundByThatResearch() {
+        when(repository.save(any())).thenReturn(false);
+        String researchJobId = "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13";
+        String message = event(EVENT_ID, "https://news.example.com/article/1", "[\"TEST01\"]", "[\"테스트 재검색어\"]", "")
+                .replace("\"symbols\":", "\"researchJobId\":\"" + researchJobId + "\",\"symbols\":");
+
+        listener.onNews(message);
+
+        NewsArticle saved = savedArticles(1).get(0);
+        assertThat(saved.researchJobId()).isEqualTo(UUID.fromString(researchJobId));
+        assertThat(saved.symbols()).containsExactly("TEST01");
+    }
+
+    @Test
     void consumerIgnoresFieldsAddedInFutureVersions() {
         when(repository.save(any())).thenReturn(true);
         String message = event(EVENT_ID, "https://news.example.com/article/1", "[\"TEST01\"]", null, "")

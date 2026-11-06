@@ -3,6 +3,7 @@ package dev.stockreading.news.query;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,8 +54,10 @@ class ArticlesRequestListener {
 
         int limit = Math.min(request.maxArticles(), MAX_ARTICLES_CAP);
         // 한 건 더 읽어 건수 때문에 잘렸는지 판단한다.
-        List<ArticleQueryRepository.StoredArticle> rows =
-                repository.findByRange(request.symbol(), since, until, limit + 1);
+        // 재검색 작업 id 가 있으면 그 작업이 찾은 기사만 읽고 종목 조건은 보지 않는다(symbol 은 응답 짝짓기에만 쓴다).
+        List<ArticleQueryRepository.StoredArticle> rows = request.researchJobId() == null
+                ? repository.findByRange(request.symbol(), since, until, limit + 1)
+                : repository.findByResearchJob(UUID.fromString(request.researchJobId()), since, until, limit + 1);
         boolean truncated = rows.size() > limit;
 
         // 최신 기사부터 담고, 바이트 예산을 넘기는 기사부터는 버린다.

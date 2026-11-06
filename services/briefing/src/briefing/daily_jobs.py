@@ -1,0 +1,619 @@
+"""데일리 판(아침 판, 마감 후 판) 작업. Kafka를 모르며 메시지와 시각을 인자로 받아 상태만 움직인다.
+
+흐름: schedule.tick(판마다 따로 받음) -> 범위 계산 -> 데일리 자료 요청(market.daily.requested)
+-> 아침 판이고 미국 종목이 있으면 그 티커로 공시 요청 -> 받은 자료 재검사 -> 본문(LLM 또는 규칙 기반)
+-> (LLM이 약한 문장을 냈으면 문장마다 뉴스 재검색 -> 그 문장만 다시 쓰기, 근거 부족이면 보고서 전체를 한 번 재검색)
+-> briefing.daily.generated 발행. 응답을 끝내 받지 못하거나 LLM이 끝내 실패해도 판은 나간다.
+예외는 작업 기록을 끝내 저장하지 못했을 때뿐이며, 그때는 이 판의 결과 이벤트를 발행하지 않고 ERROR 로그만 남긴다.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import uuid
+from collections import OrderedDict
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta
+from typing import Any
+
+from briefing.compose import KST
+from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
+from briefing.daily_report import (
+    Section,
+    EDITIONS_WITH_FILINGS,
+    GENERATED_BY_RULE,
+    DailyInput,
+    DailyLlmWriter,
+    DailyOutput,
+    EtfDay,
+    GENERATED_BY_LLM,
+    build_llm_input,
+    build_sections,
+    has_evidence,
+    llm_text,
+    missing_items,
+    rule_based_text,
+)
+from briefing.events import (
+    FILINGS_REQUESTED_TOPIC,
+    JOB_TYPE_BY_EDITION,
+    OutboundEvent,
+    daily_briefing_event,
+    format_timestamp,
+    parse_timestamp,
+    request_event,
+)
+from briefing.job_log import (
+    DiscardJobLog,
+    EntryType,
+    GeneratedBy,
+    JobKind,
+    JobLogEntry,
+    JobLogPort,
+    JobResult,
+    JobStart,
+    RunStatus,
+    range_target,
+    record_result,
+)
+from briefing.evidence import MARKET_WIDE
+from briefing.ports import FailureReason, RequestPort
+from briefing.research import ResearchTarget
+from briefing.sentence_research import WHOLE_REPORT, SentenceResearch, WeakSentence
+from briefing.sources import (
+    BACKGROUND_LABEL,
+    BACKGROUND_MISSING,
+    Article,
+    Background,
+    CloseRate,
+    Exchange,
+    Filing,
+    next_seq,
+    parse_background,
+    parse_close_rates,
+    parse_etf_info,
+    parse_filings,
+    response_payload,
+)
+
+log = logging.getLogger("briefing.daily_jobs")
+
+SCHEDULE_TICK = "schedule.tick"
+DAILY_DATA_REQUESTED_TOPIC = "market.daily.requested"
+DAILY_DATA_RESPONDED = "market.daily.responded"
+FILINGS_RESPONDED = "news.filings.responded"
+
+# 작업 기록의 단계와 사유. 끝내 실패한 사유는 FailureReason 값을 그대로 쓴다.
+STAGE_DAILY_DATA = "daily-data-request"
+STAGE_FILINGS = "filings-request"
+STAGE_LLM = "llm"
+STAGE_COMPOSE = "compose"
+REASON_RESENT = "no_response_resent"
+REASON_LLM_REJECTED = "llm_attempt_rejected"
+REASON_MISSING_ITEMS = "missing_items"
+REASON_LLM_ACCEPTED = "llm_attempt_accepted"
+REASON_PUBLISHED = "published"
+
+
+def range_start(scheduled_for: datetime, settings: DailySettings = DEFAULT_DAILY_SETTINGS) -> datetime:
+    """직전 같은 판의 시각. 기록을 읽지 않고 예정 시각에서 직전 평일의 같은 시각으로 계산한다(휴장일은 보지 않음)."""
+    local = scheduled_for.astimezone(KST)
+    start = local - timedelta(days=1)
+    while start.weekday() >= 5:
+        start -= timedelta(days=1)
+    return max(start, local - settings.max_lookback)
+
+
+@dataclass
+class _Sent:
+    request: str
+    seq: int
+    sent_at: datetime
+    payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class _Draft:
+    """LLM(또는 규칙 기반)이 쓴 본문 하나. 재검색을 할지 정하는 표시와 받아들인 LLM 출력을 함께 든다."""
+
+    text: str
+    generated_by: str
+    cited: tuple[str, ...]
+    insufficient_evidence: bool = False
+    weak_shortfalls: tuple[str, ...] = ()
+    output: DailyOutput | None = None
+
+
+@dataclass
+class _DailyJob:
+    job_id: str
+    edition: str
+    correlation_id: str
+    scheduled_for: datetime
+    range_start: datetime
+    data: Exchange = field(default_factory=Exchange)
+    filings: Exchange = field(default_factory=Exchange)
+    data_given_up: bool = False
+    filings_given_up: bool = False
+    data_payload: dict | None = None
+    filings_payload: dict | None = None
+    etfs: tuple[EtfDay, ...] | None = None
+    etfs_truncated: bool = False
+    close_rates: tuple[CloseRate, ...] | None = None
+    background: tuple[Background, ...] | None = None
+    filings_data: tuple[Filing, ...] | None = None
+    filings_truncated: bool = False
+    excluded: dict[str, int] = field(default_factory=dict)
+    sent: list[_Sent] = field(default_factory=list)
+    first_failure: tuple[FailureReason, str, int] | None = None
+    # 문장 단위 재검색이 진행 중인가. 끝나면 재검색 흐름이 발행한다.
+    researching: bool = False
+
+    def waiting(self) -> bool:
+        return (self.data.awaiting() and not self.data_given_up) or (self.filings.awaiting() and not self.filings_given_up)
+
+
+@dataclass
+class DailyCore:
+    requests: RequestPort
+    writer: DailyLlmWriter | None = None
+    job_log: JobLogPort = field(default_factory=DiscardJobLog)
+    settings: DailySettings = DEFAULT_DAILY_SETTINGS
+    # 있을 때만 재검색한다. 급변동과 함께 쓰는 문장 단위 재검색 흐름이다.
+    sentences: SentenceResearch | None = None
+    _jobs: dict[str, _DailyJob] = field(default_factory=dict, init=False)
+    _seen: OrderedDict[str, None] = field(default_factory=OrderedDict, init=False)
+
+    def __post_init__(self) -> None:
+        if self.sentences is not None:
+            adapter = DailySentences(self)
+            for edition in EDITION_JOB_KINDS:
+                self.sentences.register(edition, adapter)
+
+    # ---- 입력 ----
+
+    def on_schedule_tick(self, message: str | bytes, now: datetime, edition: str) -> None:
+        """판 하나의 시작 신호. 그 판의 jobType만 처리하고 같은 eventId는 한 번만 처리한다. 형식이 잘못되면 ValueError."""
+        try:
+            tick = json.loads(message)
+            if tick["eventType"] != SCHEDULE_TICK:
+                raise ValueError(f"unexpected eventType: {tick['eventType']}")
+            job_type = tick["payload"]["jobType"]
+            if job_type != JOB_TYPE_BY_EDITION[edition]:
+                return
+            job_id = tick["eventId"]
+            scheduled_for = parse_timestamp(tick["payload"]["scheduledFor"])
+            correlation_id = tick["correlationId"]
+        except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise ValueError(f"malformed schedule.tick event: {error!r}") from error
+        if job_id in self._seen:
+            log.info("duplicate daily tick %s (%s) ignored", job_id, edition)
+            return
+        self._seen[job_id] = None
+        while len(self._seen) > self.settings.remembered_ticks:
+            self._seen.popitem(last=False)
+        job = _DailyJob(job_id, edition, correlation_id, scheduled_for, range_start(scheduled_for, self.settings))
+        self._jobs[job_id] = job
+        # 작업 한 줄은 시작 때 만들고 끝날 때 고친다. 입력은 시작시킨 이벤트 원문이다.
+        raw = message.decode("utf-8") if isinstance(message, bytes) else message
+        self.job_log.start(JobStart(job_id, JobKind(edition), raw,
+                                    range_target(format_timestamp(job.range_start), format_timestamp(scheduled_for)),
+                                    now))
+        log.info("daily %s started: job=%s range=%s~%s", edition, job_id,
+                 format_timestamp(job.range_start), format_timestamp(scheduled_for))
+        self._send_data(job, now)
+
+    def on_daily_data_responded(self, message: str | bytes, now: datetime) -> None:
+        payload = response_payload(message, DAILY_DATA_RESPONDED)
+        job = self._jobs.get(payload["jobId"])
+        if job is None or job.data_payload is not None or job.data_given_up:
+            if job is not None:
+                log.info("stale daily data response ignored: job=%s seq=%s", job.job_id, payload["seq"])
+            return
+        if payload["seq"] != job.data.seq:
+            log.info("stale daily data response ignored: job=%s seq=%s latest=%s",
+                     job.job_id, payload["seq"], job.data.seq)
+            return
+        try:
+            etfs = tuple(
+                EtfDay(e["symbol"], e["date"], e["close"], e["prevClose"], e["rate"], parse_timestamp(e["fetchedAt"]),
+                       tuple(e["tickers"]), bool(e["tickersTruncated"]), parse_etf_info(e.get("etf")))
+                for e in payload["etfs"]
+            )
+            close_rates = parse_close_rates(payload["closeRates"])
+            background = tuple(parse_background(b) for b in payload["background"])
+            truncated = bool(payload["truncated"])
+        except (KeyError, TypeError) as error:
+            raise ValueError(f"malformed {DAILY_DATA_RESPONDED} event: {error!r}") from error
+        job.data.received = True
+        job.data_payload = payload
+        job.etfs = self._recheck_etfs(job, etfs)
+        job.close_rates, job.background = self._recheck_state(job, close_rates, background)
+        job.etfs_truncated = truncated
+        tickers = tuple(dict.fromkeys(t for etf in job.etfs for t in etf.tickers))
+        # 공시는 아침 판만 쓰고, 미국 종목이 없으면 해당 없음이라 요청하지 않는다.
+        if job.edition in EDITIONS_WITH_FILINGS and tickers:
+            self._send_filings(job, now)
+        else:
+            self._finish(job, now)
+
+    def on_filings_responded(self, message: str | bytes, now: datetime) -> None:
+        """급변동 작업의 공시 응답도 같은 토픽으로 오므로, 모르는 작업의 응답은 조용히 넘긴다."""
+        payload = response_payload(message, FILINGS_RESPONDED)
+        job = self._jobs.get(payload["jobId"])
+        if job is None:
+            return
+        if payload["seq"] != job.filings.seq or job.filings.received or job.filings_given_up:
+            log.info("stale daily filings response ignored: job=%s seq=%s latest=%s",
+                     job.job_id, payload["seq"], job.filings.seq)
+            return
+        try:
+            filings = parse_filings(payload["filings"])
+            truncated = bool(payload["truncated"])
+        except (KeyError, TypeError) as error:
+            raise ValueError(f"malformed {FILINGS_RESPONDED} event: {error!r}") from error
+        job.filings.received = True
+        job.filings_payload = payload
+        kept = tuple(f for f in filings if job.range_start <= f.accepted_at <= job.scheduled_for)
+        self._note_excluded(job, "filings", len(filings) - len(kept))
+        job.filings_data, job.filings_truncated = kept, truncated
+        self._finish(job, now)
+
+    def on_tick(self, now: datetime) -> None:
+        """제한 시간이 지난 요청을 다시 보내거나 포기한다. 포기해도 판은 있는 자료로 나간다."""
+        for job in list(self._jobs.values()):
+            if job.data.awaiting() and not job.data_given_up \
+                    and now - job.data.sent_at >= self.settings.response_timeout:
+                if job.data.seq >= self.settings.max_attempts:
+                    self._give_up(job, job.data, STAGE_DAILY_DATA, FailureReason.CONTEXT_NO_RESPONSE,
+                                  DAILY_DATA_RESPONDED, now)
+                    job.data_given_up = True
+                    self._finish(job, now)
+                else:
+                    self._resent(job, job.data, STAGE_DAILY_DATA, DAILY_DATA_RESPONDED, now)
+                    self._send_data(job, now)
+            elif job.filings.awaiting() and not job.filings_given_up \
+                    and now - job.filings.sent_at >= self.settings.response_timeout:
+                if job.filings.seq >= self.settings.max_attempts:
+                    self._give_up(job, job.filings, STAGE_FILINGS, FailureReason.FILINGS_NO_RESPONSE,
+                                  FILINGS_RESPONDED, now)
+                    job.filings_given_up = True
+                    self._finish(job, now)
+                else:
+                    self._resent(job, job.filings, STAGE_FILINGS, FILINGS_RESPONDED, now)
+                    self._send_filings(job, now)
+
+    def next_deadline(self) -> datetime | None:
+        deadlines = [exchange.sent_at + self.settings.response_timeout
+                     for job in self._jobs.values()
+                     for exchange, given_up in ((job.data, job.data_given_up), (job.filings, job.filings_given_up))
+                     if exchange.awaiting() and not given_up]
+        return min(deadlines) if deadlines else None
+
+    # ---- 요청 ----
+
+    def _send_data(self, job: _DailyJob, now: datetime) -> None:
+        seq = next_seq(job.data, now)
+        s = self.settings
+        payload = {
+            "jobId": job.job_id,
+            "seq": seq,
+            "asOf": format_timestamp(job.scheduled_for),
+            "since": format_timestamp(job.range_start),
+            "maxResponseBytes": s.max_response_bytes,
+            "maxEtfs": s.max_etfs,
+            "maxTickers": s.max_tickers,
+        }
+        job.sent.append(_Sent(DAILY_DATA_REQUESTED_TOPIC, seq, now, payload))
+        self.requests.send(daily_data_request(job.correlation_id, now, payload))
+
+    def _send_filings(self, job: _DailyJob, now: datetime) -> None:
+        seq = next_seq(job.filings, now)
+        with_tickers = [etf for etf in sorted(job.etfs, key=lambda e: e.symbol) if etf.tickers]
+        payload = {
+            "jobId": job.job_id,
+            "seq": seq,
+            # 계약상 필수인 종목코드. news는 메시지 키와 짝짓기에만 쓰므로 미국 종목이 있는 첫 ETF를 넣는다.
+            "symbol": with_tickers[0].symbol,
+            "tickers": list(dict.fromkeys(t for etf in with_tickers for t in etf.tickers)),
+            "since": format_timestamp(job.range_start),
+            "until": format_timestamp(job.scheduled_for),
+            "maxFilings": self.settings.max_filings,
+        }
+        job.sent.append(_Sent(FILINGS_REQUESTED_TOPIC, seq, now, payload))
+        self.requests.send(request_event(FILINGS_REQUESTED_TOPIC, "news.filings.requested", job.correlation_id, now,
+                                         payload))
+
+    # ---- 재검사 ----
+
+    def _recheck_etfs(self, job: _DailyJob, etfs: tuple[EtfDay, ...]) -> tuple[EtfDay, ...]:
+        kept = tuple(e for e in etfs if job.range_start <= e.fetched_at <= job.scheduled_for)
+        self._note_excluded(job, "etfs", len(etfs) - len(kept))
+        return kept
+
+    def _recheck_state(self, job: _DailyJob, close_rates: tuple[CloseRate, ...],
+                       background: tuple[Background, ...]) -> tuple[tuple[CloseRate, ...], tuple[Background, ...]]:
+        lo, hi = job.range_start, job.scheduled_for
+        rates = tuple(r for r in close_rates if r.fetched_at <= hi and lo <= r.close_at <= hi)
+        self._note_excluded(job, "closeRates", len(close_rates) - len(rates))
+        kept: list[Background] = []
+        dropped = 0
+        for item in background:
+            if item.fetched_at is not None and not lo <= item.fetched_at <= hi:
+                dropped += 1
+                kept.append(Background(item.api_type, item.target, BACKGROUND_MISSING))
+            else:
+                kept.append(item)
+        self._note_excluded(job, "background", dropped)
+        return rates, tuple(kept)
+
+    def _note_excluded(self, job: _DailyJob, kind: str, count: int) -> None:
+        if count:
+            job.excluded[kind] = job.excluded.get(kind, 0) + count
+            # 응답 쪽 결함 신호. 종목코드와 티커는 로그에 쓰지 않는다.
+            log.warning("daily job %s: dropped %d %s outside the range", job.job_id, count, kind)
+
+    # ---- 작업 기록 ----
+
+    def _related_data(self, job: _DailyJob, **extra: Any) -> dict[str, Any]:
+        data = {
+            "requestRange": {"since": format_timestamp(job.range_start), "asOf": format_timestamp(job.scheduled_for)},
+            "requests": [{"request": s.request, "seq": s.seq, "sentAt": format_timestamp(s.sent_at),
+                          "payload": s.payload} for s in job.sent],
+            "received": {name: payload for name, payload in ((DAILY_DATA_RESPONDED, job.data_payload),
+                                                             (FILINGS_RESPONDED, job.filings_payload))
+                         if payload is not None},
+            "notReceived": [name for name, exchange in ((DAILY_DATA_RESPONDED, job.data),
+                                                        (FILINGS_RESPONDED, job.filings))
+                            if exchange.seq and not exchange.received],
+            "excluded": dict(job.excluded),
+        }
+        data.update(extra)
+        return data
+
+    def _detail(self, job: _DailyJob, stage: str, entry_type: EntryType, reason: str, error_type: str | None,
+                attempts: int, now: datetime, *, sentence_no: int | None = None, round: int | None = None,
+                **extra: Any) -> None:
+        self.job_log.record(JobLogEntry(
+            job_id=job.job_id, entry_type=entry_type, stage=stage, reason=reason, occurred_at=now,
+            sentence_no=sentence_no, round=round, error_type=error_type, attempts=attempts,
+            data=self._related_data(job, **extra)))
+
+    def _resent(self, job: _DailyJob, exchange: Exchange, stage: str, event_type: str, now: datetime) -> None:
+        self._detail(job, stage, EntryType.RESENT, REASON_RESENT, "Timeout", exchange.seq, now,
+                     timedOut={"response": event_type, "seq": exchange.seq})
+
+    def _give_up(self, job: _DailyJob, exchange: Exchange, stage: str, reason: FailureReason, event_type: str,
+                 now: datetime) -> None:
+        detail = f"no {event_type} within the time limit"
+        self._detail(job, stage, EntryType.STEP_FAILED, reason.value, "Timeout", exchange.seq, now,
+                     timedOut={"response": event_type, "seq": exchange.seq})
+        self._first_failure(job, reason, detail, exchange.seq)
+
+    def _first_failure(self, job: _DailyJob, reason: FailureReason, detail: str, attempts: int) -> None:
+        if job.first_failure is None:
+            job.first_failure = (reason, detail, attempts)
+
+    # ---- 완성 ----
+
+    def _finish(self, job: _DailyJob, now: datetime) -> None:
+        if job.waiting() or job.researching:
+            return
+        daily_input = DailyInput(
+            job_id=job.job_id,
+            edition=job.edition,
+            range_start=job.range_start,
+            as_of=job.scheduled_for,
+            etfs=job.etfs,
+            etfs_truncated=job.etfs_truncated,
+            close_rates=job.close_rates,
+            background=job.background,
+            filings=job.filings_data,
+            filings_truncated=job.filings_truncated,
+        )
+        sections = build_sections(daily_input, self.settings)
+        draft = self._write(job, now, daily_input, sections)
+        # 문장 단위 재검색이 시작되면 그 흐름이 끝난 뒤 발행한다. 시작하지 않으면 바로 발행한다.
+        job.researching = self.sentences is not None and draft.generated_by == GENERATED_BY_LLM \
+            and self.sentences.begin(job.edition, job.job_id, DailyDraft(job, daily_input, sections, draft), now)
+        if not job.researching:
+            self._publish(job, now, daily_input, sections, draft)
+
+    def _write(self, job: _DailyJob, now: datetime, daily_input: DailyInput,
+               sections: tuple[Section, ...]) -> _Draft:
+        """본문을 쓴다. LLM이 없거나 끝내 실패하면 규칙 기반 본문이다. LLM 시도는 줄마다 남긴다."""
+        missing = missing_items(sections)
+        if self.writer is not None and has_evidence(sections):
+            result = self.writer.write(daily_input, sections)
+            for attempt in result.rejected:
+                self._detail(job, STAGE_LLM, EntryType.LLM_REJECTED, REASON_LLM_REJECTED, attempt.error_type,
+                             attempt.attempt, now,
+                             missingItems=missing,
+                             llm={"input": attempt.llm_input, "rawOutput": attempt.raw_output,
+                                  "rejectReason": attempt.reason})
+            if result.body is None:
+                detail = f"daily LLM failed after {len(result.rejected)} attempts"
+                last = result.rejected[-1] if result.rejected else None
+                self._detail(job, STAGE_LLM, EntryType.STEP_FAILED, FailureReason.LLM_ERROR.value,
+                             last.error_type if last else None, len(result.rejected), now, missingItems=missing,
+                             llm={"input": last.llm_input if last else None,
+                                  "rawOutput": last.raw_output if last else None,
+                                  "rejectReason": last.reason if last else None})
+                self._first_failure(job, FailureReason.LLM_ERROR, detail, len(result.rejected))
+            else:
+                body = result.body
+                if result.accepted is not None:
+                    self._accepted(job, now, result.accepted, missing)
+                return _Draft(body.text, body.generated_by, body.cited, body.insufficient_evidence,
+                              body.weak_shortfalls, body.output)
+        return _Draft(rule_based_text(daily_input, sections), GENERATED_BY_RULE, ())
+
+    def _accepted(self, job: _DailyJob, now: datetime, a: Any, missing: list[str], *,
+                  sentence_no: int | None = None, round: int | None = None) -> None:
+        self._detail(job, STAGE_LLM, EntryType.REPORT_WRITTEN, REASON_LLM_ACCEPTED, None, a.attempt, now,
+                     sentence_no=sentence_no, round=round, missingItems=missing,
+                     llm={"input": a.llm_input, "rawOutput": a.response, "rejectReason": None})
+
+    # ---- 문장 단위 재검색(어댑터가 부른다) ----
+
+    def rewrite_point(self, draft: DailyDraft, no: int, round: int, articles: tuple[Article, ...],
+                      research_articles: tuple[Article, ...], now: datetime) -> DailyDraft | None:
+        """근거가 약한 문장 하나만 다시 쓰고 본문을 다시 만든다. 끝내 못 쓰면 None."""
+        current = draft.draft.output.points[no - 1]
+        rewritten_input = replace(draft.input, research_articles=research_articles)
+        sections = build_sections(rewritten_input, self.settings)
+        result = self.writer.rewrite_point(rewritten_input, sections, current, no, tuple(a.article_id for a in articles))
+        missing = missing_items(sections)
+        for attempt in result.rejected:
+            self._detail(draft.job, STAGE_LLM, EntryType.LLM_REJECTED, REASON_LLM_REJECTED, attempt.error_type,
+                         attempt.attempt, now, sentence_no=no, round=round, missingItems=missing,
+                         llm={"input": attempt.llm_input, "rawOutput": attempt.raw_output,
+                              "rejectReason": attempt.reason})
+        if result.point is None:
+            return None
+        self._accepted(draft.job, now, result.accepted, missing, sentence_no=no, round=round)
+        points = list(draft.draft.output.points)
+        points[no - 1] = result.point
+        output = DailyOutput(tuple(points), False)
+        cited = tuple(dict.fromkeys(ref for p in points for ref in p.refs))
+        weak = tuple(p.shortfall for p in points if p.shortfall)
+        new = _Draft(llm_text(rewritten_input, sections, output), GENERATED_BY_LLM, cited, False, weak, output)
+        return DailyDraft(draft.job, rewritten_input, sections, new)
+
+    def rewrite_whole(self, draft: DailyDraft, round: int, research_articles: tuple[Article, ...],
+                      now: datetime) -> DailyDraft | None:
+        """근거 부족이던 보고서 전체를 재검색 기사를 더해 다시 쓴다. 끝내 못 쓰면 None(첫 결과를 낸다)."""
+        rewritten_input = replace(draft.input, research_articles=research_articles)
+        sections = build_sections(rewritten_input, self.settings)
+        new = self._write(draft.job, now, rewritten_input, sections)
+        if new.generated_by != GENERATED_BY_LLM:
+            return None
+        return DailyDraft(draft.job, rewritten_input, sections, new)
+
+    # ---- 발행 ----
+
+    def publish_draft(self, draft: DailyDraft, now: datetime, research_count: int) -> None:
+        self._publish(draft.job, now, draft.input, draft.sections, draft.draft, research_count)
+
+    def _publish(self, job: _DailyJob, now: datetime, daily_input: DailyInput, sections: tuple[Section, ...],
+                 draft: _Draft, research_count: int = 0) -> None:
+        missing = missing_items(sections)
+        by_ref = {e.ref: e for s in sections for e in s.entries}
+        if missing:
+            self._detail(job, STAGE_COMPOSE, EntryType.MISSING_ITEMS, REASON_MISSING_ITEMS, None, 0, now,
+                         missingItems=missing,
+                         evidence=[{"ref": ref, "describe": by_ref[ref].describe} for ref in draft.cited],
+                         weakItems=list(draft.weak_shortfalls))
+        event = daily_briefing_event(job.job_id, job.correlation_id, job.scheduled_for, now, job.edition,
+                                     job.range_start, job.scheduled_for, draft.text, missing, draft.generated_by)
+        result = JobResult(
+            job.job_id, RunStatus.SUCCEEDED, now, generated_by=GeneratedBy(draft.generated_by),
+            final_text=draft.text, weak_count=len(draft.weak_shortfalls), research_count=research_count,
+            # 성공했어도 중간에 포기한 단계가 있으면 첫 사유를 남긴다.
+            failure_reason=job.first_failure[0].value if job.first_failure is not None else None,
+            result_event_id=event.value["eventId"])
+        if not record_result(self.job_log, result):
+            del self._jobs[job.job_id]
+            return
+        self.requests.send(event)
+        log.info("daily %s ready: job=%s generatedBy=%s missing=%d etfs=%s filings=%s excluded=%s",
+                 job.edition, job.job_id, draft.generated_by, len(missing),
+                 "n/a" if job.etfs is None else len(job.etfs),
+                 "n/a" if job.filings_data is None else len(job.filings_data), sum(job.excluded.values()))
+        del self._jobs[job.job_id]
+
+
+# ---- 문장 단위 재검색 어댑터 ----
+
+EDITION_JOB_KINDS = (JobKind.MORNING.value, JobKind.POST_CLOSE.value)
+
+
+@dataclass(frozen=True)
+class DailyDraft:
+    """데일리 판 본문 한 벌. 다시 쓰면 재검색 기사가 든 입력·항목과 새 본문으로 바뀐다."""
+
+    job: _DailyJob
+    input: DailyInput
+    sections: tuple[Section, ...]
+    draft: _Draft
+
+
+@dataclass
+class DailySentences:
+    """데일리 판 요약의 문장(point) 하나를 재검색의 문장 하나로 본다."""
+
+    core: DailyCore
+
+    def can_research(self, draft: DailyDraft) -> bool:
+        # 기사 조회 요청에는 종목코드가 필수라 보유 ETF 자료가 없으면 재검색하지 않는다.
+        return bool(draft.input.etfs) and self.core.writer is not None
+
+    def weak_sentences(self, draft: DailyDraft) -> tuple[WeakSentence, ...]:
+        output = draft.draft.output
+        if output is None or output.insufficient_evidence:
+            return ()
+        return tuple(WeakSentence(n, p.statement, p.shortfall)
+                     for n, p in enumerate(output.points, start=1) if p.shortfall)
+
+    def whole_insufficient(self, draft: DailyDraft) -> bool:
+        return draft.draft.insufficient_evidence
+
+    def query_context(self, draft: DailyDraft, sentence: WeakSentence | None) -> dict[str, Any]:
+        llm = build_llm_input(draft.input, draft.sections, self.core.settings)
+        background = [e.llm for s in draft.sections for e in s.entries if e.llm.get("category") == BACKGROUND_LABEL]
+        context: dict[str, Any] = {
+            "edition": llm["edition"], "rangeStart": llm["rangeStart"], "asOf": llm["asOf"],
+            "foundArticleTitles": [a.title for a in draft.input.research_articles],
+            "background": background,
+        }
+        if "etfInfo" in llm:
+            context["etfInfo"] = llm["etfInfo"]
+        if sentence is not None:
+            context["sentence"] = sentence.text
+            context["shortfall"] = sentence.shortfall
+        return context
+
+    def target(self, draft: DailyDraft, research_id: str, sentence_no: int, round: int) -> ResearchTarget:
+        job = draft.job
+        return ResearchTarget(
+            job_kind=job.edition, job_id=research_id, parent_job_id=job.job_id, sentence_no=sentence_no,
+            round=round, correlation_id=job.correlation_id, tag=MARKET_WIDE,
+            # 데일리 공시 요청처럼 정렬한 첫 ETF 코드. 재검색 조회는 종목 조건을 보지 않고 응답 짝짓기에만 쓴다.
+            reply_symbol=min(etf.symbol for etf in draft.input.etfs),
+            since=job.range_start, until=job.scheduled_for)
+
+    def rewrite_sentence(self, draft: DailyDraft, sentence_no: int, round: int, articles: tuple[Article, ...],
+                         research_articles: tuple[Article, ...], now: datetime) -> DailyDraft | None:
+        return self.core.rewrite_point(draft, sentence_no, round, articles, research_articles, now)
+
+    def rewrite_whole(self, draft: DailyDraft, round: int, articles: tuple[Article, ...],
+                      research_articles: tuple[Article, ...], now: datetime) -> DailyDraft | None:
+        return self.core.rewrite_whole(draft, round, research_articles, now)
+
+    def sentence_text(self, draft: DailyDraft, sentence_no: int) -> str | None:
+        output = draft.draft.output
+        if output is None or sentence_no == WHOLE_REPORT or sentence_no > len(output.points):
+            return None
+        return output.points[sentence_no - 1].statement
+
+    def publish(self, draft: DailyDraft, now: datetime, research_count: int) -> None:
+        self.core.publish_draft(draft, now, research_count)
+
+
+def daily_data_request(correlation_id: str, now: datetime, payload: dict[str, Any]) -> OutboundEvent:
+    """데일리 자료 요청 봉투. 종목 하나가 아니라 판 단위라 메시지 키는 jobId다."""
+    event_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{DAILY_DATA_REQUESTED_TOPIC}:{payload['jobId']}:{payload['seq']}")
+    return OutboundEvent(
+        topic=DAILY_DATA_REQUESTED_TOPIC,
+        key=payload["jobId"],
+        value={
+            "eventId": str(event_id),
+            "eventType": DAILY_DATA_REQUESTED_TOPIC,
+            "schemaVersion": 1,
+            "occurredAt": format_timestamp(now),
+            "producedAt": format_timestamp(now),
+            "correlationId": correlation_id,
+            "payload": payload,
+        },
+    )
+

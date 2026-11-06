@@ -2,15 +2,24 @@ package dev.stockreading.market.holdings;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+
 /**
- * application.yml 과 환경변수(수집기와 같은 ETF_US_HOLDINGS)가 실제로 설정에 묶이는지, 형식이 틀린 값이
+ * application.yml 과 환경변수(HOLDINGS_FILE, 수집기와 같은 ETF_US_HOLDINGS)가 실제로 설정에 묶이는지, 어긋난 값이
  * 시작 단계에서 막히는지 확인한다. 가짜 값(TEST 접두)만 쓴다.
  */
 class HoldingsPropertiesBindingTest {
@@ -19,7 +28,14 @@ class HoldingsPropertiesBindingTest {
     @EnableConfigurationProperties(HoldingsProperties.class)
     @Import(ConfiguredHoldings.class)
     static class Wiring {
+        @Bean
+        ObjectMapper mapper() {
+            return JsonMapper.builder().build();
+        }
     }
+
+    @TempDir
+    Path dir;
 
     private ApplicationContextRunner runner() {
         return new ApplicationContextRunner()
@@ -27,32 +43,42 @@ class HoldingsPropertiesBindingTest {
                 .withUserConfiguration(Wiring.class);
     }
 
+    private String file(String json) throws Exception {
+        Path file = dir.resolve("holdings.json");
+        Files.writeString(file, json, StandardCharsets.UTF_8);
+        return file.toString();
+    }
+
     @Test
-    void startsWithNoHoldingsWhenTheEnvironmentVariableIsEmpty() {
-        // 셸에 실제 보유 종목이 설정돼 있어도 읽지 않게 막아, 실패 보고서에 실제 값이 찍히지 않게 한다.
-        runner().withPropertyValues("ETF_US_HOLDINGS=").run(context -> {
+    void startsWithNoHoldingsWhenBothEnvironmentVariablesAreEmpty() {
+        // 셸에 실제 값이 설정돼 있어도 읽지 않게 막아, 실패 보고서에 실제 값이 찍히지 않게 한다.
+        runner().withPropertyValues("HOLDINGS_FILE=", "ETF_US_HOLDINGS=").run(context -> {
             assertThat(context).hasNotFailed();
-            assertThat(context.getBean(HoldingsPort.class).topTickers("TEST01")).isEmpty();
+            assertThat(context.getBean(ConfiguredHoldings.class).plan().instruments()).isEmpty();
         });
     }
 
     @Test
-    void holdingsAreReadFromTheSameEnvironmentVariableAsTheCollector() {
-        runner().withPropertyValues("ETF_US_HOLDINGS=TEST01=FAKEA,FAKEB;TEST02=FAKEC").run(context -> {
+    void holdingsFileAndCollectorSettingAreReadFromTheEnvironmentVariables() throws Exception {
+        String path = file("""
+                [{"kind":"ETF","market":"KR","symbol":"TEST01","members":[{"market":"US","symbol":"FAKEA"}]}]
+                """);
+        runner().withPropertyValues("HOLDINGS_FILE=" + path, "ETF_US_HOLDINGS=TEST01=FAKEA").run(context -> {
             assertThat(context).hasNotFailed();
-            HoldingsPort port = context.getBean(HoldingsPort.class);
-            assertThat(port.topTickers("TEST01")).containsExactly("FAKEA", "FAKEB");
-            assertThat(port.topTickers("TEST02")).containsExactly("FAKEC");
+            assertThat(context.getBean(ConfiguredHoldings.class).plan().memberships()).hasSize(1);
         });
     }
 
     @Test
-    void malformedValueFailsStartupAndTheFailureDoesNotEchoTheValue() {
-        runner().withPropertyValues("ETF_US_HOLDINGS=TEST01=FAKEA;TEST02=fakeb").run(context -> {
+    void mismatchBetweenFileAndCollectorSettingFailsStartupWithoutEchoingValues() throws Exception {
+        String path = file("""
+                [{"kind":"ETF","market":"KR","symbol":"TEST01","members":[{"market":"US","symbol":"FAKEA"}]}]
+                """);
+        runner().withPropertyValues("HOLDINGS_FILE=" + path, "ETF_US_HOLDINGS=TEST01=FAKEB").run(context -> {
             assertThat(context).hasFailed();
             String messages = messagesOf(context.getStartupFailure());
-            assertThat(messages).contains("2번째").contains("티커 형식 오류");
-            assertThat(messages).doesNotContain("TEST02").doesNotContain("fakeb");
+            assertThat(messages).contains("어긋납니다");
+            assertThat(messages).doesNotContain("TEST01").doesNotContain("FAKEA").doesNotContain("FAKEB");
         });
     }
 

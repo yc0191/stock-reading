@@ -44,11 +44,18 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 
 | 설정 키 | 설명 |
 |---|---|
-| `market.holdings.us-by-etf` | ETF별 미국 종목 대응표. 수집기 `ETF_US_HOLDINGS`와 같은 값과 형식이며 `.env`에만 둡니다. 형식이 틀리면 시작 단계에서 실패하고, 비어 있으면 미국 종목이 없는 것으로 봅니다 |
+| `market.holdings.file` | 보유 종목 JSON 파일의 경로(환경변수 `HOLDINGS_FILE`). 비어 있으면 보유 종목이 없는 것으로 봅니다. 파일 모양은 아래 "보유 종목 파일"을 봅니다 |
+| `market.holdings.us-by-etf` | 수집기가 읽는 `ETF_US_HOLDINGS`와 같은 값. 여기서는 파일의 미국 구성 종목과 같은지 비교하는 데만 쓰고, 다르면 시작 단계에서 실패합니다 |
 | `market.context.max-age` | 기준 시각보다 이 기간 넘게 이른 자료는 없음으로 봅니다 |
 | `market.context.max-response-bytes` | 원문 1건의 최대 크기(UTF-8 바이트). 넘으면 원문을 빼고 너무 큼으로 표시합니다 |
 | `market.context.max-tickers` | 응답에 담을 미국 종목의 최대 개수 |
 | `market.context.world-index-continents` | 배경 자료로 줄 세계지수 대륙구분. 수집기의 마감 후 수집 대륙과 맞춥니다 |
+
+시세처리기는 데일리 브리핑의 판 자료 요청(`market.daily.requested`)에도 한 번에 답합니다(응답 `market.daily.responded`, `DailyRequestListener`). 보유 ETF는 받은 시각이 요청 범위 안인 국내 일봉이 저장된 종목이고, ETF마다 일봉 원문의 일자가 가장 최근인 레코드의 하루 등락(원문 값 그대로), 담긴 미국 종목과 직전 정규장 등락률, 시장 배경(환율종합, 시장종합, 세계지수와 계산된 지수 등락률)을 줍니다. 받은 시각 하한, 원문 크기, 미국 종목 수, 세계지수 대륙은 위 `market.context.*`를 함께 쓰고, ETF 수의 안전 상한만 따로 둡니다.
+
+| 설정 키 | 설명 |
+|---|---|
+| `market.daily.max-etfs` | 판 자료 응답에 담을 보유 ETF의 최대 개수. 넘으면 잘림으로 표시합니다 |
 
 이전 키 `market.move-threshold-percent`는 없어졌습니다. 마이그레이션(`services/market/src/main/resources/db/migration/`)은 서비스 기동 때 Flyway가 적용하며, 단위 테스트는 저장소를 대역으로 쓰므로 SQL은 로컬 Postgres에서 따로 확인해야 합니다.
 
@@ -61,30 +68,62 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 3. 배경 자료 응답에 미국 종목 목록이 있으면 그 종목들의 공시(`news.filings.requested`, 접수 시각 T - 72시간 ~ T)를 요청합니다. 공시는 하루 한 번 받으므로 + Δ를 두지 않습니다. 미국 종목이 없으면 공시를 요청하지 않고 해당 없음으로 둡니다.
 4. 응답이 제한 시간 안에 없으면 새 순번(`seq`)으로 다시 요청하는 규칙은 모든 요청에 같습니다. 기사는 일정 간격으로 다시 요청해, 연속 두 번 같은 기사 목록(순서 무시)이 오면 안정된 것으로 봅니다. 모든 응답을 받아야 다음으로 넘어갑니다.
 5. 받은 자료의 시각을 다시 검사합니다. 발행·접수 시각이 범위 밖인 기사·공시와, 받은 시각이 T 뒤이거나 기준 기간보다 오래된 배경 자료·해외 등락률은 버리고 경고 로그를 남깁니다(테스트로 검증). 변동마다 종목·티커 없이 작업 번호와 자료 종류별 건수·제외·잘림을 한 줄 수집 내역 로그(`collection job=...`)로 남깁니다.
-6. 기사(`articleId`), 공시(접수번호), 해외 등락률(`U1`…), 배경 자료(`B1`…)에 근거 번호를 붙여 LLM에 줍니다. 배경 자료에는 받은 시각과 변동보다 얼마나 전 값인지를 붙이고, 원인으로 단정하지 말라고 지시합니다. LLM이 근거 번호(`refs`)로 인용한 문장을 만들면 코드가 형식과 인용 번호를 검증하고, 목록 밖 번호가 있으면 거부합니다. 머리말과 "투자 조언이 아님" 문구는 코드가 넣습니다. `generatedBy`는 `llm`입니다. LLM 키가 없으면 기사와 공시를 나열하는 규칙 기반 리포트를 만듭니다. `generatedBy`는 `rule-based`입니다.
+6. 기사(`articleId`), 공시(접수번호), 해외 등락률(`U1`…), 배경 자료(`B1`…)에 근거 번호를 붙여 LLM에 줍니다. 배경 자료에는 받은 시각과 변동보다 얼마나 전 값인지를 붙이고, 원인으로 단정하지 말라고 지시합니다. 코드가 배경 원문에서 꺼낸 숫자(원/달러 환율, 코스피·코스닥)와 비교 숫자(변동률과 지수 등락률의 차이, 담긴 미국 종목 집계)에도 근거 번호(`F1`…)를 붙입니다. LLM은 원인마다 제목, 구체 문장, 뜻 문장과 각 문장의 근거 번호(`refs`, `meaningRefs`)를 내고, 코드가 형식과 인용 번호를 검증해 빈 문장이나 목록 밖 번호가 있거나 문장(제목·구체 문장·뜻 문장·부족한 점)에 미국 티커(해외 등락률·공시·ETF 구성 종목에 있던 것)가 나오면 거부하고 다시 부릅니다(데일리와 같은 `llm_output.py`의 공통 검사이며, 3번 실패하면 `llm_error`인 것도 같습니다). 응답에 ETF 정보(`etf`)가 있으면 이름·추종 대상·업종과 구성 종목을 비중 순위 순으로 `config.py`의 `max_etf_members`개까지 LLM 입력(`etf`)에 넣고, 지시문에 ETF 정보는 원인으로 단정하지 말고 맥락으로만 쓰라고 적습니다. ETF 정보가 없는 이전 형식 응답도 그대로 처리합니다. 본문은 머리말(종목, 시각, 방향과 변동률, 몇 분 사이 움직였는지) → 원인별 묶음(인용한 자료의 제목·출처·시각·링크 포함) → 확인하지 못한 것(받지 못하거나 잘린 자료) → "투자 조언이 아님" 문구 순이며, 머리말·확인하지 못한 것·면책 문구는 코드가 넣습니다. `generatedBy`는 `llm`입니다. LLM 키가 없으면 원인을 추정하지 않고 비교 사실과 기사·공시를 나열하는 같은 모양의 규칙 기반 리포트를 만듭니다. `generatedBy`는 `rule-based`입니다.
 7. `briefing.generated`의 근거에는 자료 종류(`kind`)와 근거 번호(`ref`)를 담습니다. 출처는 제공자 이름 대신 중립 표현을 쓰고, 공시와 해외 등락률의 근거 제목에는 어느 회사 자료인지 알 수 있게 미국 티커를 넣습니다(로그에는 넣지 않습니다).
+
+8. LLM은 원인마다 근거가 약한지(`weak`)와 부족한 점(`shortfall`, 한 문장)도 냅니다. 원인 하나가 문장 하나이며, 약하다고 한 문장마다 따로 재검색합니다(`sentence_research.py`). 문장마다 검색어만 내는 LLM을 따로 불러(입력: 그 문장, 부족한 점, ETF 정보, 이미 찾은 기사 제목, 배경 숫자) 검색어(최대 3개, 짧은 낱말 2~3개)를 받고, 미국 종목은 구성 종목의 한글 이름으로, 이름이 없을 때만 티커로 검색하게 지시합니다. 재검색 요청(`news.research.requested`, 작업 종류 `move`, 태그는 그 종목)은 문장마다 따로 보내며 재검색 작업 id는 (작업, 문장 번호, 회차)로 정한 uuid라 문장마다 다릅니다. 여러 문장이 약하면 모두 동시에 진행합니다. 같은 재검색 작업 id(`researchJobId`)의 완료 알림을 대기 상한 안에서 기다린 뒤 그 id로 기사를 조회하고(`news.articles.requested`의 `researchJobId`, 순번은 1부터, 다시 요청·안정 판정 규칙은 4번과 같음), 받은 기사는 5번과 같은 시간 범위로 다시 거르고 기존 기사와 다른 문장이 이미 쓴 기사(같은 `articleId`)는 뺍니다. 남은 기사로 그 문장 하나만 다시 쓰며(약하지 않은 문장은 그대로), 근거 번호 검증·목록 밖 번호 거부·미국 티커 거부는 다시 쓰기에도 그대로 적용합니다. 다시 써도 약하면 그 문장만 한 번 더 찾습니다. 상한(`config.py`의 `CoreSettings`): 문장당 찾기 `research_rounds_per_sentence`(2), 작업 하나의 재검색 요청 합계 `max_research_requests`(10, 넘는 문장은 찾지 않고 근거 약함으로 남김), 작업 하나의 재검색 전체 시간 `research_total_limit`(15분, 지나면 그때의 본문으로 냄). 끝내 약한 문장에는 본문에 `근거 약함: <부족한 점>` 줄을 붙입니다(데일리와 같은 모양으로 `llm_output.py`의 `weak_note_line`이 만듭니다). 보고서 전체가 근거 부족(`insufficientEvidence` true)이면 문장이 없으므로 보고서 전체를 대상으로 한 번 찾아 다시 쓰고, 다시 써도 부족하면 근거 부족 리포트를 냅니다. 검색어 LLM 실패, 검색어 없음, 수집기의 하루 상한·검색 실패(`incompleteSymbols`), 완료 알림 시간 초과, 기사 조회 무응답, 거른 뒤 남은 기사 없음, 다시 쓰기 실패이면 그 문장은 그대로 둡니다. 새 실패 사유는 없고 로그와 한 줄 재검색 내역 로그(`research job=... researched=... articles=... result=...`), 작업 기록 테이블에만 남깁니다. 검색어와 종목은 화면 로그에 쓰지 않습니다. LLM 키가 없으면 재검색하지 않습니다.
 
 같은 종목의 변동이 여러 번 와도 이벤트마다 리포트를 만듭니다. 같은 `eventId`는 한 번만 처리합니다.
 
+### 데일리 브리핑 (아침 판, 마감 후 판)
+
+수집기가 평일 정해진 시각에 `schedule.tick`(jobType `daily-briefing-morning`, `daily-briefing-post-close`, 기본 꺼짐)을 보내면 판 하나를 만들어 `briefing.daily.generated`로 발행합니다(`daily_jobs.py`, `daily_report.py`).
+
+1. 판마다 consumer group을 따로 두어(`briefing-daily-morning`, `briefing-daily-post-close`) tick을 받습니다. 같은 tick(`eventId`)은 한 번만 처리하고, 그룹이 처음 생길 때는 지난 tick을 다시 읽지 않습니다.
+2. 범위는 직전 평일의 같은 시각부터 tick의 예정 시각(`scheduledFor`)까지이며 최대 거슬러 가는 기간이 있습니다. 기록을 읽지 않고 예정 시각으로 계산하며 휴장일은 보지 않습니다.
+3. 시세처리기에 판 자료(`market.daily.requested`)를 요청합니다. 아침 판이고 보유 ETF에 미국 종목이 있으면 그 종목들의 범위 안 공시(`news.filings.requested`)도 요청합니다. 재요청 규칙은 급변동 근거 조회와 같고, 받은 자료의 시각을 다시 검사해 범위 밖은 버립니다.
+4. 아침 판은 미국 지수, 환율, 미국 종목 직전 장 등락, 범위 안 미국 공시, 전날 한국 증시를, 마감 후 판은 그날 한국 증시와 보유 ETF별 하루 등락을 항목으로 씁니다. 항목의 숫자·목록과 빠진 항목의 `자료 없음` 표시, 머리말, 면책 문구는 코드가 씁니다.
+5. LLM은 코드가 붙인 근거 번호를 인용한 요약 문장만 씁니다. 판 입력에는 응답의 ETF 정보(`etfInfo`, ETF마다 이름·추종 대상·업종과 비중 순위 순 구성 종목, 상한은 `DailySettings.max_etf_members`)도 들어가며, 지시문은 이를 원인으로 단정하지 말고 맥락으로만 쓰라고 합니다. 목록 밖 번호나 미국 티커(ETF 구성 종목의 티커 포함)를 쓴 출력은 거부하고 다시 부릅니다(본문은 메일로 나가므로 보유 종목이 드러나는 티커를 막습니다). 끝내 실패하거나 키가 없으면 요약 없이 숫자·목록 본문으로 나가며 `generatedBy`가 `rule-based`입니다. 응답을 끝내 받지 못해도 판은 있는 자료로 반드시 나갑니다.
+   LLM은 요약 문장마다 근거가 약한지(`weak`)와 부족한 점(`shortfall`)도 냅니다(부족한 점에도 미국 티커를 쓰면 거부). 약한 문장이 있고 검색어 LLM이 있으며 보유 ETF 자료가 있으면 급변동과 같은 문장 단위 재검색을 부릅니다(`news.research.requested`, 작업 종류 `morning`·`post-close`, 태그 `*`, 재검색 작업 id는 tick의 `eventId`·문장 번호·회차에서 정한 uuid). 상한과 재검색·다시 쓰기 규칙은 급변동 8번과 같습니다. 재검색 기사는 판 범위(기존 시간 범위)로 다시 거르고 범위 밖은 버리며, 기사 조회의 `symbol`은 계약상 필수라 정렬한 첫 ETF 코드를 씁니다(재검색 조회는 종목 조건을 보지 않음). 받은 기사는 항목 `재검색 기사`로 근거 번호(`articleId`)·링크와 함께 본문에 더하고 그 문장만 다시 씁니다. 다시 써도 약한 문장에는 `근거 약함: <부족한 점>`을 붙여 냅니다. 재검색 실패·시간 초과·쓸 기사 없음이면 그 문장은 그대로 냅니다.
+6. 응답을 끝내 받지 못했거나 LLM이 끝내 실패해도 판은 나가고, 그 일은 아래 작업 기록 테이블에 남습니다(판 이름 `morning`·`post-close`가 작업 종류, tick의 `eventId`가 작업 id). 끝내 실패한 사유는 판 자료 무응답이 `context_no_response`, 공시 무응답이 `filings_no_response`, LLM 실패가 `llm_error`입니다. 재요청, 거부된 LLM 시도와 그 입력·응답, 빠진 항목, 최종 본문도 같은 테이블에 줄로 남습니다.
+
+설정(범위 상한, 응답 제한 시간, 재시도 횟수, 상한, 미국 지수 대륙, LLM 시도 횟수)은 `config.py`의 `DailySettings` 기본값이며 환경변수로 바꿀 수 없습니다. LLM 키와 모델은 건별 리포트와 같은 `ANTHROPIC_API_KEY`, `BRIEFING_LLM_MODEL`을 씁니다.
+
 ### 설정
 
-근거 조회 설정(Δ, 자료별 시간 범위와 기준 기간, 시세 이력 간격, 자료별 최대 건수·크기, 응답 제한 시간, 재시도 횟수, 재확인 간격, 대기 상한 등)은 `services/briefing/src/briefing/config.py`의 `CoreSettings` 기본값이며 환경변수로 바꿀 수 없습니다. 값과 뜻은 그 파일에 있습니다.
+근거 조회 설정(Δ, 자료별 시간 범위와 기준 기간, 시세 이력 간격, 자료별 최대 건수·크기, 응답 제한 시간, 재시도 횟수, 재확인 간격, 대기 상한 등)과 재검색 설정(검색어 최대 개수, 검색어 LLM 시도 횟수, 재검색 완료 알림 대기 상한, 문장당 찾기 횟수, 작업당 재검색 요청 합계, 작업당 재검색 전체 시간)은 `services/briefing/src/briefing/config.py`의 `CoreSettings` 기본값이며 환경변수로 바꿀 수 없습니다. 값과 뜻은 그 파일에 있습니다.
 
 환경변수(`.env`)는 다음과 같습니다.
 
-환경변수가 없을 때 쓰는 값은 `main.py`와 `report.py`가 원본입니다.
+환경변수가 없을 때 쓰는 값은 `main.py`와 `llm.py`가 원본입니다.
 
 | 환경변수 | 설명 |
 |---|---|
 | `KAFKA_BOOTSTRAP` | Kafka 주소 |
 | `ANTHROPIC_API_KEY` | LLM 키. 비어 있거나 자리표시 값(`change-me`)이면 시작할 때 경고를 남기고 규칙 기반 리포트를 만듭니다. 아래 Parameter Store의 `briefing` 그룹에서 가져옵니다 |
 | `BRIEFING_LLM_MODEL` | 리포트를 쓰는 모델 |
-| `POSTGRES_DB` | 실패 기록 DB 이름 |
+| `POSTGRES_DB` | 작업 기록 DB 이름 |
 | `BRIEFING_DB_USER` / `BRIEFING_DB_PASSWORD` | 브리핑 전용 DB 계정. 비밀번호는 `.env`에만 둡니다 |
 
-### 리포트를 못 만든 변동 기록
+### 작업 기록 테이블
 
-리포트를 만들지 못하면 `briefing` 스키마의 `briefing.failed_jobs` 테이블에 한 줄을 남깁니다: `job_id`(변동 이벤트의 `eventId`, 같은 값은 한 번만), 종목, 사유, 짧은 설명(500자까지), 시도 횟수, 기록 시각. 기사 내용과 개인 정보는 저장하지 않습니다.
+급변동, 데일리 판(아침·마감 후), 뉴스 재검색이 같은 형식으로 `briefing` 스키마의 테이블 둘에 남깁니다. 서비스가 시작할 때 만듭니다(마이그레이션 도구 없음, `CREATE TABLE IF NOT EXISTS`). 옛 단일 `briefing.job_log`(작업 종류·대상이 줄마다 있던 모양)가 있으면 지우지 않고 `briefing.job_log_legacy`로 이름만 바꿔 두며, 옛 `briefing.failed_jobs`는 더 쓰지 않습니다(이미 있는 로컬 DB에서는 직접 지웁니다).
+
+- **`briefing.job_run`(작업마다 한 줄, 시작 때 만들고 끝날 때 고침):** `job_id`(기본키, 급변동은 `market.move`의 `eventId`, 데일리 판은 tick의 `eventId`), `job_kind`(`move`, `morning`, `post-close`), `input`(작업을 시작시킨 이벤트 원문 JSON), `status`(`running`, `succeeded`, `failed`), `failure_reason`, `generated_by`(`llm`, `rule-based`), `target`(급변동은 종목·변동 시각, 데일리는 판 범위), `started_at`, `finished_at`, `final_text`(발행한 최종 본문), `weak_count`(본문에 근거 약함이 남은 문장 수), `research_count`(보낸 재검색 요청 수), `result_event_id`(발행한 결과 이벤트의 `eventId`, 곧 메일의 "브리핑 ID").
+- **`briefing.job_log`(일마다 한 줄, `job_id`가 `job_run`을 가리킴):** `id`, `job_id`, `entry_type`, `stage`, `sentence_no`, `round`(문장 단위 줄의 문장 번호와 그 문장의 찾기 회차), `before`·`after`(문장을 다시 쓴 줄의 고치기 전·후 문장), `reason`, `error_type`, `attempts`, `data`(JSON 원문), `occurred_at`.
+- **기록 종류(`entry_type`):** `report-written`(받아들인 보고서·다시 쓰기 LLM 시도), `llm-rejected`(거부되거나 실패한 LLM 시도), `query-written`(받아들인 검색어 LLM 시도), `research-requested`(문장 하나의 재검색 요청), `articles-received`(재검색 기사를 받음: 받은·쓸·버린 기사와 이유, 수집기 완료 알림 원문), `sentence-rewritten`(문장을 다시 씀), `check-round`(기사 확인 라운드), `resent`(무응답 재요청), `missing-items`(판은 나갔지만 빠진 항목), `step-failed`(단계가 끝내 실패하거나 포기됨).
+- 작업 종류·상태·작성 방식·기록 종류의 값은 `job_log.py`의 enum(`JobKind`, `RunStatus`, `GeneratedBy`, `EntryType`)이 원본이고 DB 칸은 글자입니다. 시작할 때 그 enum으로 CHECK 제약을 지우고 다시 겁니다.
+- `data`는 받은 응답과 LLM 입력·원래 응답, 검색어를 가공하거나 줄이지 않고 담습니다. 수집기가 거른 건수는 이벤트에 없어 수집기 로그에서 보고, 이벤트로는 완료 알림 원문(`collectorCompletion`)을 남깁니다. 키, 수신 주소, 보유 수량, 금액은 저장하지 않으며 화면 로그에는 종목코드·티커·검색어를 쓰지 않습니다.
+- 저장은 짧게(3번) 다시 시도하고, 작업 끝 줄(`job_run` 고침)이 끝내 실패하면 ERROR 로그를 남기고 그 작업의 결과 이벤트(`briefing.generated`, `briefing.daily.generated`)를 발행하지 않습니다. 기록이 없는 브리핑은 내보내지 않는다는 결정이며, 데일리 판이 반드시 나간다는 원칙의 유일한 예외입니다. 기록은 지우지 않고 쌓으며 보관 기간은 아래 "배포 전에 정할 것"에 있습니다.
+
+작업 하나의 기록은 메일에 적힌 브리핑 ID(또는 작업 id)로 봅니다. 읽기만 하며 테이블을 고치지 않습니다. 출력에 검색어와 종목이 들어 있으므로 화면 로그나 공개 문서에 붙여 넣지 않습니다.
+
+```bash
+JOB_HISTORY_DB_URL=postgresql://localhost:5432/stock JOB_HISTORY_DB_USER=<읽기 계정> \
+  JOB_HISTORY_DB_PASSWORD=<비밀번호> python3 scripts/job_history.py <브리핑 ID 또는 job_id> [--full]
+```
+
+끝내 실패한 작업은 `job_run.status = 'failed'`로 찾고(사유는 `failure_reason`), 단계가 실패한 줄은 `entry_type = 'step-failed'`입니다. 급변동의 끝내 실패 사유:
 
 | 사유 | 뜻 |
 |---|---|
@@ -129,11 +168,21 @@ export $(grep -E '^(KAFKA_BOOTSTRAP|ANTHROPIC_API_KEY|BRIEFING_LLM_MODEL|POSTGRE
 PYTHONPATH=services/briefing/src services/briefing/.venv/bin/python -m briefing.main
 ```
 
-브리핑은 시작할 때 자기가 쓰는 토픽을 선언합니다(목록과 파티션 수는 `main.py`의 `TOPIC_PARTITIONS`). 데일리 브리핑 결과 토픽 `briefing.daily.generated`(아침 판·마감 후 판 한 통씩, 형식은 `contracts/events/briefing.daily.generated.v1.schema.json`)도 선언하지만, 이 토픽에 발행하는 처리는 아직 없습니다. `Ctrl+C`(또는 종료 신호)를 받으면 처리 중인 루프를 멈추고 끝납니다.
+브리핑은 시작할 때 자기가 쓰는 토픽을 선언합니다(목록과 파티션 수는 `main.py`의 `TOPIC_PARTITIONS`). 데일리 브리핑 결과 토픽 `briefing.daily.generated`(아침 판·마감 후 판 한 통씩, 형식은 `contracts/events/briefing.daily.generated.v1.schema.json`)도 선언합니다. `Ctrl+C`(또는 종료 신호)를 받으면 처리 중인 루프를 멈추고 끝납니다.
 
 변동 알림(`market.move`)은 읽는 즉시 읽은 위치(오프셋)를 확정합니다. 진행 중인 작업은 메모리에만 있으므로 **브리핑이 재시작되면 처리 중이던 변동은 리포트도 실패 기록도 남지 않고 사라집니다.**
 
 흐름을 사람이 직접 확인할 때는 `scripts/manual-briefing-move.sh [종목]`을 씁니다. 로컬 Kafka에 가짜 `market.move`와 그 변동에 쓸 수 있는 `collection.completed`를 한 건씩 넣고, 브리핑이 낸 요청과 `briefing.generated`를 보여 줍니다. 미리 인프라, 브리핑, 시세처리기, news 서비스를 띄워 둡니다.
+
+데일리 브리핑을 끝까지 확인할 때는 `scripts/manual-daily-briefing.sh`를 씁니다. 개발용 Kafka·DB를 쓰지 않고 이 실행만의 자원을 만들었다가 끝나면 그것만 지웁니다: 일회용 Kafka 컨테이너(127.0.0.1의 빈 포트), 개발용 Postgres 컨테이너 안의 새 데이터베이스(`daily_e2e_<시각>_<pid>`), 임시 폴더에서 띄운 시세처리기·news·발송기(드라이런)·브리핑. TEST 접두 가짜 수집 자료(`market.insight`, `filing.collected`)와 두 판의 tick을 넣고, 두 판의 `briefing.daily.generated`(계약 검사, 본문의 미국 티커 여부)와 발송기의 드라이런 로그(주소 마스킹)를 확인한 뒤 판 본문을 저장소 밖 파일에 씁니다. 실제 시세·뉴스 검색 API는 부르지 않습니다.
+
+```bash
+JAVA_HOME_21=<JDK 21 경로> scripts/manual-daily-briefing.sh                        # 가짜 LLM(로컬 가짜 서버)
+JAVA_HOME_21=<JDK 21 경로> DAILY_E2E_REAL_LLM=1 ANTHROPIC_API_KEY=... scripts/manual-daily-briefing.sh   # 실제 Claude
+```
+
+- 기본은 로컬 루프백의 가짜 Claude 서버를 SDK 주소(`ANTHROPIC_BASE_URL`)로 지정해 실제 호출이 없습니다. `DAILY_E2E_REAL_LLM=1`이면 셸 환경변수 `ANTHROPIC_API_KEY`로 실제 Claude를 부릅니다(키는 출력하지 않음).
+- 서비스 DB 계정은 `.env`(또는 `DAILY_E2E_ENV_FILE`)의 `MARKET_/NEWS_/BRIEFING_DB_USER·PASSWORD`를 읽고, 판 본문은 `DAILY_E2E_OUT_DIR`(기본 임시 폴더, 저장소 안은 거절)에 씁니다.
 
 ## 이메일 발송기 (`notifier`)
 
@@ -147,7 +196,7 @@ PYTHONPATH=services/briefing/src services/briefing/.venv/bin/python -m briefing.
 | `NOTIFIER_MAX_PER_HOUR` | 시간당 발송 한도. 건별 메일의 초과분은 보내지 않고 로그만 남김. 데일리 브리핑 메일은 한도에 막히지 않고 항상 보내되 보낸 수는 한도에 더하므로, 그 뒤 건별 메일이 막힐 수 있음 |
 | `NOTIFIER_SUBJECT_PREFIX` | 제목 머리말. 데이터가 가짜인 동안 진짜 투자 정보로 오해하지 않도록 |
 
-발송기는 데일리 브리핑 결과 토픽 `briefing.daily.generated`도 브리핑과 같은 파티션 수로 선언합니다(`Topics`). 이 토픽의 메시지 한 건(판 하나)마다 메일 한 통을 만듭니다(`DailyBriefingListener`). 제목은 머리말 뒤에 판 종류와 날짜(이번 발송 시각의 한국 날짜)를 붙인 `[시뮬레이션] 아침 판 데일리 브리핑 2026-10-20` 꼴이고, 본문은 받은 글 뒤에 자료 없음 항목, 다룬 범위, 추적 ID, 생성 방식을 붙입니다. 이 토픽에 메시지를 내는 브리핑 쪽 처리는 아직 없습니다.
+발송기는 데일리 브리핑 결과 토픽 `briefing.daily.generated`도 브리핑과 같은 파티션 수로 선언합니다(`Topics`). 이 토픽의 메시지 한 건(판 하나)마다 메일 한 통을 만듭니다(`DailyBriefingListener`). 제목은 머리말 뒤에 판 종류와 날짜(이번 발송 시각의 한국 날짜)를 붙인 `[시뮬레이션] 아침 판 데일리 브리핑 2026-10-20` 꼴이고, 본문은 받은 글 뒤에 자료 없음 항목, 다룬 범위, 추적 ID, 생성 방식을 붙입니다.
 
 안전 규칙(모두 테스트로 검증): 설정이 없으면 드라이런, 발송을 켰는데 주소/호스트가 비어 있으면 **시작 단계에서 실패**, 같은 브리핑은 한 번만 발송(건별·데일리 모두 `eventId` 기준), 필수 값이 빠지거나 형식이 잘못된 메시지는 보내지 않고 건너뜀, 로그에는 주소를 **마스킹**해서만 출력.
 
@@ -159,7 +208,7 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 
 ## 수집기의 외부 데이터 설정 (`collector`)
 
-수집기에는 공시, 시세, 뉴스 검색 클라이언트가 있습니다. 시세 기본은 가짜 데이터(시뮬레이터)이며, `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 외부 API를 씁니다. 뉴스는 `collect-news` tick마다 검색해 기사마다 `news.collected`를 발행하고, 기사 전송이 모두 확정된 뒤 `collection.completed`를 한 건 발행합니다([ADR-010](adr/010-event-format.md)). DART 공시는 아직 조회 클라이언트까지만 구현되어 있고 이벤트로 발행하지 않습니다. 미국 종목 공시(SEC EDGAR)는 아래 장 시작 전 수집에서 `filing.collected`로 발행합니다. 기본값은 `application.yml`의 `collector.*`가 원본입니다.
+수집기에는 공시, 시세, 뉴스 검색 클라이언트가 있습니다. 시세 기본은 가짜 데이터(시뮬레이터)이며, `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 외부 API를 씁니다. 뉴스는 `collect-news` tick마다 검색해 기사마다 `news.collected`를 발행하고, 기사 전송이 모두 확정된 뒤 `collection.completed`를 한 건 발행합니다([ADR-010](adr/010-event-format.md)). 브리핑의 재검색 요청을 받으면 요청한 검색어로 같은 방식으로 검색해 기사에 재검색 작업 id를 싣고, 끝나면 `jobType` `research-news`로 완료 알림을 보냅니다. 검색 한 번(정기 수집·재검색 모두)마다 거른 기사 건수를 이유별(기간 밖 `tooOld`·`tooFarAhead`, 검색어 낱말 불일치 `unmatched`, 통과한 뒤 앞서 모은 기사와 합쳐진 중복 `duplicates`)로 한 줄 `news filtered ...` 로그에 남기며 검색어와 종목은 쓰지 않습니다. DART 공시는 아직 조회 클라이언트까지만 구현되어 있고 이벤트로 발행하지 않습니다. 미국 종목 공시(SEC EDGAR)는 아래 장 시작 전 수집에서 `filing.collected`로 발행합니다. 기본값은 `application.yml`의 `collector.*`가 원본입니다.
 
 | 설정 | 설명 |
 |---|---|
@@ -176,8 +225,10 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 | `NEWS_SEARCH_ID_HEADER` / `NEWS_SEARCH_SECRET_HEADER` | 제공자가 정한 인증 헤더 이름 |
 | `NEWS_SEARCH_QUERIES` | `검색어=종목코드,종목코드;검색어2=*` 형식. 관심 종목이 드러나므로 `.env`에만 둡니다 |
 | `NEWS_SEARCH_CALL_INTERVAL_MS` | 검색어를 연달아 호출할 때 호출 사이의 대기(밀리초). 0이면 기다리지 않으며, 짧으면 제공자가 429로 거절할 수 있습니다([측정 기록](test-history/S01-real-api/call-interval.md)) |
+| `NEWS_RESEARCH_MAX_QUERIES` | 브리핑의 뉴스 재검색 요청(`news.research.requested`) 하나에서 실제로 검색할 검색어 수 상한(기본 3). 넘는 검색어는 버립니다. 검색어마다 하루 검색 호출 상한(`NEWS_SEARCH_DAILY_CALL_LIMIT`)을 한 번씩 쓰고, 상한에 걸리거나 검색이 실패하면 완료 알림의 `incompleteSymbols`에 요청 종목을 담습니다. 0 이하이면 시작 단계에서 실패합니다 |
 | `DART_API_KEY` | 공시 API 키 |
-| `ETF_US_HOLDINGS` | 관심 ETF별 미국 상위 종목 목록. `ETF코드=티커,티커;ETF코드2=티커` 형식이며 ETF 코드는 6자리 숫자·대문자, 티커는 영문 대문자·숫자 1~6자(종류 구분이 있으면 `.` 또는 `-` 뒤 1~2자)입니다. 형식이 틀리면 시작 단계에서 실패하고, 오류 메시지에는 값 대신 몇 번째 항목인지만 적습니다. 종류 구분은 `-`로 맞춰 씁니다(`.`로 적어도 같은 종목). 비어 있으면 보유 종목이 없는 것으로 봅니다. 보유 종목이 드러나므로 `.env`에만 둡니다 |
+| `ETF_US_HOLDINGS` | 관심 ETF별 미국 상위 종목 목록. `ETF코드=티커,티커;ETF코드2=티커` 형식이며 ETF 코드는 6자리 숫자·대문자, 티커는 영문 대문자·숫자 1~6자(종류 구분이 있으면 `.` 또는 `-` 뒤 1~2자)입니다. 형식이 틀리면 시작 단계에서 실패하고, 오류 메시지에는 값 대신 몇 번째 항목인지만 적습니다. 종류 구분은 `-`로 맞춰 씁니다(`.`로 적어도 같은 종목). 비어 있으면 보유 종목이 없는 것으로 봅니다. 보유 종목이 드러나므로 `.env`에만 둡니다. 시세처리기는 이 값을 `HOLDINGS_FILE`의 미국 구성 종목과 비교만 합니다(티커 집합이 ETF마다 같아야 하고 순서는 보지 않습니다) |
+| `HOLDINGS_FILE` | 시세처리기가 읽는 보유 종목 JSON 파일의 경로. 파일은 저장소 밖(UTF-8)에 두고 경로만 `.env`에 적습니다. 비어 있으면 보유 종목이 없는 것으로 봅니다. 모양은 아래 "보유 종목 파일"을 봅니다 |
 | `EDGAR_USER_AGENT` | SEC EDGAR 요청의 User-Agent. SEC가 요구하는 `회사명 연락이메일` 형식입니다. 연락 이메일은 개인 정보이므로 `.env`에만 둡니다. 비어 있으면 공시를 조회하지 않습니다 |
 | `EDGAR_FORMS` | 수집할 공시 형식. 쉼표로 구분합니다. 비어 있거나 형식이 틀리면 시작 단계에서 실패합니다 |
 | `COLLECTOR_INSIGHT_SCHEDULE_ENABLED` | `true`일 때만 장 마감 후 조회 tick(`collect-post-close`)을 발행합니다. 휴장일은 판정하지 않아 휴장일에도 발행됩니다 |
@@ -284,6 +335,17 @@ python3 scripts/load_config.py --only briefing
 - 자격증명은 `AWS_PROFILE` 환경변수나 `--profile` 옵션으로 지정합니다. 지역은 기본이 시드니이고 `--region`으로 바꿀 수 있습니다.
 - 읽기 전용 IAM 자격증명이 필요합니다: [`infra/iam/README.md`](../infra/iam/README.md)
 
+### 보유 종목 파일
+
+시세처리기는 시작할 때 `HOLDINGS_FILE`이 가리키는 UTF-8 JSON 파일로 `instrument`(종목)와 `etf_member`(ETF 구성) 테이블을 똑같이 맞춥니다. 파일에 없는 행은 지웁니다. 종목은 한 번만 적고, ETF에 담긴 관계는 ETF의 `members`에만 적습니다. 파일은 보유 종목이 드러나므로 저장소 밖에 두며, 저장소에는 가짜 값 예시([`docs/examples/holdings.example.json`](examples/holdings.example.json))만 있습니다.
+
+- 맨 위는 종목 배열이고, 항목마다 `kind`(`ETF`/`STOCK`), `market`(`KR`/`US`/`JP` 등 영문 대문자 2~4자), `symbol`, 선택으로 `name`, `tracks`(ETF만), `sector`, `relation`(`HELD`/`WATCH`/`NONE`, 기본 `NONE`)을 가집니다.
+- ETF는 `members` 배열(`market`, `symbol`, 선택 `name`, `weight`(%, 0~100, 소수 4자리까지), `rank`(비중 순위, 없으면 적힌 순서))을 가집니다. ETF 안에만 나오는 종목은 `relation`이 `NONE`인 `STOCK` 종목으로 만들어지고, 같은 종목이 여러 곳에 나와도 종목 행은 하나입니다.
+- 국내 ETF의 `symbol`은 6자리 숫자·대문자입니다. 종류 구분이 있는 티커는 `.`로 적어도 `-`로 맞춰 저장합니다.
+- 파일의 미국(`US`) 구성 종목은 `ETF_US_HOLDINGS`와 ETF마다 같은 티커 집합이어야 합니다. 어긋나면 시작이 실패합니다.
+- 파일이 없거나 형식이 틀려도 시작이 실패합니다. 메시지에는 값 대신 몇 번째 항목(구성 종목)인지와 오류 종류만 적고, 경로와 값은 로그에 남기지 않습니다(종목·관계 개수만 남깁니다).
+- 응답: `market.context.responded`와 `market.daily.responded`의 `etf`(선택)에 ETF 이름, 추종 대상, 업종과 구성 종목(시장, 심볼, 이름, 비중, 순위)이 담깁니다. 변동 종목이 ETF가 아니면 `etf`가 없습니다.
+
 ## 테스트
 
 테스트 명령과 변경 범위별로 돌릴 테스트는 [`.claude/rules/testing.md`](../.claude/rules/testing.md), 기능마다 어떤 테스트가 있고 어떤 조건에서 켜지는지는 테스트 지도 [`docs/test-map/`](test-map/README.md)가 원본입니다. 테스트 개수는 실행할 때마다 바뀌므로 적지 않고, 아래 전체 실행의 결과 표로 확인합니다.
@@ -384,16 +446,19 @@ MOVE_REPLAY_INPUT=<저장소 밖>/snapshots.tsv MOVE_REPLAY_EXCLUDE=<저장소 �
 
 지금은 로컬 실행을 전제로 미뤄 둔 결정입니다. 배포 전에 정합니다.
 
-- **브리핑 DB 마이그레이션 방식:** 실패 기록 테이블은 마이그레이션 도구 없이 시작할 때 `CREATE TABLE IF NOT EXISTS`로 만들고, 모양이 바뀌면 로컬 DB를 지우고 다시 만듭니다. 데이터를 지울 수 없게 되기 전에 Java 서비스처럼 버전 관리되는 마이그레이션을 쓸지, Python 쪽 도구를 쓸지 정합니다.
+- **브리핑 DB 마이그레이션 방식:** 작업 기록 테이블(`job_run`, `job_log`)은 마이그레이션 도구 없이 시작할 때 `CREATE TABLE IF NOT EXISTS`로 만들고, 모양이 바뀌면 옛 테이블을 이름만 바꿔 두거나 로컬 DB를 지우고 다시 만듭니다. 데이터를 지울 수 없게 되기 전에 Java 서비스처럼 버전 관리되는 마이그레이션을 쓸지, Python 쪽 도구를 쓸지 정합니다.
 - **변동 알림의 읽은 위치를 언제 확정할지:** 지금은 `market.move`를 읽는 즉시 확정해, 브리핑이 재시작되면 처리 중이던 변동이 기록 없이 사라집니다. 처리를 끝낸 뒤 확정하도록 바꿀지(재시작 후 다시 처리하므로 중복 리포트를 막는 방법도 함께 필요) 정합니다.
+- **작업 기록 보관 기간:** `briefing.job_run`과 `briefing.job_log`는 줄을 지우지 않고 쌓고, `job_log_legacy`(옛 모양 기록)도 남아 있습니다. LLM 입력·원래 응답을 그대로 담아 커지므로 보관 기간과 정리 방법(오래된 `job_log` 줄만 지울지, `job_run`까지 지울지)을 정합니다.
 - **장중 수집을 켤지:** 장중 수집은 기본 꺼짐입니다. 켜기 전에 장중에 실제 호출로 응답 모양과 호출 상한 여유를 확인합니다.
 - **휴장일 판정:** 1초 시세·마감 후·장 시작 전·장중 수집 모두 휴장일을 판정하지 않아 휴장일에도 tick을 발행합니다. 판정할지와 휴장일 목록을 어디서 받을지 정합니다.
 - **같은 종목의 중복 변동 리포트를 줄이는 방식:** 지금은 같은 종목의 변동이 짧은 간격으로 여러 번 와도 이벤트마다 리포트를 만듭니다. 묶어서 한 번만 보낼지, 일정 시간 안의 변동은 건너뛸지 정합니다.
 
 ## 후속
 
-- **보유 종목과 뉴스 검색어 테이블:** 지금은 ETF별 미국 종목과 뉴스 검색어를 설정(`ETF_US_HOLDINGS`, `NEWS_SEARCH_QUERIES`)으로 줍니다. 보유 종목 테이블(시세처리기)과 종목에 연결된 검색어 테이블(news)로 옮깁니다.
+- **보유 종목과 뉴스 검색어 테이블:** 보유 종목 테이블(시세처리기 `instrument`, `etf_member`)은 만들었고, 배포 전까지는 시작할 때 보유 종목 파일(`HOLDINGS_FILE`)로 맞춥니다. 수집기는 아직 `ETF_US_HOLDINGS`를, 뉴스 검색어는 `NEWS_SEARCH_QUERIES`를 설정으로 읽습니다. 수집기의 종목 읽기와 종목에 연결된 검색어 테이블(news)로 옮깁니다.
 - **검색어와 태그 개선:** 태그는 검색어 설정에서 정해져 저장 때 고정됩니다. 다른 종목 태그지만 관련 있는 기사를 근거에 넣는 방법과 미국 종목 검색어를 정합니다. 당장은 검색어 설정에 관련 종목 태그를 함께 적어 운영합니다.
+- **휴장일 발송 관리:** 데일리 브리핑은 휴장일을 판정하지 않아 휴장일에도 평일이면 판이 나갑니다(자료가 없으면 항목마다 `자료 없음`). 휴장일에 보낼지 건너뛸지와 판정 방법을 정합니다.
+- **마감 후 판의 그날 급변동과 근거:** 마감 후 판에는 그날 급변동 건별 리포트를 요약하는 항목이 아직 없습니다. 건별 리포트를 어디서 읽을지와 함께 정합니다.
 - **LLM 2단계:** 1단계 LLM이 모은 자료의 중복을 없애고 거른 뒤, 2단계 LLM이 분석해 리포트를 씁니다.
 
 - **외부 접속을 받는 기능:** 브리핑의 Kafka 수신·발행은 "시작"과 "멈추기"로 부를 수 있게 나뉘어 있어 다른 프로그램(예: 어드민 화면)이 같은 실행부를 부를 수 있습니다. 어드민 화면이나 웹 서버는 아직 없습니다. 이런 화면처럼 외부 접속을 받는 기능을 만들 때는 [ADR-007](adr/007-outbound-only.md)(외부 접속을 받지 않는다)을 먼저 갱신하고, 접속 경로와 인증 방식을 정해야 합니다.
