@@ -4,6 +4,7 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -16,11 +17,12 @@ import dev.stockreading.collector.CollectorProperties;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
-// 같은 종목들을 병렬(지금 수집기 방식)과 직렬(한 번에 하나씩)로 번갈아 조회해 깨진 응답 비율을 비교하는 실서버 확인 도구다.
+// 같은 종목들을 병렬(지금 수집기 방식), 직렬(한 번에 하나씩), 동시 N개 제한(한 번에 최대 N개)으로 번갈아 조회해
+// 깨진 응답 비율을 비교하는 실서버 확인 도구다.
 // 평소 테스트 실행에서는 건너뛰고 BROKER_SERIAL_PROBE=1 일 때만 동작한다. 실제 운영 서버를 호출하므로 장중에 사람이 승인한 뒤 돌린다.
-// 두 방식 모두 수집기와 같은 호출 상한 장치(CallRateLimit 하나)를 거치고, 토큰 발급과 현재가 조회만 한다.
+// 모든 방식이 수집기와 같은 호출 상한 장치(CallRateLimit 하나)를 거치고, 토큰 발급과 현재가 조회만 한다.
 // 방식별로 호출 수와 현재가 빈 값(EMPTY_PRICE), 숫자 아님·0 이하(PRICE_PARSE_FAILED), 응답 칸 불일치(FIELD_MISMATCH) 건수를 센다.
-// 칸 불일치는 두 방식 모두 수집기와 같은 검사(PriceFieldCheck)로 판단하고, 칸 이름은 수집기와 같은 BROKER_PRICE_CHECK_* 를
+// 칸 불일치는 모든 방식에서 수집기와 같은 검사(PriceFieldCheck)로 판단하고, 칸 이름은 수집기와 같은 BROKER_PRICE_CHECK_* 를
 // application.yml 로 묶어 받는다. 그 밖의 실패가 한 번이라도 나오면 서버를 계속 두드리지 않도록 바로 멈춘다.
 // 키와 주소는 BROKER_BASE_URL, BROKER_APP_KEY, BROKER_APP_SECRET, 종목은 BROKER_PROBE_SYMBOLS(쉼표 구분)로 받고 코드에 두지 않는다.
 // 결과 요약은 BROKER_SERIAL_PROBE_OUT(저장소 밖 경로)에만 쓰고, 표준 출력에는 방식별 건수 줄만 남긴다.
@@ -44,7 +46,11 @@ class BrokerSerialProbeTest {
         var settings = new SerialProbe.Settings(
                 Integer.parseInt(env("BROKER_SERIAL_PROBE_ROUNDS", DEFAULT_ROUNDS)),
                 Long.parseLong(env("BROKER_SERIAL_PROBE_SECONDS", DEFAULT_SECONDS)) * 1000,
-                Long.parseLong(env("BROKER_SERIAL_PROBE_PAUSE_MS", "1000")));
+                Long.parseLong(env("BROKER_SERIAL_PROBE_PAUSE_MS", "1000")),
+                Integer.parseInt(env("BROKER_SERIAL_PROBE_CONCURRENCY", "3")),
+                Arrays.stream(env("BROKER_SERIAL_PROBE_MODES", "parallel,serial,limited").split(","))
+                        .map(String::trim).filter(s -> !s.isEmpty())
+                        .map(s -> SerialProbe.Mode.valueOf(s.toUpperCase(Locale.ROOT))).toList());
 
         new ApplicationContextRunner()
                 .withInitializer(new ConfigDataApplicationContextInitializer())
@@ -68,7 +74,7 @@ class BrokerSerialProbeTest {
                             .run(symbols);
                     SerialProbe.write(out, SerialProbe.summary(result, settings, symbols.size(),
                             broker.maxCallsPerSecond(), fieldCheck));
-                    for (SerialProbe.Mode mode : SerialProbe.Mode.values()) {
+                    for (SerialProbe.Mode mode : settings.modes()) {
                         String countLine = result.tallies().get(mode).line(mode);
                         System.out.println(countLine);
                     }

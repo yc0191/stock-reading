@@ -239,14 +239,16 @@ python3 scripts/live_probe.py --profile <AWS 프로필> --base-url <시세 제�
 - 직전 시험이 이상 응답(한도 초과 등)으로 멈췄으면 쉬는 시간(기본 10분, `--cooldown-minutes`)이 지나기 전에는 거부하고, `--force`로 넘길 수 있습니다.
 - 실행할 때 `JAVA_HOME_21`이 필요하고, 결과는 `data/` 아래(gitignore 대상)에 씁니다.
 
-병렬·직렬 비교 시험 `BrokerSerialProbeTest`는 같은 종목들을 병렬(지금 수집기 방식, `BrokerMarketData`)과 직렬(한 번에 한 종목)로 번갈아 조회해, 방식별 호출 수와 깨진 응답 건수(현재가 빈 값, 숫자 아님, 0 이하, 응답 칸 불일치)를 셉니다. 응답 칸 불일치(`fieldMismatch`)는 두 방식 모두 수집기와 같은 응답 칸 검사(`BROKER_PRICE_CHECK_*`, 위 수집기 설정 표)로 판단하므로 수집기가 `FIELD_MISMATCH`로 버리는 응답과 기준이 같고, 걸린 검사 조합별 건수(`mismatchChecks`)도 함께 적습니다. 평소 건너뛰고 `BROKER_SERIAL_PROBE=1`일 때만 돌며, 두 방식 모두 같은 호출 상한 장치를 거치고 토큰 발급과 현재가 조회만 합니다. 실제 운영 서버를 호출하므로 장중에 사람이 승인한 뒤 실행합니다. 가짜 서버로 같은 흐름을 리허설하는 `SerialProbeRehearsalTest`는 평소 테스트에서 돕니다.
+병렬·직렬 비교 시험 `BrokerSerialProbeTest`는 같은 종목들을 병렬(지금 수집기 방식, `BrokerMarketData`), 직렬(한 번에 한 종목), 동시 N개 제한(`limited`, 한 번에 최대 N개)으로 번갈아 조회해, 방식별 호출 수와 깨진 응답 건수(현재가 빈 값, 숫자 아님, 0 이하, 응답 칸 불일치)를 셉니다. 동시 N개 제한은 종목이 늘어도 1초 안에 끝내면서 동시 호출을 줄이는 방식이 깨진 응답을 줄이는지 보려는 것입니다. 응답 칸 불일치(`fieldMismatch`)는 모든 방식에서 수집기와 같은 응답 칸 검사(`BROKER_PRICE_CHECK_*`, 위 수집기 설정 표)로 판단하므로 수집기가 `FIELD_MISMATCH`로 버리는 응답과 기준이 같고, 걸린 검사 조합별 건수(`mismatchChecks`)도 함께 적습니다. 평소 건너뛰고 `BROKER_SERIAL_PROBE=1`일 때만 돌며, 모든 방식이 같은 호출 상한 장치를 거치고 토큰 발급과 현재가 조회만 합니다. 실제 운영 서버를 호출하므로 장중에 사람이 승인한 뒤 실행합니다. 가짜 서버로 같은 흐름을 리허설하는 `SerialProbeRehearsalTest`는 평소 테스트에서 돕니다.
 
 | 환경변수 | 뜻 |
 |---|---|
 | `BROKER_BASE_URL`, `BROKER_APP_KEY`, `BROKER_APP_SECRET` | 주소와 키. Parameter Store에서 가져온 값을 환경변수로만 넘깁니다 |
 | `BROKER_PROBE_SYMBOLS` | 종목(쉼표 구분). 다른 확인 도구와 같은 값을 씁니다 |
 | `BROKER_SERIAL_PROBE_OUT` | 결과 요약 파일. 저장소 안의 경로는 호출 전에 거절합니다 |
-| `BROKER_SERIAL_PROBE_ROUNDS` / `BROKER_SERIAL_PROBE_SECONDS` | 라운드 수(병렬 1회+직렬 1회, 기본 350)와 시간 상한(초, 기본 1200 = 20분). 먼저 닿는 쪽에서 멈춥니다. 0.2% 수준의 깨짐을 가리려면 방식별 수천 회가 필요해, 종목 9~10개·응답 0.1초면 20분 안에 방식별 3천 회 남짓을 부르는 값으로 정했습니다. 라운드 사이 쉼 덕분에 평균은 초당 5~8회이고, 어느 1초에도 호출 상한을 넘지 않습니다 |
+| `BROKER_SERIAL_PROBE_MODES` | 돌릴 방식(쉼표 구분, 기본 `parallel,serial,limited`) |
+| `BROKER_SERIAL_PROBE_CONCURRENCY` | 동시 N개 제한 방식의 N(기본 3) |
+| `BROKER_SERIAL_PROBE_ROUNDS` / `BROKER_SERIAL_PROBE_SECONDS` | 라운드 수(고른 방식을 한 번씩 도는 것이 한 라운드, 기본 350)와 시간 상한(초, 기본 1200 = 20분). 먼저 닿는 쪽에서 멈춥니다. 0.2% 수준의 깨짐을 가리려면 방식별 수천 회가 필요해, 종목 9~10개·응답 0.1초면 20분 안에 방식별 3천 회 남짓을 부르는 값으로 정했습니다. 세 방식을 다 돌면 시간 상한에 먼저 닿아 방식별 호출이 조금 줄어듭니다. 방식 사이 쉼 덕분에 평균은 초당 5~8회이고, 어느 1초에도 호출 상한을 넘지 않습니다 |
 | `BROKER_SERIAL_PROBE_PAUSE_MS` | 방식 하나를 돈 뒤 쉬는 시간(기본 1000). 호출 상한의 1초 창을 비웁니다 |
 | `BROKER_MAX_CALLS_PER_SECOND` | 호출 상한. 없으면 수집기 기본값 |
 | `BROKER_PRICE_CHECK_*` | 응답 칸 검사 설정. 수집기와 같이 `application.yml`로 묶어 읽으므로 따로 넣지 않으면 수집기와 같은 값을 씁니다. 검사가 꺼졌거나 칸 이름이 모두 비면 칸 불일치는 세지 않습니다(`fieldCheck=off`) |
@@ -258,7 +260,7 @@ BROKER_SERIAL_PROBE=1 BROKER_SERIAL_PROBE_OUT=<저장소 밖 경로>/serial-prob
 
 - 결과 파일과 표준 출력에는 방식별 건수만 쓰고 종목 코드, 시세 값, 응답 원문, 키·토큰은 남기지 않습니다. 시험 동안에는 종목 코드가 들어가는 수집기 실패 로그를 끕니다.
 - 센 대상이 아닌 실패(토큰 발급 실패, HTTP 오류, 한도 초과 등)가 한 번이라도 나오면 다음 호출을 하지 않고 멈추며 `stop=`에 실패 종류를 적습니다.
-- 라운드마다 병렬과 직렬의 순서를 바꿔 앞 방식의 영향을 고르게 나눕니다. 병렬에서 상한 때문에 보내지 못한 종목은 호출 수가 아니라 `rateLimited`로 셉니다.
+- 라운드마다 시작 방식을 하나씩 밀어 앞 방식의 영향을 고르게 나눕니다. 병렬에서 상한 때문에 보내지 못한 종목은 호출 수가 아니라 `rateLimited`로 셉니다.
 
 ## 설정 값 가져오기 (Parameter Store, 선택)
 

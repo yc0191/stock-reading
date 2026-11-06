@@ -17,7 +17,7 @@ import dev.stockreading.collector.CollectorProperties;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
-// 직렬 비교 시험 도구(BrokerSerialProbeTest)를 가짜 서버(FakeBrokerServer)로 끝까지 리허설한다. 실제 서버는 호출하지 않는다.
+// 병렬·직렬·동시 N개 제한 비교 시험 도구(BrokerSerialProbeTest)를 가짜 서버(FakeBrokerServer)로 끝까지 리허설한다. 실제 서버는 호출하지 않는다.
 // 칸 불일치는 수집기와 같은 검사(PriceFieldCheck, 가짜 칸 이름)로 판단한다.
 class SerialProbeRehearsalTest {
 
@@ -75,7 +75,8 @@ class SerialProbeRehearsalTest {
         try (FakeBrokerServer server = new FakeBrokerServer()) {
             mixed(server);
             List<String> symbols = symbols(10);
-            SerialProbe.Result result = probe(server, symbols, 50, settings(3)).run(symbols);
+            // 방식 셋을 쉬지 않고 돌아 1초에 90회 가까이 부르므로 상한이 건수에 끼어들지 않게 넉넉히 둔다.
+            SerialProbe.Result result = probe(server, symbols, 200, settings(3)).run(symbols);
 
             assertThat(result.roundsDone()).isEqualTo(3);
             assertThat(result.stopReason()).isEqualTo("none");
@@ -91,7 +92,7 @@ class SerialProbeRehearsalTest {
                 assertThat(tally.nonPositive + tally.rateLimited + tally.abnormal).as(mode.label).isZero();
                 assertThat(tally.line(mode)).contains("brokenRate=40.00%");
             }
-            assertThat(server.priceCalls.get()).isEqualTo(60);
+            assertThat(server.priceCalls.get()).isEqualTo(90);
             assertThat(server.tokenCalls.get()).isEqualTo(1);
         }
     }
@@ -221,7 +222,9 @@ class SerialProbeRehearsalTest {
             assertThat(parallel.rateLimited).isEqualTo(3);
             SerialProbe.Tally serial = result.tallies().get(SerialProbe.Mode.SERIAL);
             assertThat(serial.calls + serial.rateLimited).isEqualTo(8);
-            assertThat(server.priceCalls.get()).isEqualTo(parallel.calls + serial.calls);
+            SerialProbe.Tally limited = result.tallies().get(SerialProbe.Mode.LIMITED);
+            assertThat(limited.calls + limited.rateLimited).isEqualTo(8);
+            assertThat(server.priceCalls.get()).isEqualTo(parallel.calls + serial.calls + limited.calls);
         }
     }
 
@@ -231,17 +234,115 @@ class SerialProbeRehearsalTest {
             mixed(server);
             List<String> symbols = symbols(10);
             SerialProbe.Settings settings = settings(2);
-            SerialProbe.Result result = probe(server, symbols, 50, settings).run(symbols);
+            SerialProbe.Result result = probe(server, symbols, 200, settings).run(symbols);
 
             Path out = SerialProbe.outsideRepo(tempDir.resolve("serial-probe.txt"), Path.of(""));
             SerialProbe.write(out, SerialProbe.summary(result, settings, symbols.size(), 50, true));
 
             String written = Files.readString(out);
-            assertThat(written).contains("parallel: calls=20", "serial: calls=20", "fieldCheck=on", "stop=none",
+            assertThat(written).contains("parallel: calls=20", "serial: calls=20", "limited: calls=20", "fieldCheck=on",
+                    "stop=none",
                     "round 2:");
             assertThat(written).doesNotContain("TEST0", "TEST1", "now_prc", "10250", "99999", "TEST_BASE", "TEST-key",
                     "tok-secret");
         }
+    }
+
+    private static SerialProbe.Settings only(SerialProbe.Mode mode, int concurrency, int rounds) {
+        return new SerialProbe.Settings(rounds, 60_000, 0, concurrency, List.of(mode));
+    }
+
+    // 동시 N개 제한은 한 번에 처리 중인 현재가 호출을 N개 이하로 묶는다. 응답이 느려도 N을 넘지 않고, N개까지는 실제로 겹친다.
+    @Test
+    void limitedModeKeepsAtMostTheGivenNumberOfCallsInFlight() throws Exception {
+        try (FakeBrokerServer server = new FakeBrokerServer()) {
+            server.priceDelayMs = 100;
+            server.priceBody = NORMAL;
+            List<String> symbols = symbols(10);
+            SerialProbe.Result result = probe(server, symbols, 50, only(SerialProbe.Mode.LIMITED, 3, 1)).run(symbols);
+
+            SerialProbe.Tally limited = result.tallies().get(SerialProbe.Mode.LIMITED);
+            assertThat(limited.calls).isEqualTo(10);
+            assertThat(limited.ok).isEqualTo(10);
+            assertThat(server.maxInFlight.get()).isEqualTo(3);
+        }
+    }
+
+    // 겹칠 때만 깨지는 서버에서, 동시 1개로 묶으면 직렬처럼 하나도 깨지지 않고 동시 2개 이상이면 깨진다.
+    @Test
+    void limitedModeWithOneSlotDoesNotOverlapButTwoSlotsDo() throws Exception {
+        try (FakeBrokerServer server = new FakeBrokerServer()) {
+            server.priceDelayMs = 100;
+            server.priceBody = NORMAL;
+            server.overlapPriceBody = ALL_CHECKS_BROKEN;
+            List<String> symbols = symbols(6);
+
+            SerialProbe.Tally one = probe(server, symbols, 50, only(SerialProbe.Mode.LIMITED, 1, 1)).run(symbols)
+                    .tallies().get(SerialProbe.Mode.LIMITED);
+            assertThat(one.calls).isEqualTo(6);
+            assertThat(one.broken()).isZero();
+            assertThat(server.maxInFlight.get()).isEqualTo(1);
+
+            SerialProbe.Tally two = probe(server, symbols, 50, only(SerialProbe.Mode.LIMITED, 2, 1)).run(symbols)
+                    .tallies().get(SerialProbe.Mode.LIMITED);
+            assertThat(two.calls).isEqualTo(6);
+            assertThat(two.fieldMismatch).isPositive();
+            assertThat(server.maxInFlight.get()).isEqualTo(2);
+        }
+    }
+
+    // 동시 N개 제한에서도 이상 응답이 나오면 남은 종목을 호출하지 않고 멈춘다.
+    @Test
+    void limitedModeStopsAtTheFirstAbnormalFailure() throws Exception {
+        try (FakeBrokerServer server = new FakeBrokerServer()) {
+            server.priceStatus = 500;
+            List<String> symbols = symbols(5);
+            SerialProbe.Result result = probe(server, symbols, 50, only(SerialProbe.Mode.LIMITED, 1, 3)).run(symbols);
+
+            assertThat(result.roundsDone()).isEqualTo(1);
+            assertThat(result.stopReason()).contains("HTTP_ERROR");
+            assertThat(server.priceCalls.get()).isEqualTo(1);
+        }
+    }
+
+    // 앞 방식의 영향을 고르게 나누려고 라운드마다 시작 방식을 하나씩 민다.
+    @Test
+    void rotatesTheStartingModeEveryRound() throws Exception {
+        try (FakeBrokerServer server = new FakeBrokerServer()) {
+            List<String> symbols = symbols(2);
+            SerialProbe.Result result = probe(server, symbols, 50, settings(3)).run(symbols);
+
+            assertThat(result.roundLines()).hasSize(3);
+            assertThat(result.roundLines().get(0)).startsWith("round 1: parallel(").contains("serial(", "limited(");
+            assertThat(result.roundLines().get(1)).startsWith("round 2: serial(");
+            assertThat(result.roundLines().get(2)).startsWith("round 3: limited(");
+        }
+    }
+
+    // 고른 방식만 돌리고 요약에도 그 방식만 쓰며, 머리줄에 동시 호출 수를 적는다.
+    @Test
+    void runsAndSummarizesOnlyTheChosenModes() throws Exception {
+        try (FakeBrokerServer server = new FakeBrokerServer()) {
+            List<String> symbols = symbols(3);
+            var settings = new SerialProbe.Settings(1, 60_000, 0, 2,
+                    List.of(SerialProbe.Mode.SERIAL, SerialProbe.Mode.LIMITED));
+            SerialProbe.Result result = probe(server, symbols, 50, settings).run(symbols);
+
+            assertThat(result.tallies()).containsOnlyKeys(SerialProbe.Mode.SERIAL, SerialProbe.Mode.LIMITED);
+            assertThat(server.priceCalls.get()).isEqualTo(6);
+            List<String> summary = SerialProbe.summary(result, settings, symbols.size(), 50, true);
+            assertThat(summary.get(0)).contains("concurrency=2");
+            assertThat(String.join("\n", summary)).contains("serial: calls=3", "limited: calls=3")
+                    .doesNotContain("parallel:");
+        }
+    }
+
+    @Test
+    void rejectsSettingsThatCannotRun() {
+        assertThatThrownBy(() -> new SerialProbe.Settings(1, 1_000, 0, 0, List.of(SerialProbe.Mode.LIMITED)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new SerialProbe.Settings(1, 1_000, 0, 3, List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
