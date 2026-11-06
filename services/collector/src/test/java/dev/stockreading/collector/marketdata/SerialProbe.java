@@ -10,6 +10,10 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.slf4j.LoggerFactory;
 
@@ -17,15 +21,16 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 
 /**
- * 같은 종목 목록을 병렬(수집기와 같은 {@link BrokerMarketData#fetch})과 직렬(한 번에 한 종목)로 번갈아 조회해
- * 깨진 응답을 방식별로 센다. 두 방식 모두 같은 {@link CallRateLimit} 을 거치고 현재가 조회만 한다.
- * 응답 칸 불일치는 두 방식 모두 수집기와 같은 {@link PriceFieldCheck} 로 판단해 수집기가 버리는 기준 그대로 센다.
+ * 같은 종목 목록을 병렬(수집기와 같은 {@link BrokerMarketData#fetch}), 직렬(한 번에 한 종목),
+ * 동시 N개 제한(한 번에 최대 N개)으로 번갈아 조회해 깨진 응답을 방식별로 센다.
+ * 모든 방식이 같은 {@link CallRateLimit} 을 거치고 현재가 조회만 한다.
+ * 응답 칸 불일치는 모든 방식에서 수집기와 같은 {@link PriceFieldCheck} 로 판단해 수집기가 버리는 기준 그대로 센다.
  * 결과에는 건수만 남기고 종목 코드, 시세 값, 응답 원문은 남기지 않는다.
  */
 final class SerialProbe {
 
     enum Mode {
-        PARALLEL("parallel"), SERIAL("serial");
+        PARALLEL("parallel"), SERIAL("serial"), LIMITED("limited");
 
         final String label;
 
@@ -35,11 +40,27 @@ final class SerialProbe {
     }
 
     /**
-     * @param rounds 병렬 1회와 직렬 1회를 한 라운드로 센 최대 라운드 수
+     * @param rounds 고른 방식을 한 번씩 돈 것을 한 라운드로 센 최대 라운드 수
      * @param maxMillis 이 시간이 지나면 다음 라운드를 시작하지 않는다
      * @param pauseMillis 방식 하나를 돈 뒤 쉬는 시간. 호출 상한의 1초 창을 비워 다음 방식이 상한에 걸리지 않게 한다
+     * @param concurrency 동시 N개 제한 방식에서 한 번에 처리 중일 수 있는 호출 수
+     * @param modes 돌릴 방식. 라운드마다 시작 방식을 하나씩 밀어 순서를 바꾼다
      */
-    record Settings(int rounds, long maxMillis, long pauseMillis) {
+    record Settings(int rounds, long maxMillis, long pauseMillis, int concurrency, List<Mode> modes) {
+
+        Settings {
+            if (concurrency < 1) {
+                throw new IllegalArgumentException("동시 호출 수는 1 이상이어야 합니다");
+            }
+            if (modes.isEmpty()) {
+                throw new IllegalArgumentException("방식을 하나 이상 골라야 합니다");
+            }
+            modes = List.copyOf(modes);
+        }
+
+        Settings(int rounds, long maxMillis, long pauseMillis) {
+            this(rounds, maxMillis, pauseMillis, 3, List.of(Mode.values()));
+        }
     }
 
     /** 방식 하나의 누적 건수. calls 는 실제로 보낸 현재가 호출 수이며 상한 때문에 보내지 못한 것은 rateLimited 에만 센다. */
@@ -86,7 +107,7 @@ final class SerialProbe {
     record Result(Map<Mode, Tally> tallies, int roundsDone, String stopReason, List<String> roundLines, long elapsedMs) {
     }
 
-    // 직렬은 한 번에 하나만 보내므로 상한에 자리가 날 때까지 넉넉히 기다린다. 병렬은 수집기와 같은 대기 시간을 쓴다.
+    // 직렬·동시 N개 제한은 보내는 수가 적어 상한에 자리가 날 때까지 넉넉히 기다린다. 병렬은 수집기와 같은 대기 시간을 쓴다.
     private static final Duration SERIAL_WAIT = Duration.ofSeconds(2);
 
     private final BrokerClient client;
@@ -120,8 +141,9 @@ final class SerialProbe {
 
     private Result runRounds(List<String> symbols) throws InterruptedException {
         Map<Mode, Tally> totals = new EnumMap<>(Mode.class);
-        totals.put(Mode.PARALLEL, new Tally());
-        totals.put(Mode.SERIAL, new Tally());
+        for (Mode mode : settings.modes()) {
+            totals.put(mode, new Tally());
+        }
         List<String> roundLines = new ArrayList<>();
         String stopReason = "none";
         long start = System.nanoTime();
@@ -129,13 +151,16 @@ final class SerialProbe {
         rounds:
         while (round < settings.rounds() && elapsedMs(start) < settings.maxMillis()) {
             round++;
-            // 앞 방식이 서버 상태에 주는 영향을 고르게 나누려고 라운드마다 순서를 바꾼다.
-            Mode[] order = round % 2 == 1
-                    ? new Mode[] {Mode.PARALLEL, Mode.SERIAL}
-                    : new Mode[] {Mode.SERIAL, Mode.PARALLEL};
+            // 앞 방식이 서버 상태에 주는 영향을 고르게 나누려고 라운드마다 시작 방식을 하나씩 민다.
+            List<Mode> modes = settings.modes();
             StringBuilder line = new StringBuilder("round " + round + ":");
-            for (Mode mode : order) {
-                Tally tally = mode == Mode.PARALLEL ? parallel(symbols) : serial(symbols);
+            for (int i = 0; i < modes.size(); i++) {
+                Mode mode = modes.get((round - 1 + i) % modes.size());
+                Tally tally = switch (mode) {
+                    case PARALLEL -> parallel(symbols);
+                    case SERIAL -> serial(symbols);
+                    case LIMITED -> limited(symbols);
+                };
                 totals.get(mode).add(tally);
                 line.append(' ').append(mode.label).append("(calls=").append(tally.calls)
                         .append(" broken=").append(tally.broken()).append(" abnormal=").append(tally.abnormal).append(')');
@@ -175,24 +200,7 @@ final class SerialProbe {
     private Tally serial(List<String> symbols) throws InterruptedException {
         Tally tally = new Tally();
         for (String symbol : symbols) {
-            if (!limiter.tryAcquire(SERIAL_WAIT)) {
-                tally.rateLimited++;
-                continue;
-            }
-            tally.calls++;
-            try {
-                PriceQuote quote = client.currentPrice(symbol);
-                List<PriceFieldCheck.Check> failed = priceCheck.failedChecks(quote.price(), quote.raw());
-                if (failed.isEmpty()) {
-                    tally.ok++;
-                } else {
-                    countFailure(FailureType.FIELD_MISMATCH, PriceFieldCheck.exceptionType(failed), tally);
-                }
-            } catch (BrokerApiException e) {
-                countFailure(e.failureType(), e.exceptionType(), tally);
-            } catch (RuntimeException e) {
-                countFailure(FailureType.RESULT_CODE_FAILED, e.getClass().getSimpleName(), tally);
-            }
+            callOne(symbol, tally);
             if (tally.abnormal > 0) {
                 break;
             }
@@ -201,6 +209,61 @@ final class SerialProbe {
             }
         }
         return tally;
+    }
+
+    // 병렬과 직렬 사이: 종목마다 가상 스레드를 쓰되 한 번에 처리 중인 호출을 concurrency 개 이하로 묶는다.
+    // 상한 대기는 직렬과 같게 넉넉히 해, 상한 때문에 건너뛴 건수가 아니라 동시 호출 수의 영향만 비교되게 한다.
+    private Tally limited(List<String> symbols) throws InterruptedException {
+        Tally tally = new Tally();
+        Semaphore slots = new Semaphore(settings.concurrency());
+        AtomicBoolean stop = new AtomicBoolean();
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (String symbol : symbols) {
+                slots.acquire();
+                if (stop.get()) {
+                    slots.release();
+                    break;
+                }
+                executor.submit(() -> {
+                    try {
+                        Tally one = new Tally();
+                        callOne(symbol, one);
+                        synchronized (tally) {
+                            tally.add(one);
+                        }
+                        if (one.abnormal > 0) {
+                            stop.set(true);
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    } finally {
+                        slots.release();
+                    }
+                });
+            }
+        }
+        return tally;
+    }
+
+    private void callOne(String symbol, Tally tally) throws InterruptedException {
+        if (!limiter.tryAcquire(SERIAL_WAIT)) {
+            tally.rateLimited++;
+            return;
+        }
+        tally.calls++;
+        try {
+            PriceQuote quote = client.currentPrice(symbol);
+            List<PriceFieldCheck.Check> failed = priceCheck.failedChecks(quote.price(), quote.raw());
+            if (failed.isEmpty()) {
+                tally.ok++;
+            } else {
+                countFailure(FailureType.FIELD_MISMATCH, PriceFieldCheck.exceptionType(failed), tally);
+            }
+        } catch (BrokerApiException e) {
+            countFailure(e.failureType(), e.exceptionType(), tally);
+        } catch (RuntimeException e) {
+            countFailure(FailureType.RESULT_CODE_FAILED, e.getClass().getSimpleName(), tally);
+        }
     }
 
     private static void countFailure(FailureType type, String exceptionType, Tally tally) {
@@ -232,10 +295,11 @@ final class SerialProbe {
     static List<String> summary(Result result, Settings settings, int symbolCount, int capPerSecond,
             boolean fieldCheck) {
         List<String> lines = new ArrayList<>();
-        lines.add(String.format("# serial-probe symbols=%d rounds=%d/%d pauseMs=%d capPerSecond=%d fieldCheck=%s elapsedMs=%d",
+        lines.add(String.format("# serial-probe symbols=%d rounds=%d/%d pauseMs=%d capPerSecond=%d concurrency=%d"
+                        + " fieldCheck=%s elapsedMs=%d",
                 symbolCount, result.roundsDone(), settings.rounds(), settings.pauseMillis(), capPerSecond,
-                fieldCheck ? "on" : "off", result.elapsedMs()));
-        for (Mode mode : Mode.values()) {
+                settings.concurrency(), fieldCheck ? "on" : "off", result.elapsedMs()));
+        for (Mode mode : settings.modes()) {
             lines.add(result.tallies().get(mode).line(mode));
         }
         lines.add("stop=" + result.stopReason());
