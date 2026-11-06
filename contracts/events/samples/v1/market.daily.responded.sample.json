@@ -1,0 +1,93 @@
+{
+  "eventId": "c71e4a29-5d8b-4b36-8f2a-0e9d6c3b5a14",
+  "eventType": "market.daily.responded",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T17:00:01+09:00",
+  "producedAt": "2026-10-20T17:00:01.520+09:00",
+  "correlationId": "daily-briefing-post-close-2026-10-20T17:00:00+09:00",
+  "payload": {
+    "jobId": "8d3b5e17-6c2a-4f90-b1e4-7a9c0d2f3e68",
+    "seq": 1,
+    "etfs": [
+      {
+        "symbol": "TEST01",
+        "date": "20261020",
+        "close": "9850",
+        "prevClose": "10000",
+        "rate": "-1.50",
+        "fetchedAt": "2026-10-20T16:30:02+09:00",
+        "tickers": ["TESTA", "FAKEB"],
+        "tickersTruncated": false,
+        "etf": {
+          "name": "TEST ETF ONE",
+          "tracks": "TEST INDEX",
+          "sector": "TEST SECTOR",
+          "members": [
+            { "market": "US", "symbol": "TESTA", "name": "TEST CORP A", "weight": "12.5", "rank": 1 },
+            { "market": "US", "symbol": "FAKEB", "weight": "8.25", "rank": 2 }
+          ],
+          "membersTruncated": false
+        }
+      },
+      {
+        "symbol": "TEST02",
+        "date": "20261020",
+        "close": "20100",
+        "prevClose": "20000",
+        "rate": "0.50",
+        "fetchedAt": "2026-10-20T16:30:03+09:00",
+        "tickers": [],
+        "tickersTruncated": false
+      }
+    ],
+    "closeRates": [
+      {
+        "ticker": "TESTA",
+        "date": "20261019",
+        "closeAt": "2026-10-20T05:00:00+09:00",
+        "rate": "-1.25",
+        "fetchedAt": "2026-10-20T08:30:02+09:00"
+      }
+    ],
+    "background": [
+      {
+        "apiType": "exchange-rate-summary",
+        "target": null,
+        "status": "ok",
+        "response": "{\"dataHeader\": {\"resultCode\": \"0000\"}, \"dataBody\": {\"items\": [{\"name\": \"TEST\", \"value\": \" 1000.00 \"}]}}",
+        "fetchedAt": "2026-10-20T16:30:05+09:00"
+      },
+      {
+        "apiType": "market-summary",
+        "target": null,
+        "status": "too-large",
+        "fetchedAt": "2026-10-20T16:30:06+09:00",
+        "responseBytes": 40000
+      },
+      {
+        "apiType": "world-index",
+        "target": "C",
+        "status": "ok",
+        "response": "{\"dataHeader\": {\"resultCode\": \"0000\"}, \"dataBody\": {\"items\": [{\"code\": \"TESTIX\", \"name\": \"TEST INDEX\", \"day\": \"20261019\", \"close\": \" 100.00 \", \"rate\": \" 0.00 \"}]}}",
+        "fetchedAt": "2026-10-20T16:30:07+09:00",
+        "indexRates": [
+          {
+            "code": "TESTIX",
+            "name": "TEST INDEX",
+            "businessDay": "20261019",
+            "close": "100.00",
+            "prevBusinessDay": "20261016",
+            "prevClose": "98.00",
+            "rate": "2.04"
+          }
+        ]
+      },
+      {
+        "apiType": "world-index",
+        "target": "S",
+        "status": "missing"
+      }
+    ],
+    "truncated": false
+  }
+}

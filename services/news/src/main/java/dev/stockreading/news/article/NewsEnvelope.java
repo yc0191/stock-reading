@@ -23,6 +23,7 @@ record NewsEnvelope(
             String publisher,
             String publishedAt,
             List<String> symbols,
-            List<String> matchedQueries) {
+            List<String> matchedQueries,
+            String researchJobId) {
     }
 }

@@ -1,7 +1,10 @@
 package dev.stockreading.news.query;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.UUID;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -36,14 +39,39 @@ class ArticleQueryRepository {
                 .param("since", since)
                 .param("until", until)
                 .param("limit", limit)
-                .query((rs, rowNum) -> new StoredArticle(
-                        rs.getString("article_key"),
-                        rs.getString("title"),
-                        rs.getString("summary"),
-                        rs.getString("publisher"),
-                        rs.getString("url"),
-                        rs.getObject("published_at", OffsetDateTime.class)))
+                .query(ArticleQueryRepository::toStoredArticle)
                 .list();
+    }
+
+    /**
+     * 그 재검색 작업이 처음 찾은 기사(research_job_id 가 그 값인 기사)를 [since, until] 구간(양끝 포함)에서 최신순으로
+     * 최대 limit건 돌려준다. 종목 태그는 보지 않는다. 순서 규칙은 findByRange 와 같다.
+     */
+    List<StoredArticle> findByResearchJob(UUID researchJobId, OffsetDateTime since, OffsetDateTime until, int limit) {
+        return jdbc.sql("""
+                        SELECT a.article_key, a.title, a.summary, a.publisher, a.url, a.published_at
+                        FROM news_article a
+                        WHERE a.research_job_id = :researchJobId
+                          AND a.published_at >= :since AND a.published_at <= :until
+                        ORDER BY a.published_at DESC, a.id DESC
+                        LIMIT :limit
+                        """)
+                .param("researchJobId", researchJobId)
+                .param("since", since)
+                .param("until", until)
+                .param("limit", limit)
+                .query(ArticleQueryRepository::toStoredArticle)
+                .list();
+    }
+
+    private static StoredArticle toStoredArticle(ResultSet rs, int rowNum) throws SQLException {
+        return new StoredArticle(
+                rs.getString("article_key"),
+                rs.getString("title"),
+                rs.getString("summary"),
+                rs.getString("publisher"),
+                rs.getString("url"),
+                rs.getObject("published_at", OffsetDateTime.class));
     }
 
     record StoredArticle(

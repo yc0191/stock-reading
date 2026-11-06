@@ -1,0 +1,17 @@
+{
+  "eventId": "2f6a1c8e-3b7d-4e59-9a0c-6d4e8b2f1a75",
+  "eventType": "market.daily.requested",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T17:00:01+09:00",
+  "producedAt": "2026-10-20T17:00:01.040+09:00",
+  "correlationId": "daily-briefing-post-close-2026-10-20T17:00:00+09:00",
+  "payload": {
+    "jobId": "8d3b5e17-6c2a-4f90-b1e4-7a9c0d2f3e68",
+    "seq": 1,
+    "asOf": "2026-10-20T17:00:00+09:00",
+    "since": "2026-10-16T17:00:00+09:00",
+    "maxResponseBytes": 32768,
+    "maxEtfs": 50,
+    "maxTickers": 100
+  }
+}

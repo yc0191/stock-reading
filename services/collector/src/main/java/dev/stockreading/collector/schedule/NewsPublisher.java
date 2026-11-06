@@ -4,6 +4,7 @@ import java.net.URI;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
@@ -26,17 +27,20 @@ import dev.stockreading.collector.event.NewsPayload;
 import dev.stockreading.collector.news.NewsCollection;
 import dev.stockreading.collector.news.NewsCollector;
 import dev.stockreading.collector.news.NewsItem;
+import dev.stockreading.collector.news.NewsQuery;
 import tools.jackson.databind.ObjectMapper;
 
 /**
  * 수집한 기사를 기사마다 news.collected 이벤트 한 건으로 발행한다. 메시지 키는 기사 url 이다.
  * 기사 전송이 모두 확정되면(성공·실패 포함) collection.completed 를 한 건 발행한다. 메시지 키는 jobType 이다.
+ * 재검색(news.research.requested)도 같은 수집·발행 경로를 쓰고, 기사와 완료 알림에 재검색 작업 id 를 싣는다.
  */
 @Component
 class NewsPublisher {
 
     static final String EVENT_TYPE = "news.collected";
     static final String COMPLETED_EVENT_TYPE = "collection.completed";
+    static final String JOB_RESEARCH_NEWS = "research-news";
 
     private static final Logger log = LoggerFactory.getLogger(NewsPublisher.class);
     private static final int MAX_REMEMBERED_KEYS = 10_000;
@@ -72,6 +76,37 @@ class NewsPublisher {
             log.warn("news collect failed corr={} errorType={}", correlationId, e.getClass().getSimpleName());
             return;
         }
+        publish(collection, correlationId, scheduledFor, TickPublisher.JOB_COLLECT_NEWS, null);
+    }
+
+    /**
+     * 재검색 요청 하나를 처리한다. 검색어마다 기존 수집(같은 하루 호출 상한, 같은 거르기·중복 합치기)을 거치고,
+     * 기사 태그는 요청의 종목 하나다. 완료 알림의 scheduledFor 는 요청 시각이다.
+     */
+    void publishResearch(String correlationId, String requestedAt, String researchJobId, String symbol,
+            List<String> queries) {
+        List<NewsQuery> newsQueries = queries.stream()
+                .map(q -> new NewsQuery(q, new LinkedHashSet<>(List.of(symbol))))
+                .toList();
+        NewsCollection collection;
+        if (newsQueries.isEmpty()) {
+            // 쓸 검색어가 없으면 아무것도 찾지 못한 것이다. 브리핑이 결과 없음으로 판단하도록 못 모은 종목으로 알린다.
+            collection = new NewsCollection(List.of(), Set.of(symbol), OffsetDateTime.now(clock));
+        } else {
+            try {
+                collection = collector.collectWithStatus(newsQueries);
+            } catch (RuntimeException e) {
+                // 정기 수집과 달리 브리핑이 이 완료 알림을 기다리므로, 실패해도 그 종목을 못 모은 것으로 알린다.
+                log.warn("news research collect failed corr={} jobId={} errorType={}",
+                        correlationId, researchJobId, e.getClass().getSimpleName());
+                collection = new NewsCollection(List.of(), Set.of(symbol), OffsetDateTime.now(clock));
+            }
+        }
+        publish(collection, correlationId, requestedAt, JOB_RESEARCH_NEWS, researchJobId);
+    }
+
+    private void publish(NewsCollection collection, String correlationId, String scheduledFor, String jobType,
+            String researchJobId) {
         List<NewsItem> items = collection.items();
         // 전송 실패는 콜백 스레드에서도 기록되므로 동시 접근에 안전한 집합과 카운터를 쓴다.
         Set<String> incomplete = ConcurrentHashMap.newKeySet();
@@ -84,7 +119,7 @@ class NewsPublisher {
         int invalid = 0;
         int sendFailed = 0;
         for (NewsItem item : items) {
-            NewsPayload payload = toPayload(item);
+            NewsPayload payload = toPayload(item, researchJobId);
             if (payload == null) {
                 invalid++;
                 continue;
@@ -121,8 +156,8 @@ class NewsPublisher {
             published++;
         }
 
-        log.info("sent {} news.collected events corr={} collected={} alreadyPublished={} invalid={} sendFailed={}",
-                published, correlationId, items.size(), alreadyPublished, invalid, sendFailed);
+        log.info("sent {} news.collected events jobType={} corr={} collected={} alreadyPublished={} invalid={} sendFailed={}",
+                published, jobType, correlationId, items.size(), alreadyPublished, invalid, sendFailed);
         if (!items.isEmpty() && invalid == items.size()) {
             // 설정 실수로 모든 기사가 조용히 버려지는 일을 막기 위해 눈에 띄게 남긴다.
             log.warn("all {} collected items were skipped as invalid corr={}; check the news query settings",
@@ -130,8 +165,8 @@ class NewsPublisher {
         }
 
         CompletableFuture<Void> allSettled = CompletableFuture.allOf(settled.toArray(new CompletableFuture[0]));
-        Runnable sendCompletion = () ->
-                publishCompleted(correlationId, scheduledFor, collection.startedAt(), confirmed.get(), incomplete);
+        Runnable sendCompletion = () -> publishCompleted(
+                jobType, researchJobId, correlationId, scheduledFor, collection.startedAt(), confirmed.get(), incomplete);
         if (allSettled.isDone()) {
             sendCompletion.run();
         } else {
@@ -141,22 +176,23 @@ class NewsPublisher {
         }
     }
 
-    private void publishCompleted(String correlationId, String scheduledFor, OffsetDateTime startedAt,
-            int publishedCount, Set<String> incomplete) {
+    private void publishCompleted(String jobType, String researchJobId, String correlationId, String scheduledFor,
+            OffsetDateTime startedAt, int publishedCount, Set<String> incomplete) {
         try {
             OffsetDateTime finishedAt = OffsetDateTime.now(clock);
             CollectionCompletedPayload payload = new CollectionCompletedPayload(
-                    TickPublisher.JOB_COLLECT_NEWS,
+                    jobType,
                     scheduledFor,
                     EventFactory.format(startedAt),
                     EventFactory.format(finishedAt),
                     publishedCount,
-                    new ArrayList<>(new TreeSet<>(incomplete)));
+                    new ArrayList<>(new TreeSet<>(incomplete)),
+                    researchJobId);
             Envelope<CollectionCompletedPayload> event = EventFactory.create(
                     clock, COMPLETED_EVENT_TYPE, finishedAt, correlationId, payload);
-            kafka.send(Topics.COLLECTION_COMPLETED, TickPublisher.JOB_COLLECT_NEWS, mapper.writeValueAsString(event));
-            log.info("sent collection.completed corr={} published={} incomplete={}",
-                    correlationId, publishedCount, incomplete.size());
+            kafka.send(Topics.COLLECTION_COMPLETED, jobType, mapper.writeValueAsString(event));
+            log.info("sent collection.completed jobType={} jobId={} corr={} published={} incomplete={}",
+                    jobType, researchJobId, correlationId, publishedCount, incomplete.size());
         } catch (RuntimeException e) {
             log.warn("collection.completed publish failed corr={} errorType={}", correlationId, e.getClass().getSimpleName());
         }
@@ -182,18 +218,21 @@ class NewsPublisher {
     }
 
     // 정렬한 목록으로 비교하므로 순서만 다른 조합은 같은 키이고, 구분자 충돌도 없다.
-    private record SentKey(String url, List<String> symbols, List<String> matchedQueries) {
+    // 재검색 작업 id 도 키에 넣는다. 정기 수집으로 이미 보낸 기사라도 재검색이 찾았으면 news 가 그 작업의
+    // 기사로 표시할 수 있게 다시 보내야 하기 때문이다.
+    private record SentKey(String url, List<String> symbols, List<String> matchedQueries, String researchJobId) {
 
         static SentKey of(NewsPayload payload) {
             return new SentKey(
                     payload.url(),
                     payload.symbols().stream().sorted().toList(),
-                    payload.matchedQueries().stream().sorted().toList());
+                    payload.matchedQueries().stream().sorted().toList(),
+                    payload.researchJobId());
         }
     }
 
     // 스키마를 어기는 기사는 null 을 돌려 발행에서 뺀다. 길이 초과만 잘라서 살린다.
-    private static NewsPayload toPayload(NewsItem item) {
+    private static NewsPayload toPayload(NewsItem item, String researchJobId) {
         if (isBlank(item.title()) || isBlank(item.url()) || isBlank(item.source()) || item.publishedAt() == null) {
             return null;
         }
@@ -212,7 +251,8 @@ class NewsPublisher {
                 item.source(),
                 EventFactory.format(item.publishedAt()),
                 List.copyOf(item.symbols()),
-                List.copyOf(queries));
+                List.copyOf(queries),
+                researchJobId);
     }
 
     // 스키마의 길이는 코드 포인트 수라서, 서로게이트 쌍이 중간에서 끊기지 않게 코드 포인트 단위로 자른다.

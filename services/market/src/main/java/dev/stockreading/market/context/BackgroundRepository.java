@@ -30,6 +30,24 @@ class BackgroundRepository {
         return select(BackgroundKind.WORLD_INDEX, continent, since, asOf, null);
     }
 
+    /**
+     * 받은 시각이 [since, asOf] 안(양끝 포함)인 국내 일봉 원문을 종목마다 가장 늦게 받은 1건씩, 종목코드 순으로 읽는다.
+     * 데일리 판은 이 범위 안에 일봉이 저장된 종목을 보유 ETF로 본다.
+     */
+    List<StoredTargetResponse> latestDailyPrices(OffsetDateTime since, OffsetDateTime asOf) {
+        return jdbc.sql("""
+                        SELECT DISTINCT ON (target) target, CAST(response AS text) AS response, fetched_at
+                        FROM daily_price
+                        WHERE fetched_at >= :since AND fetched_at <= :asOf
+                        ORDER BY target, fetched_at DESC, id DESC
+                        """)
+                .param("since", since)
+                .param("asOf", asOf)
+                .query((rs, rowNum) -> new StoredTargetResponse(rs.getString("target"),
+                        new StoredResponse(rs.getString("response"), rs.getObject("fetched_at", OffsetDateTime.class))))
+                .list();
+    }
+
     private List<StoredResponse> select(
             BackgroundKind kind, String target, OffsetDateTime since, OffsetDateTime asOf, Integer limit) {
         String sql = "SELECT CAST(response AS text) AS response, fetched_at FROM " + kind.table()
@@ -51,5 +69,8 @@ class BackgroundRepository {
     }
 
     record StoredResponse(String response, OffsetDateTime fetchedAt) {
+    }
+
+    record StoredTargetResponse(String target, StoredResponse row) {
     }
 }

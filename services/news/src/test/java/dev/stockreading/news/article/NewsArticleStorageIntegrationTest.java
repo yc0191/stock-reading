@@ -71,6 +71,67 @@ class NewsArticleStorageIntegrationTest {
         assertThat(symbolsOf("1002")).isEqualTo("*,ITN002");
     }
 
+    private static final String RESEARCH_JOB = "a1000000-0000-4000-8000-000000000001";
+    private static final String OTHER_RESEARCH_JOB = "a2000000-0000-4000-8000-000000000002";
+
+    @Test
+    void articleFirstFoundByResearchIsStoredWithTheMarkAndTheJobId() {
+        listener.onNews(researchEvent("d3000000-0000-4000-8000-000000000001", "https://news.example.com/it/1003",
+                "[\"ITN003\"]", RESEARCH_JOB));
+
+        assertThat(researchMark("1003")).containsEntry("from_research", true).containsEntry("job", RESEARCH_JOB);
+    }
+
+    @Test
+    void articleStoredByTheRegularCollectionGetsTheMarkAndJobIdWhenResearchFindsIt() {
+        listener.onNews(event("d4000000-0000-4000-8000-000000000001", "https://news.example.com/it/1004",
+                "[\"ITN004\"]", "[\"검색어A\"]"));
+        assertThat(researchMark("1004")).containsEntry("from_research", false).containsEntry("job", null);
+
+        listener.onNews(researchEvent("d4000000-0000-4000-8000-000000000002", "https://news.example.com/it/1004",
+                "[\"ITN005\"]", RESEARCH_JOB));
+
+        assertThat(articles("https://news.example.com/it/1004")).isEqualTo(1);
+        assertThat(researchMark("1004")).containsEntry("from_research", true).containsEntry("job", RESEARCH_JOB);
+        assertThat(symbolsOf("1004")).isEqualTo("ITN004,ITN005");
+    }
+
+    @Test
+    void secondResearchJobFindingTheSameArticleDoesNotReplaceTheFirstJobId() {
+        listener.onNews(researchEvent("d5000000-0000-4000-8000-000000000001", "https://news.example.com/it/1005",
+                "[\"ITN006\"]", RESEARCH_JOB));
+
+        listener.onNews(researchEvent("d5000000-0000-4000-8000-000000000002", "https://news.example.com/it/1005",
+                "[\"*\"]", OTHER_RESEARCH_JOB));
+
+        // 한 기사에 작업 id 하나만 두므로 두 번째 작업과의 연결은 남지 않는다. 종목 태그는 합친다.
+        assertThat(researchMark("1005")).containsEntry("from_research", true).containsEntry("job", RESEARCH_JOB);
+        assertThat(symbolsOf("1005")).isEqualTo("*,ITN006");
+    }
+
+    @Test
+    void laterRegularCollectionDoesNotClearTheResearchMark() {
+        listener.onNews(researchEvent("d6000000-0000-4000-8000-000000000001", "https://news.example.com/it/1006",
+                "[\"ITN007\"]", RESEARCH_JOB));
+
+        listener.onNews(event("d6000000-0000-4000-8000-000000000002", "https://news.example.com/it/1006",
+                "[\"ITN007\"]", "[\"검색어A\"]"));
+
+        assertThat(researchMark("1006")).containsEntry("from_research", true).containsEntry("job", RESEARCH_JOB);
+    }
+
+    private static Map<String, Object> researchMark(String urlPart) {
+        return jdbc.sql("""
+                        SELECT from_research, CAST(research_job_id AS text) AS job FROM news_article
+                        WHERE url LIKE :pattern
+                        """).param("pattern", "%/it/" + urlPart).query().singleRow();
+    }
+
+    private static String researchEvent(String eventId, String url, String symbolsJson, String researchJobId) {
+        return event(eventId, url, symbolsJson, "[\"재검색어\"]")
+                .replace("\"symbols\":", "\"researchJobId\":\"" + researchJobId + "\",\"symbols\":");
+    }
+
     private static long articles(String url) {
         return jdbc.sql("SELECT count(*) FROM news_article WHERE url = :url").param("url", url).query(Long.class).single();
     }

@@ -3,8 +3,16 @@ package dev.stockreading.collector.event;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
+
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 class NewsCollectedContractTest {
 
@@ -113,6 +121,37 @@ class NewsCollectedContractTest {
         String tick = ContractSchemas.sample("schedule.tick.sample.json").replace("\"collect\"", "\"collect-news\"");
 
         assertThat(ContractSchemas.validate("schedule.tick.v1.schema.json", tick)).isEmpty();
+    }
+
+    @Test
+    void researchJobIdIsOptionalAndMustBeAUuid() throws IOException {
+        String withResearch = sample().replace(
+                "\"symbols\": [\"TEST01\"]",
+                "\"symbols\": [\"TEST01\"],\n    \"researchJobId\": \"5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13\"");
+
+        assertThat(withResearch).contains("researchJobId");
+        assertThat(ContractSchemas.validate(SCHEMA, withResearch)).isEmpty();
+        assertRejected(withResearch.replace("5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13", "not-a-uuid"));
+    }
+
+    @Test
+    void producedPayloadCarriesResearchJobIdOnlyWhenPresent() throws IOException {
+        ObjectMapper mapper = JsonMapper.builder().build();
+        Clock clock = Clock.fixed(Instant.parse("2026-10-20T07:00:00Z"), ZoneId.of("Asia/Seoul"));
+        OffsetDateTime at = OffsetDateTime.now(clock);
+        String time = EventFactory.format(at);
+        NewsPayload regular = new NewsPayload("테스트 제목", "", "https://news.example.com/a/1", "news.example.com",
+                time, List.of("TEST01"), List.of("테스트검색어"));
+        NewsPayload research = new NewsPayload("테스트 제목", "", "https://news.example.com/a/1", "news.example.com",
+                time, List.of("TEST01"), List.of("테스트검색어"), "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13");
+
+        String regularJson = mapper.writeValueAsString(EventFactory.create(clock, "news.collected", at, "c", regular));
+        String researchJson = mapper.writeValueAsString(EventFactory.create(clock, "news.collected", at, "c", research));
+
+        assertThat(regularJson).doesNotContain("researchJobId");
+        assertThat(ContractSchemas.validate(SCHEMA, regularJson)).isEmpty();
+        assertThat(researchJson).contains("\"researchJobId\":\"5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13\"");
+        assertThat(ContractSchemas.validate(SCHEMA, researchJson)).isEmpty();
     }
 
     private static String sample() throws IOException {

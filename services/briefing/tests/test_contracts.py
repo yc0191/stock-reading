@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 import pytest
 
 from briefing.compose import KST
-from briefing.events import EDITION_MORNING, EDITION_POST_CLOSE, JOB_TYPE_BY_EDITION, daily_briefing_event
+from briefing.events import (EDITION_MORNING, EDITION_POST_CLOSE, JOB_TYPE_BY_EDITION, RESEARCH_JOB_KINDS,
+                             daily_briefing_event, research_request_event)
 from contracts import CONTRACTS_DIR, sample, validate
 
 
@@ -81,12 +82,17 @@ EVIDENCE_CONTRACTS = [
     ("market.context.responded.v1.schema.json", "market.context.responded.sample.json"),
     ("news.filings.requested.v1.schema.json", "news.filings.requested.sample.json"),
     ("news.filings.responded.v1.schema.json", "news.filings.responded.sample.json"),
+    ("news.research.requested.v1.schema.json", "news.research.requested.sample.json"),
 ]
 
 
 @pytest.mark.parametrize("schema_file, sample_file", EVIDENCE_CONTRACTS)
 def test_evidence_samples_match_their_schemas(schema_file, sample_file):
     assert validate(schema_file, sample(sample_file)) == []
+
+
+# 계약에서 선택 칸인 payload 필드. 없어도 유효해야 하므로 "빠지면 거부" 검사에서 뺀다.
+OPTIONAL_PAYLOAD_FIELDS = {"market.context.responded.sample.json": {"etf"}}
 
 
 @pytest.mark.parametrize("schema_file, sample_file", EVIDENCE_CONTRACTS)
@@ -101,6 +107,8 @@ def test_evidence_events_tolerate_unknown_fields(schema_file, sample_file):
 @pytest.mark.parametrize("schema_file, sample_file", EVIDENCE_CONTRACTS)
 def test_evidence_events_reject_missing_payload_field(schema_file, sample_file):
     for field in sample(sample_file)["payload"]:
+        if field in OPTIONAL_PAYLOAD_FIELDS.get(sample_file, set()):
+            continue
         broken = sample(sample_file)
         del broken["payload"][field]
 
@@ -126,6 +134,7 @@ def test_evidence_job_id_is_the_move_event_id():
         "market.context.responded.sample.json",
         "news.filings.requested.sample.json",
         "news.filings.responded.sample.json",
+        "news.research.requested.sample.json",
     ):
         assert sample(sample_file)["payload"]["jobId"] == move["eventId"], sample_file
         assert sample(sample_file)["correlationId"] == move["correlationId"], sample_file
@@ -171,6 +180,13 @@ def test_requests_reject_bad_sequence_symbol_and_limit():
         ("news.filings.requested", "tickers", ["TESTA", "TESTA"]),
         ("news.filings.requested", "tickers", ["testa"]),
         ("news.filings.requested", "maxFilings", 0),
+        ("news.research.requested", "seq", 0),
+        ("news.research.requested", "symbol", "test01"),
+        ("news.research.requested", "jobKind", "noon"),
+        ("news.research.requested", "queries", []),
+        ("news.research.requested", "queries", ["테스트1", "테스트2", "테스트3", "테스트4"]),
+        ("news.research.requested", "queries", ["테스트1", "테스트1"]),
+        ("news.research.requested", "queries", [""]),
     ]
     for topic, field, value in cases:
         broken = sample(f"{topic}.sample.json")
@@ -488,3 +504,220 @@ def test_daily_briefing_job_types_are_the_ones_listed_in_the_tick_schema():
     assert set(JOB_TYPE_BY_EDITION) == {"morning", "post-close"}
     for job_type in JOB_TYPE_BY_EDITION.values():
         assert job_type in description
+
+
+DAILY_DATA_CONTRACTS = [
+    ("market.daily.requested.v1.schema.json", "market.daily.requested.sample.json"),
+    ("market.daily.responded.v1.schema.json", "market.daily.responded.sample.json"),
+]
+
+
+@pytest.mark.parametrize("schema_file, sample_file", DAILY_DATA_CONTRACTS)
+def test_daily_data_samples_match_their_schemas(schema_file, sample_file):
+    assert validate(schema_file, sample(sample_file)) == []
+
+
+@pytest.mark.parametrize("schema_file, sample_file", DAILY_DATA_CONTRACTS)
+def test_daily_data_events_tolerate_unknown_fields(schema_file, sample_file):
+    future = sample(sample_file)
+    future["newTopLevelHint"] = "x"
+    future["payload"]["venue"] = "future"
+
+    assert validate(schema_file, future) == []
+
+
+@pytest.mark.parametrize("schema_file, sample_file", DAILY_DATA_CONTRACTS)
+def test_daily_data_events_reject_missing_payload_field(schema_file, sample_file):
+    for field in sample(sample_file)["payload"]:
+        broken = sample(sample_file)
+        del broken["payload"][field]
+
+        assert validate(schema_file, broken) != [], field
+
+
+@pytest.mark.parametrize("schema_file, sample_file", DAILY_DATA_CONTRACTS)
+def test_daily_data_events_reject_wrong_event_type(schema_file, sample_file):
+    broken = sample(sample_file)
+    broken["eventType"] = "market.context.requested"
+
+    assert validate(schema_file, broken) != []
+
+
+def test_daily_data_request_and_response_share_job_id_and_correlation_id():
+    request = sample("market.daily.requested.sample.json")
+    response = sample("market.daily.responded.sample.json")
+
+    assert response["payload"]["jobId"] == request["payload"]["jobId"]
+    assert response["payload"]["seq"] == request["payload"]["seq"]
+    assert response["correlationId"] == request["correlationId"]
+    # 데일리 판 단위라 종목 하나(symbol)는 요청하지 않는다.
+    assert "symbol" not in request["payload"]
+
+
+def test_daily_data_request_rejects_bad_sequence_limit_and_timestamp():
+    for field, value in (("seq", 0), ("maxResponseBytes", 0), ("maxEtfs", 0), ("maxTickers", 0),
+                         ("asOf", "2026-10-20T17:00+09:00"), ("since", "2026-10-16")):
+        broken = sample("market.daily.requested.sample.json")
+        broken["payload"][field] = value
+
+        assert validate("market.daily.requested.v1.schema.json", broken) != [], field
+
+
+def test_daily_data_response_accepts_no_etfs_and_an_etf_without_us_stocks():
+    no_etfs = sample("market.daily.responded.sample.json")
+    no_etfs["payload"]["etfs"] = []
+    no_etfs["payload"]["closeRates"] = []
+
+    assert validate("market.daily.responded.v1.schema.json", no_etfs) == []
+    assert sample("market.daily.responded.sample.json")["payload"]["etfs"][1]["tickers"] == []
+
+
+def test_daily_data_response_rejects_malformed_etfs():
+    cases = []
+    for field in ("symbol", "date", "close", "prevClose", "rate", "fetchedAt", "tickers", "tickersTruncated"):
+        broken = sample("market.daily.responded.sample.json")
+        del broken["payload"]["etfs"][0][field]
+        cases.append((field, broken))
+    bad_symbol = sample("market.daily.responded.sample.json")
+    bad_symbol["payload"]["etfs"][0]["symbol"] = "*"
+    bad_ticker = sample("market.daily.responded.sample.json")
+    bad_ticker["payload"]["etfs"][0]["tickers"] = ["testa"]
+    empty_rate = sample("market.daily.responded.sample.json")
+    empty_rate["payload"]["etfs"][0]["rate"] = ""
+    cases += [("symbol *", bad_symbol), ("lower ticker", bad_ticker), ("empty rate", empty_rate)]
+
+    for name, broken in cases:
+        assert validate("market.daily.responded.v1.schema.json", broken) != [], name
+
+
+def test_daily_data_background_follows_the_context_rules_without_a_per_symbol_daily_price():
+    cases = [
+        ({"apiType": "world-index", "target": "S", "status": "missing"}, True),
+        ({"apiType": "exchange-rate-summary", "target": None, "status": "missing"}, True),
+        ({"apiType": "exchange-rate-summary", "target": "S", "status": "missing"}, False),
+        ({"apiType": "daily-price", "target": "TEST01", "status": "missing"}, False),
+        ({"apiType": "market-summary", "target": None, "status": "ok", "fetchedAt": "2026-10-20T16:30:06+09:00"},
+         False),
+        ({"apiType": "market-summary", "target": None, "status": "missing", "indexRates": []}, False),
+    ]
+    for item, valid in cases:
+        event = sample("market.daily.responded.sample.json")
+        event["payload"]["background"] = [item]
+        assert (validate("market.daily.responded.v1.schema.json", event) == []) is valid, item
+
+
+def test_daily_data_world_index_carries_computed_rates_next_to_the_raw_response():
+    world = sample("market.daily.responded.sample.json")["payload"]["background"][2]
+
+    assert world["apiType"] == "world-index"
+    assert world["response"]
+    assert world["indexRates"][0]["rate"] == "2.04"
+
+
+RESEARCH_SCHEMA = "news.research.requested.v1.schema.json"
+RESEARCH_JOB_ID = "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13"
+
+
+def test_research_sample_uses_fake_symbol_and_queries_only():
+    payload = sample("news.research.requested.sample.json")["payload"]
+
+    # 검색어는 LLM이 만들어 보유 종목을 드러낼 수 있으므로 샘플에는 가짜 값만 둔다.
+    assert payload["symbol"].startswith("TEST")
+    assert payload["queries"] and all("테스트" in query for query in payload["queries"])
+
+
+def test_research_request_has_no_response_event():
+    assert not list(CONTRACTS_DIR.glob("news.research.responded*"))
+
+
+@pytest.mark.parametrize("job_kind, symbol", [("move", "TEST01"), ("morning", "*"), ("post-close", "*")])
+def test_research_request_built_by_the_producer_matches_the_schema(job_kind, symbol):
+    at = datetime(2026, 10, 20, 16, 16, 10, tzinfo=KST)
+    event = research_request_event(job_id=RESEARCH_JOB_ID, seq=1, job_kind=job_kind, symbol=symbol,
+                                   queries=["테스트 재검색어"], correlation_id="move-correlation", now=at)
+
+    assert event.topic == "news.research.requested"
+    assert event.key == symbol
+    assert validate(RESEARCH_SCHEMA, event.value) == []
+    assert event.value["payload"]["jobKind"] == job_kind
+    assert event.value["correlationId"] == "move-correlation"
+
+
+def test_research_request_event_id_is_the_same_for_the_same_job_and_seq():
+    at = datetime(2026, 10, 20, 16, 16, 10, tzinfo=KST)
+
+    def build(job_id, seq, now):
+        return research_request_event(job_id=job_id, seq=seq, job_kind="move", symbol="TEST01",
+                                      queries=["테스트 재검색어"], correlation_id="c", now=now).value["eventId"]
+
+    first = build(RESEARCH_JOB_ID, 1, at)
+    assert build(RESEARCH_JOB_ID, 1, at + timedelta(seconds=5)) == first
+    assert build(RESEARCH_JOB_ID, 2, at) != first
+    assert build("0b8c2d3e-4f50-4a6b-9c7d-1e2f3a4b5c6d", 1, at) != first
+
+
+def test_research_request_event_rejects_an_unknown_job_kind():
+    at = datetime(2026, 10, 20, 16, 16, 10, tzinfo=KST)
+
+    assert set(RESEARCH_JOB_KINDS) == {"move", "morning", "post-close"}
+    with pytest.raises(ValueError):
+        research_request_event(job_id=RESEARCH_JOB_ID, seq=1, job_kind="noon", symbol="*",
+                               queries=["테스트 재검색어"], correlation_id="c", now=at)
+
+
+@pytest.mark.parametrize("schema_file, sample_file", [
+    ("news.collected.v1.schema.json", "news.collected.sample.json"),
+    ("collection.completed.v1.schema.json", "collection.completed.sample.json"),
+    ("news.articles.requested.v1.schema.json", "news.articles.requested.sample.json"),
+])
+def test_research_job_id_is_an_optional_uuid_on_existing_events(schema_file, sample_file):
+    schema = json.loads((CONTRACTS_DIR / schema_file).read_text(encoding="utf-8"))
+    assert "researchJobId" not in schema["properties"]["payload"]["required"]
+
+    older = sample(sample_file)
+    assert "researchJobId" not in older["payload"]
+    assert validate(schema_file, older) == []
+
+    with_research = sample(sample_file)
+    with_research["payload"]["researchJobId"] = RESEARCH_JOB_ID
+    assert validate(schema_file, with_research) == []
+
+    with_research["payload"]["researchJobId"] = "not-a-uuid"
+    assert validate(schema_file, with_research) != []
+
+
+def test_context_and_daily_responses_carry_an_optional_etf_info():
+    context = sample("market.context.responded.sample.json")
+    daily = sample("market.daily.responded.sample.json")
+    context_etf = context["payload"]["etf"]
+    assert context_etf["members"][0]["rank"] == 1
+
+    # 선택 칸이라 없어도 되고, 모르는 칸(이름·업종·비중)이 빠져도 된다.
+    without_context = sample("market.context.responded.sample.json")
+    del without_context["payload"]["etf"]
+    without_daily = sample("market.daily.responded.sample.json")
+    del without_daily["payload"]["etfs"][0]["etf"]
+    sparse = sample("market.context.responded.sample.json")
+    sparse["payload"]["etf"] = {"members": [{"market": "US", "symbol": "TESTA", "rank": 1}], "membersTruncated": False}
+
+    for valid in (context, without_context, sparse):
+        assert validate("market.context.responded.v1.schema.json", valid) == []
+    for valid in (daily, without_daily):
+        assert validate("market.daily.responded.v1.schema.json", valid) == []
+
+
+def test_etf_info_rejects_malformed_members():
+    cases = []
+    for field, value in (("weight", 12.5), ("weight", "-1"), ("rank", 0), ("market", "us"), ("symbol", "testa")):
+        broken = sample("market.context.responded.sample.json")
+        broken["payload"]["etf"]["members"][0][field] = value
+        cases.append(broken)
+    no_flag = sample("market.context.responded.sample.json")
+    del no_flag["payload"]["etf"]["membersTruncated"]
+    cases.append(no_flag)
+    no_rank = sample("market.daily.responded.sample.json")
+    del no_rank["payload"]["etfs"][0]["etf"]["members"][0]["rank"]
+
+    for broken in cases:
+        assert validate("market.context.responded.v1.schema.json", broken) != []
+    assert validate("market.daily.responded.v1.schema.json", no_rank) != []

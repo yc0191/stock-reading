@@ -22,7 +22,7 @@ paths:
 2. 토픽 선언: 쓰는 모든 서비스의 `Topics`와 브리핑 `main.py`의 `TOPIC_PARTITIONS`. 파티션 수를 같게 둡니다.
 3. 복제 이벤트 모델: 응답하는 서비스의 이벤트 모델과 브리핑의 파싱 코드
 4. 계약 테스트: 응답하는 서비스의 `*ContractTest`, 브리핑 `tests/test_contracts.py`, 토픽 선언 테스트(`TopicsConfigTest`, `tests/test_topics.py`)
-5. 다시 요청하는 규칙(`seq`, 제한 시간, 총 시도 횟수)은 기존 쌍과 같게 하고, 끝내 응답이 없을 때의 실패 사유를 `jobs.py`의 `FailureReason`과 실패 테이블 제약에 더합니다.
+5. 다시 요청하는 규칙(`seq`, 제한 시간, 총 시도 횟수)은 기존 쌍과 같게 하고, 끝내 응답이 없을 때의 실패 사유를 `ports.py`의 `FailureReason`과 실패 테이블 제약에 더합니다.
 
 상세 절차는 `.claude/rules/event-contract.md`입니다.
 

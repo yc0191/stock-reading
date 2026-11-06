@@ -120,6 +120,10 @@ collector:
     daily-call-limit: ${NEWS_SEARCH_DAILY_CALL_LIMIT:19500}
     # 검색어를 연달아 호출할 때 호출 사이의 대기(밀리초). 0이면 기다리지 않는다.
     call-interval-ms: ${NEWS_SEARCH_CALL_INTERVAL_MS:60}
+  news-research:
+    # 브리핑의 뉴스 재검색 요청 하나에서 실제로 검색할 검색어 수 상한. 넘는 검색어는 버린다.
+    # 검색어마다 위 하루 호출 상한을 한 번씩 쓴다. 0 이하이면 시작 단계에서 실패한다.
+    max-queries: ${NEWS_RESEARCH_MAX_QUERIES:3}
   holdings:
     # "ETF코드=티커,티커;ETF코드2=티커" 형식. 보유 ETF와 상위 종목이 드러나므로 값은 환경변수로만 준다.
     # 형식이 틀리면 시작 단계에서 실패하고, 비어 있으면 보유 종목이 없는 것으로 본다.

@@ -4,8 +4,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from briefing.config import CoreSettings
-from briefing.jobs import BriefingCore, FailureReason
+from briefing.job_log import EntryType, JobKind, RunStatus
+from briefing.jobs import BriefingCore
+from briefing.ports import FailureReason
 from contracts import sample, validate
+from fake_job_log import FakeJobLog
 
 KST = timezone(timedelta(hours=9))
 T = datetime(2026, 10, 20, 16, 0, 31, tzinfo=KST)
@@ -17,13 +20,16 @@ JOB_ID = "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13"
 
 class Recorder:
     def __init__(self):
-        self.sent, self.failed, self.readied = [], [], []
+        self.sent, self.readied = [], []
+        self.log = FakeJobLog()
+
+    @property
+    def failed(self):
+        """끝내 실패한 작업의 줄. 줄마다 사유와 대상(종목)이 담겨 있다."""
+        return self.log.failed
 
     def send(self, event):
         self.sent.append(event)
-
-    def record(self, failure):
-        self.failed.append(failure)
 
     def on_ready(self, report_input):
         self.readied.append(report_input)
@@ -39,7 +45,7 @@ def rec():
 
 @pytest.fixture
 def core(rec):
-    return BriefingCore(rec, rec, rec)
+    return BriefingCore(rec, rec, job_log=rec.log)
 
 
 def move(event_id=JOB_ID, symbol="TEST01", as_of=T, legacy=False):
@@ -274,8 +280,8 @@ def test_news_no_response_after_three_attempts(core, rec):
         core.on_tick(T + step * S.response_timeout)
 
     (failure,) = rec.failed
-    assert (failure.reason, failure.attempts, failure.job_id, failure.symbol) == (
-        FailureReason.NEWS_NO_RESPONSE, 3, JOB_ID, "TEST01")
+    assert (failure.reason, failure.attempts, failure.job_id) == (FailureReason.NEWS_NO_RESPONSE, 3, JOB_ID)
+    assert rec.log.starts[0].target["symbol"] == "TEST01"
     assert [e.value["payload"]["seq"] for e in rec.of("news.articles.requested")] == [1, 2, 3]
     assert rec.readied == []
 
@@ -292,7 +298,7 @@ def test_news_that_never_stabilizes_fails_after_five_rounds(core, rec):
             core.on_tick(now)
 
     (failure,) = rec.failed
-    assert failure.reason is FailureReason.NEWS_UNSTABLE
+    assert failure.reason == FailureReason.NEWS_UNSTABLE
     assert len(rec.of("news.articles.requested")) == 5
     assert rec.readied == []
 
@@ -318,23 +324,24 @@ def test_collection_not_covered_after_the_wait_limit(core, rec):
     core.on_tick(T + S.collection_wait_limit)
 
     (failure,) = rec.failed
-    assert failure.reason is FailureReason.COLLECTION_NOT_COVERED
+    assert failure.reason == FailureReason.COLLECTION_NOT_COVERED
     core.on_collection_completed(completed(), T + S.collection_wait_limit + SEC)
     assert rec.sent == []  # 실패한 작업은 되살아나지 않는다
 
 
-def test_llm_error_failure_goes_through_the_same_port(core, rec):
+def test_a_failed_job_leaves_one_failure_line_and_one_result_line_under_the_same_job_id(core, rec):
     start(core)
-    core.on_context_responded(context_response(), T)
-    core.on_history_responded(history_response(1), T)
-    core.on_articles_responded(news_response(1, ["a"]), T)
-    core.on_tick(T + S.recheck_interval)
-    core.on_articles_responded(news_response(2, ["a"]), T + S.recheck_interval)
+    for step in (1, 2, 3):
+        core.on_tick(T + step * S.response_timeout)
 
-    core.fail_llm_error(rec.readied[0], "invalid json", 3)
-
-    (failure,) = rec.failed
-    assert (failure.reason, failure.attempts) == (FailureReason.LLM_ERROR, 3)
+    (failure,) = rec.log.failures()
+    (result,) = rec.log.results()
+    assert failure.job_id == result.job_id == JOB_ID
+    # 작업 한 줄(job_run)은 시작 때 move로 만들고 끝날 때 실패 사유와 함께 고친다.
+    (run,) = rec.log.starts
+    assert run.job_kind == JobKind.MOVE and run.job_id == JOB_ID and run.target["symbol"] == "TEST01"
+    assert result.status == RunStatus.FAILED and result.failure_reason == FailureReason.MARKET_NO_RESPONSE.value
+    assert len([e for e in rec.log.of_type(EntryType.RESENT) if e.stage == "market.history"]) == 2  # 재요청 두 번
 
 
 def test_failure_reasons_are_exactly_the_seven_defined(core):
@@ -367,9 +374,9 @@ def test_next_deadline_reports_the_earliest_timer(core):
 
 
 def test_core_does_not_import_kafka():
-    import briefing.config, briefing.events, briefing.jobs  # noqa: E401
+    import briefing.config, briefing.events, briefing.jobs, briefing.llm, briefing.ports, briefing.sources  # noqa: E401
 
-    for module in (briefing.config, briefing.events, briefing.jobs):
+    for module in (briefing.config, briefing.events, briefing.jobs, briefing.llm, briefing.ports, briefing.sources):
         source = open(module.__file__, encoding="utf-8").read()
         assert "confluent_kafka" not in source
 
