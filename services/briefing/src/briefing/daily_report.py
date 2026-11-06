@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Mapping
@@ -21,9 +20,11 @@ from briefing.llm_output import (
     output_cited_refs,
     output_item,
     output_sentence,
-    WEAK_NOTE_PREFIX,
     output_weak_shortfall,
+    check_no_ticker,
     parse_output_object,
+    ticker_pattern,
+    weak_note_line,
 )
 from briefing.llm import API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCallError, LlmClient, llm_config
 from briefing.sources import (
@@ -43,7 +44,9 @@ from briefing.sources import (
     Article,
     Background,
     CloseRate,
+    EtfInfo,
     Filing,
+    etf_info_input,
 )
 
 log = logging.getLogger("briefing.daily_report")
@@ -92,6 +95,7 @@ SYSTEM_PROMPT = """당신은 ETF 투자자에게 하루 시장 흐름을 짧게 
 - 공시의 hoursBeforeAsOf는 공시 접수 시각이 기준 시각보다 몇 시간 전인지입니다.
 - 보유 ETF별 하루 등락의 rate는 일봉 원문의 등락률(%)입니다.
 - 항목 "재검색 기사"는 근거가 부족해 다시 검색해 찾은 기사이며(있을 때만 담깁니다) 기사 번호(ref)로 인용합니다. minutesBeforeAsOf는 기사 발행 시각이 판 기준 시각보다 몇 분 전인지입니다.
+- etfInfo(있을 때만 담깁니다)는 보유 ETF의 이름(name)·추종 대상(tracks)·업종(sector)과 비중 순위(rank, 1이 가장 큼) 순의 구성 종목(members)입니다. ETF가 무엇을 따라가고 무엇이 담겨 있는지 이해하는 맥락으로만 쓰고, 이것을 등락의 원인으로 단정하지 않습니다. ref가 없어 인용할 수 없으며, 문장의 근거는 ref가 있는 자료에서 찾습니다.
 - 상태 표시: "있음"은 자료가 있다는 뜻, "없음"은 범위 안에 자료가 없다는 뜻, "잘림"은 상한 때문에 일부만 받았다는 뜻, "너무 큼"은 원문이 커서 빠졌다는 뜻, "해당 없음"은 보유 ETF에 미국 종목이 없어 조회하지 않았다는 뜻입니다.
 
 규칙:
@@ -146,6 +150,8 @@ class EtfDay:
     fetched_at: datetime
     tickers: tuple[str, ...]
     tickers_truncated: bool
+    # 응답의 ETF 정보(선택 칸). 이전 형식 응답에는 없다.
+    etf: EtfInfo | None = None
 
 
 @dataclass(frozen=True)
@@ -168,6 +174,10 @@ class DailyInput:
 
     def tickers(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(t for etf in self.etfs or () for t in etf.tickers))
+
+    def member_us_symbols(self) -> frozenset[str]:
+        """ETF 정보의 구성 종목 중 미국 종목의 티커."""
+        return frozenset(t for etf in self.etfs or () if etf.etf for t in etf.etf.us_tickers())
 
 
 @dataclass(frozen=True)
@@ -398,13 +408,20 @@ def has_evidence(sections: tuple[Section, ...]) -> bool:
     return any(s.entries for s in sections)
 
 
-def build_llm_input(i: DailyInput, sections: tuple[Section, ...]) -> dict[str, Any]:
-    return {
+def build_llm_input(i: DailyInput, sections: tuple[Section, ...],
+                    settings: DailySettings = DEFAULT_DAILY_SETTINGS) -> dict[str, Any]:
+    data: dict[str, Any] = {
         "edition": EDITION_NAMES[i.edition],
         "rangeStart": _at(i.range_start),
         "asOf": _at(i.as_of),
         "items": [{"name": s.name, "status": s.status, "entries": [e.llm for e in s.entries]} for s in sections],
     }
+    # ETF 정보는 응답에 있을 때만 넣는다. 정보가 없는 이전 형식 응답의 입력 모양은 바꾸지 않는다.
+    etf_info = [{"symbol": e.symbol, **etf_info_input(e.etf, settings.max_etf_members)}
+                for e in i.etfs or () if e.etf is not None]
+    if etf_info:
+        data["etfInfo"] = etf_info
+    return data
 
 
 # ---- 출력 검증 ----
@@ -427,32 +444,21 @@ class DailyOutput:
     insufficient_evidence: bool
 
 
-def _ticker_pattern(tickers: frozenset[str]) -> re.Pattern[str] | None:
-    # 종류 구분 표기는 '-'로 맞춰 두었지만 LLM은 '.'으로 쓸 수 있어 둘 다 찾는다.
-    forms = {form for t in tickers if t for form in (t, t.replace("-", "."))}
-    if not forms:
-        return None
-    alternatives = "|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))
-    return re.compile(rf"(?<![A-Za-z0-9])(?:{alternatives})(?![A-Za-z0-9])")
-
-
 def parse_output(text: str, allowed_refs: frozenset[str],
                  forbidden_tickers: frozenset[str] = frozenset()) -> DailyOutput:
     """LLM 응답을 검증한다. 형식이 틀리거나 준 적 없는 근거 번호를 인용하거나
     LLM 입력에 있던 미국 티커를 문장에 쓰면 InvalidDailyOutput."""
-    tickers = _ticker_pattern(forbidden_tickers)
+    tickers = ticker_pattern(forbidden_tickers)
     data = parse_output_object(text, "points", InvalidDailyOutput)
     points = []
     for raw in data["points"]:
         item = output_item(raw, "point", InvalidDailyOutput)
         statement = output_sentence(item, "statement", "point", InvalidDailyOutput)
         refs = output_cited_refs(item, "refs", "point", allowed_refs, InvalidDailyOutput)
-        # 본문은 메일로 나가므로 보유 종목이 드러나는 티커를 막는다. 사유에는 티커 값을 넣지 않는다.
-        if tickers is not None and tickers.search(statement):
-            raise InvalidDailyOutput("point mentions a US ticker")
+        check_no_ticker(statement, tickers, "point", InvalidDailyOutput)
         shortfall = output_weak_shortfall(item, "point", InvalidDailyOutput)
-        if shortfall is not None and tickers is not None and tickers.search(shortfall):
-            raise InvalidDailyOutput("point shortfall mentions a US ticker")
+        if shortfall is not None:
+            check_no_ticker(shortfall, tickers, "point shortfall", InvalidDailyOutput)
         points.append(Point(statement, refs, shortfall))
     insufficient = check_items_present(data, "points", "point", InvalidDailyOutput)
     return DailyOutput(tuple(points), insufficient)
@@ -495,7 +501,7 @@ def llm_text(i: DailyInput, sections: tuple[Section, ...], output: DailyOutput) 
     for p in output.points:
         lines.append(f"  - {p.statement} [근거 {', '.join(str(number[x]) for x in p.refs)}]")
         if p.shortfall:
-            lines.append(f"    {WEAK_NOTE_PREFIX}{p.shortfall}")
+            lines.append(weak_note_line(p.shortfall, "    "))
     lines.append("근거:")
     lines.extend(f"  {number[ref]}. {by_ref[ref].describe}" for ref in cited)
     return "\n".join([*lines, "", DAILY_DISCLAIMER])
@@ -537,12 +543,13 @@ class DailyWriteResult:
 class DailyLlmWriter:
     client: LlmClient
     max_attempts: int = DEFAULT_DAILY_SETTINGS.llm_max_attempts
+    settings: DailySettings = DEFAULT_DAILY_SETTINGS
 
     def write(self, i: DailyInput, sections: tuple[Section, ...]) -> DailyWriteResult:
-        user = json.dumps(build_llm_input(i, sections), ensure_ascii=False)
+        user = json.dumps(build_llm_input(i, sections, self.settings), ensure_ascii=False)
         allowed = frozenset(e.ref for s in sections for e in s.entries)
         tickers = frozenset(i.tickers()) | frozenset(r.ticker for r in i.close_rates or ()) \
-            | frozenset(t for f in i.filings or () for t in f.tickers)
+            | frozenset(t for f in i.filings or () for t in f.tickers) | i.member_us_symbols()
         rejected: list[LlmAttempt] = []
         for attempt in range(1, self.max_attempts + 1):
             raw: str | None = None
@@ -571,4 +578,4 @@ def build_daily_writer(env: Mapping[str, str],
     if config is None:
         log.warning("%s is not set; daily briefings will be rule-based", API_KEY_ENV)
         return None
-    return DailyLlmWriter(client_factory(config.api_key, config.model), settings.llm_max_attempts)
+    return DailyLlmWriter(client_factory(config.api_key, config.model), settings.llm_max_attempts, settings)

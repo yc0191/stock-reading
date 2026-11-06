@@ -29,6 +29,8 @@ class CoreSettings:
     background_window: timedelta = timedelta(days=4)
     max_background_bytes: int = 32 * 1024
     max_tickers: int = 100
+    # LLM 입력에 넣는 ETF 구성 종목 수. 비중 순위가 높은 종목부터 이 수까지 넣는다.
+    max_etf_members: int = 10
     # 같은 eventId 중복 처리를 위해 기억하는 작업 키 수. 메모리가 무한히 늘지 않게 한다.
     remembered_jobs: int = 10000
     # 근거 부족 시 재검색: 검색어 LLM이 낼 수 있는 검색어 수, 검색어 LLM 시도 횟수, 재검색 완료 알림을 기다리는 상한.
@@ -62,6 +64,8 @@ class DailySettings:
     max_etfs: int = 50
     max_tickers: int = 100
     max_filings: int = 20
+    # LLM 입력에 넣는 ETF 구성 종목 수(ETF마다). 비중 순위가 높은 종목부터 넣는다.
+    max_etf_members: int = 10
     # 세계지수 대륙구분 중 미국 지수가 든 값(market 설정 world-index-continents의 아메리카).
     us_index_target: str = "C"
     llm_max_attempts: int = 3

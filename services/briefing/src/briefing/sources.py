@@ -72,6 +72,31 @@ class Background:
     index_rates: tuple[IndexRate, ...] = ()
 
 
+@dataclass(frozen=True)
+class EtfMember:
+    market: str
+    symbol: str
+    rank: int
+    name: str | None = None
+    weight: str | None = None
+
+
+@dataclass(frozen=True)
+class EtfInfo:
+    """ETF의 이름·추종 대상·업종과 구성 종목. 응답의 선택 칸이라 모르는 값은 None이다."""
+
+    members: tuple[EtfMember, ...]
+    members_truncated: bool
+    name: str | None = None
+    tracks: str | None = None
+    sector: str | None = None
+
+    def us_tickers(self) -> frozenset[str]:
+        return frozenset(m.symbol for m in self.members if m.market == US_MARKET)
+
+
+US_MARKET = "US"
+
 # LLM 입력에 담는 자료 상태 표시
 MARK_PRESENT = "있음"
 MARK_MISSING = "없음"
@@ -152,3 +177,29 @@ def parse_filings(items: list[dict]) -> tuple[Filing, ...]:
                parse_timestamp(f["acceptedAt"]), f["url"])
         for f in items
     )
+
+
+def parse_etf_info(item: dict | None) -> EtfInfo | None:
+    """응답의 ETF 정보(선택 칸)를 값 객체로 바꾼다. 이전 형식 응답에는 없어 None이다. 필수 칸이 없으면 KeyError."""
+    if item is None:
+        return None
+    return EtfInfo(
+        members=tuple(EtfMember(m["market"], m["symbol"], m["rank"], m.get("name"), m.get("weight"))
+                      for m in item["members"]),
+        members_truncated=bool(item["membersTruncated"]),
+        name=item.get("name"), tracks=item.get("tracks"), sector=item.get("sector"),
+    )
+
+
+def etf_info_input(info: EtfInfo, max_members: int) -> dict:
+    """LLM 입력에 넣을 ETF 정보. 구성 종목은 비중 순위(1이 가장 큼) 순으로 max_members개까지 담는다."""
+    ranked = sorted(info.members, key=lambda m: m.rank)
+    data: dict = {key: value for key, value in (("name", info.name), ("tracks", info.tracks),
+                                                 ("sector", info.sector)) if value}
+    data["members"] = [
+        {"rank": m.rank, "market": m.market, "symbol": m.symbol,
+         **({"name": m.name} if m.name else {}), **({"weightPercent": m.weight} if m.weight else {})}
+        for m in ranked[:max_members]
+    ]
+    data["membersTruncated"] = info.members_truncated or len(ranked) > max_members
+    return data

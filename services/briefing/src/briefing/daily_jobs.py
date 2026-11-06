@@ -76,6 +76,7 @@ from briefing.sources import (
     next_seq,
     parse_background,
     parse_close_rates,
+    parse_etf_info,
     parse_filings,
     response_payload,
 )
@@ -212,7 +213,7 @@ class DailyCore:
         try:
             etfs = tuple(
                 EtfDay(e["symbol"], e["date"], e["close"], e["prevClose"], e["rate"], parse_timestamp(e["fetchedAt"]),
-                       tuple(e["tickers"]), bool(e["tickersTruncated"]))
+                       tuple(e["tickers"]), bool(e["tickersTruncated"]), parse_etf_info(e.get("etf")))
                 for e in payload["etfs"]
             )
             close_rates = parse_close_rates(payload["closeRates"])

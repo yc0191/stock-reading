@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 
@@ -68,3 +69,24 @@ def output_weak_shortfall(item: dict, noun: str, error: type[InvalidLlmOutput]) 
     if not isinstance(weak, bool):
         raise error(f"{noun} weak is not a boolean")
     return output_sentence(item, "shortfall", noun, error) if weak else None
+
+
+def weak_note_line(shortfall: str, indent: str) -> str:
+    """근거 약함 표시 줄. 급변동과 데일리 본문이 같은 모양으로 쓴다."""
+    return f"{indent}{WEAK_NOTE_PREFIX}{shortfall}"
+
+
+def ticker_pattern(tickers: frozenset[str]) -> re.Pattern[str] | None:
+    """문장에 쓰면 안 되는 티커를 찾는 정규식. 금지할 티커가 없으면 None."""
+    # 종류 구분 표기는 '-'로 맞춰 두었지만 LLM은 '.'으로 쓸 수 있어 둘 다 찾는다.
+    forms = {form for t in tickers if t for form in (t, t.replace("-", "."))}
+    if not forms:
+        return None
+    alternatives = "|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))
+    return re.compile(rf"(?<![A-Za-z0-9])(?:{alternatives})(?![A-Za-z0-9])")
+
+
+def check_no_ticker(text: str, pattern: re.Pattern[str] | None, what: str, error: type[InvalidLlmOutput]) -> None:
+    """본문은 메일로 나가므로 보유 종목이 드러나는 미국 티커를 막는다. 사유에는 티커 값을 넣지 않는다."""
+    if pattern is not None and pattern.search(text):
+        raise error(f"{what} mentions a US ticker")

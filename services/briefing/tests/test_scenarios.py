@@ -710,7 +710,7 @@ def test_meaning_sentence_cites_the_market_comparison_and_the_report_shows_the_a
     ready = rec.readied[0]
     vs_kospi = figure_ref(ready, "변동률 - 코스피종합 등락률")
     llm_out = json.dumps({"causes": [{
-        "title": "미국 종목 실적 공시", "detail": "TESTA가 8-K 항목 2.02를 냈으며 어느 부분이 부진했는지는 자료에 없음.",
+        "title": "미국 종목 실적 공시", "detail": "미국 종목이 8-K 항목 2.02를 냈으며 어느 부분이 부진했는지는 자료에 없음.",
         "refs": [ACCESSION, "a1"], "meaning": "변동률이 코스피종합 등락률보다 낮아 시장 전체보다 더 빠졌습니다.",
         "meaningRefs": [vs_kospi]}], "insufficientEvidence": False}, ensure_ascii=False)
     stage, published, _ = report_stage(LlmWriter(FakeLlm(llm_out)))

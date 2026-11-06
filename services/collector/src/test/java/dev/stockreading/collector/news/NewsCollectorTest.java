@@ -20,7 +20,14 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
+
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 
 class NewsCollectorTest {
 
@@ -30,6 +37,20 @@ class NewsCollectorTest {
     private final NewsSearchPort search = mock(NewsSearchPort.class);
     private final NewsCollector collector =
             new NewsCollector(search, new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 100, 0), CLOCK, ms -> { });
+
+    private ListAppender<ILoggingEvent> logs;
+
+    @BeforeEach
+    void attachLogs() {
+        logs = new ListAppender<>();
+        logs.start();
+        ((Logger) LoggerFactory.getLogger(NewsCollector.class)).addAppender(logs);
+    }
+
+    @AfterEach
+    void detachLogs() {
+        ((Logger) LoggerFactory.getLogger(NewsCollector.class)).detachAppender(logs);
+    }
 
     private static NewsItem item(String query, String title, String url, String time) {
         // 요약에 검색어를 넣어 검색어 토큰 필터를 통과하게 한다.
@@ -357,6 +378,29 @@ class NewsCollectorTest {
 
         assertThat(research.items()).isEmpty();
         assertThat(research.incompleteSymbols()).containsExactly("*");
+    }
+
+    // 수집 한 번마다 거른 건수를 이유별로 한 줄 남긴다. 검색어와 종목은 쓰지 않는다.
+    @Test
+    void oneCollectionLogsHowManyArticlesWereFilteredPerReasonWithoutQueriesOrSymbols() {
+        when(search.search(eq("테스트검색어"), anyInt())).thenReturn(List.of(
+                item("테스트검색어", "어제보다 오래된 기사", "https://a.example.com/old", "2026-10-21T06:00:00+09:00"),
+                item("테스트검색어", "미래 기사", "https://a.example.com/future", "2026-10-22T20:00:00+09:00"),
+                new NewsItem("검색어가 없는 기사", "무관한 요약", "https://a.example.com/off", "",
+                        OffsetDateTime.parse("2026-10-22T15:00:00+09:00"), "example.com",
+                        new LinkedHashSet<>(), new LinkedHashSet<>(Set.of("테스트검색어"))),
+                item("테스트검색어", "남는 기사", "https://a.example.com/ok", "2026-10-22T15:00:00+09:00")));
+        when(search.search(eq("테스트시황"), anyInt())).thenReturn(List.of(
+                item("테스트시황", "남는 기사", "https://b.example.com/same-title", "2026-10-22T14:00:00+09:00"),
+                item("테스트시황", "다른 기사", "https://a.example.com/ok", "2026-10-22T13:00:00+09:00")));
+
+        collector.collect(List.of(query("테스트검색어", "TEST01"), query("테스트시황", "*")));
+
+        List<String> filtered = logs.list.stream().map(ILoggingEvent::getFormattedMessage)
+                .filter(m -> m.startsWith("news filtered")).toList();
+        assertThat(filtered).containsExactly("news filtered passed=3 tooOld=1 tooFarAhead=1 unmatched=1 duplicates=2");
+        assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage)
+                .noneMatch(m -> m.contains("테스트검색어") || m.contains("테스트시황") || m.contains("TEST01"));
     }
 
     private NewsCollector collectorWithLimit(String queries, int dailyLimit) {

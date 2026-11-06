@@ -67,6 +67,7 @@ public class NewsCollector {
         int tooOld = 0;
         int tooFarAhead = 0;
         int unmatched = 0;
+        int duplicates = 0;
         int skippedByLimit = 0;
         int index = 0;
         boolean called = false;
@@ -109,6 +110,7 @@ public class NewsCollector {
                     existingKey = urlKeyByTitleKey.get(titleKey);
                 }
                 if (existingKey != null) {
+                    duplicates++;
                     byUrl.put(existingKey, byUrl.get(existingKey).mergedWith(tagged));
                 } else {
                     byUrl.put(urlKey, tagged);
@@ -121,7 +123,9 @@ public class NewsCollector {
         if (skippedByLimit > 0) {
             log.warn("news daily call limit reached, skipped queries count={} limit={}", skippedByLimit, properties.dailyCallLimit());
         }
-        log.info("news filtered passed={} tooOld={} tooFarAhead={} unmatched={}", passed, tooOld, tooFarAhead, unmatched);
+        // 거른 이유별 건수만 남긴다. passed 는 거르기를 통과한 건수이고 duplicates 는 그중 앞서 모은 기사와 합쳐진 건수다.
+        log.info("news filtered passed={} tooOld={} tooFarAhead={} unmatched={} duplicates={}",
+                passed, tooOld, tooFarAhead, unmatched, duplicates);
         List<NewsItem> result = new ArrayList<>(byUrl.values());
         result.sort(Comparator.comparing(NewsItem::publishedAt).reversed());
         return new NewsCollection(result, incompleteSymbols, startedAt != null ? startedAt : OffsetDateTime.ofInstant(now, clock.getZone()));

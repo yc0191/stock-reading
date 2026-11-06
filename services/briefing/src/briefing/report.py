@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping, Protocol
 
+from briefing.config import DEFAULT_SETTINGS, CoreSettings
 from briefing.compose import DISCLAIMER, KST, NO_EVIDENCE, direction_of, headline
 from briefing.events import BRIEFING_GENERATED_TOPIC, OutboundEvent, format_timestamp
 from briefing.jobs import ReportInput
@@ -47,9 +48,11 @@ from briefing.llm_output import (
     output_cited_refs,
     output_item,
     output_sentence,
-    WEAK_NOTE_PREFIX,
     output_weak_shortfall,
+    check_no_ticker,
     parse_output_object,
+    ticker_pattern,
+    weak_note_line,
 )
 from briefing.llm import API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCallError, LlmClient, llm_config
 from briefing.ports import FailureReason, RequestPort
@@ -68,6 +71,7 @@ from briefing.sources import (
     MARK_TRUNCATED,
     Article,
     Background,
+    etf_info_input,
 )
 
 log = logging.getLogger("briefing.report")
@@ -109,6 +113,7 @@ SYSTEM_PROMPT = """당신은 ETF 가격 변동과 같은 시기에 공개된 자
 - 배경 자료(category가 "배경")는 환율·시장종합·세계지수·국내 일봉의 응답 원문(response)을 그대로 준 것이며, receivedAt은 받은 시각, minutesBeforeMove는 변동보다 몇 분 전에 받은 값인지입니다.
 - 세계지수 배경 자료의 indexRates는 코드가 지수마다 직전 영업일 종가와 비교해 계산한 등락률입니다. 원문의 전일대비·등락률은 장이 끝난 지수에서 0.00으로 오므로 0.00을 "변동 없음"으로 읽지 말고, 등락률은 indexRates의 계산된 rate를 씁니다. rate가 "없음"이면 그 지수의 등락률은 모르는 것입니다.
 - figures는 코드가 배경 원문에서 꺼낸 숫자(원/달러 환율, 코스피종합, 코스닥종합)와 코드가 계산한 비교 숫자입니다. "변동률 - 코스피종합 등락률"의 differencePoint는 변동 종목의 변동률에서 지수 등락률을 뺀 값(%p)으로, 음수면 시장 전체보다 더 내렸거나 덜 올랐다는 뜻이고 양수면 더 올랐거나 덜 내렸다는 뜻입니다. "미국 종목 직전 정규장 등락 집계"는 담긴 미국 종목 가운데 오른 수·내린 수·보합 수와 평균 등락률(%)입니다. status가 "없음"인 항목에는 ref가 없어 인용할 수 없습니다.
+- etf(변동 종목이 ETF이고 정보가 있을 때만 담깁니다)는 ETF의 이름(name)·추종 대상(tracks)·업종(sector)과 비중 순위(rank, 1이 가장 큼) 순의 구성 종목(members)입니다. ETF가 무엇을 따라가고 무엇이 담겨 있는지 이해하는 맥락으로만 쓰고, 이것을 변동의 원인으로 단정하지 않습니다. ref가 없어 인용할 수 없으며, 근거는 ref가 있는 자료에서 찾습니다.
 - 상태 표시: "잘림"은 상한 때문에 일부만 받았다는 뜻, "없음"은 기간 안에 자료가 없다는 뜻, "너무 큼"은 원문이 커서 빠졌다는 뜻, "해당 없음"은 변동 종목에 미국 종목이 없어 공시·해외 등락률을 조회하지 않았다는 뜻입니다.
 
 쓰는 법:
@@ -121,6 +126,7 @@ SYSTEM_PROMPT = """당신은 ETF 가격 변동과 같은 시기에 공개된 자
 - 원인을 단정하지 않습니다. "~때문에 올랐다"가 아니라 "~가 영향을 줬을 수 있다"처럼 씁니다.
 - 배경 자료는 변동 당시의 상태를 보여 줄 뿐입니다. 배경 자료를 변동의 원인으로 단정하지 않고, 기사·공시와 함께 상황을 설명하는 데에만 씁니다.
 - 원인마다 weak(근거 약함 여부)와 shortfall(부족한 점)을 냅니다. 그 원인을 뒷받침하는 자료가 약하면(시각이 맞지 않거나, 간접 정보뿐이거나, 세부가 자료에 없으면) weak를 true로 하고 shortfall에 어떤 자료가 더 있어야 하는지 한 문장으로 씁니다. 근거가 충분하면 weak를 false로, shortfall을 빈 문자열로 둡니다. shortfall은 찾아야 할 자료를 말할 뿐 원인을 단정하지 않습니다.
+- 제목·문장·부족한 점에 미국 종목의 티커(ticker, tickers, members의 symbol 중 미국 종목의 값)를 쓰지 않습니다. 개별 종목을 말해야 하면 회사 이름이나 "미국 종목"이라고 씁니다.
 - 근거가 부족하면 insufficientEvidence를 true로 하고 causes는 빈 목록으로 둡니다. 억지로 원인을 만들지 않습니다.
 - 투자 조언(매수·매도·보유 권유, 가격 전망)을 하지 않습니다.
 - 숫자를 새로 계산하지 않습니다. 더하기·빼기·평균도 하지 않고 입력에 있는 값만 씁니다.
@@ -498,7 +504,7 @@ def _at(value: datetime) -> str:
     return format_timestamp(value.astimezone(KST))
 
 
-def build_llm_input(report_input: ReportInput) -> dict[str, Any]:
+def build_llm_input(report_input: ReportInput, settings: CoreSettings = DEFAULT_SETTINGS) -> dict[str, Any]:
     """LLM에게 줄 공개 정보만 고른다. 보유 수량·금액 같은 개인 정보는 ReportInput에도 없고 여기서도 넣지 않는다."""
     i = report_input
     us = bool(i.tickers)
@@ -543,6 +549,9 @@ def build_llm_input(report_input: ReportInput) -> dict[str, Any]:
         # 배경 원문에서 꺼낸 숫자와 코드가 계산한 비교 숫자. LLM은 계산하지 않고 ref로 인용만 한다.
         "figures": [_figure_input(e, i.as_of) for e in figure_entries(i)],
     }
+    # ETF 정보는 응답에 있을 때만 넣는다. 정보가 없는 이전 형식 응답의 입력 모양은 바꾸지 않는다.
+    if i.etf is not None:
+        data["etf"] = etf_info_input(i.etf, settings.max_etf_members)
     # 재검색 기사는 다시 쓸 때만 있다. 첫 작성의 입력 모양은 바꾸지 않는다.
     if i.research_articles:
         data["researchArticlesStatus"] = _status(len(i.research_articles), i.research_articles_truncated)
@@ -596,21 +605,28 @@ def _background_input(ref: str | None, item: Background, as_of: datetime) -> dic
     return data
 
 
-def parse_output(text: str, allowed_ids: frozenset[str]) -> LlmOutput:
+def parse_output(text: str, allowed_ids: frozenset[str], forbidden_tickers: frozenset[str] = frozenset()) -> LlmOutput:
     """LLM 응답을 검증한다. 형식이 틀리거나, 빈 문장이 있거나, 문장이 근거를 인용하지 않거나,
-    준 적 없는 근거 번호를 인용하면 InvalidOutput."""
+    준 적 없는 근거 번호를 인용하거나, LLM 입력에 있던 미국 티커를 문장에 쓰면 InvalidOutput.
+    근거 목록의 제목에 붙는 티커(공시)는 코드가 쓰므로 검사하지 않는다."""
+    tickers = ticker_pattern(forbidden_tickers)
     data = parse_output_object(text, "causes", InvalidOutput)
     causes = []
     for raw in data["causes"]:
         item = output_item(raw, "cause", InvalidOutput)
-        causes.append(Cause(
+        cause = Cause(
             title=output_sentence(item, "title", "cause", InvalidOutput),
             detail=output_sentence(item, "detail", "cause", InvalidOutput),
             refs=output_cited_refs(item, "refs", "cause", allowed_ids, InvalidOutput),
             meaning=output_sentence(item, "meaning", "cause", InvalidOutput),
             meaning_refs=output_cited_refs(item, "meaningRefs", "cause", allowed_ids, InvalidOutput),
             shortfall=output_weak_shortfall(item, "cause", InvalidOutput),
-        ))
+        )
+        for sentence in (cause.title, cause.detail, cause.meaning):
+            check_no_ticker(sentence, tickers, "cause", InvalidOutput)
+        if cause.shortfall is not None:
+            check_no_ticker(cause.shortfall, tickers, "cause shortfall", InvalidOutput)
+        causes.append(cause)
     insufficient = check_items_present(data, "causes", "cause", InvalidOutput)
     return LlmOutput(tuple(causes), insufficient)
 
@@ -619,17 +635,19 @@ def parse_output(text: str, allowed_ids: frozenset[str]) -> LlmOutput:
 class LlmWriter:
     client: LlmClient
     max_attempts: int = LLM_MAX_ATTEMPTS
+    settings: CoreSettings = DEFAULT_SETTINGS
 
     def write(self, report_input: ReportInput) -> Report:
-        user = json.dumps(build_llm_input(report_input), ensure_ascii=False)
+        user = json.dumps(build_llm_input(report_input, self.settings), ensure_ascii=False)
         allowed = frozenset(evidence_catalog(report_input))
+        tickers = _us_symbols_in_input(report_input)
         reason = ""
         failed: list[LlmAttempt] = []
         for attempt in range(1, self.max_attempts + 1):
             response: str | None = None
             try:
                 response = self.client.complete(SYSTEM_PROMPT, user, OUTPUT_SCHEMA)
-                output = parse_output(response, allowed)
+                output = parse_output(response, allowed, tickers)
             except (LlmCallError, InvalidOutput) as error:
                 reason = str(error)
                 failed.append(LlmAttempt(attempt, user, response, reason, type(error).__name__))
@@ -640,6 +658,12 @@ class LlmWriter:
                            accepted=AcceptedAttempt(attempt, user, response))
         raise ReportError(f"LLM report failed after {self.max_attempts} attempts: {reason}", self.max_attempts,
                           tuple(failed))
+
+
+def _us_symbols_in_input(i: ReportInput) -> frozenset[str]:
+    """LLM 입력에 있던 미국 티커. 문장에 쓰면 거부한다."""
+    return frozenset(i.tickers) | frozenset(r.ticker for r in i.close_rates) \
+        | frozenset(t for f in i.filings for t in f.tickers) | (i.etf.us_tickers() if i.etf else frozenset())
 
 
 def _llm_report(report_input: ReportInput, output: LlmOutput) -> Report:
@@ -666,7 +690,7 @@ def _llm_report(report_input: ReportInput, output: LlmOutput) -> Report:
         lines.append(f"- {cause.detail} [근거 {_numbers(cause.refs, number)}]")
         lines.append(f"- {cause.meaning} [근거 {_numbers(cause.meaning_refs, number)}]")
         if cause.shortfall:
-            lines.append(f"- {WEAK_NOTE_PREFIX}{cause.shortfall}")
+            lines.append(weak_note_line(cause.shortfall, "  "))
         for ref in cause.cited():
             lines.append(f"  근거 {number[ref]}. {_describe(by_id[ref])}")
         lines.append("")
@@ -681,14 +705,15 @@ def _numbers(refs: tuple[str, ...], number: dict[str, int]) -> str:
 
 
 def build_report_writer(env: Mapping[str, str],
-                        client_factory: Callable[[str, str], LlmClient] = AnthropicClient) -> ReportWriter:
+                        client_factory: Callable[[str, str], LlmClient] = AnthropicClient,
+                        settings: CoreSettings = DEFAULT_SETTINGS) -> ReportWriter:
     """시작할 때 한 번 부른다. 키가 없어도 시작을 막지 않고 규칙 기반으로 바꾼다."""
     config = llm_config(env)
     if config is None:
         log.warning("%s is not set; briefing reports will be rule-based", API_KEY_ENV)
         return RuleBasedWriter()
     log.info("briefing reports will be written by the LLM (model=%s)", config.model)
-    return LlmWriter(client_factory(config.api_key, config.model))
+    return LlmWriter(client_factory(config.api_key, config.model), settings=settings)
 
 
 # ---- 발행 ----
