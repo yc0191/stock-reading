@@ -215,6 +215,7 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 | `COLLECTOR_MARKET_DATA_SOURCE` | `simulator` 또는 `broker` |
 | `BROKER_BASE_URL` / `BROKER_APP_KEY` / `BROKER_APP_SECRET` | 시세 제공자의 주소와 키. `broker`일 때 필요 |
 | `COLLECTOR_TICK_INTERVAL_MS` | `schedule.tick`(수집) 발행 간격(밀리초). 타이머(`COLLECTOR_SCHEDULE_ENABLED=true`)가 켜져 있을 때만 쓰입니다. `scheduledFor`가 초 단위라 1000보다 작게 두면 같은 초의 tick이 중복으로 버려집니다 |
+| `COLLECTOR_QUOTE_START` / `COLLECTOR_QUOTE_END` | 1초 시세 tick(`collect`)을 발행하는 시간대(한국 시간 `HH:mm`, 양끝 포함, 끝 시각은 분 단위라 `15:30`이면 15:30:59까지). 평일 이 시간대 밖에서는 발행하지 않습니다. 장 밖에서는 현재가가 전일 종가 그대로라 조회해도 쓸 값이 없고, 그 시간에도 응답 칸이 깨져 오기 때문입니다. 뉴스 tick(`collect-news`)은 이 시간대와 상관없이 발행합니다. 휴장일은 판정하지 않아 평일 휴장일에도 발행됩니다 |
 | `COLLECTOR_MAX_TICK_AGE_MS` | 현재보다 이만큼 이상 오래된 tick은 조회하지 않고 종목마다 `TICK_SKIPPED` 실패 이벤트로 기록합니다(`exceptionType` 없음). 이와 별개로, 응답이 느려지거나 시작 준비 중에 tick이 쌓여 한 번에 여러 개 받으면 `scheduledFor`가 가장 늦은 tick 하나만 조회하고 나머지는 종목마다 `TICK_SKIPPED`, `exceptionType=SupersededByNewerTick`으로 기록합니다. 쌓인 tick을 모두 조회하면 같은 1초에 호출이 몰려 `BROKER_MAX_CALLS_PER_SECOND`에 걸리기 때문입니다. 같은 `scheduledFor`의 tick은 두 번째부터 이벤트 없이 버립니다(메모리 기록이라 재시작하면 잊습니다) |
 | `BROKER_MAX_CALLS_PER_SECOND` | 초당 시세 호출 상한. 종목 수가 이보다 많으면 시작할 때 경고하고, 넘친 종목은 그 tick에서 호출하지 않고 `TICK_SKIPPED` 실패 이벤트로 기록합니다. 상한 때문임은 `exceptionType=RateLimited`로 구분하며, 나중에 계약에 정식 실패 종류가 생기면 바꿀 수 있습니다. **종목 수와 같게 두면 오래 돌 때 일부 호출을 놓치고 처리도 느려지므로 종목 수의 1.2배 이상으로 두세요**([측정 기록](test-history/S03-quote-fixed-load/results.md), 가짜 서버로 쟀을 때. 1.1배까지는 가짜 서버 시험에서 놓침이 없었지만 처리 시간이 길었습니다, [R012](test-history/S03-quote-fixed-load/results.md)). 값을 올릴 때는 실제 서버가 5분을 버틴 가장 높은 속도가 초당 12회이고 13회부터 걸렸다는 점을 넘지 않게 합니다([S04](test-history/S04-quote-real-api/results.md)). 제공자의 공식 한도는 앱 전체 초당 40회, API별 초당 20회입니다 |
 | `BROKER_PRICE_CHECK_ENABLED` | 기본 `true`. 시세 응답마다 현재가를 같은 응답의 전일대비·등락률·고가·저가와 맞춰 보고, 판단할 수 있는 검사 중 과반이 어긋나면 시세 이벤트를 보내지 않고 `FIELD_MISMATCH` 실패 이벤트로 기록합니다. 어느 검사에 걸렸는지는 `exceptionType=FieldMismatch:CHANGE+RATE`처럼(`CHANGE` 전일대비, `RATE` 등락률, `HIGH_LOW` 고가·저가), 응답 원문은 `responseRaw`에 담깁니다(토큰 값은 가림). 비교 칸이 비었거나 숫자가 아닌 검사는 판단하지 않고, 판단할 검사가 하나도 없으면 통과시킵니다. 로그에는 종목 코드와 검사 이름만 남습니다. `false`면 검사하지 않습니다 |
@@ -288,6 +289,27 @@ python3 scripts/live_probe.py --profile <AWS 프로필> --base-url <시세 제�
 - 직전 시험에서 토큰 발급이 거절됐으면 `data/.live-probe-last.json`을 사람이 지우기 전에는 다시 실행하지 않습니다(틀린 키 반복 방지).
 - 직전 시험이 이상 응답(한도 초과 등)으로 멈췄으면 쉬는 시간(기본 10분, `--cooldown-minutes`)이 지나기 전에는 거부하고, `--force`로 넘길 수 있습니다.
 - 실행할 때 `JAVA_HOME_21`이 필요하고, 결과는 `data/` 아래(gitignore 대상)에 씁니다.
+
+병렬·직렬 비교 시험 `BrokerSerialProbeTest`는 같은 종목들을 병렬(지금 수집기 방식, `BrokerMarketData`)과 직렬(한 번에 한 종목)로 번갈아 조회해, 방식별 호출 수와 깨진 응답 건수(현재가 빈 값, 숫자 아님, 0 이하, 응답 칸 불일치)를 셉니다. 응답 칸 불일치(`fieldMismatch`)는 두 방식 모두 수집기와 같은 응답 칸 검사(`BROKER_PRICE_CHECK_*`, 위 수집기 설정 표)로 판단하므로 수집기가 `FIELD_MISMATCH`로 버리는 응답과 기준이 같고, 걸린 검사 조합별 건수(`mismatchChecks`)도 함께 적습니다. 평소 건너뛰고 `BROKER_SERIAL_PROBE=1`일 때만 돌며, 두 방식 모두 같은 호출 상한 장치를 거치고 토큰 발급과 현재가 조회만 합니다. 실제 운영 서버를 호출하므로 장중에 사람이 승인한 뒤 실행합니다. 가짜 서버로 같은 흐름을 리허설하는 `SerialProbeRehearsalTest`는 평소 테스트에서 돕니다.
+
+| 환경변수 | 뜻 |
+|---|---|
+| `BROKER_BASE_URL`, `BROKER_APP_KEY`, `BROKER_APP_SECRET` | 주소와 키. Parameter Store에서 가져온 값을 환경변수로만 넘깁니다 |
+| `BROKER_PROBE_SYMBOLS` | 종목(쉼표 구분). 다른 확인 도구와 같은 값을 씁니다 |
+| `BROKER_SERIAL_PROBE_OUT` | 결과 요약 파일. 저장소 안의 경로는 호출 전에 거절합니다 |
+| `BROKER_SERIAL_PROBE_ROUNDS` / `BROKER_SERIAL_PROBE_SECONDS` | 라운드 수(병렬 1회+직렬 1회, 기본 350)와 시간 상한(초, 기본 1200 = 20분). 먼저 닿는 쪽에서 멈춥니다. 0.2% 수준의 깨짐을 가리려면 방식별 수천 회가 필요해, 종목 9~10개·응답 0.1초면 20분 안에 방식별 3천 회 남짓을 부르는 값으로 정했습니다. 라운드 사이 쉼 덕분에 평균은 초당 5~8회이고, 어느 1초에도 호출 상한을 넘지 않습니다 |
+| `BROKER_SERIAL_PROBE_PAUSE_MS` | 방식 하나를 돈 뒤 쉬는 시간(기본 1000). 호출 상한의 1초 창을 비웁니다 |
+| `BROKER_MAX_CALLS_PER_SECOND` | 호출 상한. 없으면 수집기 기본값 |
+| `BROKER_PRICE_CHECK_*` | 응답 칸 검사 설정. 수집기와 같이 `application.yml`로 묶어 읽으므로 따로 넣지 않으면 수집기와 같은 값을 씁니다. 검사가 꺼졌거나 칸 이름이 모두 비면 칸 불일치는 세지 않습니다(`fieldCheck=off`) |
+
+```bash
+BROKER_SERIAL_PROBE=1 BROKER_SERIAL_PROBE_OUT=<저장소 밖 경로>/serial-probe.txt \
+  ./gradlew :services:collector:test --tests '*BrokerSerialProbeTest' --no-build-cache
+```
+
+- 결과 파일과 표준 출력에는 방식별 건수만 쓰고 종목 코드, 시세 값, 응답 원문, 키·토큰은 남기지 않습니다. 시험 동안에는 종목 코드가 들어가는 수집기 실패 로그를 끕니다.
+- 센 대상이 아닌 실패(토큰 발급 실패, HTTP 오류, 한도 초과 등)가 한 번이라도 나오면 다음 호출을 하지 않고 멈추며 `stop=`에 실패 종류를 적습니다.
+- 라운드마다 병렬과 직렬의 순서를 바꿔 앞 방식의 영향을 고르게 나눕니다. 병렬에서 상한 때문에 보내지 못한 종목은 호출 수가 아니라 `rateLimited`로 셉니다.
 
 ## 설정 값 가져오기 (Parameter Store, 선택)
 
@@ -428,7 +450,7 @@ MOVE_REPLAY_INPUT=<저장소 밖>/snapshots.tsv MOVE_REPLAY_EXCLUDE=<저장소 �
 - **변동 알림의 읽은 위치를 언제 확정할지:** 지금은 `market.move`를 읽는 즉시 확정해, 브리핑이 재시작되면 처리 중이던 변동이 기록 없이 사라집니다. 처리를 끝낸 뒤 확정하도록 바꿀지(재시작 후 다시 처리하므로 중복 리포트를 막는 방법도 함께 필요) 정합니다.
 - **작업 기록 보관 기간:** `briefing.job_run`과 `briefing.job_log`는 줄을 지우지 않고 쌓고, `job_log_legacy`(옛 모양 기록)도 남아 있습니다. LLM 입력·원래 응답을 그대로 담아 커지므로 보관 기간과 정리 방법(오래된 `job_log` 줄만 지울지, `job_run`까지 지울지)을 정합니다.
 - **장중 수집을 켤지:** 장중 수집은 기본 꺼짐입니다. 켜기 전에 장중에 실제 호출로 응답 모양과 호출 상한 여유를 확인합니다.
-- **휴장일 판정:** 마감 후·장 시작 전·장중 수집 모두 휴장일을 판정하지 않아 휴장일에도 tick을 발행합니다. 판정할지와 휴장일 목록을 어디서 받을지 정합니다.
+- **휴장일 판정:** 1초 시세·마감 후·장 시작 전·장중 수집 모두 휴장일을 판정하지 않아 휴장일에도 tick을 발행합니다. 판정할지와 휴장일 목록을 어디서 받을지 정합니다.
 - **같은 종목의 중복 변동 리포트를 줄이는 방식:** 지금은 같은 종목의 변동이 짧은 간격으로 여러 번 와도 이벤트마다 리포트를 만듭니다. 묶어서 한 번만 보낼지, 일정 시간 안의 변동은 건너뛸지 정합니다.
 
 ## 후속
