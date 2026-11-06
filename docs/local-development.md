@@ -166,6 +166,7 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 | `COLLECTOR_MARKET_DATA_SOURCE` | `simulator` 또는 `broker` |
 | `BROKER_BASE_URL` / `BROKER_APP_KEY` / `BROKER_APP_SECRET` | 시세 제공자의 주소와 키. `broker`일 때 필요 |
 | `COLLECTOR_TICK_INTERVAL_MS` | `schedule.tick`(수집) 발행 간격(밀리초). 타이머(`COLLECTOR_SCHEDULE_ENABLED=true`)가 켜져 있을 때만 쓰입니다. `scheduledFor`가 초 단위라 1000보다 작게 두면 같은 초의 tick이 중복으로 버려집니다 |
+| `COLLECTOR_QUOTE_START` / `COLLECTOR_QUOTE_END` | 1초 시세 tick(`collect`)을 발행하는 시간대(한국 시간 `HH:mm`, 양끝 포함, 끝 시각은 분 단위라 `15:30`이면 15:30:59까지). 평일 이 시간대 밖에서는 발행하지 않습니다. 장 밖에서는 현재가가 전일 종가 그대로라 조회해도 쓸 값이 없고, 그 시간에도 응답 칸이 깨져 오기 때문입니다. 뉴스 tick(`collect-news`)은 이 시간대와 상관없이 발행합니다. 휴장일은 판정하지 않아 평일 휴장일에도 발행됩니다 |
 | `COLLECTOR_MAX_TICK_AGE_MS` | 현재보다 이만큼 이상 오래된 tick은 조회하지 않고 종목마다 `TICK_SKIPPED` 실패 이벤트로 기록합니다(`exceptionType` 없음). 이와 별개로, 응답이 느려지거나 시작 준비 중에 tick이 쌓여 한 번에 여러 개 받으면 `scheduledFor`가 가장 늦은 tick 하나만 조회하고 나머지는 종목마다 `TICK_SKIPPED`, `exceptionType=SupersededByNewerTick`으로 기록합니다. 쌓인 tick을 모두 조회하면 같은 1초에 호출이 몰려 `BROKER_MAX_CALLS_PER_SECOND`에 걸리기 때문입니다. 같은 `scheduledFor`의 tick은 두 번째부터 이벤트 없이 버립니다(메모리 기록이라 재시작하면 잊습니다) |
 | `BROKER_MAX_CALLS_PER_SECOND` | 초당 시세 호출 상한. 종목 수가 이보다 많으면 시작할 때 경고하고, 넘친 종목은 그 tick에서 호출하지 않고 `TICK_SKIPPED` 실패 이벤트로 기록합니다. 상한 때문임은 `exceptionType=RateLimited`로 구분하며, 나중에 계약에 정식 실패 종류가 생기면 바꿀 수 있습니다. **종목 수와 같게 두면 오래 돌 때 일부 호출을 놓치고 처리도 느려지므로 종목 수의 1.2배 이상으로 두세요**([측정 기록](test-history/S03-quote-fixed-load/results.md), 가짜 서버로 쟀을 때. 1.1배까지는 가짜 서버 시험에서 놓침이 없었지만 처리 시간이 길었습니다, [R012](test-history/S03-quote-fixed-load/results.md)). 값을 올릴 때는 실제 서버가 5분을 버틴 가장 높은 속도가 초당 12회이고 13회부터 걸렸다는 점을 넘지 않게 합니다([S04](test-history/S04-quote-real-api/results.md)). 제공자의 공식 한도는 앱 전체 초당 40회, API별 초당 20회입니다 |
 | `BROKER_PRICE_CHECK_ENABLED` | 기본 `true`. 시세 응답마다 현재가를 같은 응답의 전일대비·등락률·고가·저가와 맞춰 보고, 판단할 수 있는 검사 중 과반이 어긋나면 시세 이벤트를 보내지 않고 `FIELD_MISMATCH` 실패 이벤트로 기록합니다. 어느 검사에 걸렸는지는 `exceptionType=FieldMismatch:CHANGE+RATE`처럼(`CHANGE` 전일대비, `RATE` 등락률, `HIGH_LOW` 고가·저가), 응답 원문은 `responseRaw`에 담깁니다(토큰 값은 가림). 비교 칸이 비었거나 숫자가 아닌 검사는 판단하지 않고, 판단할 검사가 하나도 없으면 통과시킵니다. 로그에는 종목 코드와 검사 이름만 남습니다. `false`면 검사하지 않습니다 |
@@ -386,7 +387,7 @@ MOVE_REPLAY_INPUT=<저장소 밖>/snapshots.tsv MOVE_REPLAY_EXCLUDE=<저장소 �
 - **브리핑 DB 마이그레이션 방식:** 실패 기록 테이블은 마이그레이션 도구 없이 시작할 때 `CREATE TABLE IF NOT EXISTS`로 만들고, 모양이 바뀌면 로컬 DB를 지우고 다시 만듭니다. 데이터를 지울 수 없게 되기 전에 Java 서비스처럼 버전 관리되는 마이그레이션을 쓸지, Python 쪽 도구를 쓸지 정합니다.
 - **변동 알림의 읽은 위치를 언제 확정할지:** 지금은 `market.move`를 읽는 즉시 확정해, 브리핑이 재시작되면 처리 중이던 변동이 기록 없이 사라집니다. 처리를 끝낸 뒤 확정하도록 바꿀지(재시작 후 다시 처리하므로 중복 리포트를 막는 방법도 함께 필요) 정합니다.
 - **장중 수집을 켤지:** 장중 수집은 기본 꺼짐입니다. 켜기 전에 장중에 실제 호출로 응답 모양과 호출 상한 여유를 확인합니다.
-- **휴장일 판정:** 마감 후·장 시작 전·장중 수집 모두 휴장일을 판정하지 않아 휴장일에도 tick을 발행합니다. 판정할지와 휴장일 목록을 어디서 받을지 정합니다.
+- **휴장일 판정:** 1초 시세·마감 후·장 시작 전·장중 수집 모두 휴장일을 판정하지 않아 휴장일에도 tick을 발행합니다. 판정할지와 휴장일 목록을 어디서 받을지 정합니다.
 - **같은 종목의 중복 변동 리포트를 줄이는 방식:** 지금은 같은 종목의 변동이 짧은 간격으로 여러 번 와도 이벤트마다 리포트를 만듭니다. 묶어서 한 번만 보낼지, 일정 시간 안의 변동은 건너뛸지 정합니다.
 
 ## 후속
