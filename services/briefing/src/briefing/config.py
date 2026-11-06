@@ -38,6 +38,11 @@ class CoreSettings:
     max_research_queries: int = 3
     research_query_attempts: int = 3
     research_wait_limit: timedelta = timedelta(minutes=5)
+    # 근거가 약한 문장 단위 재검색: 문장 하나를 찾는 최대 횟수(처음 찾기 포함), 작업 하나가 보낼 수 있는 재검색 요청 합계,
+    # 작업 하나의 재검색 전체 시간. 요청 합계를 넘는 문장은 찾지 않고 '근거 약함'을 남기고, 전체 시간이 지나면 그때의 본문으로 낸다.
+    research_rounds_per_sentence: int = 2
+    max_research_requests: int = 10
+    research_total_limit: timedelta = timedelta(minutes=15)
 
 
 @dataclass(frozen=True)

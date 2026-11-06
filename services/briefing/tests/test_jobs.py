@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from briefing.config import CoreSettings
+from briefing.job_log import EntryType, JobKind, RunStatus
 from briefing.jobs import BriefingCore
 from briefing.ports import FailureReason
 from contracts import sample, validate
@@ -279,8 +280,8 @@ def test_news_no_response_after_three_attempts(core, rec):
         core.on_tick(T + step * S.response_timeout)
 
     (failure,) = rec.failed
-    assert (failure.reason, failure.attempts, failure.job_id, failure.target["symbol"]) == (
-        FailureReason.NEWS_NO_RESPONSE, 3, JOB_ID, "TEST01")
+    assert (failure.reason, failure.attempts, failure.job_id) == (FailureReason.NEWS_NO_RESPONSE, 3, JOB_ID)
+    assert rec.log.starts[0].target["symbol"] == "TEST01"
     assert [e.value["payload"]["seq"] for e in rec.of("news.articles.requested")] == [1, 2, 3]
     assert rec.readied == []
 
@@ -336,9 +337,11 @@ def test_a_failed_job_leaves_one_failure_line_and_one_result_line_under_the_same
     (failure,) = rec.log.failures()
     (result,) = rec.log.results()
     assert failure.job_id == result.job_id == JOB_ID
-    assert failure.job_kind == result.job_kind == "move" and not failure.researched
-    assert result.reason == FailureReason.MARKET_NO_RESPONSE and result.data["outcome"] == "failed"
-    assert len([e for e in rec.log.of_type("resent") if e.stage == "market.history"]) == 2  # 재요청 두 번
+    # 작업 한 줄(job_run)은 시작 때 move로 만들고 끝날 때 실패 사유와 함께 고친다.
+    (run,) = rec.log.starts
+    assert run.job_kind == JobKind.MOVE and run.job_id == JOB_ID and run.target["symbol"] == "TEST01"
+    assert result.status == RunStatus.FAILED and result.failure_reason == FailureReason.MARKET_NO_RESPONSE.value
+    assert len([e for e in rec.log.of_type(EntryType.RESENT) if e.stage == "market.history"]) == 2  # 재요청 두 번
 
 
 def test_failure_reasons_are_exactly_the_seven_defined(core):

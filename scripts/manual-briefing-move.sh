@@ -58,4 +58,4 @@ show news.articles.requested
 show market.history.responded
 show news.articles.responded
 show briefing.generated
-echo "briefing.generated 가 없으면 작업 기록 테이블(briefing.job_log)에서 job_id=${move_id} 를 확인합니다."
+echo "briefing.generated 가 없으면 작업 기록(briefing.job_run·briefing.job_log)을 확인합니다: python3 scripts/job_history.py ${move_id}"

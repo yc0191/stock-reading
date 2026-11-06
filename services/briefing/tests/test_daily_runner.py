@@ -95,7 +95,8 @@ def test_daily_no_response_is_resent_by_the_runner_timer_and_still_publishes(set
     [(key, briefing)] = sent(producer, "briefing.daily.generated")
     assert key == "post-close" and briefing["payload"]["generatedBy"] == "rule-based"
     [failure] = store.failures
-    assert failure.reason == FailureReason.CONTEXT_NO_RESPONSE and failure.job_kind == "post-close"
+    assert failure.reason == FailureReason.CONTEXT_NO_RESPONSE
+    assert [run.job_kind for run in store.starts] == ["post-close"]
 
 
 def test_duplicate_tick_is_handled_once_by_the_runner(setup):

@@ -26,7 +26,6 @@ from briefing.events import (
 )
 from briefing.evidence import MARKET_WIDE, in_evidence_range
 from briefing.job_log import (
-    JOB_KIND_MOVE,
     REASON_RECHECK_ROUND,
     REASON_RESENT,
     STAGE_ARTICLES,
@@ -35,14 +34,16 @@ from briefing.job_log import (
     STAGE_CONTEXT,
     STAGE_FILINGS,
     STAGE_HISTORY,
-    TYPE_CHECK_ROUND,
-    TYPE_FAILED,
-    TYPE_RESENT,
-    TYPE_RESULT,
     DiscardJobLog,
+    EntryType,
+    JobKind,
     JobLogEntry,
     JobLogPort,
+    JobResult,
+    JobStart,
+    RunStatus,
     move_target,
+    record_result,
 )
 from briefing.ports import FailureReason, RequestPort
 from briefing.sources import (
@@ -219,6 +220,10 @@ class BriefingCore:
         self._jobs[job.job_id] = job
         while len(self._jobs) > self.settings.remembered_jobs:
             self._jobs.popitem(last=False)
+        # 작업 한 줄은 시작 때 만들고 끝날 때 고친다. 입력은 시작시킨 이벤트 원문이다.
+        raw = message.decode("utf-8") if isinstance(message, bytes) else message
+        self.job_log.start(JobStart(job.job_id, JobKind.MOVE, raw, move_target(job.symbol, format_timestamp(job.as_of)),
+                                    now))
 
         # 완료 알림이 변동 알림보다 먼저 도착했을 수 있어 보관분부터 확인한다.
         if any(c.covers(job.symbol, job.as_of, self.settings) for c in self._completions):
@@ -475,7 +480,7 @@ class BriefingCore:
             self._fail(job, reason, f"no {event_type} within the time limit", exchange.seq, now)
         else:
             resend(job, now)
-            self._record(job, stage, TYPE_RESENT, REASON_RESENT, "ResponseTimeout", exchange.seq, now,
+            self._record(job, stage, EntryType.RESENT, REASON_RESENT, "ResponseTimeout", exchange.seq, now,
                          {"timedOutSeq": exchange.seq - 1, "resentSeq": exchange.seq})
 
     def _tick_news(self, job: _Job, now: datetime) -> None:
@@ -487,7 +492,7 @@ class BriefingCore:
                            "no news.articles.responded within the time limit", job.news_attempt, now)
             else:
                 self._send_news(job, now, job.news_attempt + 1)
-                self._record(job, STAGE_ARTICLES, TYPE_RESENT, REASON_RESENT, "ResponseTimeout", job.news_attempt, now,
+                self._record(job, STAGE_ARTICLES, EntryType.RESENT, REASON_RESENT, "ResponseTimeout", job.news_attempt, now,
                              {"round": job.news_round, "timedOutSeq": job.news_seq - 1, "resentSeq": job.news_seq})
         elif job.news_recheck_at is not None and not job.news_stable and now >= job.news_recheck_at:
             job.news_round += 1
@@ -572,10 +577,9 @@ class BriefingCore:
         if reason is FailureReason.NEWS_UNSTABLE:
             extra["rounds"] = job.news_round
             extra["lastArticles"] = _article_list(job.news_articles or ())
-        self._record(job, stage, TYPE_FAILED, reason.value, error_type, attempts, now, extra)
-        # 결과 줄에는 사유만 담는다. 관련 데이터는 위의 실패 줄에 있다.
-        self._record(job, stage, TYPE_RESULT, reason.value, error_type, attempts, now,
-                     {"outcome": "failed", "detail": detail}, related=False)
+        self._record(job, stage, EntryType.STEP_FAILED, reason.value, error_type, attempts, now, extra)
+        # 작업 한 줄에는 사유만 적는다. 관련 데이터는 위의 실패 줄에 있다.
+        record_result(self.job_log, JobResult(job.job_id, RunStatus.FAILED, now, failure_reason=reason.value))
 
     # ---- 작업 기록 ----
 
@@ -585,14 +589,8 @@ class BriefingCore:
         job.request_ranges[stage] = {k: v for k, v in payload.items() if k not in ("jobId", "seq")}
         return payload
 
-    def _record(self, job: _Job, stage: str, entry_type: str, reason: str, error_type: str, attempts: int,
-                now: datetime, extra: dict[str, Any], related: bool = True) -> None:
-        if not related:
-            self.job_log.record(JobLogEntry(
-                job_kind=JOB_KIND_MOVE, researched=False, job_id=job.job_id,
-                target=move_target(job.symbol, format_timestamp(job.as_of)), stage=stage, entry_type=entry_type,
-                reason=reason, error_type=error_type, attempts=attempts, data=extra, occurred_at=now))
-            return
+    def _record(self, job: _Job, stage: str, entry_type: EntryType, reason: str, error_type: str, attempts: int,
+                now: datetime, extra: dict[str, Any]) -> None:
         received, not_received = _response_states(job)
         request_stage = STAGE_ARTICLES if stage == STAGE_ARTICLES_RECHECK else stage
         data: dict[str, Any] = {
@@ -608,14 +606,13 @@ class BriefingCore:
         }
         data.update(extra)
         self.job_log.record(JobLogEntry(
-            job_kind=JOB_KIND_MOVE, researched=False, job_id=job.job_id,
-            target=move_target(job.symbol, format_timestamp(job.as_of)), stage=stage, entry_type=entry_type,
-            reason=reason, error_type=error_type, attempts=attempts, data=data, occurred_at=now))
+            job_id=job.job_id, entry_type=entry_type, stage=stage, reason=reason, occurred_at=now,
+            error_type=error_type, attempts=attempts, data=data))
 
     def _record_recheck_round(self, job: _Job, articles: tuple[Article, ...], ids: frozenset[str],
                               now: datetime) -> None:
         changed = ids != job.news_previous_ids
-        self._record(job, STAGE_ARTICLES_RECHECK, TYPE_CHECK_ROUND, REASON_RECHECK_ROUND,
+        self._record(job, STAGE_ARTICLES_RECHECK, EntryType.CHECK_ROUND, REASON_RECHECK_ROUND,
                      "ArticleSetChanged" if changed else "ArticleSetUnchanged", job.news_round, now, {
                          "round": job.news_round,
                          "receivedArticles": _article_list(articles),

@@ -11,6 +11,7 @@ from briefing.ports import FailureReason
 from fake_job_log import FakeJobLog
 from briefing.report import GENERATED_BY_LLM, LlmWriter, Report, ReportError, RuleBasedWriter
 from briefing.research import QueryWriter
+from briefing.sentence_research import WHOLE_REPORT, research_job_id
 from contracts import sample, validate
 
 KST = timezone(timedelta(hours=9))
@@ -437,12 +438,13 @@ def research_completed_message(incomplete=()):
     return FakeMessage("collection.completed", envelope("collection.completed", {
         "jobType": "research-news", "scheduledFor": "2026-10-20T16:15:43+09:00",
         "startedAt": "2026-10-20T16:15:44+09:00", "finishedAt": "2026-10-20T16:15:50+09:00",
-        "publishedCount": 1, "incompleteSymbols": list(incomplete), "researchJobId": JOB_ID}))
+        "publishedCount": 1, "incompleteSymbols": list(incomplete),
+        "researchJobId": research_job_id(JOB_ID, WHOLE_REPORT, 1)}))
 
 
 def research_articles_message(seq):
     return FakeMessage("news.articles.responded", envelope("news.articles.responded", {
-        "jobId": JOB_ID, "seq": seq, "symbol": "TEST01",
+        "jobId": research_job_id(JOB_ID, WHOLE_REPORT, 1), "seq": seq, "symbol": "TEST01",
         "articles": [{"articleId": "r1", "title": "다시 찾은 기사", "summary": "",
                       "publishedAt": "2026-10-20T06:00:00Z", "publisher": "news.example.com",
                       "url": "https://news.example.com/articles/r1"}],
@@ -473,11 +475,13 @@ def test_insufficient_evidence_flows_through_research_request_completion_and_rew
     feed(runner, consumer, research_completed_message())
     (_, research_request), = [(k, v) for k, v in sent(producer, "news.articles.requested")
                               if "researchJobId" in v["payload"]]
-    assert research_request["payload"]["seq"] == 3
-    feed(runner, consumer, research_articles_message(3))
+    # 재검색 작업은 자기 id로 따로 돌므로 기사 조회 순번이 1부터 시작한다.
+    assert research_request["payload"]["seq"] == 1
+    assert research_request["payload"]["researchJobId"] == research_job_id(JOB_ID, WHOLE_REPORT, 1)
+    feed(runner, consumer, research_articles_message(1))
     clock.advance(seconds=10)
     runner.run_once()  # 재검색 쪽 제한 시각도 실행부가 깨워 확인 라운드를 보낸다
-    feed(runner, consumer, research_articles_message(4))
+    feed(runner, consumer, research_articles_message(2))
 
     (_, event), = sent(producer, "briefing.generated")
     assert [e["articleId"] for e in event["payload"]["evidence"]] == ["r1"]

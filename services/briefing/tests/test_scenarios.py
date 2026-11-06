@@ -790,7 +790,9 @@ def logged_core(rec):
 
 def filled(record):
     from dataclasses import fields
-    return all(getattr(record, f.name) not in (None, "", {}, []) for f in fields(record))
+    # 문장 단위 칸(문장 번호, 회차, 고치기 전·후)은 문장 단위 줄에만 채워진다.
+    optional = ("sentence_no", "round", "before", "after")
+    return all(getattr(record, f.name) not in (None, "", {}, []) for f in fields(record) if f.name not in optional)
 
 
 def test_a_request_resent_after_the_time_limit_is_recorded_even_when_the_job_succeeds(logged_core, rec, failure_log):
@@ -856,7 +858,7 @@ def test_a_job_that_finally_fails_records_both_the_old_failure_and_a_full_move_f
     assert old.reason == FailureReason.FILINGS_NO_RESPONSE
     final = old
     (result,) = failure_log.results()
-    assert result.data["outcome"] == "failed" and result.reason == "filings_no_response"
+    assert result.status == "failed" and result.failure_reason == "filings_no_response"
     assert filled(final)
     assert (final.stage, final.reason, final.attempts) == (STAGE_FILINGS, "filings_no_response", 3)
     assert final.data["notReceived"] == [STAGE_FILINGS]
@@ -880,7 +882,7 @@ def test_waiting_for_collection_until_the_limit_is_recorded(logged_core, rec, fa
 
     (record,) = failure_log.failed
     (result,) = failure_log.results()
-    assert result.reason == "collection_not_covered" and result.data["outcome"] == "failed"
+    assert result.failure_reason == "collection_not_covered" and result.status == "failed"
     assert filled(record)
     assert (record.stage, record.reason, record.attempts) == (STAGE_COLLECTION, "collection_not_covered", 0)
     assert record.data["missingItems"] == ["collection.completed"]
@@ -934,7 +936,8 @@ def test_a_move_that_succeeds_after_a_resent_request_leaves_every_kind_of_line_u
     core.on_articles_responded(articles(2), T + SEC + S.recheck_interval)
 
     entries = rec.log.entries
-    assert {e.job_id for e in entries} == {JOB_ID} and {e.job_kind for e in entries} == {"move"}
-    assert [e.entry_type for e in entries] == ["resent", "check-round", "llm-rejected", "llm-succeeded", "result"]
+    assert {e.job_id for e in entries} == {JOB_ID} and [r.job_kind for r in rec.log.starts] == ["move"]
+    assert [e.entry_type for e in entries] == ["resent", "check-round", "llm-rejected", "report-written", "missing-items"]
     assert rec.log.failed == [] and len(published.sent) == 1
-    assert entries[-1].data["outcome"] == "published"
+    (result,) = rec.log.results()
+    assert result.status == "succeeded" and result.job_id == JOB_ID and result.final_text

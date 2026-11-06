@@ -39,11 +39,8 @@ from briefing.job_log_store import PostgresJobLog, psycopg_connector
 from briefing.jobs import BriefingCore
 from briefing.llm import AnthropicClient
 from briefing.report import ReportStage, ReportWriter, build_report_writer
-from briefing.research import (
-    QueryWriter,
-    ResearchReportStage,
-    build_query_writer,
-)
+from briefing.research import QueryWriter, build_query_writer
+from briefing.sentence_research import ResearchReportStage, SentenceResearch
 
 log = logging.getLogger("briefing")
 
@@ -173,6 +170,7 @@ class BriefingRunner:
         self._producer: Producer | None = None
         self.core: BriefingCore | None = None
         self.research: ResearchReportStage | None = None
+        self.sentences: SentenceResearch | None = None
         self._running = threading.Event()
         self._thread: threading.Thread | None = None
         self.error: BaseException | None = None
@@ -220,13 +218,12 @@ class BriefingRunner:
         self._producer = self._producer_factory({"bootstrap.servers": self.bootstrap, "acks": "all", **COMMON})
         publisher = KafkaPublisher(self._producer)
         stage = ReportStage(self.writer, publisher, self.job_log, clock=self.clock)
-        self.research = ResearchReportStage(stage, self.query_writer, publisher, self.job_log,
-                                            self.settings, self.clock)
+        # 급변동과 데일리 판이 문장 단위 재검색 흐름 하나를 함께 쓴다.
+        self.sentences = SentenceResearch(self.query_writer, publisher, self.job_log, self.settings)
+        self.research = ResearchReportStage(stage, self.sentences)
         self.core = BriefingCore(publisher, self.research, self.settings, self.job_log)
-        # 데일리 판도 같은 재검색 흐름을 쓴다. 끝난 데일리 재검색은 급변동 쪽에서 갈라 데일리가 넘겨받는다.
         self.daily = DailyCore(publisher, self.daily_writer, self.job_log, self.daily_settings,
-                               queries=self.query_writer, research=self.research.research)
-        self.research.other_done = self.daily
+                               sentences=self.sentences)
         for edition, group in TICK_CONSUMER_GROUPS.items():
             consumer = self._consumer_factory({
                 "bootstrap.servers": self.bootstrap,
@@ -273,10 +270,10 @@ class BriefingRunner:
         handler = {
             MOVE_TOPIC: self.core.on_move,
             # 재검색 완료 알림과 재검색 기사 응답은 재검색 쪽이 먼저 가져가고, 아니면 근거 조회 작업으로 넘긴다.
-            COLLECTION_COMPLETED_TOPIC: lambda m, now: self.research.research.on_collection_completed(m, now)
+            COLLECTION_COMPLETED_TOPIC: lambda m, now: self.sentences.on_collection_completed(m, now)
             or self.core.on_collection_completed(m, now),
             HISTORY_RESPONDED_TOPIC: self.core.on_history_responded,
-            ARTICLES_RESPONDED_TOPIC: lambda m, now: self.research.research.on_articles_responded(m, now)
+            ARTICLES_RESPONDED_TOPIC: lambda m, now: self.sentences.on_articles_responded(m, now)
             or self.core.on_articles_responded(m, now),
             CONTEXT_RESPONDED_TOPIC: self.core.on_context_responded,
             FILINGS_RESPONDED_TOPIC: self._on_filings_responded,
@@ -319,7 +316,7 @@ class BriefingRunner:
     # ---- 내부 ----
 
     def _next_deadline(self) -> datetime | None:
-        deadlines = [d for d in (self.core.next_deadline(), self.research.next_deadline(),
+        deadlines = [d for d in (self.core.next_deadline(), self.sentences.next_deadline(),
                                  self.daily.next_deadline()) if d is not None]
         return min(deadlines) if deadlines else None
 
@@ -335,9 +332,9 @@ class BriefingRunner:
         deadline = self.core.next_deadline()
         if deadline is not None and now >= deadline:
             self.core.on_tick(now)
-        deadline = self.research.next_deadline()
+        deadline = self.sentences.next_deadline()
         if deadline is not None and now >= deadline:
-            self.research.on_tick(now)
+            self.sentences.on_tick(now)
         deadline = self.daily.next_deadline()
         if deadline is not None and now >= deadline:
             self.daily.on_tick(now)

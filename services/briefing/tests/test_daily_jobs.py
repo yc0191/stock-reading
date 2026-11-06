@@ -28,7 +28,7 @@ from briefing.daily_report import (
     NO_DATA,
     DailyLlmWriter,
 )
-from briefing.job_log import DiscardJobLog, JobLogEntry
+from briefing.job_log import DiscardJobLog, EntryType, GeneratedBy, JobKind, JobLogEntry, RunStatus
 from briefing.llm import LlmCallError
 from briefing.ports import FailureReason
 from contracts import validate
@@ -355,10 +355,13 @@ def test_daily_data_is_resent_with_a_new_seq_and_given_up_after_the_last_attempt
 
     [failure] = failures.records
     assert failure.reason == FailureReason.CONTEXT_NO_RESPONSE
-    assert failure.job_kind == "morning" and failure.job_id == TICK_ID and failure.attempts == 3
+    assert failure.job_id == TICK_ID and failure.attempts == 3
+    [run] = details.starts
+    assert run.job_kind == JobKind.MORNING and run.job_id == TICK_ID
     [result] = details.results()
-    assert ITEM_FILINGS in result.data["missingItems"]
-    assert result.data["firstFailure"]["reason"] == "context_no_response"
+    assert result.status == RunStatus.SUCCEEDED and result.failure_reason == "context_no_response"
+    [missing] = details.of_type(EntryType.MISSING_ITEMS)
+    assert ITEM_FILINGS in missing.data["missingItems"]
 
     resent = details.by_reason(REASON_RESENT)
     assert [r.attempts for r in resent] == [1, 2] and {r.stage for r in resent} == {STAGE_DAILY_DATA}
@@ -378,7 +381,7 @@ def test_filings_no_response_still_sends_the_edition_and_records_one_failure(cor
     [event] = published(requests)
     assert event.value["payload"]["missingItems"] == [ITEM_FILINGS]
     [failure] = failures.records
-    assert failure.reason == FailureReason.FILINGS_NO_RESPONSE and failure.job_kind == "morning"
+    assert failure.reason == FailureReason.FILINGS_NO_RESPONSE and failure.job_id == TICK_ID
     [final] = details.by_reason("filings_no_response")
     assert final.stage == STAGE_FILINGS
     # 받은 응답은 내용 전부를 담는다.
@@ -401,7 +404,9 @@ def test_llm_writes_the_summary_and_cites_only_given_refs(core):
     assert "요약:" in payload["text"] and "[근거 1, 2]" in payload["text"]
     assert "투자 조언" in payload["text"]
     assert failures.records == []
-    assert [e.entry_type for e in details.records] == ["llm-succeeded", "result"]
+    assert [e.entry_type for e in details.records] == [EntryType.REPORT_WRITTEN]
+    [result] = details.results()
+    assert (result.status, result.generated_by, result.failure_reason) == (RunStatus.SUCCEEDED, GeneratedBy.LLM, None)
     _, user, schema = llm.calls[0]
     assert "insufficientEvidence" in schema["required"]
     assert {i["name"] for i in json.loads(user)["items"]} >= {ITEM_US_INDEX, ITEM_FILINGS}
@@ -437,7 +442,7 @@ def test_llm_failing_every_time_falls_back_to_the_rule_based_body_and_records_ll
     assert payload["generatedBy"] == GENERATED_BY_RULE
     assert "요약:" not in payload["text"] and "TEST INDEX(TESTIX) 2.04%" in payload["text"]
     [failure] = failures.records
-    assert failure.reason == FailureReason.LLM_ERROR and failure.attempts == 3 and failure.job_kind == "morning"
+    assert failure.reason == FailureReason.LLM_ERROR and failure.attempts == 3 and failure.job_id == TICK_ID
     assert [r.attempts for r in details.by_reason(REASON_LLM_REJECTED)] == [1, 2, 3]
     assert details.by_reason(REASON_LLM_REJECTED)[0].error_type == "LlmCallError"
     assert details.by_reason(REASON_LLM_REJECTED)[0].data["llm"]["rawOutput"] is None
@@ -476,7 +481,7 @@ def test_every_failure_is_logged_but_the_result_line_names_the_first_one(core):
         c.on_tick(MORNING_AT + timedelta(seconds=10 * n))
     assert [f.reason for f in failures.records] == [FailureReason.FILINGS_NO_RESPONSE, FailureReason.LLM_ERROR]
     [result] = details.results()
-    assert result.data["firstFailure"]["reason"] == FailureReason.FILINGS_NO_RESPONSE
+    assert result.failure_reason == FailureReason.FILINGS_NO_RESPONSE.value
     assert len(published(requests)) == 1
 
 
@@ -487,10 +492,11 @@ def test_missing_items_are_recorded_with_every_field_filled(core):
     c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
     c.on_daily_data_responded(daily_response(etfs=[], background=[]), POST_CLOSE_AT)
     [record] = details.by_reason(REASON_MISSING_ITEMS)
-    assert record.job_kind == "post-close" and record.job_id == TICK_ID and record.stage == STAGE_COMPOSE
-    assert record.target == {"rangeStart": datetime(2026, 10, 19, 17, 0, tzinfo=KST).isoformat(),
-                             "rangeEnd": POST_CLOSE_AT.isoformat()}
-    assert not record.researched
+    assert record.job_id == TICK_ID and record.stage == STAGE_COMPOSE
+    [run] = details.starts
+    assert run.job_kind == JobKind.POST_CLOSE
+    assert run.target == {"rangeStart": datetime(2026, 10, 19, 17, 0, tzinfo=KST).isoformat(),
+                          "rangeEnd": POST_CLOSE_AT.isoformat()}
     assert record.data["missingItems"] == [ITEM_KR_TODAY, ITEM_ETFS]
     assert record.data["received"]["market.daily.responded"]["etfs"] == []
     assert record.occurred_at == POST_CLOSE_AT
@@ -513,8 +519,8 @@ def test_records_and_events_carry_no_keys_or_personal_data(core, caplog, monkeyp
 
 
 def test_default_log_port_keeps_nothing_and_logs_nothing(caplog):
-    entry = JobLogEntry("morning", False, TICK_ID, {}, STAGE_LLM, "failed", "x", None, 1,
-                        {"llm": {"input": "TEST-INPUT"}}, MORNING_AT)
+    entry = JobLogEntry(TICK_ID, EntryType.STEP_FAILED, STAGE_LLM, "x", MORNING_AT, attempts=1,
+                        data={"llm": {"input": "TEST-INPUT"}})
     with caplog.at_level(logging.DEBUG):
         assert DiscardJobLog().record(entry) is True
         assert DiscardJobLog().has_failed(TICK_ID) is False
@@ -532,14 +538,15 @@ def test_every_edition_leaves_one_result_line_with_body_cited_evidence_missing_i
 
     [event] = published(requests)
     [result] = details.results()
-    assert (result.job_kind, result.job_id, result.reason, result.researched) == (
-        "morning", TICK_ID, "published", False)
-    assert result.data["text"] == event.value["payload"]["text"]
-    assert result.data["generatedBy"] == GENERATED_BY_LLM
-    assert result.data["missingItems"] == event.value["payload"]["missingItems"]
-    assert [e["ref"] for e in result.data["evidence"]] == ["B1", "0000000001-26-000001"]
-    assert all(e["describe"] for e in result.data["evidence"])
-    assert "firstFailure" not in result.data
+    # 작업 한 줄(job_run)은 morning으로 시작해 본문·작성 방식·메일의 브리핑 ID와 함께 끝난다.
+    [run] = details.starts
+    assert (run.job_kind, result.job_id, result.status) == (JobKind.MORNING, TICK_ID, RunStatus.SUCCEEDED)
+    assert result.final_text == event.value["payload"]["text"]
+    assert result.generated_by == GeneratedBy.LLM and result.result_event_id == event.value["eventId"]
+    assert (result.weak_count, result.research_count, result.failure_reason) == (0, 0, None)
+    # 빠진 항목이 없으면 missing-items 줄도 없고, 인용한 근거는 최종 본문의 근거 목록에 있다.
+    assert details.of_type(EntryType.MISSING_ITEMS) == [] and event.value["payload"]["missingItems"] == []
+    assert "근거:" in result.final_text and "[근거 1, 2]" in result.final_text
 
 
 def test_the_accepted_llm_attempt_keeps_its_input_and_original_response(core):
@@ -550,7 +557,7 @@ def test_the_accepted_llm_attempt_keeps_its_input_and_original_response(core):
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
 
-    [accepted] = details.of_type("llm-succeeded")
+    [accepted] = details.of_type(EntryType.REPORT_WRITTEN)
     assert accepted.attempts == 2 and accepted.error_type is None and accepted.stage == STAGE_LLM
     assert accepted.data["llm"]["rawOutput"] == answer and accepted.data["llm"]["input"] == llm.calls[1][1]
     assert accepted.data["llm"]["rejectReason"] is None
@@ -566,6 +573,7 @@ def test_edition_is_not_published_when_its_log_could_not_be_saved(caplog):
 
     assert published(requests) == []
     assert "result event not published" in caplog.text and "TEST01" not in caplog.text
+    assert "result was not saved" in caplog.text
     assert c.next_deadline() is None  # 작업은 정리되어 더 기다리지 않는다
 
 
@@ -575,6 +583,7 @@ def test_post_close_edition_also_leaves_its_lines_under_its_own_job_kind(core):
     for n in (1, 2, 3):
         c.on_tick(POST_CLOSE_AT + timedelta(seconds=10 * n))
 
-    assert {e.job_kind for e in details.entries} == {"post-close"}
-    assert [e.entry_type for e in details.entries][-1] == "result"
+    assert {run.job_kind for run in details.starts} == {JobKind.POST_CLOSE}
+    assert {e.job_id for e in details.entries} == {TICK_ID}
+    assert [r.status for r in details.results()] == [RunStatus.SUCCEEDED]
     assert len(published(requests)) == 1

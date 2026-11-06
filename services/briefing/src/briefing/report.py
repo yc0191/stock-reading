@@ -17,21 +17,19 @@ from briefing.compose import DISCLAIMER, KST, NO_EVIDENCE, direction_of, headlin
 from briefing.events import BRIEFING_GENERATED_TOPIC, OutboundEvent, format_timestamp
 from briefing.jobs import ReportInput
 from briefing.job_log import (
-    JOB_KIND_MOVE,
     REASON_LLM_ACCEPTED,
     REASON_LLM_CALL_FAILED,
     REASON_LLM_REJECTED,
     REASON_PUBLISHED,
     STAGE_LLM,
     STAGE_PUBLISH,
-    TYPE_FAILED,
-    TYPE_LLM_REJECTED,
-    TYPE_LLM_SUCCEEDED,
-    TYPE_RESULT,
     DiscardJobLog,
+    EntryType,
+    GeneratedBy,
     JobLogEntry,
     JobLogPort,
-    move_target,
+    JobResult,
+    RunStatus,
     record_result,
 )
 from briefing.move_figures import (
@@ -76,8 +74,8 @@ from briefing.sources import (
 
 log = logging.getLogger("briefing.report")
 
-GENERATED_BY_RULE = "rule-based"
-GENERATED_BY_LLM = "llm"
+GENERATED_BY_RULE = GeneratedBy.RULE_BASED.value
+GENERATED_BY_LLM = GeneratedBy.LLM.value
 LLM_MAX_ATTEMPTS = 3
 RULE_BASED_LIMIT = 3
 
@@ -200,6 +198,8 @@ class Report:
     insufficient_evidence: bool = False
     # LLM이 근거가 약하다고 한 원인들의 부족한 점. 재검색 여부를 정하고 검색어 LLM 입력에 들어간다.
     weak_shortfalls: tuple[str, ...] = ()
+    # 받아들인 LLM 출력. 문장 하나만 다시 쓸 때 나머지 원인을 그대로 두고 본문을 다시 만드는 데 쓴다(규칙 기반이면 None).
+    output: LlmOutput | None = None
 
 
 class ReportError(Exception):
@@ -631,6 +631,29 @@ def parse_output(text: str, allowed_ids: frozenset[str], forbidden_tickers: froz
     return LlmOutput(tuple(causes), insufficient)
 
 
+REWRITE_ADDENDUM = """
+
+다시 쓰기 요청:
+- 입력의 rewrite 칸은 근거가 약하다고 한 원인 하나(sentence)와 그 부족한 점(shortfall)입니다. newRefs는 그 부족한 점을 채우려고 새로 찾아 researchArticles에 담은 기사의 ref입니다.
+- 그 원인 하나만 다시 씁니다. causes에는 다시 쓴 원인 하나만 담고 다른 원인은 쓰지 않으며, insufficientEvidence는 false로 둡니다.
+- 새 기사로 부족한 점이 채워지면 weak를 false로, 그래도 약하면 weak를 true로 하고 shortfall에 아직 부족한 점을 씁니다. 새 기사에 없는 내용은 지어내지 않습니다.
+- 근거 번호·단정 금지·티커 금지 같은 위의 규칙은 그대로 지킵니다."""
+
+
+@dataclass(frozen=True)
+class SentenceRewrite:
+    """원인 하나를 다시 쓴 결과. cause가 None이면 끝내 실패했고 원래 원인을 그대로 둔다."""
+
+    cause: Cause | None
+    failed_attempts: tuple[LlmAttempt, ...]
+    accepted: AcceptedAttempt | None = None
+
+
+def _cause_input(cause: Cause) -> dict[str, Any]:
+    return {"title": cause.title, "detail": cause.detail, "refs": list(cause.refs), "meaning": cause.meaning,
+            "meaningRefs": list(cause.meaning_refs)}
+
+
 @dataclass(frozen=True)
 class LlmWriter:
     client: LlmClient
@@ -659,6 +682,36 @@ class LlmWriter:
         raise ReportError(f"LLM report failed after {self.max_attempts} attempts: {reason}", self.max_attempts,
                           tuple(failed))
 
+    def rewrite_cause(self, report_input: ReportInput, current: Cause, no: int,
+                      new_refs: tuple[str, ...]) -> SentenceRewrite:
+        """근거가 약한 원인 하나만 다시 쓴다. 나머지 원인은 건드리지 않는다."""
+        return _rewrite_cause(self, report_input, current, no, new_refs)
+
+
+def _rewrite_cause(writer: LlmWriter, report_input: ReportInput, current: Cause, no: int,
+                   new_refs: tuple[str, ...]) -> SentenceRewrite:
+    data = build_llm_input(report_input, writer.settings)
+    data["rewrite"] = {"sentenceNo": no, "sentence": _cause_input(current), "shortfall": current.shortfall,
+                       "newRefs": list(new_refs)}
+    user = json.dumps(data, ensure_ascii=False)
+    allowed = frozenset(evidence_catalog(report_input))
+    tickers = _us_symbols_in_input(report_input)
+    failed: list[LlmAttempt] = []
+    for attempt in range(1, writer.max_attempts + 1):
+        response: str | None = None
+        try:
+            response = writer.client.complete(SYSTEM_PROMPT + REWRITE_ADDENDUM, user, OUTPUT_SCHEMA)
+            output = parse_output(response, allowed, tickers)
+            if output.insufficient_evidence or len(output.causes) != 1:
+                raise InvalidOutput("rewrite must return exactly one cause")
+        except (LlmCallError, InvalidOutput) as error:
+            failed.append(LlmAttempt(attempt, user, response, str(error), type(error).__name__))
+            log.warning("LLM sentence rewrite attempt %d/%d failed for job %s: %s",
+                        attempt, writer.max_attempts, report_input.job_id, error)
+            continue
+        return SentenceRewrite(output.causes[0], tuple(failed), AcceptedAttempt(attempt, user, response))
+    return SentenceRewrite(None, tuple(failed))
+
 
 def _us_symbols_in_input(i: ReportInput) -> frozenset[str]:
     """LLM 입력에 있던 미국 티커. 문장에 쓰면 거부한다."""
@@ -676,7 +729,7 @@ def _llm_report(report_input: ReportInput, output: LlmOutput) -> Report:
         lines.append("")
         lines.extend(unchecked_lines(i))
         lines.append(LLM_DISCLAIMER)
-        return Report("\n".join(lines), GENERATED_BY_LLM, (), insufficient_evidence=True)
+        return Report("\n".join(lines), GENERATED_BY_LLM, (), insufficient_evidence=True, output=output)
 
     cited: list[str] = []
     for cause in output.causes:
@@ -697,7 +750,7 @@ def _llm_report(report_input: ReportInput, output: LlmOutput) -> Report:
     lines.extend(unchecked_lines(i))
     lines.append(LLM_DISCLAIMER)
     return Report("\n".join(lines), GENERATED_BY_LLM, tuple(by_id[x] for x in cited),
-                  weak_shortfalls=tuple(c.shortfall for c in output.causes if c.shortfall))
+                  weak_shortfalls=tuple(c.shortfall for c in output.causes if c.shortfall), output=output)
 
 
 def _numbers(refs: tuple[str, ...], number: dict[str, int]) -> str:
@@ -758,59 +811,88 @@ class ReportStage:
         if report is not None:
             self.publish(report_input, report)
 
-    def write(self, report_input: ReportInput, researched: bool = False) -> Report | None:
-        """리포트를 만든다. 끝내 못 만들면 llm_error로 기록하고 None."""
+    def write(self, report_input: ReportInput, fail_job: bool = True) -> Report | None:
+        """리포트를 만든다. 끝내 못 만들면 llm_error로 기록하고 None.
+
+        fail_job이 False이면 작업을 실패로 닫지 않고 시도 기록만 남긴다(이미 낼 수 있는 보고서가 있을 때).
+        """
         try:
             report = self.writer.write(report_input)
         except ReportError as error:
             log.warning("job %s failed: %s", report_input.job_id, FailureReason.LLM_ERROR.value)
             now = self.clock()
-            self._record_attempts(report_input, error.failed_attempts, now, researched)
-            self._record(report_input, TYPE_FAILED, FailureReason.LLM_ERROR.value, "ReportError", error.attempts, now,
-                         researched, {"detail": error.detail,
-                                      "failedAttempts": [_attempt_data(a) for a in error.failed_attempts]})
-            self._record(report_input, TYPE_RESULT, FailureReason.LLM_ERROR.value, "ReportError", error.attempts, now,
-                         researched, {"outcome": "failed", "detail": error.detail}, STAGE_LLM)
+            self._record_attempts(report_input, error.failed_attempts, now)
+            self._record(report_input, EntryType.STEP_FAILED, FailureReason.LLM_ERROR.value, "ReportError",
+                         error.attempts, now, {"detail": error.detail,
+                                               "failedAttempts": [_attempt_data(a) for a in error.failed_attempts]})
+            if fail_job:
+                record_result(self.job_log, JobResult(
+                    report_input.job_id, RunStatus.FAILED, now, failure_reason=FailureReason.LLM_ERROR.value))
             return None
         now = self.clock()
-        self._record_attempts(report_input, report.failed_attempts, now, researched)
+        self._record_attempts(report_input, report.failed_attempts, now)
         if report.accepted is not None:
-            a = report.accepted
-            self._record(report_input, TYPE_LLM_SUCCEEDED, REASON_LLM_ACCEPTED, None, a.attempt, now, researched,
-                         {"attempt": a.attempt, "llmInput": a.llm_input, "llmResponse": a.response,
-                          "rejection": None})
+            self._record_accepted(report_input, report.accepted, now)
         return report
 
-    def publish(self, report_input: ReportInput, report: Report, researched: bool = False) -> None:
-        """최종 결과 줄을 남기고, 이 작업의 줄이 모두 저장됐을 때만 발행한다."""
-        event = briefing_event(report_input, report, self.clock())
+    def rewrite_sentence(self, report_input: ReportInput, report: Report, sentence_no: int, round: int,
+                         new_refs: tuple[str, ...]) -> Report | None:
+        """근거가 약한 원인 하나만 다시 쓰고 본문을 다시 만든다. 끝내 못 쓰면 None(원래 보고서를 그대로 둔다).
+
+        report_input에는 이 원인을 위해 새로 찾은 기사까지 이미 들어 있다.
+        """
+        rewrite = getattr(self.writer, "rewrite_cause", None)
+        if rewrite is None or report.output is None:
+            return None
+        current = report.output.causes[sentence_no - 1]
+        result = rewrite(report_input, current, sentence_no, new_refs)
+        now = self.clock()
+        self._record_attempts(report_input, result.failed_attempts, now, sentence_no, round)
+        if result.cause is None:
+            return None
+        self._record_accepted(report_input, result.accepted, now, sentence_no, round)
+        causes = list(report.output.causes)
+        causes[sentence_no - 1] = result.cause
+        return _llm_report(report_input, LlmOutput(tuple(causes), False))
+
+    def publish(self, report_input: ReportInput, report: Report, research_count: int = 0) -> None:
+        """최종 결과를 job_run에 적고, 이 작업의 줄이 모두 저장됐을 때만 발행한다."""
+        now = self.clock()
+        event = briefing_event(report_input, report, now)
         i = report_input
-        result = JobLogEntry(
-            job_kind=JOB_KIND_MOVE, researched=researched, job_id=i.job_id,
-            target=move_target(i.symbol, format_timestamp(i.as_of)), stage=STAGE_PUBLISH, entry_type=TYPE_RESULT,
-            reason=REASON_PUBLISHED, error_type=None, attempts=0, occurred_at=self.clock(),
-            data={"outcome": "published", "text": report.text, "generatedBy": report.generated_by,
-                  "evidence": event.value["payload"]["evidence"], "missingItems": unchecked_items(i),
-                  "weakItems": list(report.weak_shortfalls)})
+        missing = unchecked_items(i)
+        if missing:
+            self._record(i, EntryType.MISSING_ITEMS, REASON_PUBLISHED, None, 0, now,
+                         {"evidence": event.value["payload"]["evidence"], "weakItems": list(report.weak_shortfalls)},
+                         stage=STAGE_PUBLISH)
+        result = JobResult(
+            i.job_id, RunStatus.SUCCEEDED, now, generated_by=GeneratedBy(report.generated_by),
+            final_text=report.text, weak_count=len(report.weak_shortfalls), research_count=research_count,
+            result_event_id=event.value["eventId"])
         if record_result(self.job_log, result):
             self.publisher.send(event)
 
     def _record_attempts(self, report_input: ReportInput, attempts: tuple[LlmAttempt, ...], now: datetime,
-                         researched: bool) -> None:
+                         sentence_no: int | None = None, round: int | None = None) -> None:
         for a in attempts:
             reason = REASON_LLM_CALL_FAILED if a.response is None else REASON_LLM_REJECTED
-            self._record(report_input, TYPE_LLM_REJECTED, reason, a.error_type, a.attempt, now, researched,
-                         _attempt_data(a))
+            self._record(report_input, EntryType.LLM_REJECTED, reason, a.error_type, a.attempt, now,
+                         _attempt_data(a), sentence_no=sentence_no, round=round)
 
-    def _record(self, report_input: ReportInput, entry_type: str, reason: str, error_type: str | None, attempts: int,
-                now: datetime, researched: bool, extra: dict[str, Any], stage: str = STAGE_LLM) -> None:
-        i = report_input
-        data: dict[str, Any] = {"missingItems": unchecked_items(i)}
+    def _record_accepted(self, report_input: ReportInput, a: AcceptedAttempt, now: datetime,
+                         sentence_no: int | None = None, round: int | None = None) -> None:
+        self._record(report_input, EntryType.REPORT_WRITTEN, REASON_LLM_ACCEPTED, None, a.attempt, now,
+                     {"attempt": a.attempt, "llmInput": a.llm_input, "llmResponse": a.response, "rejection": None},
+                     sentence_no=sentence_no, round=round)
+
+    def _record(self, report_input: ReportInput, entry_type: EntryType, reason: str, error_type: str | None,
+                attempts: int, now: datetime, extra: dict[str, Any], stage: str = STAGE_LLM,
+                sentence_no: int | None = None, round: int | None = None) -> None:
+        data: dict[str, Any] = {"missingItems": unchecked_items(report_input)}
         data.update(extra)
         self.job_log.record(JobLogEntry(
-            job_kind=JOB_KIND_MOVE, researched=researched, job_id=i.job_id,
-            target=move_target(i.symbol, format_timestamp(i.as_of)), stage=stage, entry_type=entry_type,
-            reason=reason, error_type=error_type, attempts=attempts, data=data, occurred_at=now))
+            job_id=report_input.job_id, entry_type=entry_type, stage=stage, reason=reason, occurred_at=now,
+            sentence_no=sentence_no, round=round, error_type=error_type, attempts=attempts, data=data))
 
 
 def _attempt_data(a: LlmAttempt) -> dict[str, Any]:

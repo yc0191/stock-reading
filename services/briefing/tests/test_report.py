@@ -192,7 +192,7 @@ def test_three_failed_attempts_record_llm_error_and_publish_nothing():
     assert published == []
     [failure] = failures.failed
     assert failure.reason == FailureReason.LLM_ERROR
-    assert (failure.job_id, failure.target["symbol"], failure.attempts) == (JOB_ID, "TEST01", 3)
+    assert (failure.job_id, failure.attempts) == (JOB_ID, 3)
     assert "APIConnectionError" in failure.data["detail"]
 
 
@@ -454,14 +454,16 @@ def stage_with_log(writer, job_log=None):
     return s, published.items, job_log
 
 
-def filled(record, allowed_empty=("error_type", "attempts")):
+def filled(record, allowed_empty=("error_type", "attempts", "sentence_no", "round", "before", "after",
+                                   "failure_reason", "generated_by", "final_text", "result_event_id", "weak_count",
+                                   "research_count")):
     from dataclasses import fields
     return all(getattr(record, f.name) not in (None, "", {}, []) for f in fields(record)
                if f.name not in allowed_empty)
 
 
 def test_rejected_llm_attempts_are_recorded_even_when_the_report_finally_succeeds():
-    from briefing.job_log import REASON_LLM_REJECTED, STAGE_LLM, TYPE_LLM_REJECTED, JobLogEntry
+    from briefing.job_log import REASON_LLM_REJECTED, STAGE_LLM, EntryType, JobLogEntry
     bad = output([("지어낸 기사가 영향을 줬을 수 있습니다.", ["a9"])])
     llm = FakeLlm(bad, VALID)
     s, published, job_log = stage_with_log(LlmWriter(llm))
@@ -469,11 +471,11 @@ def test_rejected_llm_attempts_are_recorded_even_when_the_report_finally_succeed
     s.on_ready(report_input())
 
     assert len(published) == 1 and job_log.failed == []
-    (record,) = job_log.of_type(TYPE_LLM_REJECTED)
+    (record,) = job_log.of_type(EntryType.LLM_REJECTED)
     assert isinstance(record, JobLogEntry) and filled(record)
-    assert (record.job_kind, record.researched, record.job_id, record.stage, record.reason, record.attempts) == (
-        "move", False, JOB_ID, STAGE_LLM, REASON_LLM_REJECTED, 1)
-    assert record.target == {"symbol": "TEST01", "moveAt": "2026-10-20T16:00:00+09:00"}
+    assert (record.job_id, record.stage, record.reason, record.attempts) == (
+        JOB_ID, STAGE_LLM, REASON_LLM_REJECTED, 1)
+    assert record.sentence_no is None and record.round is None
     assert record.error_type == "InvalidOutput"
     assert record.data["llmInput"] == llm.calls[0][1]
     assert record.data["llmResponse"] == bad
@@ -481,47 +483,51 @@ def test_rejected_llm_attempts_are_recorded_even_when_the_report_finally_succeed
 
 
 def test_the_accepted_llm_attempt_is_recorded_with_its_input_and_original_response():
-    from briefing.job_log import REASON_LLM_ACCEPTED, TYPE_LLM_SUCCEEDED
+    from briefing.job_log import REASON_LLM_ACCEPTED, EntryType
     bad = output([("지어낸 기사가 영향을 줬을 수 있습니다.", ["a9"])])
     llm = FakeLlm(bad, VALID)
     s, _, job_log = stage_with_log(LlmWriter(llm))
 
     s.on_ready(report_input())
 
-    (accepted,) = job_log.of_type(TYPE_LLM_SUCCEEDED)
+    (accepted,) = job_log.of_type(EntryType.REPORT_WRITTEN)
     assert (accepted.reason, accepted.attempts, accepted.error_type) == (REASON_LLM_ACCEPTED, 2, None)
     assert accepted.data["llmInput"] == llm.calls[1][1] and accepted.data["llmResponse"] == VALID
     assert accepted.data["rejection"] is None
 
 
 def test_a_published_report_leaves_one_result_line_with_text_evidence_missing_items_and_generation_method():
-    from briefing.job_log import REASON_PUBLISHED
+    from briefing.job_log import EntryType, GeneratedBy, RunStatus
     s, published, job_log = stage_with_log(LlmWriter(FakeLlm(VALID)))
 
     s.on_ready(report_input())
 
     (result,) = job_log.results()
-    payload = published[0].value["payload"]
-    assert (result.reason, result.job_id, result.researched) == (REASON_PUBLISHED, JOB_ID, False)
-    assert result.data["outcome"] == "published" and result.data["text"] == payload["text"]
-    assert result.data["generatedBy"] == "llm" and result.data["evidence"] == payload["evidence"]
-    assert result.data["missingItems"] == ["미국 공시·미국 종목 등락률: 변동 종목에 미국 종목이 없어 조회하지 않음"]
-    assert filled(result)
+    event = published[0]
+    payload = event.value["payload"]
+    # 작업 한 줄(job_run)에는 끝 상태, 최종 본문, 작성 방식, 메일의 브리핑 ID가 적힌다.
+    assert (result.job_id, result.status, result.generated_by) == (JOB_ID, RunStatus.SUCCEEDED, GeneratedBy.LLM)
+    assert result.final_text == payload["text"] and result.result_event_id == event.value["eventId"]
+    assert (result.weak_count, result.research_count, result.failure_reason) == (0, 0, None)
+    # 빠진 자료와 근거 목록은 일 줄 하나로 남는다.
+    (missing,) = job_log.of_type(EntryType.MISSING_ITEMS)
+    assert missing.data["evidence"] == payload["evidence"]
+    assert missing.data["missingItems"] == ["미국 공시·미국 종목 등락률: 변동 종목에 미국 종목이 없어 조회하지 않음"]
 
 
 def test_rule_based_report_also_leaves_a_result_line_but_no_llm_success_line():
-    from briefing.job_log import TYPE_LLM_SUCCEEDED
+    from briefing.job_log import EntryType, GeneratedBy
     s, published, job_log = stage_with_log(RuleBasedWriter())
 
     s.on_ready(report_input())
 
     (result,) = job_log.results()
-    assert result.data["generatedBy"] == "rule-based" and len(published) == 1
-    assert job_log.of_type(TYPE_LLM_SUCCEEDED) == []
+    assert result.generated_by == GeneratedBy.RULE_BASED and len(published) == 1
+    assert job_log.of_type(EntryType.REPORT_WRITTEN) == []
 
 
 def test_three_failed_llm_attempts_give_one_record_per_attempt_a_final_failure_and_a_failed_result():
-    from briefing.job_log import REASON_LLM_CALL_FAILED, REASON_LLM_REJECTED
+    from briefing.job_log import REASON_LLM_CALL_FAILED, REASON_LLM_REJECTED, EntryType, RunStatus
     llm = FakeLlm("not json", output([("x", ["a9"])]), LlmCallError("LLM call failed: APIConnectionError"))
     s, published, job_log = stage_with_log(LlmWriter(llm))
 
@@ -529,14 +535,16 @@ def test_three_failed_llm_attempts_give_one_record_per_attempt_a_final_failure_a
 
     assert published == []
     assert [r.reason for r in job_log.entries] == [REASON_LLM_REJECTED, REASON_LLM_REJECTED, REASON_LLM_CALL_FAILED,
-                                                   "llm_error", "llm_error"]
-    assert [r.entry_type for r in job_log.entries[-2:]] == ["failed", "result"]
+                                                   "llm_error"]
+    assert job_log.entries[-1].entry_type == EntryType.STEP_FAILED
     assert all(filled(r) for r in job_log.entries)
     assert job_log.entries[2].data["llmResponse"].startswith("(응답 없음")
     final = job_log.entries[3]
     assert final.attempts == 3 and len(final.data["failedAttempts"]) == 3
     assert final.data["missingItems"] == ["미국 공시·미국 종목 등락률: 변동 종목에 미국 종목이 없어 조회하지 않음"]
-    assert job_log.entries[4].data["outcome"] == "failed"
+    # 작업 한 줄은 실패로 끝난다.
+    (result,) = job_log.results()
+    assert (result.status, result.failure_reason) == (RunStatus.FAILED, "llm_error")
 
 
 def test_report_is_not_published_when_its_log_could_not_be_saved(caplog):
@@ -546,7 +554,7 @@ def test_report_is_not_published_when_its_log_could_not_be_saved(caplog):
         s.on_ready(report_input())
 
     assert published == []
-    assert "result event not published" in caplog.text
+    assert "result was not saved; result event not published" in caplog.text
     assert "TEST01" not in caplog.text
 
 
@@ -563,7 +571,7 @@ def test_report_is_not_published_when_an_earlier_line_of_the_job_was_lost():
 
     s.on_ready(report_input())
 
-    assert published == [] and len(job_log.results()) == 1  # 결과 줄은 남기되 이벤트는 내보내지 않는다
+    assert published == [] and len(job_log.results()) == 1  # 작업 끝 줄은 남기되 이벤트는 내보내지 않는다
 
 
 def test_failure_records_and_their_logs_carry_no_api_key(fake_sdk, caplog):
@@ -572,6 +580,7 @@ def test_failure_records_and_their_logs_carry_no_api_key(fake_sdk, caplog):
         s, _, job_log = stage_with_log(writer)
         s.on_ready(report_input())
 
-    assert len(job_log.entries) == 5
-    assert FAKE_KEY not in repr(job_log.entries)
+    # 시도 세 줄과 끝내 실패한 줄, 그리고 작업 끝 줄
+    assert len(job_log.entries) == 4 and len(job_log.results()) == 1
+    assert FAKE_KEY not in repr(job_log.entries) + repr(job_log.results())
     assert "TEST01" not in caplog.text

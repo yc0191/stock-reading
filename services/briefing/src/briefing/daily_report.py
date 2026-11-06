@@ -14,6 +14,7 @@ from typing import Any, Callable, Mapping
 from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
 from briefing.events import EDITION_MORNING, EDITION_POST_CLOSE
+from briefing.job_log import GeneratedBy
 from briefing.llm_output import (
     InvalidLlmOutput,
     check_items_present,
@@ -51,8 +52,8 @@ from briefing.sources import (
 
 log = logging.getLogger("briefing.daily_report")
 
-GENERATED_BY_LLM = "llm"
-GENERATED_BY_RULE = "rule-based"
+GENERATED_BY_LLM = GeneratedBy.LLM.value
+GENERATED_BY_RULE = GeneratedBy.RULE_BASED.value
 
 NO_DATA = "자료 없음"
 DAILY_INSUFFICIENT = "받은 자료만으로는 요약할 근거가 부족합니다."
@@ -518,6 +519,8 @@ class DailyBody:
     cited: tuple[str, ...] = ()
     # 근거가 약하다고 한 문장들의 부족한 점. 재검색 여부를 정하고 검색어 LLM 입력에 들어간다.
     weak_shortfalls: tuple[str, ...] = ()
+    # 받아들인 LLM 출력. 문장 하나만 다시 쓸 때 나머지 문장을 그대로 두고 본문을 다시 만드는 데 쓴다(규칙 기반이면 None).
+    output: DailyOutput | None = None
 
 
 @dataclass(frozen=True)
@@ -536,6 +539,24 @@ class DailyWriteResult:
     body: DailyBody | None
     rejected: tuple[LlmAttempt, ...]
     # 받아들인 시도(끝내 실패했으면 None)
+    accepted: AcceptedAttempt | None = None
+
+
+REWRITE_ADDENDUM = """
+
+다시 쓰기 요청:
+- 입력의 rewrite 칸은 근거가 약하다고 한 문장 하나(sentence)와 그 부족한 점(shortfall)입니다. newRefs는 그 부족한 점을 채우려고 새로 찾아 항목 "재검색 기사"에 담은 기사의 ref입니다.
+- 그 문장 하나만 다시 씁니다. points에는 다시 쓴 문장 하나만 담고 다른 문장은 쓰지 않으며, insufficientEvidence는 false로 둡니다.
+- 새 기사로 부족한 점이 채워지면 weak를 false로, 그래도 약하면 weak를 true로 하고 shortfall에 아직 부족한 점을 씁니다. 새 기사에 없는 내용은 지어내지 않습니다.
+- 근거 번호·단정 금지·티커 금지 같은 위의 규칙은 그대로 지킵니다."""
+
+
+@dataclass(frozen=True)
+class PointRewrite:
+    """문장 하나를 다시 쓴 결과. point가 None이면 끝내 실패했고 원래 문장을 그대로 둔다."""
+
+    point: Point | None
+    rejected: tuple[LlmAttempt, ...]
     accepted: AcceptedAttempt | None = None
 
 
@@ -565,9 +586,35 @@ class DailyLlmWriter:
                 dict.fromkeys(ref for p in output.points for ref in p.refs))
             weak = () if output.insufficient_evidence else tuple(p.shortfall for p in output.points if p.shortfall)
             return DailyWriteResult(DailyBody(llm_text(i, sections, output), GENERATED_BY_LLM,
-                                              output.insufficient_evidence, cited, weak), tuple(rejected),
+                                              output.insufficient_evidence, cited, weak, output), tuple(rejected),
                                     AcceptedAttempt(attempt, user, raw))
         return DailyWriteResult(None, tuple(rejected))
+
+    def rewrite_point(self, i: DailyInput, sections: tuple[Section, ...], current: Point, no: int,
+                      new_refs: tuple[str, ...]) -> PointRewrite:
+        """근거가 약한 문장 하나만 다시 쓴다. 나머지 문장은 건드리지 않는다. i와 sections에는 새로 찾은 기사까지 들어 있다."""
+        data = build_llm_input(i, sections, self.settings)
+        data["rewrite"] = {"sentenceNo": no, "sentence": {"statement": current.statement, "refs": list(current.refs)},
+                           "shortfall": current.shortfall, "newRefs": list(new_refs)}
+        user = json.dumps(data, ensure_ascii=False)
+        allowed = frozenset(e.ref for s in sections for e in s.entries)
+        tickers = frozenset(i.tickers()) | frozenset(r.ticker for r in i.close_rates or ()) \
+            | frozenset(t for f in i.filings or () for t in f.tickers) | i.member_us_symbols()
+        rejected: list[LlmAttempt] = []
+        for attempt in range(1, self.max_attempts + 1):
+            raw: str | None = None
+            try:
+                raw = self.client.complete(SYSTEM_PROMPT + REWRITE_ADDENDUM, user, OUTPUT_SCHEMA)
+                output = parse_output(raw, allowed, tickers)
+                if output.insufficient_evidence or len(output.points) != 1:
+                    raise InvalidDailyOutput("rewrite must return exactly one point")
+            except (LlmCallError, InvalidDailyOutput) as error:
+                rejected.append(LlmAttempt(attempt, type(error).__name__, str(error), user, raw))
+                log.warning("daily LLM sentence rewrite attempt %d/%d failed for job %s: %s",
+                            attempt, self.max_attempts, i.job_id, error)
+                continue
+            return PointRewrite(output.points[0], tuple(rejected), AcceptedAttempt(attempt, user, raw))
+        return PointRewrite(None, tuple(rejected))
 
 
 def build_daily_writer(env: Mapping[str, str],
