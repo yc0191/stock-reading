@@ -33,6 +33,16 @@ def test_values_are_fake():
     assert de.holdings_setting() == "TEST01=TESTA,FAKEB"
 
 
+def test_holdings_file_matches_the_collector_setting():
+    items = json.loads(de.holdings_file_json())
+    from_file = {item["symbol"]: [m["symbol"] for m in item["members"] if m["market"] == "US"] for item in items}
+    from_setting = dict(part.split("=") for part in de.holdings_setting().split(";"))
+
+    # 미국 종목이 있는 ETF 의 티커 목록이 ETF_US_HOLDINGS 와 같아야 시세처리기가 시작한다.
+    assert {etf: ",".join(t) for etf, t in from_file.items() if t} == from_setting
+    assert all(item["kind"] == "ETF" and item["market"] == "KR" for item in items)
+
+
 def test_us_close_is_the_latest_new_york_close_before_the_time():
     ny = ZoneInfo("America/New_York")
     # 뉴욕 목요일 15:59 에는 아직 수요일 장이 마지막 마감이다.

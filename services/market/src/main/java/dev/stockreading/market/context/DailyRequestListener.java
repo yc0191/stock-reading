@@ -118,6 +118,7 @@ class DailyRequestListener {
         List<String> allTickers = holdings.topTickers(symbol);
         List<String> tickers = allTickers.stream().limit(maxTickers).toList();
         return new DailyPayload.Etf(symbol, record.date(), record.close(), record.prevClose(), record.rate(),
-                EventFactory.formatKst(fetchedAt), tickers, allTickers.size() > tickers.size());
+                EventFactory.formatKst(fetchedAt), tickers, allTickers.size() > tickers.size(),
+                holdings.etfInfo(symbol).map(info -> MarketBackground.etfInfo(info, maxTickers)).orElse(null));
     }
 }

@@ -91,6 +91,10 @@ def test_evidence_samples_match_their_schemas(schema_file, sample_file):
     assert validate(schema_file, sample(sample_file)) == []
 
 
+# 계약에서 선택 칸인 payload 필드. 없어도 유효해야 하므로 "빠지면 거부" 검사에서 뺀다.
+OPTIONAL_PAYLOAD_FIELDS = {"market.context.responded.sample.json": {"etf"}}
+
+
 @pytest.mark.parametrize("schema_file, sample_file", EVIDENCE_CONTRACTS)
 def test_evidence_events_tolerate_unknown_fields(schema_file, sample_file):
     future = sample(sample_file)
@@ -103,6 +107,8 @@ def test_evidence_events_tolerate_unknown_fields(schema_file, sample_file):
 @pytest.mark.parametrize("schema_file, sample_file", EVIDENCE_CONTRACTS)
 def test_evidence_events_reject_missing_payload_field(schema_file, sample_file):
     for field in sample(sample_file)["payload"]:
+        if field in OPTIONAL_PAYLOAD_FIELDS.get(sample_file, set()):
+            continue
         broken = sample(sample_file)
         del broken["payload"][field]
 
@@ -678,3 +684,40 @@ def test_research_job_id_is_an_optional_uuid_on_existing_events(schema_file, sam
 
     with_research["payload"]["researchJobId"] = "not-a-uuid"
     assert validate(schema_file, with_research) != []
+
+
+def test_context_and_daily_responses_carry_an_optional_etf_info():
+    context = sample("market.context.responded.sample.json")
+    daily = sample("market.daily.responded.sample.json")
+    context_etf = context["payload"]["etf"]
+    assert context_etf["members"][0]["rank"] == 1
+
+    # 선택 칸이라 없어도 되고, 모르는 칸(이름·업종·비중)이 빠져도 된다.
+    without_context = sample("market.context.responded.sample.json")
+    del without_context["payload"]["etf"]
+    without_daily = sample("market.daily.responded.sample.json")
+    del without_daily["payload"]["etfs"][0]["etf"]
+    sparse = sample("market.context.responded.sample.json")
+    sparse["payload"]["etf"] = {"members": [{"market": "US", "symbol": "TESTA", "rank": 1}], "membersTruncated": False}
+
+    for valid in (context, without_context, sparse):
+        assert validate("market.context.responded.v1.schema.json", valid) == []
+    for valid in (daily, without_daily):
+        assert validate("market.daily.responded.v1.schema.json", valid) == []
+
+
+def test_etf_info_rejects_malformed_members():
+    cases = []
+    for field, value in (("weight", 12.5), ("weight", "-1"), ("rank", 0), ("market", "us"), ("symbol", "testa")):
+        broken = sample("market.context.responded.sample.json")
+        broken["payload"]["etf"]["members"][0][field] = value
+        cases.append(broken)
+    no_flag = sample("market.context.responded.sample.json")
+    del no_flag["payload"]["etf"]["membersTruncated"]
+    cases.append(no_flag)
+    no_rank = sample("market.daily.responded.sample.json")
+    del no_rank["payload"]["etfs"][0]["etf"]["members"][0]["rank"]
+
+    for broken in cases:
+        assert validate("market.context.responded.v1.schema.json", broken) != []
+    assert validate("market.daily.responded.v1.schema.json", no_rank) != []

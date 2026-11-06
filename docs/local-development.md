@@ -44,7 +44,8 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 
 | 설정 키 | 설명 |
 |---|---|
-| `market.holdings.us-by-etf` | ETF별 미국 종목 대응표. 수집기 `ETF_US_HOLDINGS`와 같은 값과 형식이며 `.env`에만 둡니다. 형식이 틀리면 시작 단계에서 실패하고, 비어 있으면 미국 종목이 없는 것으로 봅니다 |
+| `market.holdings.file` | 보유 종목 JSON 파일의 경로(환경변수 `HOLDINGS_FILE`). 비어 있으면 보유 종목이 없는 것으로 봅니다. 파일 모양은 아래 "보유 종목 파일"을 봅니다 |
+| `market.holdings.us-by-etf` | 수집기가 읽는 `ETF_US_HOLDINGS`와 같은 값. 여기서는 파일의 미국 구성 종목과 같은지 비교하는 데만 쓰고, 다르면 시작 단계에서 실패합니다 |
 | `market.context.max-age` | 기준 시각보다 이 기간 넘게 이른 자료는 없음으로 봅니다 |
 | `market.context.max-response-bytes` | 원문 1건의 최대 크기(UTF-8 바이트). 넘으면 원문을 빼고 너무 큼으로 표시합니다 |
 | `market.context.max-tickers` | 응답에 담을 미국 종목의 최대 개수 |
@@ -216,7 +217,8 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 | `NEWS_SEARCH_CALL_INTERVAL_MS` | 검색어를 연달아 호출할 때 호출 사이의 대기(밀리초). 0이면 기다리지 않으며, 짧으면 제공자가 429로 거절할 수 있습니다([측정 기록](test-history/S01-real-api/call-interval.md)) |
 | `NEWS_RESEARCH_MAX_QUERIES` | 브리핑의 뉴스 재검색 요청(`news.research.requested`) 하나에서 실제로 검색할 검색어 수 상한(기본 3). 넘는 검색어는 버립니다. 검색어마다 하루 검색 호출 상한(`NEWS_SEARCH_DAILY_CALL_LIMIT`)을 한 번씩 쓰고, 상한에 걸리거나 검색이 실패하면 완료 알림의 `incompleteSymbols`에 요청 종목을 담습니다. 0 이하이면 시작 단계에서 실패합니다 |
 | `DART_API_KEY` | 공시 API 키 |
-| `ETF_US_HOLDINGS` | 관심 ETF별 미국 상위 종목 목록. `ETF코드=티커,티커;ETF코드2=티커` 형식이며 ETF 코드는 6자리 숫자·대문자, 티커는 영문 대문자·숫자 1~6자(종류 구분이 있으면 `.` 또는 `-` 뒤 1~2자)입니다. 형식이 틀리면 시작 단계에서 실패하고, 오류 메시지에는 값 대신 몇 번째 항목인지만 적습니다. 종류 구분은 `-`로 맞춰 씁니다(`.`로 적어도 같은 종목). 비어 있으면 보유 종목이 없는 것으로 봅니다. 보유 종목이 드러나므로 `.env`에만 둡니다 |
+| `ETF_US_HOLDINGS` | 관심 ETF별 미국 상위 종목 목록. `ETF코드=티커,티커;ETF코드2=티커` 형식이며 ETF 코드는 6자리 숫자·대문자, 티커는 영문 대문자·숫자 1~6자(종류 구분이 있으면 `.` 또는 `-` 뒤 1~2자)입니다. 형식이 틀리면 시작 단계에서 실패하고, 오류 메시지에는 값 대신 몇 번째 항목인지만 적습니다. 종류 구분은 `-`로 맞춰 씁니다(`.`로 적어도 같은 종목). 비어 있으면 보유 종목이 없는 것으로 봅니다. 보유 종목이 드러나므로 `.env`에만 둡니다. 시세처리기는 이 값을 `HOLDINGS_FILE`의 미국 구성 종목과 비교만 합니다(티커 집합이 ETF마다 같아야 하고 순서는 보지 않습니다) |
+| `HOLDINGS_FILE` | 시세처리기가 읽는 보유 종목 JSON 파일의 경로. 파일은 저장소 밖(UTF-8)에 두고 경로만 `.env`에 적습니다. 비어 있으면 보유 종목이 없는 것으로 봅니다. 모양은 아래 "보유 종목 파일"을 봅니다 |
 | `EDGAR_USER_AGENT` | SEC EDGAR 요청의 User-Agent. SEC가 요구하는 `회사명 연락이메일` 형식입니다. 연락 이메일은 개인 정보이므로 `.env`에만 둡니다. 비어 있으면 공시를 조회하지 않습니다 |
 | `EDGAR_FORMS` | 수집할 공시 형식. 쉼표로 구분합니다. 비어 있거나 형식이 틀리면 시작 단계에서 실패합니다 |
 | `COLLECTOR_INSIGHT_SCHEDULE_ENABLED` | `true`일 때만 장 마감 후 조회 tick(`collect-post-close`)을 발행합니다. 휴장일은 판정하지 않아 휴장일에도 발행됩니다 |
@@ -301,6 +303,17 @@ python3 scripts/load_config.py --only briefing
 - `NOTIFIER_SEND_ENABLED`는 가져오지 않습니다. 실수로 발송이 켜지지 않도록 사람이 `.env`에서만 바꿉니다.
 - 자격증명은 `AWS_PROFILE` 환경변수나 `--profile` 옵션으로 지정합니다. 지역은 기본이 시드니이고 `--region`으로 바꿀 수 있습니다.
 - 읽기 전용 IAM 자격증명이 필요합니다: [`infra/iam/README.md`](../infra/iam/README.md)
+
+### 보유 종목 파일
+
+시세처리기는 시작할 때 `HOLDINGS_FILE`이 가리키는 UTF-8 JSON 파일로 `instrument`(종목)와 `etf_member`(ETF 구성) 테이블을 똑같이 맞춥니다. 파일에 없는 행은 지웁니다. 종목은 한 번만 적고, ETF에 담긴 관계는 ETF의 `members`에만 적습니다. 파일은 보유 종목이 드러나므로 저장소 밖에 두며, 저장소에는 가짜 값 예시([`docs/examples/holdings.example.json`](examples/holdings.example.json))만 있습니다.
+
+- 맨 위는 종목 배열이고, 항목마다 `kind`(`ETF`/`STOCK`), `market`(`KR`/`US`/`JP` 등 영문 대문자 2~4자), `symbol`, 선택으로 `name`, `tracks`(ETF만), `sector`, `relation`(`HELD`/`WATCH`/`NONE`, 기본 `NONE`)을 가집니다.
+- ETF는 `members` 배열(`market`, `symbol`, 선택 `name`, `weight`(%, 0~100, 소수 4자리까지), `rank`(비중 순위, 없으면 적힌 순서))을 가집니다. ETF 안에만 나오는 종목은 `relation`이 `NONE`인 `STOCK` 종목으로 만들어지고, 같은 종목이 여러 곳에 나와도 종목 행은 하나입니다.
+- 국내 ETF의 `symbol`은 6자리 숫자·대문자입니다. 종류 구분이 있는 티커는 `.`로 적어도 `-`로 맞춰 저장합니다.
+- 파일의 미국(`US`) 구성 종목은 `ETF_US_HOLDINGS`와 ETF마다 같은 티커 집합이어야 합니다. 어긋나면 시작이 실패합니다.
+- 파일이 없거나 형식이 틀려도 시작이 실패합니다. 메시지에는 값 대신 몇 번째 항목(구성 종목)인지와 오류 종류만 적고, 경로와 값은 로그에 남기지 않습니다(종목·관계 개수만 남깁니다).
+- 응답: `market.context.responded`와 `market.daily.responded`의 `etf`(선택)에 ETF 이름, 추종 대상, 업종과 구성 종목(시장, 심볼, 이름, 비중, 순위)이 담깁니다. 변동 종목이 ETF가 아니면 `etf`가 없습니다.
 
 ## 테스트
 
@@ -410,7 +423,7 @@ MOVE_REPLAY_INPUT=<저장소 밖>/snapshots.tsv MOVE_REPLAY_EXCLUDE=<저장소 �
 
 ## 후속
 
-- **보유 종목과 뉴스 검색어 테이블:** 지금은 ETF별 미국 종목과 뉴스 검색어를 설정(`ETF_US_HOLDINGS`, `NEWS_SEARCH_QUERIES`)으로 줍니다. 보유 종목 테이블(시세처리기)과 종목에 연결된 검색어 테이블(news)로 옮깁니다.
+- **보유 종목과 뉴스 검색어 테이블:** 보유 종목 테이블(시세처리기 `instrument`, `etf_member`)은 만들었고, 배포 전까지는 시작할 때 보유 종목 파일(`HOLDINGS_FILE`)로 맞춥니다. 수집기는 아직 `ETF_US_HOLDINGS`를, 뉴스 검색어는 `NEWS_SEARCH_QUERIES`를 설정으로 읽습니다. 수집기의 종목 읽기와 종목에 연결된 검색어 테이블(news)로 옮깁니다.
 - **검색어와 태그 개선:** 태그는 검색어 설정에서 정해져 저장 때 고정됩니다. 다른 종목 태그지만 관련 있는 기사를 근거에 넣는 방법과 미국 종목 검색어를 정합니다. 당장은 검색어 설정에 관련 종목 태그를 함께 적어 운영합니다.
 - **휴장일 발송 관리:** 데일리 브리핑은 휴장일을 판정하지 않아 휴장일에도 평일이면 판이 나갑니다(자료가 없으면 항목마다 `자료 없음`). 휴장일에 보낼지 건너뛸지와 판정 방법을 정합니다.
 - **마감 후 판의 그날 급변동과 근거:** 마감 후 판에는 그날 급변동 건별 리포트를 요약하는 항목이 아직 없습니다. 건별 리포트를 어디서 읽을지와 함께 정합니다.

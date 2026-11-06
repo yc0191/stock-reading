@@ -73,6 +73,7 @@ class ContextRequestListener {
         background.add(marketBackground.single(BackgroundKind.DAILY_PRICE, request.symbol(), since, asOf, maxBytes));
 
         return new ContextPayload(request.jobId(), request.seq(), request.symbol(), tickers, closeRates, background,
-                allTickers.size() > tickers.size());
+                allTickers.size() > tickers.size(),
+                holdings.etfInfo(request.symbol()).map(info -> MarketBackground.etfInfo(info, maxTickers)).orElse(null));
     }
 }

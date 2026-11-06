@@ -83,6 +83,24 @@ class DailyContractTest {
     }
 
     @Test
+    void producerEtfInfoMatchesSchemaAndMissingCellsAreLeftOut() throws IOException {
+        ContextPayload.EtfInfo info = new ContextPayload.EtfInfo("TEST ETF", null, null, List.of(
+                new ContextPayload.EtfMember("US", "TESTA", null, "12.5", 1)), false);
+        String json = serialize(new DailyPayload(JOB_ID, 1,
+                List.of(new DailyPayload.Etf("TEST01", "20261020", "9850", "10000", "-1.50",
+                        "2026-10-20T16:30:02+09:00", List.of("TESTA"), false, info),
+                        new DailyPayload.Etf("TEST02", "20261020", "20100", "20000", "0.50",
+                                "2026-10-20T16:30:03+09:00", List.of(), false)),
+                List.of(), List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false));
+
+        assertThat(ContractSchemas.validate("market.daily.responded.v1.schema.json", json)).isEmpty();
+        var etfs = mapper.readTree(json).get("payload").get("etfs");
+        assertThat(etfs.get(0).get("etf").has("tracks")).isFalse();
+        assertThat(etfs.get(0).get("etf").get("members").get(0).has("name")).isFalse();
+        assertThat(etfs.get(1).has("etf")).isFalse();
+    }
+
+    @Test
     void emptyResponseWithoutEtfsIsValid() throws IOException {
         String json = serialize(new DailyPayload(JOB_ID, 1, List.of(), List.of(),
                 List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false));

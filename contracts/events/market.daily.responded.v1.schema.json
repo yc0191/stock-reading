@@ -117,6 +117,31 @@
               "tickersTruncated": {
                 "type": "boolean",
                 "description": "maxTickers 때문에 tickers가 잘렸으면 true."
+              },
+              "etf": {
+                "type": "object",
+                "description": "선택. 이 종목이 보유 종목 파일에 ETF로 있을 때만 담긴다. 이름·추종 대상·업종은 모르면 빠지고, 구성 종목은 비중 순위 순이며 maxTickers개까지다. 보유 수량 같은 개인 정보는 담지 않는다.",
+                "required": ["members", "membersTruncated"],
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "tracks": { "type": "string", "minLength": 1, "description": "추종 대상." },
+                  "sector": { "type": "string", "minLength": 1 },
+                  "members": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["market", "symbol", "rank"],
+                      "properties": {
+                        "market": { "type": "string", "pattern": "^[A-Z]{2,4}$", "description": "시장 구분(KR, US, JP 등)." },
+                        "symbol": { "type": "string", "pattern": "^[0-9A-Z]{1,12}([.-][0-9A-Z]{1,2})?$" },
+                        "name": { "type": "string", "minLength": 1 },
+                        "weight": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$", "description": "ETF 안의 비중(%). 모르면 빠진다." },
+                        "rank": { "type": "integer", "minimum": 1, "description": "비중 순위(1이 가장 큼)." }
+                      }
+                    }
+                  },
+                  "membersTruncated": { "type": "boolean", "description": "maxTickers 때문에 members가 잘렸으면 true." }
+                }
               }
             }
           }

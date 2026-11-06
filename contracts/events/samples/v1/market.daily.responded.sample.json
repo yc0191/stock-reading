@@ -17,7 +17,17 @@
         "rate": "-1.50",
         "fetchedAt": "2026-10-20T16:30:02+09:00",
         "tickers": ["TESTA", "FAKEB"],
-        "tickersTruncated": false
+        "tickersTruncated": false,
+        "etf": {
+          "name": "TEST ETF ONE",
+          "tracks": "TEST INDEX",
+          "sector": "TEST SECTOR",
+          "members": [
+            { "market": "US", "symbol": "TESTA", "name": "TEST CORP A", "weight": "12.5", "rank": 1 },
+            { "market": "US", "symbol": "FAKEB", "weight": "8.25", "rank": 2 }
+          ],
+          "membersTruncated": false
+        }
       },
       {
         "symbol": "TEST02",

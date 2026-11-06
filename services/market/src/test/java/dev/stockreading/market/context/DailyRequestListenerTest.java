@@ -14,6 +14,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -25,6 +26,7 @@ import org.mockito.ArgumentCaptor;
 
 import dev.stockreading.market.event.ContextPayload;
 import dev.stockreading.market.event.DailyPayload;
+import dev.stockreading.market.holdings.EtfInfo;
 import dev.stockreading.market.holdings.HoldingsPort;
 import dev.stockreading.market.insight.OverseasCloseRate;
 import dev.stockreading.market.insight.OverseasCloseRateQuery;
@@ -170,6 +172,20 @@ class DailyRequestListenerTest {
                 "FAKEA", "20261019", "2026-10-20T05:00:00+09:00", "-1.25", "2026-10-20T08:30:02+09:00"));
         verify(closeRateQuery, times(1)).find(eq("FAKEA"), any(), any());
         verify(closeRateQuery, times(1)).find(eq("FAKE-B"), any(), any());
+    }
+
+    @Test
+    void eachEtfCarriesItsOwnEtfInfoAndAnUnknownOneHasNone() throws IOException {
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                daily("TEST01", "-1.50", AS_OF), daily("TEST02", "0.50", AS_OF)));
+        when(holdings.etfInfo("TEST01")).thenReturn(Optional.of(new EtfInfo("TEST ETF", null, "TEST SECTOR", List.of(
+                new EtfInfo.Member("US", "FAKEA", null, new BigDecimal("5.25"), 1)))));
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs().get(0).etf()).isEqualTo(new ContextPayload.EtfInfo("TEST ETF", null, "TEST SECTOR",
+                List.of(new ContextPayload.EtfMember("US", "FAKEA", null, "5.25", 1)), false));
+        assertThat(payload.etfs().get(1).etf()).isNull();
     }
 
     @Test

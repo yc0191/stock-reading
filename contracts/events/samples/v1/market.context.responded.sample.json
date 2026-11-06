@@ -67,6 +67,17 @@
         "status": "missing"
       }
     ],
-    "truncated": false
+    "truncated": false,
+    "etf": {
+      "name": "TEST ETF ONE",
+      "tracks": "TEST INDEX",
+      "sector": "TEST SECTOR",
+      "members": [
+        { "market": "US", "symbol": "TESTA", "name": "TEST CORP A", "weight": "12.5", "rank": 1 },
+        { "market": "US", "symbol": "FAKEB", "weight": "8.25", "rank": 2 },
+        { "market": "KR", "symbol": "TEST09", "name": "TEST CORP KR", "rank": 3 }
+      ],
+      "membersTruncated": false
+    }
   }
 }

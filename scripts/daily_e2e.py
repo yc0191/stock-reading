@@ -50,6 +50,15 @@ def holdings_setting() -> str:
     return ";".join(f"{etf}={','.join(tickers)}" for etf, tickers in HOLDINGS.items() if tickers)
 
 
+def holdings_file_json() -> str:
+    """시세처리기 보유 종목 파일(HOLDINGS_FILE) 내용. holdings_setting 과 같은 가짜 대응표를 파일 모양으로 옮긴다."""
+    items = [{"kind": "ETF", "market": "KR", "symbol": etf, "relation": "HELD",
+              "members": [{"market": "US", "symbol": ticker, "rank": rank}
+                          for rank, ticker in enumerate(tickers, start=1)]}
+             for etf, tickers in HOLDINGS.items()]
+    return json.dumps(items)
+
+
 def _ts(value: datetime) -> str:
     return value.astimezone(KST).isoformat(timespec="milliseconds")
 

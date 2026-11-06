@@ -12,7 +12,27 @@ public record ContextPayload(
         List<String> tickers,
         List<CloseRate> closeRates,
         List<Background> background,
-        boolean truncated) {
+        boolean truncated,
+        @JsonInclude(JsonInclude.Include.NON_NULL) EtfInfo etf) {
+
+    public ContextPayload(String jobId, int seq, String symbol, List<String> tickers, List<CloseRate> closeRates,
+            List<Background> background, boolean truncated) {
+        this(jobId, seq, symbol, tickers, closeRates, background, truncated, null);
+    }
+
+    /**
+     * ETF 정보(선택). 변동 종목이 보유 종목 파일에 ETF로 있을 때만 담긴다. 비중(weight)은 %를 문자열로 옮기고,
+     * 모르는 칸은 빠진다. 구성 종목이 maxTickers보다 많으면 비중 순위 순으로 잘라 membersTruncated를 true로 한다.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record EtfInfo(String name, String tracks, String sector, List<EtfMember> members,
+            boolean membersTruncated) {
+    }
+
+    /** ETF 구성 종목 한 개. rank는 비중 순위(1이 가장 큼)다. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record EtfMember(String market, String symbol, String name, String weight, int rank) {
+    }
 
     /** 미국 종목 한 개의 직전 정규장 등락률. date와 rate는 저장된 원문 그대로다. */
     public record CloseRate(String ticker, String date, String closeAt, String rate, String fetchedAt) {

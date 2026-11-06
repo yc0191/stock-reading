@@ -8,6 +8,7 @@ import java.util.Optional;
 
 import dev.stockreading.market.event.ContextPayload;
 import dev.stockreading.market.event.EventFactory;
+import dev.stockreading.market.holdings.EtfInfo;
 import dev.stockreading.market.insight.OverseasCloseRate;
 
 /**
@@ -58,6 +59,16 @@ class MarketBackground {
     static ContextPayload.CloseRate closeRate(String ticker, OverseasCloseRate rate) {
         return new ContextPayload.CloseRate(ticker, rate.date(), EventFactory.formatKst(rate.closeAt()),
                 rate.rate().strip(), EventFactory.formatKst(rate.fetchedAt()));
+    }
+
+    /** ETF 정보를 응답 모양으로 만든다. 구성 종목은 비중 순위 순으로 maxMembers개까지 담는다. */
+    static ContextPayload.EtfInfo etfInfo(EtfInfo info, int maxMembers) {
+        List<ContextPayload.EtfMember> members = info.members().stream().limit(maxMembers)
+                .map(m -> new ContextPayload.EtfMember(m.market(), m.symbol(), m.name(),
+                        m.weight() == null ? null : m.weight().stripTrailingZeros().toPlainString(), m.rank()))
+                .toList();
+        return new ContextPayload.EtfInfo(info.name(), info.tracks(), info.sector(), members,
+                info.members().size() > members.size());
     }
 
     private static ContextPayload.Background background(
