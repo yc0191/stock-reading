@@ -41,6 +41,8 @@ final class FakeBrokerServer implements AutoCloseable {
     volatile long priceDelayMs;
     // 종목 코드별 현재가 응답 본문. 없으면 priceBody 를 쓴다.
     final Map<String, String> priceBodyBySymbol = new ConcurrentHashMap<>();
+    // 설정하면 다른 현재가 요청과 겹쳐 처리 중인 요청에는 종목과 상관없이 이 본문을 보낸다. 동시 호출 때만 깨지는 서버를 흉내 낸다.
+    volatile String overlapPriceBody;
 
     private final HttpServer server;
 
@@ -62,6 +64,10 @@ final class FakeBrokerServer implements AutoCloseable {
                 String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                 Matcher symbol = SYMBOL.matcher(request);
                 String body = symbol.find() ? priceBodyBySymbol.getOrDefault(symbol.group(1), priceBody) : priceBody;
+                String overlap = overlapPriceBody;
+                if (overlap != null && inFlight.get() > 1) {
+                    body = overlap;
+                }
                 reply(exchange, priceStatus, body);
             } finally {
                 inFlight.decrementAndGet();
