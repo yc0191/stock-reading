@@ -653,46 +653,57 @@
               "properties": {
                 "TOKEN_ISSUE_FAILED": {
                   "type": "integer",
+                  "description": "접근토큰 발급에 실패해 시세를 조회하지 못한 건수.",
                   "minimum": 0
                 },
                 "HTTP_ERROR": {
                   "type": "integer",
+                  "description": "시세 조회 호출이 HTTP 오류로 끝난 건수.",
                   "minimum": 0
                 },
                 "RESULT_CODE_FAILED": {
                   "type": "integer",
+                  "description": "시세 조회 응답은 왔지만 결과 코드가 실패를 나타낸 건수.",
                   "minimum": 0
                 },
                 "EMPTY_PRICE": {
                   "type": "integer",
+                  "description": "시세 조회 응답에 현재가가 비어 있던 건수.",
                   "minimum": 0
                 },
                 "PRICE_PARSE_FAILED": {
                   "type": "integer",
+                  "description": "시세 조회 응답의 현재가를 숫자로 읽지 못한 건수.",
                   "minimum": 0
                 },
                 "CONNECTION_FAILED": {
                   "type": "integer",
+                  "description": "시세 조회 중 연결이 실패한 건수.",
                   "minimum": 0
                 },
                 "TIMEOUT": {
                   "type": "integer",
+                  "description": "시세 조회가 제한 시간 안에 끝나지 않은 건수.",
                   "minimum": 0
                 },
                 "FIELD_MISMATCH": {
                   "type": "integer",
+                  "description": "응답 안의 현재가가 같은 응답의 다른 칸과 맞지 않아 깨진 응답으로 보고 버린 건수.",
                   "minimum": 0
                 },
                 "TICK_SKIPPED_RATE_LIMITED": {
                   "type": "integer",
+                  "description": "호출 상한을 넘겨 해당 tick의 조회를 건너뛴 건수.",
                   "minimum": 0
                 },
                 "TICK_SKIPPED_SUPERSEDED": {
                   "type": "integer",
+                  "description": "더 새 tick이 있어 오래된 tick의 조회를 건너뛴 건수.",
                   "minimum": 0
                 },
                 "TICK_SKIPPED_OTHER": {
                   "type": "integer",
+                  "description": "위 두 사유가 아닌 이유로 tick의 조회를 건너뛴 건수.",
                   "minimum": 0
                 }
               }
@@ -714,6 +725,7 @@
                   },
                   "count": {
                     "type": "integer",
+                    "description": "해당 토픽에서 버린 메시지 건수.",
                     "minimum": 1
                   }
                 }
