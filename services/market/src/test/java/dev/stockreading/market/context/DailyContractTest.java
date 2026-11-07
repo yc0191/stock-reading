@@ -42,9 +42,22 @@ class DailyContractTest {
     }
 
     @Test
-    void responseSampleMatchesSchema() throws IOException {
+    void v1ResponseSampleStillMatchesTheV1Schema() throws IOException {
         assertThat(ContractSchemas.validate("market.daily.responded.v1.schema.json",
                 ContractSchemas.sample("market.daily.responded.sample.json"))).isEmpty();
+    }
+
+    @Test
+    void v2ResponseSampleMatchesTheV2SchemaAndIncludesAnEtfWithoutADailyPrice() throws IOException {
+        String sample = ContractSchemas.sample("v2", "market.daily.responded.sample.json");
+
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", sample)).isEmpty();
+        var etfs = mapper.readTree(sample).get("payload").get("etfs");
+        assertThat(mapper.readTree(sample).get("schemaVersion").asInt()).isEqualTo(2);
+        assertThat(etfs.get(0).get("missingReason").isNull()).isTrue();
+        assertThat(etfs.get(2).get("close").isNull()).isTrue();
+        assertThat(etfs.get(2).get("missingReason").asString()).isEqualTo("no-daily-price-in-range");
+        assertThat(etfs.get(2).get("tickers")).hasSize(1);
     }
 
     @Test
@@ -78,7 +91,7 @@ class DailyContractTest {
 
         String json = serialize(payload);
 
-        assertThat(ContractSchemas.validate("market.daily.responded.v1.schema.json", json)).isEmpty();
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", json)).isEmpty();
         assertThat(mapper.readTree(json).get("payload").get("background").get(0).has("target")).isTrue();
     }
 
@@ -93,7 +106,7 @@ class DailyContractTest {
                                 "2026-10-20T16:30:03+09:00", List.of(), false)),
                 List.of(), List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false));
 
-        assertThat(ContractSchemas.validate("market.daily.responded.v1.schema.json", json)).isEmpty();
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", json)).isEmpty();
         var etfs = mapper.readTree(json).get("payload").get("etfs");
         assertThat(etfs.get(0).get("etf").has("tracks")).isFalse();
         assertThat(etfs.get(0).get("etf").get("members").get(0).has("name")).isFalse();
@@ -105,7 +118,7 @@ class DailyContractTest {
         String json = serialize(new DailyPayload(JOB_ID, 1, List.of(), List.of(),
                 List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false));
 
-        assertThat(ContractSchemas.validate("market.daily.responded.v1.schema.json", json)).isEmpty();
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", json)).isEmpty();
     }
 
     @Test
@@ -113,22 +126,54 @@ class DailyContractTest {
         String json = serialize(new DailyPayload(JOB_ID, 1, List.of(), List.of(),
                 List.of(ContextPayload.Background.missing("daily-price", "TEST01")), false));
 
-        assertThat(ContractSchemas.validate("market.daily.responded.v1.schema.json", json)).isNotEmpty();
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", json)).isNotEmpty();
     }
 
     @Test
     void schemaRejectsEtfWithoutItsRawRateOrWithAMalformedSymbol() throws IOException {
-        String noRate = ContractSchemas.sample("market.daily.responded.sample.json")
+        String noRate = ContractSchemas.sample("v2", "market.daily.responded.sample.json")
                 .replace("\"rate\": \"-1.50\",", "");
-        String badSymbol = ContractSchemas.sample("market.daily.responded.sample.json")
+        String badSymbol = ContractSchemas.sample("v2", "market.daily.responded.sample.json")
                 .replace("\"symbol\": \"TEST01\"", "\"symbol\": \"*\"");
 
-        assertThat(ContractSchemas.validate("market.daily.responded.v1.schema.json", noRate)).isNotEmpty();
-        assertThat(ContractSchemas.validate("market.daily.responded.v1.schema.json", badSymbol)).isNotEmpty();
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", noRate)).isNotEmpty();
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", badSymbol)).isNotEmpty();
+    }
+
+    @Test
+    void producerEtfWithoutADailyPriceCarriesNullsAndTheReasonAndStillMatchesSchema() throws IOException {
+        String json = serialize(new DailyPayload(JOB_ID, 1, List.of(
+                DailyPayload.Etf.withoutDaily("TEST01", DailyPayload.NO_DAILY_PRICE_IN_RANGE, List.of("TESTA"), false,
+                        null),
+                DailyPayload.Etf.withoutDaily("TEST02", DailyPayload.DAILY_PRICE_UNREADABLE, List.of(), false, null)),
+                List.of(), List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false));
+
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", json)).isEmpty();
+        var etfs = mapper.readTree(json).get("payload").get("etfs");
+        assertThat(etfs.get(0).get("date").isNull()).isTrue();
+        assertThat(etfs.get(0).get("fetchedAt").isNull()).isTrue();
+        assertThat(etfs.get(0).get("missingReason").asString()).isEqualTo("no-daily-price-in-range");
+        assertThat(etfs.get(1).get("missingReason").asString()).isEqualTo("daily-price-unreadable");
+        assertThat(mapper.readTree(json).get("schemaVersion").asInt()).isEqualTo(2);
+    }
+
+    @Test
+    void schemaRejectsInconsistentDailyCellsAndUnknownReasons() throws IOException {
+        String sample = ContractSchemas.sample("v2", "market.daily.responded.sample.json");
+        // 사유가 있는데 값이 남아 있음, 사유가 없는데 값이 비어 있음, 정해진 목록 밖의 사유.
+        String reasonWithValues = sample.replaceFirst("\"missingReason\": null",
+                "\"missingReason\": \"no-daily-price-in-range\"");
+        String nullsWithoutReason = sample.replace("\"close\": \"9850\"", "\"close\": null");
+        String unknownReason = sample.replace("\"no-daily-price-in-range\"", "\"because\"");
+        String noReasonKey = sample.replaceFirst("\"missingReason\": null,", "");
+
+        for (String bad : List.of(reasonWithValues, nullsWithoutReason, unknownReason, noReasonKey)) {
+            assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", bad)).isNotEmpty();
+        }
     }
 
     private String serialize(DailyPayload payload) {
-        return mapper.writeValueAsString(EventFactory.create(CLOCK, "market.daily.responded",
+        return mapper.writeValueAsString(EventFactory.create(CLOCK, "market.daily.responded", 2,
                 OffsetDateTime.now(CLOCK), "daily-briefing-post-close-2026-10-20T17:00:00+09:00", payload));
     }
 }

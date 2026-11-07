@@ -60,6 +60,7 @@ class DailyRequestListenerTest {
         when(repository.latestDailyPrices(any(), any())).thenReturn(List.of());
         when(closeRateQuery.find(anyString(), any(), any())).thenReturn(Optional.empty());
         when(holdings.topTickers(anyString())).thenReturn(List.of());
+        when(holdings.trackedEtfCodes()).thenReturn(List.of());
     }
 
     private DailyRequestListener listener(int maxTickers, int maxEtfs) {
@@ -81,6 +82,10 @@ class DailyRequestListenerTest {
         ArgumentCaptor<DailyPayload> payload = ArgumentCaptor.captor();
         verify(publisher).publish(payload.capture(), eq(REQUEST_EVENT_ID), eq(CORRELATION_ID));
         return payload.getValue();
+    }
+
+    private void tracked(String... symbols) {
+        when(holdings.trackedEtfCodes()).thenReturn(List.of(symbols));
     }
 
     private static BackgroundRepository.StoredTargetResponse daily(String symbol, String rate, OffsetDateTime fetched) {
@@ -106,7 +111,8 @@ class DailyRequestListenerTest {
     }
 
     @Test
-    void etfsAreTheSymbolsWithStoredDailyPricesAndCarryTheRawRecordValues() throws IOException {
+    void trackedEtfsWithDailyPricesCarryTheRawRecordValues() throws IOException {
+        tracked("TEST01", "TEST02");
         when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
                 daily("TEST01", "-1.50", AS_OF.minusMinutes(30)), daily("TEST02", "0.50", AS_OF.minusMinutes(29))));
 
@@ -120,28 +126,65 @@ class DailyRequestListenerTest {
     }
 
     @Test
-    void etfInTheHoldingsMapButWithoutADailyPriceInRangeIsLeftOut() throws IOException {
+    void trackedEtfWithoutADailyPriceInRangeStaysWithNullsAndTheReasonButKeepsUsStocksInfoAndCloseRates()
+            throws IOException {
+        tracked("TEST01", "TEST09");
         when(holdings.topTickers("TEST09")).thenReturn(List.of("FAKEZ"));
+        when(holdings.etfInfo("TEST09")).thenReturn(Optional.of(new EtfInfo("TEST ETF NINE", null, null, List.of())));
+        when(closeRateQuery.find(eq("FAKEZ"), eq(AS_OF), eq(SINCE))).thenReturn(Optional.of(new OverseasCloseRate(
+                "FAKEZ", "20261019", OffsetDateTime.parse("2026-10-19T16:00:00-04:00"), "-0.75",
+                OffsetDateTime.parse("2026-10-19T23:30:02Z"))));
         when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(daily("TEST01", "-1.50", AS_OF)));
 
         DailyPayload payload = answer(listener(), request());
 
-        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol).containsExactly("TEST01");
-        verify(closeRateQuery, never()).find(eq("FAKEZ"), any(), any());
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol, DailyPayload.Etf::missingReason)
+                .containsExactly(tuple("TEST01", null), tuple("TEST09", DailyPayload.NO_DAILY_PRICE_IN_RANGE));
+        DailyPayload.Etf without = payload.etfs().get(1);
+        assertThat(without).extracting(DailyPayload.Etf::date, DailyPayload.Etf::close, DailyPayload.Etf::prevClose,
+                DailyPayload.Etf::rate, DailyPayload.Etf::fetchedAt).containsOnlyNulls();
+        assertThat(without.tickers()).containsExactly("FAKEZ");
+        assertThat(without.etf().name()).isEqualTo("TEST ETF NINE");
+        assertThat(payload.closeRates()).extracting(ContextPayload.CloseRate::ticker).containsExactly("FAKEZ");
     }
 
     @Test
-    void dailyPriceFetchedAtTheReferenceTimeIsIncludedAndOneSecondLaterIsNot() throws IOException {
+    void everyTrackedEtfWithoutAnyDailyPriceIsStillListedWithTheReason() throws IOException {
+        tracked("TEST01", "TEST02");
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol, DailyPayload.Etf::missingReason)
+                .containsExactly(tuple("TEST01", DailyPayload.NO_DAILY_PRICE_IN_RANGE),
+                        tuple("TEST02", DailyPayload.NO_DAILY_PRICE_IN_RANGE));
+    }
+
+    @Test
+    void dailyPriceOfASymbolNotInTheInstrumentTableIsNotListed() throws IOException {
+        tracked("TEST01");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                daily("TEST01", "-1.50", AS_OF), daily("TEST77", "0.50", AS_OF)));
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol).containsExactly("TEST01");
+    }
+
+    @Test
+    void dailyPriceFetchedAtTheReferenceTimeIsUsedAndOneSecondLaterCountsAsMissing() throws IOException {
+        tracked("TEST01", "TEST02");
         when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
                 daily("TEST01", "-1.50", AS_OF), daily("TEST02", "0.50", AS_OF.plusSeconds(1))));
 
         DailyPayload payload = answer(listener(), request());
 
-        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol).containsExactly("TEST01");
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol, DailyPayload.Etf::missingReason)
+                .containsExactly(tuple("TEST01", null), tuple("TEST02", DailyPayload.NO_DAILY_PRICE_IN_RANGE));
     }
 
     @Test
-    void dailyPriceOlderThanTheLowerBoundIsLeftOutAndTheSafetyLimitRaisesTheLowerBound() throws IOException {
+    void dailyPriceOlderThanTheLowerBoundCountsAsMissingAndTheSafetyLimitRaisesTheLowerBound() throws IOException {
+        tracked("TEST01", "TEST02");
         // 요청 since가 8일 전이어도 안전 상한 4일이 하한이 된다.
         String wideRequest = request().replace("2026-10-16T17:00:00+09:00", "2026-10-12T17:00:00+09:00");
         when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
@@ -149,12 +192,14 @@ class DailyRequestListenerTest {
 
         DailyPayload payload = answer(listener(), wideRequest);
 
-        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol).containsExactly("TEST01");
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol, DailyPayload.Etf::missingReason)
+                .containsExactly(tuple("TEST01", null), tuple("TEST02", DailyPayload.NO_DAILY_PRICE_IN_RANGE));
         verify(repository).latestDailyPrices(SINCE, AS_OF);
     }
 
     @Test
     void etfWithoutUsStocksHasNoTickersAndCloseRatesAreAskedOncePerTicker() throws IOException {
+        tracked("TEST01", "TEST02", "TEST03");
         when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
                 daily("TEST01", "-1.50", AS_OF), daily("TEST02", "0.50", AS_OF), daily("TEST03", "0.10", AS_OF)));
         when(holdings.topTickers("TEST01")).thenReturn(List.of("FAKEA", "FAKE-B"));
@@ -176,6 +221,7 @@ class DailyRequestListenerTest {
 
     @Test
     void eachEtfCarriesItsOwnEtfInfoAndAnUnknownOneHasNone() throws IOException {
+        tracked("TEST01", "TEST02");
         when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
                 daily("TEST01", "-1.50", AS_OF), daily("TEST02", "0.50", AS_OF)));
         when(holdings.etfInfo("TEST01")).thenReturn(Optional.of(new EtfInfo("TEST ETF", null, "TEST SECTOR", List.of(
@@ -190,6 +236,7 @@ class DailyRequestListenerTest {
 
     @Test
     void etfsOverTheLimitAreCutInSymbolOrderAndMarkedTruncated() throws IOException {
+        tracked("TEST01", "TEST02", "TEST03");
         when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
                 daily("TEST01", "-1.50", AS_OF), daily("TEST02", "0.50", AS_OF), daily("TEST03", "0.10", AS_OF)));
         when(holdings.topTickers("TEST03")).thenReturn(List.of("FAKEC"));
@@ -199,10 +246,12 @@ class DailyRequestListenerTest {
         assertThat(requested.etfs()).extracting(DailyPayload.Etf::symbol).containsExactly("TEST01", "TEST02");
         assertThat(requested.truncated()).isTrue();
         verify(closeRateQuery, never()).find(eq("FAKEC"), any(), any());
+        verify(holdings, never()).topTickers("TEST03");
     }
 
     @Test
     void requestedEtfLimitAboveTheSafetyLimitIsCappedAndExactlyTheLimitIsNotTruncated() throws IOException {
+        tracked("TEST01", "TEST02");
         when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
                 daily("TEST01", "-1.50", AS_OF), daily("TEST02", "0.50", AS_OF)));
 
@@ -214,6 +263,7 @@ class DailyRequestListenerTest {
 
     @Test
     void tickersOverTheLimitAreCutPerEtfAndMarkedOnThatEtf() throws IOException {
+        tracked("TEST01", "TEST02");
         when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
                 daily("TEST01", "-1.50", AS_OF), daily("TEST02", "0.50", AS_OF)));
         when(holdings.topTickers("TEST01")).thenReturn(List.of("FAKEA", "FAKEB", "FAKEC"));
@@ -228,7 +278,9 @@ class DailyRequestListenerTest {
     }
 
     @Test
-    void dailyPriceWithoutAReadableRecordIsLeftOutButTheRestAreAnswered() throws IOException {
+    void dailyPriceWithoutAReadableRecordKeepsTheEtfWithTheUnreadableReasonAndTheRestAreAnswered() throws IOException {
+        tracked("TEST01", "TEST02");
+        when(holdings.topTickers("TEST01")).thenReturn(List.of("FAKEA"));
         when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
                 new BackgroundRepository.StoredTargetResponse("TEST01",
                         new BackgroundRepository.StoredResponse("{\"dataBody\": {\"out2\": []}}", AS_OF)),
@@ -236,11 +288,28 @@ class DailyRequestListenerTest {
 
         DailyPayload payload = answer(listener(), request());
 
-        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol).containsExactly("TEST02");
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol, DailyPayload.Etf::missingReason,
+                DailyPayload.Etf::tickers)
+                .containsExactly(tuple("TEST01", DailyPayload.DAILY_PRICE_UNREADABLE, List.of("FAKEA")),
+                        tuple("TEST02", null, List.of()));
+    }
+
+    @Test
+    void dailyPriceThatIsNotJsonCountsAsUnreadableToo() throws IOException {
+        tracked("TEST01");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                new BackgroundRepository.StoredTargetResponse("TEST01",
+                        new BackgroundRepository.StoredResponse("not json", AS_OF))));
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::missingReason)
+                .containsExactly(DailyPayload.DAILY_PRICE_UNREADABLE);
     }
 
     @Test
     void sameRequestTwiceGivesTheSameAnswer() throws IOException {
+        tracked("TEST01");
         when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(daily("TEST01", "-1.50", AS_OF)));
         DailyRequestListener listener = listener();
 

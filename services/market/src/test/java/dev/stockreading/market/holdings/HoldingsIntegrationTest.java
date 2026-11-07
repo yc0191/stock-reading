@@ -95,6 +95,24 @@ class HoldingsIntegrationTest {
     }
 
     @Test
+    void trackedEtfCodesAreKrEtfsHeldOrWatchedInCodeOrderAndLeaveOutNoneAndMembers() {
+        repository.replaceAll(plan("""
+                [{"kind": "ETF", "market": "KR", "symbol": "TEST03", "relation": "WATCH"},
+                 {"kind": "ETF", "market": "KR", "symbol": "TEST01", "relation": "HELD",
+                  "members": [{"market": "US", "symbol": "FAKEA", "rank": 1}]},
+                 {"kind": "ETF", "market": "KR", "symbol": "TEST02", "relation": "NONE"},
+                 {"kind": "ETF", "market": "KR", "symbol": "TEST04"}]
+                """));
+
+        assertThat(repository.trackedEtfCodes()).containsExactly("TEST01", "TEST03");
+    }
+
+    @Test
+    void trackedEtfCodesAreEmptyWhenTheTableIsEmpty() {
+        assertThat(repository.trackedEtfCodes()).isEmpty();
+    }
+
+    @Test
     void syncingAgainWithADifferentFileMakesTheTablesIdenticalToIt() {
         repository.replaceAll(plan(FIRST));
         repository.replaceAll(plan("""
