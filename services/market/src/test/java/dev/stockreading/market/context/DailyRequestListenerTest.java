@@ -47,6 +47,7 @@ class DailyRequestListenerTest {
     private BackgroundRepository repository;
     private OverseasCloseRateQuery closeRateQuery;
     private HoldingsPort holdings;
+    private OperationsReader operationsReader;
     private DailyPublisher publisher;
 
     @BeforeEach
@@ -54,6 +55,7 @@ class DailyRequestListenerTest {
         repository = mock(BackgroundRepository.class);
         closeRateQuery = mock(OverseasCloseRateQuery.class);
         holdings = mock(HoldingsPort.class);
+        operationsReader = mock(OperationsReader.class);
         publisher = mock(DailyPublisher.class);
         when(repository.latest(any(), any(), any(), any())).thenReturn(Optional.empty());
         when(repository.worldIndexRows(anyString(), any(), any())).thenReturn(List.of());
@@ -66,7 +68,7 @@ class DailyRequestListenerTest {
     private DailyRequestListener listener(int maxTickers, int maxEtfs) {
         return new DailyRequestListener(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
                 new ContextProperties(Duration.ofDays(4), 32_768, maxTickers, List.of("C", "S")),
-                new DailyProperties(maxEtfs), publisher, mapper);
+                new DailyProperties(maxEtfs), operationsReader, publisher, mapper);
     }
 
     private DailyRequestListener listener() {
@@ -331,5 +333,54 @@ class DailyRequestListenerTest {
                 .hasMessageContaining(JOB_ID);
         assertThatThrownBy(() -> listener.onRequest(zeroEtfs)).isInstanceOf(IllegalArgumentException.class);
         verifyNoInteractions(publisher);
+    }
+
+    private static final DailyPayload.Operations OPERATIONS = new DailyPayload.Operations(
+            List.of(new DailyPayload.CollectionStatus("quote-1s", null, null, 0)), java.util.Map.of("TIMEOUT", 0),
+            List.of());
+
+    @Test
+    void addsOperationsOnlyWhenTheRequestAsksForThem() throws IOException {
+        when(operationsReader.read(any(), any())).thenReturn(OPERATIONS);
+
+        DailyPayload asked = answer(listener(), request());
+
+        assertThat(asked.operations()).isSameAs(OPERATIONS);
+        verify(operationsReader).read(SINCE, AS_OF);
+    }
+
+    @Test
+    void leavesOperationsOutWhenTheFlagIsMissingOrFalse() throws IOException {
+        String missing = request().replace(",\n    \"includeOperations\": true", "");
+        assertThat(missing).doesNotContain("includeOperations");
+
+        assertThat(answer(listener(), missing).operations()).isNull();
+        verifyNoInteractions(operationsReader);
+
+        publisher = mock(DailyPublisher.class);
+        String off = request().replace("\"includeOperations\": true", "\"includeOperations\": false");
+        assertThat(answer(listener(), off).operations()).isNull();
+        verifyNoInteractions(operationsReader);
+    }
+
+    @Test
+    void operationsUseTheSameClampedRangeAsTheOtherData() throws IOException {
+        when(operationsReader.read(any(), any())).thenReturn(OPERATIONS);
+        // 요청 하한이 안전 기간(4일)보다 오래되면 응답의 다른 자료처럼 안전 기간까지만 본다.
+        String old = request().replace("2026-10-16T17:00:00+09:00", "2026-10-01T17:00:00+09:00");
+
+        answer(listener(), old);
+
+        verify(operationsReader).read(AS_OF.minus(Duration.ofDays(4)), AS_OF);
+    }
+
+    @Test
+    void sendsTheRestOfTheAnswerWithoutOperationsWhenReadingThemFails() throws IOException {
+        when(operationsReader.read(any(), any())).thenThrow(new IllegalStateException("db down"));
+
+        DailyPayload answer = answer(listener(), request());
+
+        assertThat(answer.operations()).isNull();
+        assertThat(mapper.writeValueAsString(answer)).doesNotContain("operations");
     }
 }

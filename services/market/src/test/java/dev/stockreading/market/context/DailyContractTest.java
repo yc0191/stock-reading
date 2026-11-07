@@ -39,6 +39,25 @@ class DailyContractTest {
         assertThat(event.payload().maxResponseBytes()).isEqualTo(32_768);
         assertThat(event.payload().maxEtfs()).isEqualTo(50);
         assertThat(event.payload().maxTickers()).isEqualTo(100);
+        assertThat(event.payload().wantsOperations()).isTrue();
+    }
+
+    @Test
+    void requestWithoutTheOperationsFlagStillMatchesTheSchemaAndDoesNotAskForOperations() throws IOException {
+        String withoutFlag = ContractSchemas.sample("market.daily.requested.sample.json")
+                .replace(",\n    \"includeOperations\": true", "");
+
+        assertThat(withoutFlag).doesNotContain("includeOperations");
+        assertThat(ContractSchemas.validate("market.daily.requested.v1.schema.json", withoutFlag)).isEmpty();
+        assertThat(mapper.readValue(withoutFlag, DailyRequestEnvelope.class).payload().wantsOperations()).isFalse();
+    }
+
+    @Test
+    void schemaRejectsANonBooleanOperationsFlag() throws IOException {
+        String bad = ContractSchemas.sample("market.daily.requested.sample.json")
+                .replace("\"includeOperations\": true", "\"includeOperations\": \"yes\"");
+
+        assertThat(ContractSchemas.validate("market.daily.requested.v1.schema.json", bad)).isNotEmpty();
     }
 
     @Test
@@ -58,6 +77,43 @@ class DailyContractTest {
         assertThat(etfs.get(2).get("close").isNull()).isTrue();
         assertThat(etfs.get(2).get("missingReason").asString()).isEqualTo("no-daily-price-in-range");
         assertThat(etfs.get(2).get("tickers")).hasSize(1);
+    }
+
+    @Test
+    void v2SampleOperationsMatchTheSchemaWithAllFourCollectionsAndEveryFailureKind() throws IOException {
+        String sample = ContractSchemas.sample("v2", "market.daily.responded.sample.json");
+
+        var operations = mapper.readTree(sample).get("payload").get("operations");
+        assertThat(operations.get("collections")).hasSize(4);
+        assertThat(operations.get("collections").get(3).get("firstReceivedAt").isNull()).isTrue();
+        assertThat(operations.get("quoteFailures").has("TICK_SKIPPED_SUPERSEDED")).isTrue();
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json",
+                sample.replace("\"TIMEOUT\": 0,", ""))).isNotEmpty();
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json",
+                sample.replace("\"receivedCount\": 4", "\"receivedCount\": -1"))).isNotEmpty();
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json",
+                sample.replace("\"kind\": \"pre-open\"", "\"kind\": \"night\""))).isNotEmpty();
+    }
+
+    @Test
+    void producerOperationsMatchSchemaAndAreLeftOutWhenNull() throws IOException {
+        var failures = new java.util.LinkedHashMap<String, Integer>();
+        OperationsReader.QUOTE_FAILURE_KINDS.forEach(kind -> failures.put(kind, 0));
+        failures.put("SOMETHING_NEW", 2);
+        DailyPayload.Operations operations = new DailyPayload.Operations(
+                OperationsReader.COLLECTION_KINDS.stream()
+                        .map(kind -> new DailyPayload.CollectionStatus(kind, null, null, 0)).toList(),
+                failures, List.of(new DailyPayload.DroppedTopic("market.snapshot", 3)));
+        DailyPayload base = new DailyPayload(JOB_ID, 1, List.of(), List.of(),
+                List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false);
+
+        String with = serialize(new DailyPayload(JOB_ID, 1, List.of(), List.of(),
+                List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false, operations));
+
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", with)).isEmpty();
+        assertThat(mapper.readTree(with).get("payload").get("operations").get("quoteFailures").get("SOMETHING_NEW")
+                .asInt()).isEqualTo(2);
+        assertThat(mapper.readTree(serialize(base)).get("payload").has("operations")).isFalse();
     }
 
     @Test

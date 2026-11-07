@@ -12,6 +12,7 @@
     "since": "2026-10-16T17:00:00+09:00",
     "maxResponseBytes": 32768,
     "maxEtfs": 50,
-    "maxTickers": 100
+    "maxTickers": 100,
+    "includeOperations": true
   }
 }

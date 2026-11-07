@@ -1,6 +1,7 @@
 package dev.stockreading.market.event;
 
 import java.util.List;
+import java.util.Map;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 
@@ -14,7 +15,13 @@ public record DailyPayload(
         List<Etf> etfs,
         List<ContextPayload.CloseRate> closeRates,
         List<ContextPayload.Background> background,
-        boolean truncated) {
+        boolean truncated,
+        @JsonInclude(JsonInclude.Include.NON_NULL) Operations operations) {
+
+    public DailyPayload(String jobId, int seq, List<Etf> etfs, List<ContextPayload.CloseRate> closeRates,
+            List<ContextPayload.Background> background, boolean truncated) {
+        this(jobId, seq, etfs, closeRates, background, truncated, null);
+    }
 
     /** 일봉이 없어 하루 등락 칸이 비었을 때의 이유. 값은 market.daily.responded v2 스키마의 enum과 같다. */
     public static final String NO_DAILY_PRICE_IN_RANGE = "no-daily-price-in-range";
@@ -51,5 +58,22 @@ public record DailyPayload(
                 boolean tickersTruncated, ContextPayload.EtfInfo etf) {
             return new Etf(symbol, null, null, null, null, null, missingReason, tickers, tickersTruncated, etf);
         }
+    }
+
+    /**
+     * 시세처리기 운영 상태. 요청이 includeOperations를 보냈을 때만 담긴다. 종목코드는 담지 않는다.
+     * quoteFailures의 키는 market.daily.responded v2 스키마가 정한 종류 이름이다.
+     */
+    public record Operations(
+            List<CollectionStatus> collections,
+            Map<String, Integer> quoteFailures,
+            List<DroppedTopic> droppedMessages) {
+    }
+
+    /** 수집 종류 하나의 범위 안 수신 현황. 받은 자료가 없으면 두 시각은 null이고 receivedCount는 0이다. */
+    public record CollectionStatus(String kind, String firstReceivedAt, String lastReceivedAt, long receivedCount) {
+    }
+
+    public record DroppedTopic(String topic, long count) {
     }
 }
