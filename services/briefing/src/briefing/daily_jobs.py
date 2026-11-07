@@ -215,11 +215,7 @@ class DailyCore:
                      job.job_id, payload["seq"], job.data.seq)
             return
         try:
-            etfs = tuple(
-                EtfDay(e["symbol"], e["date"], e["close"], e["prevClose"], e["rate"], parse_timestamp(e["fetchedAt"]),
-                       tuple(e["tickers"]), bool(e["tickersTruncated"]), parse_etf_info(e.get("etf")))
-                for e in payload["etfs"]
-            )
+            etfs = tuple(_parse_etf_day(e) for e in payload["etfs"])
             close_rates = parse_close_rates(payload["closeRates"])
             background = tuple(parse_background(b) for b in payload["background"])
             truncated = bool(payload["truncated"])
@@ -327,7 +323,8 @@ class DailyCore:
     # ---- 재검사 ----
 
     def _recheck_etfs(self, job: _DailyJob, etfs: tuple[EtfDay, ...]) -> tuple[EtfDay, ...]:
-        kept = tuple(e for e in etfs if job.range_start <= e.fetched_at <= job.scheduled_for)
+        # 일봉이 없는 ETF(받은 시각 없음)는 버리지 않고 자료 없음으로 싣는다.
+        kept = tuple(e for e in etfs if e.fetched_at is None or job.range_start <= e.fetched_at <= job.scheduled_for)
         self._note_excluded(job, "etfs", len(etfs) - len(kept))
         return kept
 
@@ -502,6 +499,9 @@ class DailyCore:
         if missing:
             self._detail(job, STAGE_COMPOSE, EntryType.MISSING_ITEMS, REASON_MISSING_ITEMS, None, 0, now,
                          missingItems=missing,
+                         # 일봉이 빈 ETF와 이유 코드. 화면 로그가 아니라 작업 기록에만 남는다.
+                         missingEtfs=[{"symbol": e.symbol, "name": e.label(), "reason": e.missing_reason}
+                                      for e in daily_input.etfs or () if not e.has_day()],
                          evidence=[{"ref": ref, "describe": by_ref[ref].describe} for ref in draft.cited],
                          weakItems=list(draft.weak_shortfalls))
         event = daily_briefing_event(job.job_id, job.correlation_id, job.scheduled_for, now, job.edition,
@@ -598,6 +598,15 @@ class DailySentences:
 
     def publish(self, draft: DailyDraft, now: datetime, research_count: int) -> None:
         self.core.publish_draft(draft, now, research_count)
+
+
+def _parse_etf_day(e: dict[str, Any]) -> EtfDay:
+    """v2 응답은 일봉이 없으면 값 칸이 null이다. v1 응답에는 missingReason이 없다."""
+    fetched = e["fetchedAt"]
+    return EtfDay(e["symbol"], e["date"], e["close"], e["prevClose"], e["rate"],
+                  parse_timestamp(fetched) if fetched is not None else None,
+                  tuple(e["tickers"]), bool(e["tickersTruncated"]), parse_etf_info(e.get("etf")),
+                  e.get("missingReason"))
 
 
 def daily_data_request(correlation_id: str, now: datetime, payload: dict[str, Any]) -> OutboundEvent:

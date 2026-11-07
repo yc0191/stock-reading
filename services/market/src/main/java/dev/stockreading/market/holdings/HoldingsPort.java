@@ -12,6 +12,9 @@ public interface HoldingsPort {
     /** ETF 하나의 미국 구성 종목 티커 목록(비중 순위 순). 모르는 ETF 코드면 빈 목록이다. */
     List<String> topTickers(String etfCode);
 
+    /** 관계가 HELD 또는 WATCH인 국내 ETF의 종목코드(코드 순). 구성 종목으로만 아는 NONE 종목은 빠진다. */
+    List<String> trackedEtfCodes();
+
     /** ETF 하나의 이름·추종 대상·업종과 구성 종목. 목록에 없는 ETF 코드면 비어 있다. */
     Optional<EtfInfo> etfInfo(String etfCode);
 }

@@ -23,8 +23,8 @@ def validate(schema_file: str, instance: dict) -> list[str]:
     return [error.message for error in validator.iter_errors(instance)]
 
 
-def sample(sample_file: str) -> dict:
-    return json.loads((CONTRACTS_DIR / "samples" / "v1" / sample_file).read_text(encoding="utf-8"))
+def sample(sample_file: str, version: str = "v1") -> dict:
+    return json.loads((CONTRACTS_DIR / "samples" / version / sample_file).read_text(encoding="utf-8"))
 
 
 def sample_text(sample_file: str) -> str:

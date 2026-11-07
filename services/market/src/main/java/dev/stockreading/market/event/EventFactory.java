@@ -20,10 +20,15 @@ public final class EventFactory {
 
     public static <T> Envelope<T> create(
             Clock clock, String eventType, OffsetDateTime occurredAt, String correlationId, T payload) {
+        return create(clock, eventType, 1, occurredAt, correlationId, payload);
+    }
+
+    public static <T> Envelope<T> create(Clock clock, String eventType, int schemaVersion,
+            OffsetDateTime occurredAt, String correlationId, T payload) {
         return new Envelope<>(
                 UUID.randomUUID().toString(),
                 eventType,
-                1,
+                schemaVersion,
                 format(occurredAt),
                 format(OffsetDateTime.now(clock)),
                 correlationId,

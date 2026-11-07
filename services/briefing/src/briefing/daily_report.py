@@ -95,6 +95,7 @@ SYSTEM_PROMPT = """당신은 ETF 투자자에게 하루 시장 흐름을 짧게 
 - 미국 종목 등락률은 보유 ETF에 담긴 미국 종목의 직전 정규장 등락률(%)이며 hoursBeforeAsOf는 그 장 마감이 기준 시각보다 몇 시간 전인지입니다.
 - 공시의 hoursBeforeAsOf는 공시 접수 시각이 기준 시각보다 몇 시간 전인지입니다.
 - 보유 ETF별 하루 등락의 rate는 일봉 원문의 등락률(%)입니다.
+- 항목의 missing(있을 때만 담깁니다)은 값이 비어 있는 대상(ETF)과 그 이유(reason)입니다. 자료 없음 ETF에는 숫자를 쓰지 않습니다(등락 숫자를 짐작하거나 지어내지 않고, 구성 종목 비중 등 다른 숫자도 그 ETF 문장에 쓰지 않습니다). ref가 없으므로 문장의 근거로 인용하지 않습니다. 필요하면 "일부 ETF는 자료가 없다"고만 씁니다.
 - 항목 "재검색 기사"는 근거가 부족해 다시 검색해 찾은 기사이며(있을 때만 담깁니다) 기사 번호(ref)로 인용합니다. minutesBeforeAsOf는 기사 발행 시각이 판 기준 시각보다 몇 분 전인지입니다.
 - etfInfo(있을 때만 담깁니다)는 보유 ETF의 이름(name)·추종 대상(tracks)·업종(sector)과 비중 순위(rank, 1이 가장 큼) 순의 구성 종목(members)입니다. ETF가 무엇을 따라가고 무엇이 담겨 있는지 이해하는 맥락으로만 쓰고, 이것을 등락의 원인으로 단정하지 않습니다. ref가 없어 인용할 수 없으며, 문장의 근거는 ref가 있는 자료에서 찾습니다.
 - 상태 표시: "있음"은 자료가 있다는 뜻, "없음"은 범위 안에 자료가 없다는 뜻, "잘림"은 상한 때문에 일부만 받았다는 뜻, "너무 큼"은 원문이 커서 빠졌다는 뜻, "해당 없음"은 보유 ETF에 미국 종목이 없어 조회하지 않았다는 뜻입니다.
@@ -141,18 +142,27 @@ OUTPUT_SCHEMA: dict[str, Any] = {
 
 @dataclass(frozen=True)
 class EtfDay:
-    """보유 ETF 하나의 하루 등락. 값은 일봉 원문 그대로다."""
+    """보유 ETF 하나의 하루 등락. 값은 일봉 원문 그대로다. 일봉이 없으면 값 칸이 None이고 이유가 missing_reason에 있다."""
 
     symbol: str
-    date: str
-    close: str
-    prev_close: str
-    rate: str
-    fetched_at: datetime
+    date: str | None
+    close: str | None
+    prev_close: str | None
+    rate: str | None
+    fetched_at: datetime | None
     tickers: tuple[str, ...]
     tickers_truncated: bool
     # 응답의 ETF 정보(선택 칸). 이전 형식 응답에는 없다.
     etf: EtfInfo | None = None
+    # 값 칸이 빈 이유(market.daily.responded v2). 값이 있으면 None이고, v1 응답에도 없다.
+    missing_reason: str | None = None
+
+    def has_day(self) -> bool:
+        return self.missing_reason is None and None not in (self.date, self.close, self.prev_close, self.rate)
+
+    def label(self) -> str:
+        """본문에 쓰는 ETF 이름. 이름을 모르면 종목코드."""
+        return self.etf.name if self.etf is not None and self.etf.name else self.symbol
 
 
 @dataclass(frozen=True)
@@ -196,6 +206,10 @@ class Section:
     status: str
     lines: tuple[str, ...]
     entries: tuple[Entry, ...] = ()
+    # 항목 안에서 일부만 빈 경우 빈 것마다 한 줄("<이름>, <이유>"). 항목 전체가 비면 status가 없음이다.
+    gaps: tuple[str, ...] = ()
+    # gaps와 같은 자리의 LLM 입력(어느 대상의 무엇이 왜 비었는지)
+    gaps_llm: tuple[dict[str, Any], ...] = ()
 
     @property
     def missing(self) -> bool:
@@ -344,11 +358,28 @@ def _filings_section(i: DailyInput) -> Section:
     return Section(ITEM_FILINGS, status, tuple(lines), tuple(entries))
 
 
+ETF_MISSING_REASONS = {
+    "no-daily-price-in-range": "범위 안에 받은 일봉이 없음",
+    "daily-price-unreadable": "일봉 원문을 읽지 못함",
+}
+ETF_MISSING_UNKNOWN = "일봉 값이 비어 있고 이유를 받지 못함"
+
+
+def _etf_missing_reason(etf: EtfDay) -> str:
+    return ETF_MISSING_REASONS.get(etf.missing_reason or "", ETF_MISSING_UNKNOWN)
+
+
 def _etfs_section(i: DailyInput, refs: Callable[[], str]) -> Section:
     if not i.etfs:
-        return _missing(ITEM_ETFS, None if i.etfs is None else "범위 안에 받은 일봉이 없음")
-    lines, entries = [], []
+        return _missing(ITEM_ETFS, None if i.etfs is None else "받은 ETF가 없음")
+    lines, entries, gaps, gaps_llm = [], [], [], []
     for etf in i.etfs:
+        if not etf.has_day():
+            reason = _etf_missing_reason(etf)
+            lines.append(f"{NO_DATA}: {etf.label()}, {reason}")
+            gaps.append(f"{etf.label()}, {reason}")
+            gaps_llm.append({"symbol": etf.symbol, "name": etf.label(), "status": MARK_MISSING, "reason": reason})
+            continue
         ref = refs()
         lines.append(f"{etf.symbol} {etf.rate}% (종가 {etf.close}, 전일 {etf.prev_close}, {etf.date})")
         entries.append(Entry(ref, {"ref": ref, "symbol": etf.symbol, "date": etf.date, "close": etf.close,
@@ -357,7 +388,11 @@ def _etfs_section(i: DailyInput, refs: Callable[[], str]) -> Section:
                              f"{etf.symbol} 하루 등락 {etf.rate}% ({etf.date}) — {BACKGROUND_SOURCE}"))
     if i.etfs_truncated:
         lines.append(f"({MARK_TRUNCATED}: 상한까지만 받음)")
-    return Section(ITEM_ETFS, MARK_TRUNCATED if i.etfs_truncated else MARK_PRESENT, tuple(lines), tuple(entries))
+    if not entries:
+        # 모든 ETF가 비면 항목 전체가 자료 없음이다.
+        return Section(ITEM_ETFS, MARK_MISSING, tuple(lines), (), tuple(gaps), tuple(gaps_llm))
+    return Section(ITEM_ETFS, MARK_TRUNCATED if i.etfs_truncated else MARK_PRESENT, tuple(lines), tuple(entries),
+                   tuple(gaps), tuple(gaps_llm))
 
 
 def _research_section(i: DailyInput) -> Section:
@@ -402,11 +437,26 @@ def build_sections(i: DailyInput, settings: DailySettings = DEFAULT_DAILY_SETTIN
 
 
 def missing_items(sections: tuple[Section, ...]) -> list[str]:
-    return [s.name for s in sections if s.missing]
+    """빠진 항목 이름. 항목 안에서 빈 대상이 있으면 '<항목>: <대상>, <이유>'를 이어 붙인다."""
+    items: list[str] = []
+    for s in sections:
+        # 빈 대상이 있으면 대상별 줄이 이미 항목을 가리키므로 항목 이름만 따로 싣지 않는다.
+        if s.missing and not s.gaps:
+            items.append(s.name)
+        items.extend(f"{s.name}: {gap}" for gap in s.gaps)
+    return items
 
 
 def has_evidence(sections: tuple[Section, ...]) -> bool:
     return any(s.entries for s in sections)
+
+
+def _llm_item(s: Section) -> dict[str, Any]:
+    item: dict[str, Any] = {"name": s.name, "status": s.status, "entries": [e.llm for e in s.entries]}
+    # 값이 빈 대상은 있을 때만 싣는다. 빈 것이 없는 항목의 입력 모양은 바꾸지 않는다.
+    if s.gaps_llm:
+        item["missing"] = list(s.gaps_llm)
+    return item
 
 
 def build_llm_input(i: DailyInput, sections: tuple[Section, ...],
@@ -415,7 +465,7 @@ def build_llm_input(i: DailyInput, sections: tuple[Section, ...],
         "edition": EDITION_NAMES[i.edition],
         "rangeStart": _at(i.range_start),
         "asOf": _at(i.as_of),
-        "items": [{"name": s.name, "status": s.status, "entries": [e.llm for e in s.entries]} for s in sections],
+        "items": [_llm_item(s) for s in sections],
     }
     # ETF 정보는 응답에 있을 때만 넣는다. 정보가 없는 이전 형식 응답의 입력 모양은 바꾸지 않는다.
     etf_info = [{"symbol": e.symbol, **etf_info_input(e.etf, settings.max_etf_members)}

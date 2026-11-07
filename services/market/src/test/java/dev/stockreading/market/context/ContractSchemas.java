@@ -30,6 +30,10 @@ final class ContractSchemas {
     }
 
     static String sample(String sampleFile) throws IOException {
-        return Files.readString(DIR.resolve("samples/v1").resolve(sampleFile));
+        return sample("v1", sampleFile);
+    }
+
+    static String sample(String version, String sampleFile) throws IOException {
+        return Files.readString(DIR.resolve("samples").resolve(version).resolve(sampleFile));
     }
 }

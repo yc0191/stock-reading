@@ -2,8 +2,10 @@ package dev.stockreading.market.context;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -21,10 +23,10 @@ import dev.stockreading.market.insight.OverseasCloseRateQuery;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * 데일리 판 하나에 쓸 보유 ETF 전체의 하루 등락, 담긴 미국 종목과 직전 정규장 등락률, 시장 배경을 한 번에 답한다.
+ * 데일리 판 하나에 쓸 관심 ETF 전체의 하루 등락, 담긴 미국 종목과 직전 정규장 등락률, 시장 배경을 한 번에 답한다.
  *
- * <p>보유 ETF는 받은 시각이 [하한, 기준 시각] 안인 국내 일봉(daily-price)이 저장된 종목이다. 보유 종목 설정이 따로 없어
- * 수집기가 일봉을 받는 종목을 그대로 따른다. 미국 종목은 대응표로 찾고, 해외 등락률·세계지수 계산·받은 시각 하한은
+ * <p>ETF 목록은 종목 테이블의 국내 ETF 중 관계가 HELD 또는 WATCH인 종목이다. 받은 시각이 [하한, 기준 시각] 안인
+ * 국내 일봉(daily-price)이 있으면 값을 싣고, 없거나 읽지 못하면 값을 비우고 이유를 싣는다. 미국 종목은 대응표로 찾고, 해외 등락률·세계지수 계산·받은 시각 하한은
  * 배경 자료 응답(market.context)과 같은 규칙을 쓴다. 저장 상태를 바꾸지 않는 조회라 같은 요청을 다시 받아도
  * 같은 내용으로 다시 답할 뿐이고, 브리핑은 jobId·seq로 짝을 지어 중복 응답을 버린다.
  */
@@ -78,30 +80,41 @@ class DailyRequestListener {
         int maxEtfs = Math.min(request.maxEtfs(), dailyProperties.maxEtfs());
         int maxTickers = Math.min(request.maxTickers(), contextProperties.maxTickers());
 
-        List<DailyPayload.Etf> etfs = new ArrayList<>();
-        int unreadable = 0;
+        // 받은 시각이 범위 안인 일봉을 종목별로 모아 두고, ETF 목록은 종목 테이블에서 만든다. 일봉만 있고 테이블에 없는 종목은 쓰지 않는다.
+        Map<String, BackgroundRepository.StoredResponse> dailyBySymbol = new HashMap<>();
         for (BackgroundRepository.StoredTargetResponse stored : repository.latestDailyPrices(since, asOf)) {
             // 저장소가 기간을 지키더라도 여기서 한 번 더 확인한다. 어기면 조용히 미래·오래된 값이 나간다.
             OffsetDateTime fetchedAt = stored.row().fetchedAt();
-            if (fetchedAt.isBefore(since) || fetchedAt.isAfter(asOf)) {
-                continue;
+            if (!fetchedAt.isBefore(since) && !fetchedAt.isAfter(asOf)) {
+                dailyBySymbol.put(stored.target(), stored.row());
             }
-            Optional<DailyPriceReader.Record> record = dailyPriceReader.latest(stored.row().response());
-            if (record.isEmpty()) {
+        }
+        List<DailyPayload.Etf> etfs = new ArrayList<>();
+        int noDaily = 0;
+        int unreadable = 0;
+        List<String> tracked = holdings.trackedEtfCodes();
+        // 잘릴 ETF는 미국 종목과 ETF 정보를 조회하지 않도록 상한을 먼저 적용한다.
+        boolean truncated = tracked.size() > maxEtfs;
+        for (String symbol : tracked.stream().limit(maxEtfs).toList()) {
+            BackgroundRepository.StoredResponse stored = dailyBySymbol.get(symbol);
+            Optional<DailyPriceReader.Record> record =
+                    stored == null ? Optional.empty() : dailyPriceReader.latest(stored.response());
+            if (stored == null) {
+                noDaily++;
+            } else if (record.isEmpty()) {
                 unreadable++;
-                continue;
             }
-            etfs.add(etf(stored.target(), record.get(), fetchedAt, maxTickers));
+            etfs.add(etf(symbol, record.orElse(null), stored, stored == null
+                    ? DailyPayload.NO_DAILY_PRICE_IN_RANGE : DailyPayload.DAILY_PRICE_UNREADABLE, maxTickers));
         }
-        if (unreadable > 0) {
+        if (noDaily > 0 || unreadable > 0) {
             // 종목코드는 보유 종목이 드러나므로 건수만 남긴다.
-            log.warn("daily-price rows skipped: no readable record jobId={} count={}", request.jobId(), unreadable);
+            log.warn("etfs without daily price jobId={} noDailyInRange={} unreadable={}", request.jobId(), noDaily,
+                    unreadable);
         }
-        boolean truncated = etfs.size() > maxEtfs;
-        List<DailyPayload.Etf> kept = etfs.stream().limit(maxEtfs).toList();
 
         Set<String> tickers = new LinkedHashSet<>();
-        kept.forEach(etf -> tickers.addAll(etf.tickers()));
+        etfs.forEach(etf -> tickers.addAll(etf.tickers()));
         List<ContextPayload.CloseRate> closeRates = new ArrayList<>();
         for (String ticker : tickers) {
             closeRateQuery.find(ticker, asOf, since)
@@ -110,15 +123,21 @@ class DailyRequestListener {
 
         List<ContextPayload.Background> background =
                 marketBackground.market(contextProperties.worldIndexContinents(), since, asOf, maxBytes);
-        return new DailyPayload(request.jobId(), request.seq(), kept, closeRates, background, truncated);
+        return new DailyPayload(request.jobId(), request.seq(), etfs, closeRates, background, truncated);
     }
 
-    private DailyPayload.Etf etf(String symbol, DailyPriceReader.Record record, OffsetDateTime fetchedAt,
-            int maxTickers) {
+    /** record가 null이면 일봉 값을 비우고 missingReason을 싣는다. 미국 종목과 ETF 정보는 일봉과 관계없이 싣는다. */
+    private DailyPayload.Etf etf(String symbol, DailyPriceReader.Record record,
+            BackgroundRepository.StoredResponse stored, String missingReason, int maxTickers) {
         List<String> allTickers = holdings.topTickers(symbol);
         List<String> tickers = allTickers.stream().limit(maxTickers).toList();
+        boolean tickersTruncated = allTickers.size() > tickers.size();
+        ContextPayload.EtfInfo info =
+                holdings.etfInfo(symbol).map(i -> MarketBackground.etfInfo(i, maxTickers)).orElse(null);
+        if (record == null) {
+            return DailyPayload.Etf.withoutDaily(symbol, missingReason, tickers, tickersTruncated, info);
+        }
         return new DailyPayload.Etf(symbol, record.date(), record.close(), record.prevClose(), record.rate(),
-                EventFactory.formatKst(fetchedAt), tickers, allTickers.size() > tickers.size(),
-                holdings.etfInfo(symbol).map(info -> MarketBackground.etfInfo(info, maxTickers)).orElse(null));
+                EventFactory.formatKst(stored.fetchedAt()), tickers, tickersTruncated, info);
     }
 }

@@ -721,3 +721,44 @@ def test_etf_info_rejects_malformed_members():
     for broken in cases:
         assert validate("market.context.responded.v1.schema.json", broken) != []
     assert validate("market.daily.responded.v1.schema.json", no_rank) != []
+
+
+# ---- market.daily.responded v2 (일봉이 없는 ETF도 목록에 남는다) ----
+
+DAILY_V2 = "market.daily.responded.v2.schema.json"
+
+
+def daily_v2():
+    return sample("market.daily.responded.sample.json", "v2")
+
+
+def test_daily_responded_v2_sample_matches_its_schema_and_has_a_missing_etf():
+    event = daily_v2()
+
+    assert validate(DAILY_V2, event) == []
+    assert event["schemaVersion"] == 2
+    empty = [e for e in event["payload"]["etfs"] if e["missingReason"] is not None]
+    assert empty and all(e["rate"] is None and e["fetchedAt"] is None for e in empty)
+
+
+def test_daily_responded_v2_tolerates_unknown_fields():
+    future = daily_v2()
+    future["payload"]["venue"] = "future"
+    future["payload"]["etfs"][0]["hint"] = "x"
+
+    assert validate(DAILY_V2, future) == []
+
+
+def test_daily_responded_v2_rejects_values_that_disagree_with_the_missing_reason():
+    with_reason_and_value = daily_v2()
+    gap = next(e for e in with_reason_and_value["payload"]["etfs"] if e["missingReason"] is not None)
+    gap["rate"] = "1.00"
+    without_reason = daily_v2()
+    next(e for e in without_reason["payload"]["etfs"] if e["missingReason"] is not None)["missingReason"] = None
+    unknown_reason = daily_v2()
+    next(e for e in unknown_reason["payload"]["etfs"] if e["missingReason"] is not None)["missingReason"] = "x"
+    no_flag = daily_v2()
+    del no_flag["payload"]["etfs"][0]["missingReason"]
+
+    for broken in (with_reason_and_value, without_reason, unknown_reason, no_flag):
+        assert validate(DAILY_V2, broken) != []
