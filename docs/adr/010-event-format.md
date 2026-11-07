@@ -43,7 +43,7 @@ Avro + 스키마 레지스트리, Protobuf
 
 2026-11-06 변경: `market.context.responded`와 `market.daily.responded`에 ETF 정보 선택 칸 `etf`(이름, 추종 대상, 업종, 구성 종목과 비중·순위)를 더했다. 선택 칸이라 기존 소비자는 그대로 읽는다. 필드는 `contracts/events`의 스키마가 원본이다.
 
-2026-11-07 변경: `market.daily.responded`에 `v2`(같은 토픽, `schemaVersion` 2)를 더했다. v1은 범위 안에 일봉이 없는 ETF를 목록에서 빼서, 일봉 수집이 실패한 ETF가 브리핑에서 이유 없이 사라졌다. v2는 ETF 목록을 종목 테이블의 보유·관심 국내 ETF로 만들고, 일봉이 없으면 하루 등락 칸을 `null`로 두고 `missingReason`에 이유를 싣는다. 칸이 비는 것은 v1 소비자가 필수로 읽던 값이 없어지는 변경이라 필드 추가가 아니라 새 버전으로 냈다. v1 스키마와 샘플은 그대로 둔다. 필드의 원본은 `contracts/events/market.daily.responded.v2.schema.json`이다.
+2026-11-07 변경: `market.daily.responded`에 `v2`(같은 토픽, `schemaVersion` 2)를 더했다. v1은 범위 안에 일봉이 없는 ETF를 목록에서 빼서, 일봉 수집이 실패한 ETF가 브리핑에서 이유 없이 사라졌다. v2는 ETF 목록을 종목 테이블의 보유·관심 국내 ETF로 만들고, 일봉이 없으면 하루 등락 칸을 `null`로 두고 `missingReason`에 이유를 싣는다. 칸이 비는 것은 v1 소비자가 필수로 읽던 값이 없어지는 변경이라 필드 추가가 아니라 새 버전으로 냈다. v1 스키마와 샘플은 그대로 둔다. 필드의 원본은 `contracts/events/market.daily.responded.v2.schema.json`이다. 브리핑은 v2를 읽어 값이 빈 ETF도 목록에서 빼지 않고 `자료 없음: <ETF 이름>, <이유>`로 싣는다(이름이 없으면 종목코드). 빈 ETF와 이유는 LLM 입력에도 넣고, `briefing.daily.generated`의 `missingItems`(`보유 ETF별 하루 등락: <ETF>, <이유>`)와 작업 기록의 빠진 항목 줄에 남긴다. v1 응답(`missingReason` 없음)도 그대로 읽는다.
 
 ## 실제로 겪은 함정
 - **시각 형식:** `OffsetDateTime.toString()`은 초가 0이면 초를 생략해 RFC 3339 `date-time`에 어긋난다. 표준 포매터를 쓰고, 해당 케이스 테스트를 둔다.
