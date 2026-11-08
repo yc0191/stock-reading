@@ -22,7 +22,16 @@ class LoggingMailSender implements MailSenderPort {
 
     @Override
     public void send(EmailMessage message) {
-        log.info("DRY-RUN (not sent) to={} subject=\"{}\"\n{}",
-                MailAddresses.mask(properties.recipient()), message.subject(), message.body());
+        log.info("DRY-RUN (not sent) to={} subject=\"{}\"{}\n{}",
+                MailAddresses.mask(properties.recipient()), message.subject(), htmlSummary(message), message.body());
+    }
+
+    /** HTML과 그림은 내용을 찍지 않고 크기만 남긴다(그림 base64가 로그를 채우지 않게). */
+    private static String htmlSummary(EmailMessage message) {
+        if (!message.hasHtml()) {
+            return "";
+        }
+        String sizes = message.images().stream().map(image -> image.data().length + "B").toList().toString();
+        return " html=" + message.html().length() + "chars images=" + message.images().size() + sizes;
     }
 }

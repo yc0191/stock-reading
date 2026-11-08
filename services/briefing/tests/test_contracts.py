@@ -427,12 +427,36 @@ def test_daily_briefing_tolerates_unknown_fields():
     assert validate(DAILY_SCHEMA, future) == []
 
 
+DAILY_OPTIONAL_FIELDS = {"html", "images"}
+
+
 def test_daily_briefing_rejects_missing_payload_field():
     for field in sample(DAILY_SAMPLE)["payload"]:
+        if field in DAILY_OPTIONAL_FIELDS:
+            continue
         broken = sample(DAILY_SAMPLE)
         del broken["payload"][field]
 
         assert validate(DAILY_SCHEMA, broken) != [], field
+
+
+def test_daily_briefing_html_and_images_are_optional():
+    text_only = sample(DAILY_SAMPLE)
+    for field in DAILY_OPTIONAL_FIELDS:
+        del text_only["payload"][field]
+
+    assert validate(DAILY_SCHEMA, text_only) == []
+
+
+def test_daily_briefing_rejects_a_bad_inline_image():
+    for field, value in [("contentType", "image/svg+xml"), ("data", "not base64!"), ("contentId", "a b")]:
+        broken = sample(DAILY_SAMPLE)
+        broken["payload"]["images"][0][field] = value
+
+        assert validate(DAILY_SCHEMA, broken) != [], field
+    missing = sample(DAILY_SAMPLE)
+    del missing["payload"]["images"][0]["data"]
+    assert validate(DAILY_SCHEMA, missing) != []
 
 
 @pytest.mark.parametrize("field, value", [

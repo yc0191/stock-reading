@@ -25,7 +25,21 @@
           "description": "자료가 없어 '자료 없음'으로 표시한 항목 이름. 빠진 것이 없으면 빈 배열이다.",
           "items": { "type": "string", "minLength": 1 }
         },
-        "generatedBy": { "type": "string", "minLength": 1, "description": "본문을 만든 방식. 알려진 값: llm, rule-based(LLM이 끝내 실패해 숫자·목록으로 대신 만든 본문)" }
+        "generatedBy": { "type": "string", "minLength": 1, "description": "본문을 만든 방식. 알려진 값: llm, rule-based(LLM이 끝내 실패해 숫자·목록으로 대신 만든 본문)" },
+        "html": { "type": "string", "minLength": 1, "description": "선택. text 와 같은 내용을 꾸민 HTML 본문. 있으면 발송기가 글자판(text)과 HTML을 함께 담은 묶음 메일을 보내고, 없으면 text 만 보낸다. 그림은 images 의 contentId 를 cid: 로 가리킨다. 꼬리(자료 없음·범위·ID)는 발송기가 붙이므로 담지 않는다." },
+        "images": {
+          "type": "array",
+          "description": "선택. html 이 cid: 로 가리키는 인라인 그림. html 이 없으면 쓰이지 않는다.",
+          "items": {
+            "type": "object",
+            "required": ["contentId", "contentType", "data"],
+            "properties": {
+              "contentId": { "type": "string", "pattern": "^[^\\s<>]+$", "description": "html 의 cid: 뒤에 오는 값(꺾쇠 없이)." },
+              "contentType": { "enum": ["image/png", "image/jpeg", "image/gif"], "description": "그림 형식." },
+              "data": { "type": "string", "pattern": "^[A-Za-z0-9+/]+={0,2}$", "description": "그림 바이트의 base64(줄바꿈 없음)." }
+            }
+          }
+        }
       }
     }
   }

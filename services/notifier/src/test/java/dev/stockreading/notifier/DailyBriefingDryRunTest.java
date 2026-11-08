@@ -78,5 +78,7 @@ class DailyBriefingDryRunTest {
         assertThat(line).contains("subject=\"[시뮬레이션] 마감 후 판 데일리 브리핑 2026-10-20\"");
         assertThat(line).contains("자료 없음 항목: etf-daily-change:TEST02");
         assertThat(line).doesNotContain("reader@example.com");
+        // HTML과 그림은 내용이 아니라 크기만 남는다
+        assertThat(line).contains(" images=1[70B]").doesNotContain("iVBORw0KGgo").doesNotContain("<html>");
     }
 }

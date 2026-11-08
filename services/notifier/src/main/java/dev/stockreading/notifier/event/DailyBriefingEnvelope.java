@@ -22,6 +22,13 @@ public record DailyBriefingEnvelope(
             String rangeEnd,
             String text,
             List<String> missingItems,
-            String generatedBy) {
+            String generatedBy,
+            String html,
+            List<Image> images) {
+    }
+
+    /** html이 cid:로 가리키는 인라인 그림. data는 base64 문자열이다. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Image(String contentId, String contentType, String data) {
     }
 }

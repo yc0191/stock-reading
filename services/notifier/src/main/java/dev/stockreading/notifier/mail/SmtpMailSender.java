@@ -3,6 +3,7 @@ package dev.stockreading.notifier.mail;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.mail.MailException;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
@@ -41,11 +42,19 @@ class SmtpMailSender implements MailSenderPort {
     public void send(EmailMessage message) {
         try {
             MimeMessage mime = mailSender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(mime, false, "UTF-8");
+            // HTML이 있으면 글자판+HTML(alternative)에 인라인 그림(related)을 묶은 multipart로 만든다.
+            MimeMessageHelper helper = new MimeMessageHelper(mime, message.hasHtml(), "UTF-8");
             helper.setFrom(sender);
             helper.setTo(recipient);
             helper.setSubject(message.subject());
-            helper.setText(message.body(), false);
+            if (message.hasHtml()) {
+                helper.setText(message.body(), message.html());
+                for (EmailMessage.InlineImage image : message.images()) {
+                    helper.addInline(image.contentId(), new ByteArrayResource(image.data()), image.contentType());
+                }
+            } else {
+                helper.setText(message.body(), false);
+            }
             mailSender.send(mime);
             log.info("email sent to={} subject=\"{}\"", MailAddresses.mask(recipient), message.subject());
         } catch (MessagingException error) {
