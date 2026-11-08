@@ -170,6 +170,38 @@ class DailyContractTest {
     }
 
     @Test
+    void producerEtfRelationMatchesSchemaAndIsLeftOutWhenUnknown() throws IOException {
+        String json = serialize(new DailyPayload(JOB_ID, 1, List.of(
+                DailyPayload.Etf.withoutDaily("TEST01", DailyPayload.NO_DAILY_PRICE_IN_RANGE, List.of(), false, null)
+                        .withRelation("HELD"),
+                DailyPayload.Etf.withoutDaily("TEST02", DailyPayload.NO_DAILY_PRICE_IN_RANGE, List.of(), false, null)
+                        .withRelation("WATCH"),
+                DailyPayload.Etf.withoutDaily("TEST03", DailyPayload.NO_DAILY_PRICE_IN_RANGE, List.of(), false, null)),
+                List.of(), List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false));
+
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", json)).isEmpty();
+        var etfs = mapper.readTree(json).get("payload").get("etfs");
+        assertThat(etfs.get(0).get("relation").asString()).isEqualTo("HELD");
+        assertThat(etfs.get(1).get("relation").asString()).isEqualTo("WATCH");
+        assertThat(etfs.get(2).has("relation")).isFalse();
+    }
+
+    @Test
+    void schemaTakesOnlyHeldOrWatchAsRelationAndTheSampleCarriesIt() throws IOException {
+        String sample = ContractSchemas.sample("v2", "market.daily.responded.sample.json");
+        assertThat(sample).contains("\"relation\": \"HELD\"").contains("\"relation\": \"WATCH\"");
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", sample)).isEmpty();
+        for (String bad : new String[] {"NONE", "held", ""}) {
+            String broken = sample.replaceFirst("\"relation\": \"HELD\"", "\"relation\": \"" + bad + "\"");
+            assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", broken))
+                    .as("relation=%s", bad).isNotEmpty();
+        }
+        String without = sample.replaceAll("\"relation\": \"[A-Z]+\",\\s*", "");
+        assertThat(without).doesNotContain("\"relation\"");
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", without)).isEmpty();
+    }
+
+    @Test
     void emptyResponseWithoutEtfsIsValid() throws IOException {
         String json = serialize(new DailyPayload(JOB_ID, 1, List.of(), List.of(),
                 List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false));

@@ -58,4 +58,34 @@ class DailyBriefingContractTest {
 
         assertThat(ContractSchemas.validate(SCHEMA, broken)).isNotEmpty();
     }
+
+    @Test
+    void consumerReadsTheOptionalHtmlAndImages() throws IOException {
+        DailyBriefingEnvelope daily = JsonMapper.builder().build()
+                .readValue(ContractSchemas.sample(SAMPLE), DailyBriefingEnvelope.class);
+
+        assertThat(daily.payload().html()).contains("cid:chart-1");
+        assertThat(daily.payload().images()).hasSize(1);
+        assertThat(daily.payload().images().get(0).contentId()).isEqualTo("chart-1");
+        assertThat(daily.payload().images().get(0).contentType()).isEqualTo("image/png");
+    }
+
+    @Test
+    void sampleWithoutHtmlAndImagesStillMatchesAndIsReadable() throws IOException {
+        String textOnly = ContractSchemas.sample(SAMPLE).replaceAll("(?s),\\s*\"html\".*?\\]\\s*(?=\\})", "\n  ");
+
+        assertThat(textOnly).doesNotContain("\"html\"");
+        assertThat(ContractSchemas.validate(SCHEMA, textOnly)).isEmpty();
+        DailyBriefingEnvelope daily = JsonMapper.builder().build().readValue(textOnly, DailyBriefingEnvelope.class);
+        assertThat(daily.payload().html()).isNull();
+        assertThat(daily.payload().images()).isNull();
+    }
+
+    @Test
+    void imageWithAnUnknownTypeOrNonBase64DataIsRejected() throws IOException {
+        assertThat(ContractSchemas.validate(SCHEMA,
+                ContractSchemas.sample(SAMPLE).replace("image/png", "image/svg+xml"))).isNotEmpty();
+        assertThat(ContractSchemas.validate(SCHEMA,
+                ContractSchemas.sample(SAMPLE).replace("iVBORw0KGgo", "iVBORw0K Ggo"))).isNotEmpty();
+    }
 }

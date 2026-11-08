@@ -95,10 +95,11 @@ class DailyRequestListener {
         List<DailyPayload.Etf> etfs = new ArrayList<>();
         int noDaily = 0;
         int unreadable = 0;
-        List<String> tracked = holdings.trackedEtfCodes();
+        List<HoldingsPort.TrackedEtf> tracked = holdings.trackedEtfs();
         // 잘릴 ETF는 미국 종목과 ETF 정보를 조회하지 않도록 상한을 먼저 적용한다.
         boolean truncated = tracked.size() > maxEtfs;
-        for (String symbol : tracked.stream().limit(maxEtfs).toList()) {
+        for (HoldingsPort.TrackedEtf trackedEtf : tracked.stream().limit(maxEtfs).toList()) {
+            String symbol = trackedEtf.code();
             BackgroundRepository.StoredResponse stored = dailyBySymbol.get(symbol);
             Optional<DailyPriceReader.Record> record =
                     stored == null ? Optional.empty() : dailyPriceReader.latest(stored.response());
@@ -108,7 +109,8 @@ class DailyRequestListener {
                 unreadable++;
             }
             etfs.add(etf(symbol, record.orElse(null), stored, stored == null
-                    ? DailyPayload.NO_DAILY_PRICE_IN_RANGE : DailyPayload.DAILY_PRICE_UNREADABLE, maxTickers));
+                    ? DailyPayload.NO_DAILY_PRICE_IN_RANGE : DailyPayload.DAILY_PRICE_UNREADABLE, maxTickers)
+                    .withRelation(trackedEtf.relation()));
         }
         if (noDaily > 0 || unreadable > 0) {
             // 종목코드는 보유 종목이 드러나므로 건수만 남긴다.

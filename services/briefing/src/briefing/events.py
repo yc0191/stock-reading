@@ -80,11 +80,25 @@ def research_request_event(job_id: str, seq: int, job_kind: str, symbol: str, qu
 
 def daily_briefing_event(tick_event_id: str, correlation_id: str, scheduled_for: datetime, now: datetime,
                          edition: str, range_start: datetime, range_end: datetime, text: str,
-                         missing_items: list[str], generated_by: str) -> OutboundEvent:
-    """데일리 브리핑 결과 봉투를 만든다. eventId는 (tick, 판)에서 정해져 같은 tick을 다시 처리해도 같다."""
+                         missing_items: list[str], generated_by: str, html: str | None = None,
+                         images: list[dict[str, str]] | None = None) -> OutboundEvent:
+    """데일리 브리핑 결과 봉투를 만든다. html·images는 선택 칸이라 있을 때만 싣는다.
+    eventId는 (tick, 판)에서 정해져 같은 tick을 다시 처리해도 같다."""
     if edition not in JOB_TYPE_BY_EDITION:
         raise ValueError(f"unknown edition: {edition}")
     event_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{DAILY_BRIEFING_GENERATED_TOPIC}:{tick_event_id}:{edition}")
+    payload: dict[str, Any] = {
+        "edition": edition,
+        "rangeStart": format_timestamp(range_start),
+        "rangeEnd": format_timestamp(range_end),
+        "text": text,
+        "missingItems": list(missing_items),
+        "generatedBy": generated_by,
+    }
+    if html:
+        payload["html"] = html
+        if images:
+            payload["images"] = list(images)
     return OutboundEvent(
         topic=DAILY_BRIEFING_GENERATED_TOPIC,
         key=edition,
@@ -95,13 +109,6 @@ def daily_briefing_event(tick_event_id: str, correlation_id: str, scheduled_for:
             "occurredAt": format_timestamp(scheduled_for),
             "producedAt": format_timestamp(now),
             "correlationId": correlation_id,
-            "payload": {
-                "edition": edition,
-                "rangeStart": format_timestamp(range_start),
-                "rangeEnd": format_timestamp(range_end),
-                "text": text,
-                "missingItems": list(missing_items),
-                "generatedBy": generated_by,
-            },
+            "payload": payload,
         },
     )

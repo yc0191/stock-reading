@@ -178,7 +178,8 @@ def test_llm_body_numbers_the_cited_refs_and_keeps_the_code_written_facts():
     assert "TEST INDEX 0(TESTIX0) 2.04%" in text
     assert "- 미국 지수가 올랐을 수 있습니다. [근거 1, 2]" in text
     assert "1. 세계지수 — 시세 자료(배경)" in text and "2. 미국 종목 직전 정규장 등락률 -1.25%" in text
-    assert text.endswith(DAILY_DISCLAIMER)
+    # 면책 문구가 요약 뒤에, 근거 목록이 맨 끝에 온다.
+    assert text.index("요약:") < text.index(DAILY_DISCLAIMER) < text.index("근거:")
 
 
 def test_writer_gives_up_after_the_attempt_limit():

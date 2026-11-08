@@ -41,22 +41,29 @@ public record DailyPayload(
             String missingReason,
             List<String> tickers,
             boolean tickersTruncated,
-            @JsonInclude(JsonInclude.Include.NON_NULL) ContextPayload.EtfInfo etf) {
+            @JsonInclude(JsonInclude.Include.NON_NULL) ContextPayload.EtfInfo etf,
+            @JsonInclude(JsonInclude.Include.NON_NULL) String relation) {
 
         public Etf(String symbol, String date, String close, String prevClose, String rate, String fetchedAt,
                 List<String> tickers, boolean tickersTruncated, ContextPayload.EtfInfo etf) {
-            this(symbol, date, close, prevClose, rate, fetchedAt, null, tickers, tickersTruncated, etf);
+            this(symbol, date, close, prevClose, rate, fetchedAt, null, tickers, tickersTruncated, etf, null);
         }
 
         public Etf(String symbol, String date, String close, String prevClose, String rate, String fetchedAt,
                 List<String> tickers, boolean tickersTruncated) {
-            this(symbol, date, close, prevClose, rate, fetchedAt, null, tickers, tickersTruncated, null);
+            this(symbol, date, close, prevClose, rate, fetchedAt, null, tickers, tickersTruncated, null, null);
         }
 
         /** 일봉 없이 이유만 담은 ETF. */
         public static Etf withoutDaily(String symbol, String missingReason, List<String> tickers,
                 boolean tickersTruncated, ContextPayload.EtfInfo etf) {
-            return new Etf(symbol, null, null, null, null, null, missingReason, tickers, tickersTruncated, etf);
+            return new Etf(symbol, null, null, null, null, null, missingReason, tickers, tickersTruncated, etf, null);
+        }
+
+        /** 보유(HELD)·관심(WATCH) 구분을 더한 사본. */
+        public Etf withRelation(String relation) {
+            return new Etf(symbol, date, close, prevClose, rate, fetchedAt, missingReason, tickers, tickersTruncated,
+                    etf, relation);
         }
     }
 

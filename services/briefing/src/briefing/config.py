@@ -78,6 +78,11 @@ class DailySettings:
     remembered_ticks: int = 1000
     # 서버 상태 절의 '주의': 판 시각에 시작한 지 이만큼 넘게 진행 중인 작업은 멈춘 것으로 본다.
     stuck_after: timedelta = timedelta(minutes=30)
+    # 메일 본문 이벤트(briefing.daily.generated)의 그림 크기 상한. 그림 한 장(base64를 푼 크기)과 이벤트 전체(JSON 바이트)가
+    # 넘으면 그림만 빼고 글자판+HTML로 보낸다. 그림은 한 판에 4장까지다.
+    max_chart_images: int = 4
+    max_chart_image_bytes: int = 300 * 1024
+    max_event_bytes: int = 900 * 1024
 
 
 DEFAULT_DAILY_SETTINGS = DailySettings()

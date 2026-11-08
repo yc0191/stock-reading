@@ -270,7 +270,7 @@ def test_post_close_edition_never_requests_filings(core):
     payload = event.value["payload"]
     assert payload["edition"] == "post-close" and payload["missingItems"] == []
     assert ITEM_KR_TODAY in payload["text"] and ITEM_ETFS in payload["text"]
-    assert "TEST01 0.50%" in payload["text"]
+    assert "TEST01 +0.50%" in payload["text"]
     assert ITEM_US_INDEX not in payload["text"]
 
 
@@ -623,7 +623,7 @@ def test_an_etf_with_no_daily_price_is_written_as_no_data_with_its_name_and_reas
         etf_v2_missing("TEST03", "daily-price-unreadable")], background=POST_CLOSE_MARKET), POST_CLOSE_AT)
     [event] = published(requests)
     payload = event.value["payload"]
-    assert "TEST01 0.50%" in payload["text"]
+    assert "TEST ETF ONE(TEST01) +0.50%" in payload["text"]
     assert f"{NO_DATA}: TEST ETF TWO, 범위 안에 받은 일봉이 없음" in payload["text"]
     # 이름을 모르면 종목코드로 쓴다.
     assert f"{NO_DATA}: TEST03, 일봉 원문을 읽지 못함" in payload["text"]
@@ -716,5 +716,5 @@ def test_a_v1_response_without_the_missing_reason_is_still_read(core):
     c.on_daily_data_responded(daily_response(etfs=[etf(fetched="2026-10-20T16:30:02+09:00", rate="0.50")],
                                              background=POST_CLOSE_MARKET), POST_CLOSE_AT)
     [event] = published(requests)
-    assert "TEST01 0.50%" in event.value["payload"]["text"]
+    assert "TEST01 +0.50%" in event.value["payload"]["text"]
     assert event.value["payload"]["missingItems"] == []

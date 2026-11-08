@@ -70,3 +70,8 @@ bin/
 # ---- 로그 ----
 *.log
 logs/
+
+# 차트 한글 글꼴은 scripts/install_font.py 로 내려받으며 git에 넣지 않는다.
+services/briefing/fonts/
+*.otf
+*.ttf

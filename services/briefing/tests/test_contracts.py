@@ -427,12 +427,36 @@ def test_daily_briefing_tolerates_unknown_fields():
     assert validate(DAILY_SCHEMA, future) == []
 
 
+DAILY_OPTIONAL_FIELDS = {"html", "images"}
+
+
 def test_daily_briefing_rejects_missing_payload_field():
     for field in sample(DAILY_SAMPLE)["payload"]:
+        if field in DAILY_OPTIONAL_FIELDS:
+            continue
         broken = sample(DAILY_SAMPLE)
         del broken["payload"][field]
 
         assert validate(DAILY_SCHEMA, broken) != [], field
+
+
+def test_daily_briefing_html_and_images_are_optional():
+    text_only = sample(DAILY_SAMPLE)
+    for field in DAILY_OPTIONAL_FIELDS:
+        del text_only["payload"][field]
+
+    assert validate(DAILY_SCHEMA, text_only) == []
+
+
+def test_daily_briefing_rejects_a_bad_inline_image():
+    for field, value in [("contentType", "image/svg+xml"), ("data", "not base64!"), ("contentId", "a b")]:
+        broken = sample(DAILY_SAMPLE)
+        broken["payload"]["images"][0][field] = value
+
+        assert validate(DAILY_SCHEMA, broken) != [], field
+    missing = sample(DAILY_SAMPLE)
+    del missing["payload"]["images"][0]["data"]
+    assert validate(DAILY_SCHEMA, missing) != []
 
 
 @pytest.mark.parametrize("field, value", [
@@ -473,6 +497,25 @@ def test_daily_briefing_event_built_by_the_producer_matches_the_schema(edition, 
     assert validate(DAILY_SCHEMA, event.value) == []
     assert event.value["correlationId"] == "tick-correlation"
     assert event.value["occurredAt"] == "2026-10-20T17:00:00+09:00"
+
+
+def test_daily_briefing_event_carries_html_and_images_only_when_given():
+    at = datetime(2026, 10, 20, 17, 0, tzinfo=KST)
+
+    def build(**extra):
+        return daily_briefing_event(tick_event_id="t", correlation_id="c", scheduled_for=at, now=at,
+                                    edition=EDITION_POST_CLOSE, range_start=at, range_end=at, text="본문",
+                                    missing_items=[], generated_by="llm", **extra)
+
+    plain = build().value["payload"]
+    assert "html" not in plain and "images" not in plain
+    image = {"contentId": "chart-day", "contentType": "image/png", "data": "iVBORw0KGgo="}
+    full = build(html="<p>본문</p>", images=[image])
+    assert validate(DAILY_SCHEMA, full.value) == []
+    assert full.value["payload"]["html"] == "<p>본문</p>" and full.value["payload"]["images"] == [image]
+    # 그림은 HTML이 있을 때만 싣는다.
+    assert "images" not in build(images=[image]).value["payload"]
+    assert "images" not in build(html="<p>본문</p>", images=[]).value["payload"]
 
 
 def test_daily_briefing_event_id_is_the_same_for_the_same_tick_and_edition():
