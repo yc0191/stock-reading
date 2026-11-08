@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Callable, Mapping
 
 from briefing.compose import KST
@@ -59,6 +61,14 @@ NO_DATA = "자료 없음"
 DAILY_INSUFFICIENT = "받은 자료만으로는 요약할 근거가 부족합니다."
 DAILY_DISCLAIMER = "※ 투자 조언이 아니며, 위 내용은 받은 자료를 정리한 것일 뿐 원인을 단정하지 않습니다."
 
+RELATION_HELD = "HELD"
+RELATION_WATCH = "WATCH"
+RELATION_TITLES = ((RELATION_HELD, "보유"), (RELATION_WATCH, "관심"))
+RELATION_UNKNOWN_TITLE = "구분 없음"
+CONCLUSION_PREFIX = "결론: "
+CONCLUSION_NO_DATA = "등락 자료 없음"
+MINUS = "\u2212"
+
 EDITION_NAMES = {EDITION_MORNING: "아침 판", EDITION_POST_CLOSE: "마감 후 판"}
 
 ITEM_US_INDEX = "미국 지수"
@@ -68,6 +78,8 @@ ITEM_FILINGS = "범위 안 미국 공시"
 ITEM_KR_REVIEW = "전날 한국 증시"
 ITEM_KR_TODAY = "그날 한국 증시"
 ITEM_ETFS = "보유 ETF별 하루 등락"
+# 보유/관심으로 나뉠 때 글자판·HTML에 보이는 절 제목. LLM 입력과 자료 없음 목록은 ITEM_ETFS 이름을 그대로 쓴다.
+ITEM_ETFS_SPLIT_TITLE = "보유·관심 ETF별 하루 등락"
 # 근거가 부족해 다시 검색해 찾은 기사. 판 종류와 상관없이 다시 쓸 때만 맨 뒤에 붙는다.
 ITEM_RESEARCH = "재검색 기사"
 
@@ -156,6 +168,8 @@ class EtfDay:
     etf: EtfInfo | None = None
     # 값 칸이 빈 이유(market.daily.responded v2). 값이 있으면 None이고, v1 응답에도 없다.
     missing_reason: str | None = None
+    # 보유(HELD)·관심(WATCH) 구분(market.daily.responded v2 선택 칸). 칸이 없는 응답이면 None.
+    relation: str | None = None
 
     def has_day(self) -> bool:
         return self.missing_reason is None and None not in (self.date, self.close, self.prev_close, self.rate)
@@ -210,6 +224,8 @@ class Section:
     gaps: tuple[str, ...] = ()
     # gaps와 같은 자리의 LLM 입력(어느 대상의 무엇이 왜 비었는지)
     gaps_llm: tuple[dict[str, Any], ...] = ()
+    # 보유/관심으로 나눠 보여 줄 때 묶음 이름과 그 묶음의 줄. 구분을 모르면 비어 있다(lines 한 묶음).
+    groups: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     @property
     def missing(self) -> bool:
@@ -236,10 +252,18 @@ def _hours_before(at: datetime, as_of: datetime) -> float:
 
 
 def _rate(text: str | None) -> float | None:
+    """등락률 문자열의 숫자. 숫자가 아니거나 nan·inf처럼 유한하지 않으면 자료 없음(None)이다."""
     try:
-        return float(text) if text is not None else None
+        value = float(text) if text is not None else None
     except ValueError:
         return None
+    return value if value is None or math.isfinite(value) else None
+
+
+def _shown(rate: float) -> float:
+    """결론에 표시하는 자리(소수 한 자리)로 반올림한 값. 오름·내림 판정은 보이는 값을 기준으로 한다."""
+    # 이진 float 의 .1f 는 0.25 를 0.2 로 내리므로 십진 반올림(0.25→0.3, -0.15→-0.2)으로 한다.
+    return float(Decimal(str(rate)).quantize(Decimal("0.1"), ROUND_HALF_UP))
 
 
 def _missing(name: str, why: str | None = None) -> Section:
@@ -369,6 +393,28 @@ def _etf_missing_reason(etf: EtfDay) -> str:
     return ETF_MISSING_REASONS.get(etf.missing_reason or "", ETF_MISSING_UNKNOWN)
 
 
+def etf_groups(etfs: tuple[EtfDay, ...]) -> tuple[tuple[str, tuple[EtfDay, ...]], ...]:
+    """보유/관심 묶음. 구분을 아는 ETF가 하나도 없으면 묶음 이름 없이 한 묶음("")이다."""
+    if not any(e.relation in dict(RELATION_TITLES) for e in etfs):
+        return (("", tuple(etfs)),) if etfs else ()
+    groups = [(title, tuple(e for e in etfs if e.relation == key)) for key, title in RELATION_TITLES]
+    groups.append((RELATION_UNKNOWN_TITLE, tuple(e for e in etfs if e.relation not in dict(RELATION_TITLES))))
+    return tuple((title, members) for title, members in groups if members)
+
+
+def etf_name(etf: EtfDay) -> str:
+    """본문 줄에 쓰는 ETF 표기. 이름을 알면 이름(종목코드)."""
+    return etf.symbol if etf.label() == etf.symbol else f"{etf.label()}({etf.symbol})"
+
+
+def _etf_line(etf: EtfDay) -> str:
+    if not etf.has_day():
+        return f"{NO_DATA}: {etf.label()}, {_etf_missing_reason(etf)}"
+    rate = _rate(etf.rate)
+    shown = f"+{etf.rate}" if rate is not None and rate > 0 and not etf.rate.startswith("+") else etf.rate
+    return f"{etf_name(etf)} {shown}% (종가 {etf.close}, 전일 {etf.prev_close}, {etf.date})"
+
+
 def _etfs_section(i: DailyInput, refs: Callable[[], str]) -> Section:
     if not i.etfs:
         return _missing(ITEM_ETFS, None if i.etfs is None else "받은 ETF가 없음")
@@ -376,23 +422,25 @@ def _etfs_section(i: DailyInput, refs: Callable[[], str]) -> Section:
     for etf in i.etfs:
         if not etf.has_day():
             reason = _etf_missing_reason(etf)
-            lines.append(f"{NO_DATA}: {etf.label()}, {reason}")
             gaps.append(f"{etf.label()}, {reason}")
             gaps_llm.append({"symbol": etf.symbol, "name": etf.label(), "status": MARK_MISSING, "reason": reason})
             continue
         ref = refs()
-        lines.append(f"{etf.symbol} {etf.rate}% (종가 {etf.close}, 전일 {etf.prev_close}, {etf.date})")
         entries.append(Entry(ref, {"ref": ref, "symbol": etf.symbol, "date": etf.date, "close": etf.close,
                                    "prevClose": etf.prev_close, "rate": etf.rate, "receivedAt": _at(etf.fetched_at),
                                    "tickers": list(etf.tickers)},
                              f"{etf.symbol} 하루 등락 {etf.rate}% ({etf.date}) — {BACKGROUND_SOURCE}"))
+    named = etf_groups(i.etfs)
+    # 구분이 없으면 받은 순서 그대로 한 묶음이고, 있으면 묶음 안에서 받은 순서를 지킨다.
+    lines = [_etf_line(e) for _, members in named for e in members]
+    groups = tuple((title, tuple(_etf_line(e) for e in members)) for title, members in named if title)
     if i.etfs_truncated:
         lines.append(f"({MARK_TRUNCATED}: 상한까지만 받음)")
     if not entries:
         # 모든 ETF가 비면 항목 전체가 자료 없음이다.
-        return Section(ITEM_ETFS, MARK_MISSING, tuple(lines), (), tuple(gaps), tuple(gaps_llm))
+        return Section(ITEM_ETFS, MARK_MISSING, tuple(lines), (), tuple(gaps), tuple(gaps_llm), groups)
     return Section(ITEM_ETFS, MARK_TRUNCATED if i.etfs_truncated else MARK_PRESENT, tuple(lines), tuple(entries),
-                   tuple(gaps), tuple(gaps_llm))
+                   tuple(gaps), tuple(gaps_llm), groups)
 
 
 def _research_section(i: DailyInput) -> Section:
@@ -523,6 +571,11 @@ def headline(i: DailyInput) -> list[str]:
             f"다룬 범위: {_short(i.range_start)} ~ {_short(i.as_of)}"]
 
 
+def section_title(s: Section) -> str:
+    """글자판·HTML에 보이는 절 제목."""
+    return ITEM_ETFS_SPLIT_TITLE if s.name == ITEM_ETFS and s.groups else s.name
+
+
 def _facts(sections: tuple[Section, ...]) -> list[str]:
     lines: list[str] = []
     for s in sections:
@@ -530,32 +583,101 @@ def _facts(sections: tuple[Section, ...]) -> list[str]:
             # 재검색 기사는 요약이 인용할 때만 근거 목록에 나온다. 항목으로 나열하지 않는다.
             continue
         lines.append("")
-        lines.append(f"■ {s.name}")
-        lines.extend(f"  - {line}" for line in s.lines)
+        lines.append(f"■ {section_title(s)}")
+        if s.groups:
+            grouped = {line for _, members in s.groups for line in members}
+            for title, members in s.groups:
+                lines.append(f"  [{title}]")
+                lines.extend(f"  - {line}" for line in members)
+            # 묶음에 들지 않은 줄(잘림 표시)은 맨 끝에 둔다.
+            lines.extend(f"  - {line}" for line in s.lines if line not in grouped)
+        else:
+            lines.extend(f"  - {line}" for line in s.lines)
     return lines
+
+
+def _signed(rate: float) -> str:
+    """결론에 쓰는 등락률. 소수 한 자리에 부호를 붙이고 내림은 빼기 기호(−)로 쓴다."""
+    shown = _shown(rate)
+    return f"{'+' if shown >= 0 else MINUS}{abs(shown):.1f}%"
+
+
+def _count_text(label: str, group: tuple[EtfDay, ...]) -> str:
+    up = sum(1 for e in group if e.has_day() and _shown(_rate(e.rate) or 0.0) > 0)
+    nodata = sum(1 for e in group if not e.has_day() or _rate(e.rate) is None)
+    text = f"{label} {len(group)}개 중 {up}개 상승"
+    return f"{text}(자료 없음 {nodata})" if nodata else text
+
+
+def conclusion(i: DailyInput) -> str:
+    """마감 후 판의 한 줄 결론. 개수와 최대 등락은 코드가 센다. 자료 없는 ETF도 개수에 넣는다."""
+    etfs = i.etfs or ()
+    rated = [(e, v) for e in etfs if e.has_day() for v in [_rate(e.rate)] if v is not None]
+    if not rated:
+        return CONCLUSION_PREFIX + CONCLUSION_NO_DATA
+    parts = [_count_text(title or "ETF", members) for title, members in etf_groups(etfs)]
+    best = max(rated, key=lambda r: r[1])
+    worst = min(rated, key=lambda r: r[1])
+    if _shown(best[1]) > 0:
+        parts.append(f"가장 크게 오름 {best[0].label()} {_signed(best[1])}")
+    if _shown(worst[1]) < 0:
+        parts.append(f"가장 크게 내림 {worst[0].label()} {_signed(worst[1])}")
+    return CONCLUSION_PREFIX + " · ".join(parts)
+
+
+@dataclass(frozen=True)
+class SummaryView:
+    """본문에 쓸 요약. 문장마다 근거 번호(본문에서 인용한 순서)와 약한 점, 근거 목록을 번호 순으로 든다."""
+
+    insufficient: bool
+    points: tuple[tuple[str, tuple[int, ...], str | None], ...]
+    evidence: tuple[tuple[int, str], ...]
+
+
+def summary_view(sections: tuple[Section, ...], output: DailyOutput) -> SummaryView:
+    if output.insufficient_evidence:
+        # 근거 부족이면 LLM이 함께 낸 문장도 쓰지 않는다.
+        return SummaryView(True, (), ())
+    by_ref = {e.ref: e for s in sections for e in s.entries}
+    cited = list(dict.fromkeys(ref for p in output.points for ref in p.refs))
+    number = {ref: n for n, ref in enumerate(cited, start=1)}
+    points = tuple((p.statement, tuple(number[x] for x in p.refs), p.shortfall) for p in output.points)
+    return SummaryView(False, points, tuple((number[ref], by_ref[ref].describe) for ref in cited))
+
+
+def daily_text(i: DailyInput, sections: tuple[Section, ...], output: DailyOutput | None,
+               status_text: str | None = None) -> str:
+    """글자판 본문. 순서: 제목 → 결론(마감 후 판) → 항목별 숫자 → 요약 → 면책 → 서버 상태(마감 후 판) → 근거 목록.
+    output이 None이면 숫자·목록만으로 된 규칙 기반 본문이다."""
+    lines = headline(i)
+    if i.edition == EDITION_POST_CLOSE:
+        lines.extend(["", conclusion(i)])
+    lines.extend(_facts(sections))
+    view = summary_view(sections, output) if output is not None else None
+    if view is not None:
+        lines.extend(["", "요약:"])
+        if view.insufficient:
+            lines.append(f"  {DAILY_INSUFFICIENT}")
+        for statement, numbers, shortfall in view.points:
+            lines.append(f"  - {statement} [근거 {', '.join(str(n) for n in numbers)}]")
+            if shortfall:
+                lines.append(weak_note_line(shortfall, "    "))
+    lines.extend(["", DAILY_DISCLAIMER])
+    if status_text:
+        lines.extend(["", status_text])
+    if view is not None and view.evidence:
+        lines.extend(["", "근거:"])
+        lines.extend(f"  {n}. {describe}" for n, describe in view.evidence)
+    return "\n".join(lines)
 
 
 def rule_based_text(i: DailyInput, sections: tuple[Section, ...]) -> str:
     """숫자·목록만으로 된 본문. LLM 키가 없거나 LLM이 끝내 실패했을 때 쓴다."""
-    return "\n".join([*headline(i), *_facts(sections), "", DAILY_DISCLAIMER])
+    return daily_text(i, sections, None)
 
 
 def llm_text(i: DailyInput, sections: tuple[Section, ...], output: DailyOutput) -> str:
-    lines = [*headline(i), *_facts(sections), "", "요약:"]
-    if output.insufficient_evidence:
-        # 근거 부족이면 LLM이 함께 낸 문장도 쓰지 않는다.
-        lines.append(f"  {DAILY_INSUFFICIENT}")
-        return "\n".join([*lines, "", DAILY_DISCLAIMER])
-    by_ref = {e.ref: e for s in sections for e in s.entries}
-    cited = list(dict.fromkeys(ref for p in output.points for ref in p.refs))
-    number = {ref: n for n, ref in enumerate(cited, start=1)}
-    for p in output.points:
-        lines.append(f"  - {p.statement} [근거 {', '.join(str(number[x]) for x in p.refs)}]")
-        if p.shortfall:
-            lines.append(weak_note_line(p.shortfall, "    "))
-    lines.append("근거:")
-    lines.extend(f"  {number[ref]}. {by_ref[ref].describe}" for ref in cited)
-    return "\n".join([*lines, "", DAILY_DISCLAIMER])
+    return daily_text(i, sections, output)
 
 
 # ---- LLM 작성기 ----

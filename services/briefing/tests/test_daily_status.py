@@ -116,7 +116,8 @@ def only_event(requests):
 
 
 def status_lines(text):
-    return text.split("──────── 서버 상태")[1].split("\n")[1:]
+    # 서버 상태 절은 빈 줄에서 끝난다(그 뒤에 근거 목록이 올 수 있다).
+    return text.split("──────── 서버 상태")[1].split("\n\n")[0].split("\n")[1:]
 
 
 # ---- 요청 ----
@@ -171,7 +172,7 @@ def test_the_lines_are_also_added_to_an_llm_body_and_the_attention_has_no_rule_b
     _, requests, _ = make(status, llm=llm)
     payload = only_event(requests)
     assert payload["generatedBy"] == "llm" and "요약:" in payload["text"]
-    assert payload["text"].index("투자 조언") < payload["text"].index("서버 상태")
+    assert payload["text"].index("투자 조언") < payload["text"].index("서버 상태") < payload["text"].index("근거:")
     assert status_lines(payload["text"])[-1] == "- 주의: 호출 상한 건너뜀 5"
     # 숫자는 코드가 세므로 LLM 입력에 서버 상태가 들어가지 않는다.
     assert all("서버 상태" not in call[1] for call in llm.calls)

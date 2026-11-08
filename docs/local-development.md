@@ -88,13 +88,18 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 5. LLM은 코드가 붙인 근거 번호를 인용한 요약 문장만 씁니다. 판 입력의 항목에는 값이 빈 ETF와 이유가 `missing`으로 들어가며, 지시문은 그 ETF의 숫자를 지어내거나 인용하지 말라고 합니다. 판 입력에는 응답의 ETF 정보(`etfInfo`, ETF마다 이름·추종 대상·업종과 비중 순위 순 구성 종목, 상한은 `DailySettings.max_etf_members`)도 들어가며, 지시문은 이를 원인으로 단정하지 말고 맥락으로만 쓰라고 합니다. 목록 밖 번호나 미국 티커(ETF 구성 종목의 티커 포함)를 쓴 출력은 거부하고 다시 부릅니다(본문은 메일로 나가므로 보유 종목이 드러나는 티커를 막습니다). 끝내 실패하거나 키가 없으면 요약 없이 숫자·목록 본문으로 나가며 `generatedBy`가 `rule-based`입니다. 응답을 끝내 받지 못해도 판은 있는 자료로 반드시 나갑니다.
    LLM은 요약 문장마다 근거가 약한지(`weak`)와 부족한 점(`shortfall`)도 냅니다(부족한 점에도 미국 티커를 쓰면 거부). 약한 문장이 있고 검색어 LLM이 있으며 보유 ETF 자료가 있으면 급변동과 같은 문장 단위 재검색을 부릅니다(`news.research.requested`, 작업 종류 `morning`·`post-close`, 태그 `*`, 재검색 작업 id는 tick의 `eventId`·문장 번호·회차에서 정한 uuid). 상한과 재검색·다시 쓰기 규칙은 급변동 8번과 같습니다. 재검색 기사는 판 범위(기존 시간 범위)로 다시 거르고 범위 밖은 버리며, 기사 조회의 `symbol`은 계약상 필수라 정렬한 첫 ETF 코드를 씁니다(재검색 조회는 종목 조건을 보지 않음). 받은 기사는 항목 `재검색 기사`로 근거 번호(`articleId`)·링크와 함께 본문에 더하고 그 문장만 다시 씁니다. 다시 써도 약한 문장에는 `근거 약함: <부족한 점>`을 붙여 냅니다. 재검색 실패·시간 초과·쓸 기사 없음이면 그 문장은 그대로 냅니다.
 6. 응답을 끝내 받지 못했거나 LLM이 끝내 실패해도 판은 나가고, 그 일은 아래 작업 기록 테이블에 남습니다(판 이름 `morning`·`post-close`가 작업 종류, tick의 `eventId`가 작업 id). 끝내 실패한 사유는 판 자료 무응답이 `context_no_response`, 공시 무응답이 `filings_no_response`, LLM 실패가 `llm_error`입니다. 재요청, 거부된 LLM 시도와 그 입력·응답, 빠진 항목(일봉이 빈 ETF는 `보유 ETF별 하루 등락: <ETF>, <이유>`와 종목코드·이유 코드 `missingEtfs`), 최종 본문도 같은 테이블에 줄로 남습니다. 화면 로그에는 종목코드를 쓰지 않습니다.
-7. 마감 후 판만 본문(면책 문구) 맨 끝에 **서버 상태 절**을 코드가 붙입니다(`status.py`). 시세처리기에 판 자료를 요청할 때 `includeOperations`를 `true`로 보내 받은 운영 상태(`operations`)와, 브리핑이 직접 저장한 수집 완료 알림(`briefing.collection_completed`), 작업 기록(`briefing.job_run`)으로 4줄을 셉니다. 범위는 판 범위(양끝 포함)이고 뉴스 수집 완료는 끝난 시각(`finishedAt`), 작업 기록은 시작 시각(`started_at`), 시세처리기 자료는 받은 시각으로 가립니다. 숫자는 모두 코드가 세고 LLM 입력에는 넣지 않으며, LLM 본문이든 규칙 기반 본문이든 같은 자리에 붙습니다. 아침 판은 바뀌지 않습니다.
+7. 마감 후 판만 본문의 면책 문구 아래, 근거 목록 위에 **서버 상태 절**을 코드가 붙입니다(`status.py`). 시세처리기에 판 자료를 요청할 때 `includeOperations`를 `true`로 보내 받은 운영 상태(`operations`)와, 브리핑이 직접 저장한 수집 완료 알림(`briefing.collection_completed`), 작업 기록(`briefing.job_run`)으로 4줄을 셉니다. 범위는 판 범위(양끝 포함)이고 뉴스 수집 완료는 끝난 시각(`finishedAt`), 작업 기록은 시작 시각(`started_at`), 시세처리기 자료는 받은 시각으로 가립니다. 숫자는 모두 코드가 세고 LLM 입력에는 넣지 않으며, LLM 본문이든 규칙 기반 본문이든 같은 자리에 붙습니다. 아침 판은 바뀌지 않습니다.
    - 수집: 장 시작 전, 1초 현재가, 장중, 장 마감 후 수집이 범위 안에서 받은 처음~마지막 시각(없으면 `없음`).
    - 시세: 받은 건수, 실패 건수와 비율(분모는 받은 건수와 실패 건수의 합), 0이 아닌 실패 종류별 건수.
    - 뉴스: 정기 수집 횟수, 일부 종목이 빠진 수집 횟수, 정기 수집이 발행한 기사 수, 재검색 횟수(따로).
    - 브리핑: 급변동 리포트 수(성공·실패·진행 중·규칙 기반), 실패는 사유별 건수, 그날 아침 판 결과(성공·실패·진행 중·기록 없음).
    - 주의: 코드·로직을 점검해야 하는 상황만 한 줄로 모읍니다(시세처리기가 버린 메시지, 결과 코드 실패, 가격 해석 실패, 호출 상한 건너뜀, 토큰 발급 실패, 규칙 기반으로 나간 판·급변동 리포트, 급변동 리포트 실패와 사유, `DailySettings.stuck_after`(기본 30분)보다 오래 진행 중인 작업, 아침 판 실패 또는 기록 없음, 작업 기록·뉴스 수집 기록을 읽지 못함). 없으면 `주의: 없음`입니다. 연결 실패·시간 초과·HTTP 오류·깨진 응답·뉴스 빠짐 같은 환경 문제는 줄의 숫자로만 봅니다.
    - 시세처리기가 운영 상태를 주지 않으면 수집·시세 줄은 `자료 없음`으로 쓰고, 수집 완료나 작업 기록을 읽지 못하면 그 줄을 `자료 없음`으로 씁니다. 판은 그대로 나가며 빠진 부분은 `missingItems`와 작업 기록의 빠진 항목 줄(`서버 상태: ...`)에 남습니다.
+8. 본문은 글자판(`text`)과 HTML(`html`)을 같은 순서로 만듭니다: 제목 → 결론(마감 후 판) → 항목별 숫자 → 요약 → 면책 → 서버 상태(마감 후 판) → 근거 목록(`daily_report.py`의 `daily_text`, `daily_html.py`). LLM 지시문과 출력은 바꾸지 않습니다.
+   - 결론(마감 후 판만): `결론: 보유 n개 중 m개 상승 · 관심 n개 중 m개 상승(자료 없음 k) · 가장 크게 오름 <ETF 이름> +x.x% · 가장 크게 내림 <ETF 이름> −x.x%`. 개수와 최대 등락은 코드가 세며 자료 없는 ETF도 n에 넣습니다. ETF마다 `relation`(`HELD` 보유, `WATCH` 관심)이 없으면 `ETF n개 중 m개 상승` 한 묶음이고, 값 있는 ETF가 없으면 `결론: 등락 자료 없음`입니다. 보유/관심 ETF 줄도 같은 묶음으로 나뉩니다.
+   - HTML은 두 판 모두 만들며 스타일은 모두 인라인입니다(글꼴 `Noto Sans KR → Apple SD Gothic Neo → 맑은 고딕 → sans-serif`, 제목·결론 굵게, 오른 등락률 빨강·내린 등락률 파랑). 면책·서버 상태·근거 목록은 작은 회색이고, 서버 상태는 '주의'가 `없음`이 아닐 때만 그 줄이 주황입니다. ETF 이름·LLM 문장·근거 설명·서버 상태 줄 같은 이벤트 값은 모두 이스케이프합니다(발송기는 `html`을 받은 그대로 보냄).
+   - 하루 등락 차트(마감 후 판만): 보유, 관심 순 가로 막대(묶음 안은 많이 오른 순, 관심 ETF는 이름 뒤 `(관심)`)를 PNG 한 장(`images`, Content-ID `chart-day`)으로 싣습니다. 자료 없는 ETF는 막대에서 빼고 그림 아래에 작게 적습니다. 그림이 한 장 300KB(base64를 푼 크기)를 넘거나 이벤트가 900KB(JSON 바이트)를 넘으면(`DailySettings.max_chart_image_bytes`·`max_event_bytes`, 그림은 4장까지) 그림만 빼고 글자판과 HTML로 보내며, HTML에 `차트 없음(크기 초과)`를 쓰고 `missingItems`에 `하루 등락 차트: 크기 초과`를 더합니다. 그리다 실패해도 메일은 나가고 `하루 등락 차트: 그리지 못함`이 `missingItems`에 남습니다.
+   - 차트의 한글 글꼴(Noto Sans KR 보통·굵게)은 파일이 git에 없으므로 `python3 scripts/install_font.py`로 `services/briefing/fonts/`에 내려받습니다(버전 고정 주소와 SHA-256 검사). 글꼴 파일이 없으면 경고 로그(`chart font files not found`)를 남기고 기본 글꼴로 그려 한글이 네모로 보일 수 있습니다. 다른 폴더를 쓰려면 환경변수 `BRIEFING_FONT_DIR`입니다.
 
 설정(범위 상한, 응답 제한 시간, 재시도 횟수, 상한, 미국 지수 대륙, LLM 시도 횟수, 멈춘 작업 기준)은 `config.py`의 `DailySettings` 기본값이며 환경변수로 바꿀 수 없습니다. LLM 키와 모델은 건별 리포트와 같은 `ANTHROPIC_API_KEY`, `BRIEFING_LLM_MODEL`을 씁니다.
 
@@ -169,6 +174,8 @@ docker compose -f infra/compose/docker-compose.yml --env-file .env up -d
 python3 -m venv services/briefing/.venv
 services/briefing/.venv/bin/python -m pip install -r services/briefing/requirements.txt
 # 의존성이 바뀌면(예: DB 드라이버, LLM SDK 추가) 위 pip install 을 다시 실행한다
+# 데일리 메일 차트의 한글 글꼴을 내려받는다(파일은 git에 넣지 않음, 없으면 경고 후 기본 글꼴로 그림)
+python3 scripts/install_font.py
 
 # 테스트 (실제 Kafka·DB·LLM을 호출하지 않음)
 services/briefing/.venv/bin/python -m pytest services/briefing

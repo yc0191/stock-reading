@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import uuid
@@ -18,6 +19,8 @@ from typing import Any
 
 from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
+from briefing.daily_chart import chart_bars, no_data_names, render_day_chart
+from briefing.daily_html import ChartSlot, render_html
 from briefing.daily_report import (
     Section,
     EDITIONS_WITH_FILINGS,
@@ -28,7 +31,10 @@ from briefing.daily_report import (
     EtfDay,
     GENERATED_BY_LLM,
     build_llm_input,
+    RELATION_HELD,
+    RELATION_WATCH,
     build_sections,
+    daily_text,
     has_evidence,
     llm_text,
     missing_items,
@@ -80,6 +86,9 @@ from briefing.sources import (
 
 log = logging.getLogger("briefing.daily_jobs")
 
+# 차트를 싣지 못했을 때 자료 없음 목록(missingItems)에 남기는 줄.
+CHART_OVERSIZED_ITEM = "하루 등락 차트: 크기 초과"
+CHART_FAILED_ITEM = "하루 등락 차트: 그리지 못함"
 # 서버 상태 절을 만들다 실패했을 때 본문 끝에 대신 붙이는 절.
 NO_STATUS_TEXT = "──────── 서버 상태 ────────\n- 자료 없음"
 
@@ -521,14 +530,59 @@ class DailyCore:
     def publish_draft(self, draft: DailyDraft, now: datetime, research_count: int) -> None:
         self._publish(draft.job, now, draft.input, draft.sections, draft.draft, research_count)
 
+    def _chart_image(self, daily_input: DailyInput) -> tuple[bytes | None, bool, str | None]:
+        """마감 후 판의 하루 등락 차트. (그림, 크기 초과 여부, 자료 없음 목록에 더할 줄). 그릴 막대가 없으면 그림이 없다."""
+        bars = chart_bars(daily_input)
+        if not bars:
+            return None, False, None
+        try:
+            png = render_day_chart(bars)
+        except Exception as error:  # noqa: BLE001 - 차트는 덤이라 실패해도 메일은 나간다
+            log.warning("daily chart failed for job %s: %s", daily_input.job_id, type(error).__name__)
+            return None, False, CHART_FAILED_ITEM
+        # 그림은 한 장씩 만들지만 상한(장 수)도 지켜서, 여러 장이 되는 날에도 같은 방식으로 뺀다.
+        image_count = 1
+        if png is not None and (image_count > self.settings.max_chart_images
+                                or len(png) > self.settings.max_chart_image_bytes):
+            return None, True, CHART_OVERSIZED_ITEM
+        return png, False, None
+
+    def _daily_event(self, job: _DailyJob, now: datetime, daily_input: DailyInput, sections: tuple[Section, ...],
+                     draft: _Draft, text: str, status_text: str | None,
+                     missing: list[str]) -> tuple[OutboundEvent, list[str]]:
+        """글자판·HTML·차트를 담은 메일 본문 이벤트. 이벤트가 상한을 넘으면 그림만 빼고 다시 만든다."""
+        post_close = job.edition == EDITION_POST_CLOSE
+        png, oversized, chart_missing = self._chart_image(daily_input) if post_close else (None, False, None)
+
+        def build(image: bytes | None, too_large: bool, items: list[str]) -> OutboundEvent:
+            slot = None
+            if post_close:
+                slot = ChartSlot("chart-day" if image is not None else None, too_large, no_data_names(daily_input))
+            html = render_html(daily_input, sections, draft.output, status_text, slot)
+            images = [{"contentId": "chart-day", "contentType": "image/png",
+                       "data": base64.b64encode(image).decode("ascii")}] if image is not None else None
+            return daily_briefing_event(job.job_id, job.correlation_id, job.scheduled_for, now, job.edition,
+                                        job.range_start, job.scheduled_for, text, items, draft.generated_by,
+                                        html, images)
+
+        items = [*missing, chart_missing] if chart_missing else missing
+        event = build(png, oversized, items)
+        if png is not None and len(json.dumps(event.value, ensure_ascii=False).encode("utf-8")) > self.settings.max_event_bytes:
+            items = [*missing, CHART_OVERSIZED_ITEM]
+            event = build(None, True, items)
+        return event, items
+
     def _publish(self, job: _DailyJob, now: datetime, daily_input: DailyInput, sections: tuple[Section, ...],
                  draft: _Draft, research_count: int = 0) -> None:
         missing = missing_items(sections)
         by_ref = {e.ref: e for s in sections for e in s.entries}
         report = self._status_report(job, now, draft)
+        status_text = report.text if report is not None else None
         if report is not None:
             missing = [*missing, *report.missing]
-            draft = replace(draft, text=f"{draft.text}\n\n{report.text}")
+        # 글자판은 서버 상태를 면책 아래·근거 목록 위에 끼워 다시 만든다.
+        text = daily_text(daily_input, sections, draft.output, status_text)
+        event, missing = self._daily_event(job, now, daily_input, sections, draft, text, status_text, missing)
         if missing:
             self._detail(job, STAGE_COMPOSE, EntryType.MISSING_ITEMS, REASON_MISSING_ITEMS, None, 0, now,
                          missingItems=missing,
@@ -537,11 +591,9 @@ class DailyCore:
                                       for e in daily_input.etfs or () if not e.has_day()],
                          evidence=[{"ref": ref, "describe": by_ref[ref].describe} for ref in draft.cited],
                          weakItems=list(draft.weak_shortfalls))
-        event = daily_briefing_event(job.job_id, job.correlation_id, job.scheduled_for, now, job.edition,
-                                     job.range_start, job.scheduled_for, draft.text, missing, draft.generated_by)
         result = JobResult(
             job.job_id, RunStatus.SUCCEEDED, now, generated_by=GeneratedBy(draft.generated_by),
-            final_text=draft.text, weak_count=len(draft.weak_shortfalls), research_count=research_count,
+            final_text=text, weak_count=len(draft.weak_shortfalls), research_count=research_count,
             # 성공했어도 중간에 포기한 단계가 있으면 첫 사유를 남긴다.
             failure_reason=job.first_failure[0].value if job.first_failure is not None else None,
             result_event_id=event.value["eventId"])
@@ -639,7 +691,12 @@ def _parse_etf_day(e: dict[str, Any]) -> EtfDay:
     return EtfDay(e["symbol"], e["date"], e["close"], e["prevClose"], e["rate"],
                   parse_timestamp(fetched) if fetched is not None else None,
                   tuple(e["tickers"]), bool(e["tickersTruncated"]), parse_etf_info(e.get("etf")),
-                  e.get("missingReason"))
+                  e.get("missingReason"), _relation(e.get("relation")))
+
+
+def _relation(value: Any) -> str | None:
+    """보유/관심 구분. 칸이 없거나 모르는 값이면 구분을 모르는 것으로 본다."""
+    return value if value in (RELATION_HELD, RELATION_WATCH) else None
 
 
 def daily_data_request(correlation_id: str, now: datetime, payload: dict[str, Any]) -> OutboundEvent:
