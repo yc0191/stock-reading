@@ -41,6 +41,8 @@ from briefing.llm import AnthropicClient
 from briefing.report import ReportStage, ReportWriter, build_report_writer
 from briefing.research import QueryWriter, build_query_writer
 from briefing.sentence_research import ResearchReportStage, SentenceResearch
+from briefing.status import StatusPort, parse_collection
+from briefing.status_store import PostgresStatusStore
 
 log = logging.getLogger("briefing")
 
@@ -113,6 +115,10 @@ class JobLogStore(JobLogPort, Protocol):
     def create_table(self) -> None: ...
 
 
+class StatusStore(StatusPort, Protocol):
+    def create_table(self) -> None: ...
+
+
 class KafkaPublisher:
     """RequestPort 구현. 이벤트 키(종목코드)를 메시지 키로 쓴다."""
 
@@ -152,7 +158,8 @@ class BriefingRunner:
                  declare_topics: Callable[[str], None] = ensure_topics,
                  query_writer: QueryWriter | None = None,
                  daily_writer: DailyLlmWriter | None = None,
-                 daily_settings: DailySettings = DEFAULT_DAILY_SETTINGS) -> None:
+                 daily_settings: DailySettings = DEFAULT_DAILY_SETTINGS,
+                 status_store: StatusStore | None = None) -> None:
         self.bootstrap = bootstrap
         self.writer = writer
         self.job_log = job_log
@@ -163,6 +170,7 @@ class BriefingRunner:
         self._declare_topics = declare_topics
         self.daily_writer = daily_writer
         self.daily_settings = daily_settings
+        self.status_store = status_store
         self.daily: DailyCore | None = None
         self.tick_consumers: dict[str, Consumer] = {}
         self.query_writer = query_writer
@@ -215,6 +223,8 @@ class BriefingRunner:
     def open(self) -> None:
         self._declare_topics(self.bootstrap)
         self.job_log.create_table()
+        if self.status_store is not None:
+            self.status_store.create_table()
         self._producer = self._producer_factory({"bootstrap.servers": self.bootstrap, "acks": "all", **COMMON})
         publisher = KafkaPublisher(self._producer)
         stage = ReportStage(self.writer, publisher, self.job_log, clock=self.clock)
@@ -223,7 +233,7 @@ class BriefingRunner:
         self.research = ResearchReportStage(stage, self.sentences)
         self.core = BriefingCore(publisher, self.research, self.settings, self.job_log)
         self.daily = DailyCore(publisher, self.daily_writer, self.job_log, self.daily_settings,
-                               sentences=self.sentences)
+                               sentences=self.sentences, status=self.status_store)
         for edition, group in TICK_CONSUMER_GROUPS.items():
             consumer = self._consumer_factory({
                 "bootstrap.servers": self.bootstrap,
@@ -270,8 +280,7 @@ class BriefingRunner:
         handler = {
             MOVE_TOPIC: self.core.on_move,
             # 재검색 완료 알림과 재검색 기사 응답은 재검색 쪽이 먼저 가져가고, 아니면 근거 조회 작업으로 넘긴다.
-            COLLECTION_COMPLETED_TOPIC: lambda m, now: self.sentences.on_collection_completed(m, now)
-            or self.core.on_collection_completed(m, now),
+            COLLECTION_COMPLETED_TOPIC: self._on_collection_completed,
             HISTORY_RESPONDED_TOPIC: self.core.on_history_responded,
             ARTICLES_RESPONDED_TOPIC: lambda m, now: self.sentences.on_articles_responded(m, now)
             or self.core.on_articles_responded(m, now),
@@ -296,6 +305,18 @@ class BriefingRunner:
         except ValueError as error:
             log.error("skipping malformed tick at %s[%d]@%d: %s",
                       message.topic(), message.partition(), message.offset(), error)
+
+    def _on_collection_completed(self, message: str | bytes, now: datetime) -> None:
+        # 서버 상태 절이 센다. 저장은 eventId로 멱등하다. 저장에 실패해도 근거 조회 흐름은 막지 않는다.
+        if self.status_store is not None:
+            try:
+                record = parse_collection(message)
+            except ValueError as error:
+                # 상태용 해석이 틀려도 근거 조회는 계속 받아야 한다. 원문과 외부 값은 로그에 남기지 않는다.
+                log.warning("collection.completed not saved for server status: %s", type(error).__name__)
+            else:
+                self.status_store.save_collection(record)
+        self.sentences.on_collection_completed(message, now) or self.core.on_collection_completed(message, now)
 
     def _on_filings_responded(self, message: str | bytes, now: datetime) -> None:
         # 급변동 작업과 데일리 판 작업이 같은 토픽으로 공시 응답을 받는다. 각자 모르는 jobId는 넘긴다.
@@ -364,9 +385,11 @@ def db_conninfo(env: Mapping[str, str]) -> str:
 def build_runner(env: Mapping[str, str]) -> BriefingRunner:
     """환경변수로 실제 구성(Kafka, Postgres 작업 기록, LLM 또는 규칙 기반 작성기)을 만든다."""
     bootstrap = env.get("KAFKA_BOOTSTRAP", "localhost:9092")
-    store = PostgresJobLog(psycopg_connector(db_conninfo(env)))
+    connect = psycopg_connector(db_conninfo(env))
+    store = PostgresJobLog(connect)
     return BriefingRunner(bootstrap, build_report_writer(env), store, daily_writer=build_daily_writer(env),
-                          query_writer=build_query_writer(env, AnthropicClient))
+                          query_writer=build_query_writer(env, AnthropicClient),
+                          status_store=PostgresStatusStore(connect))
 
 
 def main() -> None:

@@ -42,12 +42,14 @@ class DailyRequestListener {
     private final HoldingsPort holdings;
     private final ContextProperties contextProperties;
     private final DailyProperties dailyProperties;
+    private final OperationsReader operationsReader;
     private final DailyPublisher publisher;
     private final ObjectMapper mapper;
 
     DailyRequestListener(BackgroundRepository repository, WorldIndexRates worldIndexRates,
             OverseasCloseRateQuery closeRateQuery, HoldingsPort holdings, ContextProperties contextProperties,
-            DailyProperties dailyProperties, DailyPublisher publisher, ObjectMapper mapper) {
+            DailyProperties dailyProperties, OperationsReader operationsReader, DailyPublisher publisher,
+            ObjectMapper mapper) {
         this.repository = repository;
         this.marketBackground = new MarketBackground(repository, worldIndexRates);
         this.dailyPriceReader = new DailyPriceReader(mapper);
@@ -55,6 +57,7 @@ class DailyRequestListener {
         this.holdings = holdings;
         this.contextProperties = contextProperties;
         this.dailyProperties = dailyProperties;
+        this.operationsReader = operationsReader;
         this.publisher = publisher;
         this.mapper = mapper;
     }
@@ -123,7 +126,21 @@ class DailyRequestListener {
 
         List<ContextPayload.Background> background =
                 marketBackground.market(contextProperties.worldIndexContinents(), since, asOf, maxBytes);
-        return new DailyPayload(request.jobId(), request.seq(), etfs, closeRates, background, truncated);
+        // 요청이 운영 상태를 달라고 할 때만 읽는다. 아니면 칸 자체를 넣지 않는다.
+        DailyPayload.Operations operations = request.wantsOperations() ? operations(request, since, asOf) : null;
+        return new DailyPayload(request.jobId(), request.seq(), etfs, closeRates, background, truncated, operations);
+    }
+
+    /** 운영 상태는 부가 정보라 조회가 실패해도 나머지 응답은 보낸다. 종목코드·외부 오류 원문이 새지 않게 예외 종류만 남긴다. */
+    private DailyPayload.Operations operations(DailyRequestEnvelope.RequestPayload request, OffsetDateTime since,
+            OffsetDateTime asOf) {
+        try {
+            return operationsReader.read(since, asOf);
+        } catch (RuntimeException e) {
+            log.warn("operations unavailable jobId={} seq={} error={}", request.jobId(), request.seq(),
+                    e.getClass().getSimpleName());
+            return null;
+        }
     }
 
     /** record가 null이면 일봉 값을 비우고 missingReason을 싣는다. 미국 종목과 ETF 정보는 일봉과 관계없이 싣는다. */

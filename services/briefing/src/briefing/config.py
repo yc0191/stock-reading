@@ -76,6 +76,8 @@ class DailySettings:
     llm_max_attempts: int = 3
     # 같은 tick 중복 처리를 막기 위해 기억하는 eventId 수.
     remembered_ticks: int = 1000
+    # 서버 상태 절의 '주의': 판 시각에 시작한 지 이만큼 넘게 진행 중인 작업은 멈춘 것으로 본다.
+    stuck_after: timedelta = timedelta(minutes=30)
 
 
 DEFAULT_DAILY_SETTINGS = DailySettings()

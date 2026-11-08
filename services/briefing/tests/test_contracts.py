@@ -512,6 +512,10 @@ DAILY_DATA_CONTRACTS = [
 ]
 
 
+# 요청 샘플에 있어도 없는 요청이 유효해야 하는 선택 칸.
+OPTIONAL_DAILY_REQUEST_FIELDS = {"includeOperations"}
+
+
 @pytest.mark.parametrize("schema_file, sample_file", DAILY_DATA_CONTRACTS)
 def test_daily_data_samples_match_their_schemas(schema_file, sample_file):
     assert validate(schema_file, sample(sample_file)) == []
@@ -529,6 +533,8 @@ def test_daily_data_events_tolerate_unknown_fields(schema_file, sample_file):
 @pytest.mark.parametrize("schema_file, sample_file", DAILY_DATA_CONTRACTS)
 def test_daily_data_events_reject_missing_payload_field(schema_file, sample_file):
     for field in sample(sample_file)["payload"]:
+        if field in OPTIONAL_DAILY_REQUEST_FIELDS:
+            continue
         broken = sample(sample_file)
         del broken["payload"][field]
 
@@ -762,3 +768,41 @@ def test_daily_responded_v2_rejects_values_that_disagree_with_the_missing_reason
 
     for broken in (with_reason_and_value, without_reason, unknown_reason, no_flag):
         assert validate(DAILY_V2, broken) != []
+
+
+def test_daily_request_operations_flag_is_optional_and_must_be_boolean():
+    request = sample("market.daily.requested.sample.json")
+    assert request["payload"]["includeOperations"] is True
+    del request["payload"]["includeOperations"]
+    assert validate("market.daily.requested.v1.schema.json", request) == []
+
+    request["payload"]["includeOperations"] = "yes"
+    assert validate("market.daily.requested.v1.schema.json", request) != []
+
+
+def test_daily_responded_v2_operations_are_optional_and_follow_the_schema():
+    event = daily_v2()
+    operations = event["payload"]["operations"]
+    assert [c["kind"] for c in operations["collections"]] == ["pre-open", "quote-1s", "intraday", "post-close"]
+    assert operations["quoteFailures"]["TICK_SKIPPED_SUPERSEDED"] == 0
+
+    without = daily_v2()
+    del without["payload"]["operations"]
+    assert validate(DAILY_V2, without) == []
+
+    def broken(change):
+        copy = daily_v2()
+        change(copy["payload"]["operations"])
+        return copy
+
+    cases = {
+        "missing failure kind": broken(lambda o: o["quoteFailures"].pop("TIMEOUT")),
+        "negative count": broken(lambda o: o["collections"][0].update(receivedCount=-1)),
+        "unknown collection kind": broken(lambda o: o["collections"][0].update(kind="night")),
+        "bad time": broken(lambda o: o["collections"][0].update(firstReceivedAt="2026-10-20")),
+        "non integer failure": broken(lambda o: o["quoteFailures"].update(TIMEOUT="1")),
+        "zero dropped": broken(lambda o: o["droppedMessages"][0].update(count=0)),
+        "no collections": broken(lambda o: o.pop("collections")),
+    }
+    for name, event in cases.items():
+        assert validate(DAILY_V2, event) != [], name

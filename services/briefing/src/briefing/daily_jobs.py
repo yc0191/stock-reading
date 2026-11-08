@@ -35,6 +35,7 @@ from briefing.daily_report import (
     rule_based_text,
 )
 from briefing.events import (
+    EDITION_POST_CLOSE,
     FILINGS_REQUESTED_TOPIC,
     JOB_TYPE_BY_EDITION,
     OutboundEvent,
@@ -60,6 +61,7 @@ from briefing.evidence import MARKET_WIDE
 from briefing.ports import FailureReason, RequestPort
 from briefing.research import ResearchTarget
 from briefing.sentence_research import WHOLE_REPORT, SentenceResearch, WeakSentence
+from briefing.status import Operations, StatusPort, StatusReport, build_status_report, parse_operations
 from briefing.sources import (
     BACKGROUND_LABEL,
     BACKGROUND_MISSING,
@@ -77,6 +79,9 @@ from briefing.sources import (
 )
 
 log = logging.getLogger("briefing.daily_jobs")
+
+# 서버 상태 절을 만들다 실패했을 때 본문 끝에 대신 붙이는 절.
+NO_STATUS_TEXT = "──────── 서버 상태 ────────\n- 자료 없음"
 
 SCHEDULE_TICK = "schedule.tick"
 DAILY_DATA_REQUESTED_TOPIC = "market.daily.requested"
@@ -136,6 +141,7 @@ class _DailyJob:
     data_given_up: bool = False
     filings_given_up: bool = False
     data_payload: dict | None = None
+    operations: Operations | None = None
     filings_payload: dict | None = None
     etfs: tuple[EtfDay, ...] | None = None
     etfs_truncated: bool = False
@@ -161,6 +167,8 @@ class DailyCore:
     settings: DailySettings = DEFAULT_DAILY_SETTINGS
     # 있을 때만 재검색한다. 급변동과 함께 쓰는 문장 단위 재검색 흐름이다.
     sentences: SentenceResearch | None = None
+    # 있을 때만 마감 후 판 끝에 서버 상태 절을 붙인다.
+    status: StatusPort | None = None
     _jobs: dict[str, _DailyJob] = field(default_factory=dict, init=False)
     _seen: OrderedDict[str, None] = field(default_factory=OrderedDict, init=False)
 
@@ -223,6 +231,7 @@ class DailyCore:
             raise ValueError(f"malformed {DAILY_DATA_RESPONDED} event: {error!r}") from error
         job.data.received = True
         job.data_payload = payload
+        job.operations = parse_operations(payload.get("operations"))
         job.etfs = self._recheck_etfs(job, etfs)
         job.close_rates, job.background = self._recheck_state(job, close_rates, background)
         job.etfs_truncated = truncated
@@ -300,6 +309,9 @@ class DailyCore:
             "maxEtfs": s.max_etfs,
             "maxTickers": s.max_tickers,
         }
+        if job.edition == EDITION_POST_CLOSE and self.status is not None:
+            # 서버 상태 절의 시세처리기 운영 상태. 마감 후 판만 요청한다.
+            payload["includeOperations"] = True
         job.sent.append(_Sent(DAILY_DATA_REQUESTED_TOPIC, seq, now, payload))
         self.requests.send(daily_data_request(job.correlation_id, now, payload))
 
@@ -487,6 +499,23 @@ class DailyCore:
             return None
         return DailyDraft(draft.job, rewritten_input, sections, new)
 
+    # ---- 서버 상태 절 ----
+
+    def _status_report(self, job: _DailyJob, now: datetime, draft: _Draft) -> StatusReport | None:
+        """마감 후 판 끝에 붙일 서버 상태 절. 만들지 못해도 판은 나간다."""
+        if job.edition != EDITION_POST_CLOSE or self.status is None:
+            return None
+        try:
+            return build_status_report(
+                range_start=job.range_start, as_of=job.scheduled_for, current_job_id=job.job_id,
+                current_rule_based=draft.generated_by == GENERATED_BY_RULE, operations=job.operations,
+                collections=self.status.collections_between(job.range_start, job.scheduled_for),
+                runs=self.status.job_runs_between(job.range_start, job.scheduled_for),
+                stuck_after=self.settings.stuck_after)
+        except Exception as error:  # noqa: BLE001 - 서버 상태는 덤이라 실패해도 본문을 막지 않는다
+            log.warning("server status section failed for job %s: %s", job.job_id, type(error).__name__)
+            return StatusReport(NO_STATUS_TEXT, ("서버 상태: 전체(만들지 못함)",))
+
     # ---- 발행 ----
 
     def publish_draft(self, draft: DailyDraft, now: datetime, research_count: int) -> None:
@@ -496,6 +525,10 @@ class DailyCore:
                  draft: _Draft, research_count: int = 0) -> None:
         missing = missing_items(sections)
         by_ref = {e.ref: e for s in sections for e in s.entries}
+        report = self._status_report(job, now, draft)
+        if report is not None:
+            missing = [*missing, *report.missing]
+            draft = replace(draft, text=f"{draft.text}\n\n{report.text}")
         if missing:
             self._detail(job, STAGE_COMPOSE, EntryType.MISSING_ITEMS, REASON_MISSING_ITEMS, None, 0, now,
                          missingItems=missing,

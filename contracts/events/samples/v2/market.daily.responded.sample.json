@@ -117,6 +117,53 @@
         "status": "missing"
       }
     ],
-    "truncated": false
+    "truncated": false,
+    "operations": {
+      "collections": [
+        {
+          "kind": "pre-open",
+          "firstReceivedAt": "2026-10-20T08:30:02+09:00",
+          "lastReceivedAt": "2026-10-20T08:30:09+09:00",
+          "receivedCount": 4
+        },
+        {
+          "kind": "quote-1s",
+          "firstReceivedAt": "2026-10-20T09:00:01+09:00",
+          "lastReceivedAt": "2026-10-20T15:30:00+09:00",
+          "receivedCount": 70200
+        },
+        {
+          "kind": "intraday",
+          "firstReceivedAt": "2026-10-20T09:00:02+09:00",
+          "lastReceivedAt": "2026-10-20T15:30:02+09:00",
+          "receivedCount": 216
+        },
+        {
+          "kind": "post-close",
+          "firstReceivedAt": null,
+          "lastReceivedAt": null,
+          "receivedCount": 0
+        }
+      ],
+      "quoteFailures": {
+        "TOKEN_ISSUE_FAILED": 0,
+        "HTTP_ERROR": 0,
+        "RESULT_CODE_FAILED": 1,
+        "EMPTY_PRICE": 3,
+        "PRICE_PARSE_FAILED": 0,
+        "CONNECTION_FAILED": 0,
+        "TIMEOUT": 0,
+        "FIELD_MISMATCH": 2,
+        "TICK_SKIPPED_RATE_LIMITED": 5,
+        "TICK_SKIPPED_SUPERSEDED": 0,
+        "TICK_SKIPPED_OTHER": 0
+      },
+      "droppedMessages": [
+        {
+          "topic": "market.snapshot",
+          "count": 1
+        }
+      ]
+    }
   }
 }
