@@ -126,3 +126,70 @@ def test_close_closes_the_tick_consumers(setup):
     tick_consumers = list(ticks.values())
     runner.close()
     assert all(c.closed for c in tick_consumers)
+
+
+# ---- 서버 상태 절의 저장소 연결 ----
+
+class FakeStatusStore:
+    def __init__(self):
+        self.created = 0
+        self.saved = []
+
+    def create_table(self):
+        self.created += 1
+
+    def save_collection(self, record):
+        self.saved.append(record)
+        return True
+
+    def collections_between(self, since, until):
+        return []
+
+    def job_runs_between(self, since, until):
+        return []
+
+
+def status_runner(setup):
+    _, clock, store = setup
+    status = FakeStatusStore()
+    runner = main.BriefingRunner("localhost:9092", None, store, clock=clock,
+                                 consumer_factory=lambda config: FakeConsumer(config),
+                                 producer_factory=lambda config: FakeProducer(config),
+                                 declare_topics=lambda _: None, status_store=status)
+    runner.open()
+    return runner, status
+
+
+def test_startup_creates_the_status_table_and_every_collection_completed_is_saved_as_received(setup):
+    from test_runner import completed_message
+    runner, status = status_runner(setup)
+    assert status.created == 1
+    message = completed_message(incomplete=["TEST02"])
+    runner._consumer.commit = lambda **_: None
+    runner.handle_message(message)
+    [record] = status.saved
+    assert record.raw == message.value() and record.incomplete_symbols == ("TEST02",)
+    assert record.research_job_id is None and not record.is_research()
+
+
+def test_a_malformed_collection_completed_is_skipped_without_saving(setup):
+    from test_runner import FakeMessage
+    runner, status = status_runner(setup)
+    runner._consumer.commit = lambda **_: None
+    runner.handle_message(FakeMessage("collection.completed", "{not json"))
+    assert status.saved == []
+
+
+def test_unreadable_status_fields_do_not_stop_the_evidence_lookup_from_getting_the_notice(setup):
+    from test_runner import completed_message
+    runner, status = status_runner(setup)
+    runner._consumer.commit = lambda **_: None
+    received = []
+    runner.core.on_collection_completed = lambda message, now: received.append(message)
+    runner.sentences.on_collection_completed = lambda message, now: False
+    message = completed_message()
+    event = json.loads(message.value())
+    del event["payload"]["finishedAt"]
+    message = type(message)("collection.completed", json.dumps(event))
+    runner.handle_message(message)
+    assert received == [message.value()] and status.saved == []
