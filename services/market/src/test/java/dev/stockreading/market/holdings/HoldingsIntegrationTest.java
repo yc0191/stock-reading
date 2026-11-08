@@ -95,7 +95,7 @@ class HoldingsIntegrationTest {
     }
 
     @Test
-    void trackedEtfCodesAreKrEtfsHeldOrWatchedInCodeOrderAndLeaveOutNoneAndMembers() {
+    void trackedEtfsAreKrEtfsHeldOrWatchedInCodeOrderWithTheirRelationAndLeaveOutNoneAndMembers() {
         repository.replaceAll(plan("""
                 [{"kind": "ETF", "market": "KR", "symbol": "TEST03", "relation": "WATCH"},
                  {"kind": "ETF", "market": "KR", "symbol": "TEST01", "relation": "HELD",
@@ -104,12 +104,15 @@ class HoldingsIntegrationTest {
                  {"kind": "ETF", "market": "KR", "symbol": "TEST04"}]
                 """));
 
-        assertThat(repository.trackedEtfCodes()).containsExactly("TEST01", "TEST03");
+        assertThat(repository.trackedEtfs()).containsExactly(
+                new HoldingsPort.TrackedEtf("TEST01", "HELD"), new HoldingsPort.TrackedEtf("TEST03", "WATCH"));
+        assertThat(repository.trackedEtfs()).extracting(HoldingsPort.TrackedEtf::relation)
+                .containsExactly("HELD", "WATCH");
     }
 
     @Test
-    void trackedEtfCodesAreEmptyWhenTheTableIsEmpty() {
-        assertThat(repository.trackedEtfCodes()).isEmpty();
+    void trackedEtfsAreEmptyWhenTheTableIsEmpty() {
+        assertThat(repository.trackedEtfs()).isEmpty();
     }
 
     @Test

@@ -35,7 +35,7 @@ class DailyPublisherTest {
         DailyPublisher publisher = new DailyPublisher(kafka, mapper,
                 Clock.fixed(Instant.parse("2026-10-20T08:00:01Z"), ZoneId.of("Asia/Seoul")));
         DailyPayload payload = new DailyPayload(JOB_ID, 1, List.of(DailyPayload.Etf.withoutDaily("TEST01",
-                DailyPayload.NO_DAILY_PRICE_IN_RANGE, List.of("TESTA"), false, null)), List.of(),
+                DailyPayload.NO_DAILY_PRICE_IN_RANGE, List.of("TESTA"), false, null).withRelation("WATCH")), List.of(),
                 List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false);
 
         publisher.publish(payload, "2f6a1c8e-3b7d-4e59-9a0c-6d4e8b2f1a75",
@@ -45,5 +45,7 @@ class DailyPublisherTest {
         verify(kafka).send(eq(Topics.MARKET_DAILY_RESPONDED), eq(JOB_ID), message.capture());
         assertThat(mapper.readTree(message.getValue()).get("schemaVersion").asInt()).isEqualTo(2);
         assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", message.getValue())).isEmpty();
+        assertThat(mapper.readTree(message.getValue()).get("payload").get("etfs").get(0).get("relation").asString())
+                .isEqualTo("WATCH");
     }
 }

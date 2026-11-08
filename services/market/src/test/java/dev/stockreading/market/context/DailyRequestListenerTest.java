@@ -17,6 +17,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
@@ -62,7 +63,7 @@ class DailyRequestListenerTest {
         when(repository.latestDailyPrices(any(), any())).thenReturn(List.of());
         when(closeRateQuery.find(anyString(), any(), any())).thenReturn(Optional.empty());
         when(holdings.topTickers(anyString())).thenReturn(List.of());
-        when(holdings.trackedEtfCodes()).thenReturn(List.of());
+        when(holdings.trackedEtfs()).thenReturn(List.of());
     }
 
     private DailyRequestListener listener(int maxTickers, int maxEtfs) {
@@ -87,7 +88,8 @@ class DailyRequestListenerTest {
     }
 
     private void tracked(String... symbols) {
-        when(holdings.trackedEtfCodes()).thenReturn(List.of(symbols));
+        when(holdings.trackedEtfs()).thenReturn(
+                Arrays.stream(symbols).map(symbol -> new HoldingsPort.TrackedEtf(symbol, "HELD")).toList());
     }
 
     private static BackgroundRepository.StoredTargetResponse daily(String symbol, String rate, OffsetDateTime fetched) {
@@ -122,9 +124,23 @@ class DailyRequestListenerTest {
 
         assertThat(payload.etfs()).containsExactly(
                 new DailyPayload.Etf("TEST01", "20261020", "9850", "10000", "-1.50", "2026-10-20T16:30:00+09:00",
-                        List.of(), false),
+                        List.of(), false).withRelation("HELD"),
                 new DailyPayload.Etf("TEST02", "20261020", "9850", "10000", "0.50", "2026-10-20T16:31:00+09:00",
-                        List.of(), false));
+                        List.of(), false).withRelation("HELD"));
+    }
+
+    @Test
+    void eachEtfCarriesItsRelationFromTheHoldingsTableIncludingOnesWithoutADailyPrice() throws IOException {
+        when(holdings.trackedEtfs()).thenReturn(List.of(new HoldingsPort.TrackedEtf("TEST01", "HELD"),
+                new HoldingsPort.TrackedEtf("TEST02", "WATCH"), new HoldingsPort.TrackedEtf("TEST03", "WATCH")));
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                daily("TEST01", "-1.50", AS_OF.minusMinutes(30)), daily("TEST02", "0.50", AS_OF.minusMinutes(29))));
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol, DailyPayload.Etf::relation,
+                DailyPayload.Etf::missingReason).containsExactly(tuple("TEST01", "HELD", null),
+                tuple("TEST02", "WATCH", null), tuple("TEST03", "WATCH", DailyPayload.NO_DAILY_PRICE_IN_RANGE));
     }
 
     @Test

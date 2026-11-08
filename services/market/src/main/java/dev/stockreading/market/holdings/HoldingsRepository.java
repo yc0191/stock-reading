@@ -79,13 +79,13 @@ class HoldingsRepository implements HoldingsPort {
     }
 
     @Override
-    public List<String> trackedEtfCodes() {
+    public List<TrackedEtf> trackedEtfs() {
         return jdbc.sql("""
-                        SELECT symbol FROM instrument
+                        SELECT symbol, relation FROM instrument
                         WHERE kind = 'ETF' AND market = 'KR' AND relation IN ('HELD', 'WATCH')
                         ORDER BY symbol
                         """)
-                .query(String.class).list();
+                .query((rs, rowNum) -> new TrackedEtf(rs.getString("symbol"), rs.getString("relation"))).list();
     }
 
     @Override
