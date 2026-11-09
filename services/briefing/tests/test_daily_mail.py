@@ -10,6 +10,7 @@ from briefing.config import DailySettings
 from briefing.daily_jobs import CHART_FAILED_ITEM, CHART_OVERSIZED_ITEM, DailyCore
 from briefing.daily_report import DailyLlmWriter
 from contracts import validate
+from fake_news import answer_news
 from test_daily_jobs import (
     MORNING_AT,
     MORNING_JOB,
@@ -51,6 +52,8 @@ def run(edition="post-close", settings=None, llm=True, answer_etfs=None, ref=Non
     core.on_schedule_tick(tick(job, at), at, edition)
     background = POST_CLOSE_MARKET if edition == "post-close" else None
     core.on_daily_data_responded(daily_response(etfs=answer_etfs or etfs(), background=background), at)
+    if edition == "post-close":
+        answer_news(core, requests, at)
     if edition == "morning":
         from test_daily_jobs import filings_response
         core.on_filings_responded(filings_response(), at)

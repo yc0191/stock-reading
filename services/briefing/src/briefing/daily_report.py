@@ -8,13 +8,19 @@ from __future__ import annotations
 import json
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Callable, Mapping
 
 from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
+from briefing.daily_inputs import (
+    KIND_MEMBER_ISSUE,
+    EtfArticles,
+    MemberIssue,
+    NotableCandidate,
+)
 from briefing.events import EDITION_MORNING, EDITION_POST_CLOSE
 from briefing.job_log import GeneratedBy
 from briefing.llm_output import (
@@ -80,20 +86,24 @@ ITEM_KR_TODAY = "그날 한국 증시"
 ITEM_ETFS = "보유 ETF별 하루 등락"
 # 보유/관심으로 나뉠 때 글자판·HTML에 보이는 절 제목. LLM 입력과 자료 없음 목록은 ITEM_ETFS 이름을 그대로 쓴다.
 ITEM_ETFS_SPLIT_TITLE = "보유·관심 ETF별 하루 등락"
+# 마감 후 판이 ETF마다 모아 둔 기사, ETF에 담긴 미국 종목 중 이슈가 있는 종목. 글자판·HTML에는 아직 싣지 않는다.
+ITEM_ETF_ARTICLES = "ETF별 기사"
+ITEM_MEMBER_ISSUES = "미국 구성 종목 이슈"
 # 근거가 부족해 다시 검색해 찾은 기사. 판 종류와 상관없이 다시 쓸 때만 맨 뒤에 붙는다.
 ITEM_RESEARCH = "재검색 기사"
 
 EDITION_ITEMS = {
     EDITION_MORNING: (ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_KR_REVIEW),
-    EDITION_POST_CLOSE: (ITEM_KR_TODAY, ITEM_ETFS),
+    EDITION_POST_CLOSE: (ITEM_KR_TODAY, ITEM_ETFS, ITEM_ETF_ARTICLES, ITEM_FILINGS, ITEM_MEMBER_ISSUES),
 }
-# 공시는 아침 판만 쓰므로 마감 후 판은 공시를 요청하지 않는다.
 EDITIONS_WITH_FILINGS = frozenset(e for e, items in EDITION_ITEMS.items() if ITEM_FILINGS in items)
+EDITIONS_WITH_ETF_ARTICLES = frozenset(e for e, items in EDITION_ITEMS.items() if ITEM_ETF_ARTICLES in items)
 
 # 코드가 붙이는 근거 번호의 머리글. 공시는 접수번호를 그대로 쓴다.
 ETF_REF_PREFIX = "E"
 CLOSE_RATE_REF_PREFIX = "U"
 BACKGROUND_REF_PREFIX = "B"
+MEMBER_ISSUE_REF_PREFIX = "M"
 
 # 본문에는 미국 티커를 쓰지 않는다(보유 종목이 드러남). LLM 입력에는 넣는다.
 US_STOCK_LABEL = "미국 종목"
@@ -196,6 +206,10 @@ class DailyInput:
     # 재검색으로 찾은 기사. 다시 쓸 때만 있다. 첫 작성의 입력 모양은 바꾸지 않는다.
     research_articles: tuple[Article, ...] = ()
     research_articles_truncated: bool = False
+    # 마감 후 판만: ETF마다 받은 기사(None이면 요청하지 않은 판), 미국 구성 종목 이슈, 눈에 띄는 점 후보.
+    etf_articles: tuple[EtfArticles, ...] | None = None
+    member_issues: tuple[MemberIssue, ...] = ()
+    notables: tuple[NotableCandidate, ...] = ()
 
     def tickers(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(t for etf in self.etfs or () for t in etf.tickers))
@@ -226,6 +240,8 @@ class Section:
     gaps_llm: tuple[dict[str, Any], ...] = ()
     # 보유/관심으로 나눠 보여 줄 때 묶음 이름과 그 묶음의 줄. 구분을 모르면 비어 있다(lines 한 묶음).
     groups: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    # True면 Claude 입력에는 들어가지만 글자판·HTML 항목으로는 보여 주지 않는다.
+    hidden: bool = False
 
     @property
     def missing(self) -> bool:
@@ -443,6 +459,66 @@ def _etfs_section(i: DailyInput, refs: Callable[[], str]) -> Section:
                    tuple(gaps), tuple(gaps_llm), groups)
 
 
+ARTICLES_NO_RESPONSE = "기사 응답을 받지 못함"
+
+
+def _etf_articles_section(i: DailyInput) -> Section:
+    """ETF마다 모아 둔 기사. 같은 기사가 시장 전체 기사로 여러 ETF에 오면 한 번만 담고 etf 칸에 ETF 목록을 둔다."""
+    if i.etf_articles is None:
+        return Section(ITEM_ETF_ARTICLES, MARK_MISSING, (NO_DATA,), hidden=True)
+    names = {e.symbol: e.label() for e in i.etfs or ()}
+    lines, entries, gaps, gaps_llm = [], [], [], []
+    by_id: dict[str, list[str]] = {}
+    for group in i.etf_articles:
+        if not group.received:
+            gaps.append(f"{names.get(group.symbol, group.symbol)}, {ARTICLES_NO_RESPONSE}")
+            gaps_llm.append({"symbol": group.symbol, "name": names.get(group.symbol, group.symbol),
+                             "status": MARK_MISSING, "reason": ARTICLES_NO_RESPONSE})
+            continue
+        for a in group.articles:
+            seen = by_id.get(a.article_id)
+            if seen is not None:
+                seen.append(group.symbol)
+                continue
+            by_id[a.article_id] = etfs_of = [group.symbol]
+            lines.append(f"{a.title} — {a.publisher}, {_short(a.published_at)} 발행")
+            entries.append(Entry(a.article_id,
+                                 {"ref": a.article_id, "etf": etfs_of, "articleId": a.article_id,
+                                  "title": a.title, "summary": a.summary, "source": a.publisher,
+                                  "publishedAt": _at(a.published_at),
+                                  "minutesBeforeAsOf": _minutes_before(a.published_at, i.as_of)},
+                                 f"{a.title} — {a.publisher}, {_short(a.published_at)} 발행 {a.url}"))
+    truncated = any(g.truncated for g in i.etf_articles)
+    if not entries and gaps:
+        return Section(ITEM_ETF_ARTICLES, MARK_MISSING, tuple(lines), (), tuple(gaps), tuple(gaps_llm), hidden=True)
+    if not entries:
+        return Section(ITEM_ETF_ARTICLES, MARK_PRESENT, ("범위 안에 모아 둔 기사 없음",), hidden=True)
+    return Section(ITEM_ETF_ARTICLES, MARK_TRUNCATED if truncated else MARK_PRESENT, tuple(lines), tuple(entries),
+                   tuple(gaps), tuple(gaps_llm), hidden=True)
+
+
+def _member_issues_section(i: DailyInput, refs: Callable[[], str]) -> Section:
+    """미국 구성 종목 이슈. 티커와 종목 이름은 Claude 입력에만 담고 글자판·근거 설명에는 쓰지 않는다."""
+    if i.etfs is None:
+        return Section(ITEM_MEMBER_ISSUES, MARK_MISSING, (NO_DATA,), hidden=True)
+    if not i.member_issues:
+        return Section(ITEM_MEMBER_ISSUES, MARK_PRESENT, ("기준에 맞는 미국 구성 종목 없음",), hidden=True)
+    lines, entries = [], []
+    for issue in i.member_issues:
+        ref = refs()
+        data: dict[str, Any] = {"ref": ref, "etf": issue.etf, "rank": issue.rank, "ticker": issue.ticker,
+                                "rate": issue.rate if issue.rate is not None else MARK_MISSING,
+                                "filingRefs": list(issue.filing_refs)}
+        if issue.name:
+            data["name"] = issue.name
+        reasons = ([f"직전 장 등락률 {issue.rate}%"] if issue.rate is not None else []) \
+            + (["범위 안 공시"] if issue.filing_refs else [])
+        why = ", ".join(reasons)
+        entries.append(Entry(ref, data, f"{US_STOCK_LABEL} 구성 종목 이슈 ({why}) — {CLOSE_RATE_SOURCE}"))
+        lines.append(f"{US_STOCK_LABEL} 구성 종목 이슈 ({why})")
+    return Section(ITEM_MEMBER_ISSUES, MARK_PRESENT, tuple(lines), tuple(entries), hidden=True)
+
+
 def _research_section(i: DailyInput) -> Section:
     lines, entries = [], []
     for a in sorted(i.research_articles, key=lambda a: a.published_at, reverse=True):
@@ -460,7 +536,7 @@ def _research_section(i: DailyInput) -> Section:
 
 def build_sections(i: DailyInput, settings: DailySettings = DEFAULT_DAILY_SETTINGS) -> tuple[Section, ...]:
     """판의 항목을 차례대로 만든다. 근거 번호는 이 순서로 붙는다."""
-    counters = {ETF_REF_PREFIX: 0, CLOSE_RATE_REF_PREFIX: 0, BACKGROUND_REF_PREFIX: 0}
+    counters = {ETF_REF_PREFIX: 0, CLOSE_RATE_REF_PREFIX: 0, BACKGROUND_REF_PREFIX: 0, MEMBER_ISSUE_REF_PREFIX: 0}
 
     def next_ref(prefix: str) -> Callable[[], str]:
         def make() -> str:
@@ -477,8 +553,13 @@ def build_sections(i: DailyInput, settings: DailySettings = DEFAULT_DAILY_SETTIN
         ITEM_KR_REVIEW: lambda: _raw_background_section(ITEM_KR_REVIEW, i, "market-summary", background_ref),
         ITEM_KR_TODAY: lambda: _raw_background_section(ITEM_KR_TODAY, i, "market-summary", background_ref),
         ITEM_ETFS: lambda: _etfs_section(i, next_ref(ETF_REF_PREFIX)),
+        ITEM_ETF_ARTICLES: lambda: _etf_articles_section(i),
+        ITEM_MEMBER_ISSUES: lambda: _member_issues_section(i, next_ref(MEMBER_ISSUE_REF_PREFIX)),
     }
     sections = [builders[name]() for name in EDITION_ITEMS[i.edition]]
+    if i.edition in EDITIONS_WITH_ETF_ARTICLES:
+        # 마감 후 판 공시는 Claude 입력에만 담는다. 본문에 어떻게 보일지는 본문 배치에서 정한다.
+        sections = [replace(s, hidden=True) if s.name == ITEM_FILINGS else s for s in sections]
     if i.research_articles:
         sections.append(_research_section(i))
     return tuple(sections)
@@ -520,7 +601,26 @@ def build_llm_input(i: DailyInput, sections: tuple[Section, ...],
                 for e in i.etfs or () if e.etf is not None]
     if etf_info:
         data["etfInfo"] = etf_info
+    if i.edition in EDITIONS_WITH_ETF_ARTICLES:
+        data["notableCandidates"] = _candidates_input(i, sections)
     return data
+
+
+def _candidates_input(i: DailyInput, sections: tuple[Section, ...]) -> list[dict[str, Any]]:
+    """눈에 띄는 점 후보. 후보에 얽힌 ETF의 등락 근거 번호와, 구성 종목 이슈 후보면 그 이슈의 근거 번호를 함께 준다."""
+    day_refs = {e.llm["symbol"]: e.ref for s in sections if s.name == ITEM_ETFS for e in s.entries}
+    issue_refs: dict[str, list[str]] = {}
+    for s in sections:
+        if s.name == ITEM_MEMBER_ISSUES:
+            for e in s.entries:
+                issue_refs.setdefault(e.llm["etf"], []).append(e.ref)
+    result = []
+    for c in i.notables:
+        refs = [day_refs[sym] for sym in c.symbols if sym in day_refs]
+        if c.kind == KIND_MEMBER_ISSUE:
+            refs.extend(r for sym in c.symbols for r in issue_refs.get(sym, ()))
+        result.append({"kind": c.kind, "symbols": list(c.symbols), "refs": refs})
+    return result
 
 
 # ---- 출력 검증 ----
@@ -579,7 +679,7 @@ def section_title(s: Section) -> str:
 def _facts(sections: tuple[Section, ...]) -> list[str]:
     lines: list[str] = []
     for s in sections:
-        if s.name == ITEM_RESEARCH:
+        if s.name == ITEM_RESEARCH or s.hidden:
             # 재검색 기사는 요약이 인용할 때만 근거 목록에 나온다. 항목으로 나열하지 않는다.
             continue
         lines.append("")

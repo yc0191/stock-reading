@@ -8,7 +8,7 @@ from briefing import main
 from briefing.daily_report import DailyLlmWriter
 from briefing.ports import FailureReason
 from contracts import validate
-from test_daily_jobs import FakeLlm, daily_response, filings_response, good_output, tick
+from test_daily_jobs import MARKET, FakeLlm, daily_response, etf_v2, filings_response, good_output, tick
 from test_runner import Clock, FakeConsumer, FakeMessage, FakeProducer, FakeStore, sent
 
 KST = timezone(timedelta(hours=9))
@@ -80,6 +80,33 @@ def test_a_morning_tick_flows_to_a_daily_briefing(setup):
     assert briefing["payload"]["generatedBy"] == "llm"
     assert store.failures == []
     assert sent(producer, "briefing.generated") == []
+
+
+def test_a_post_close_tick_flows_through_articles_and_filings_to_a_daily_briefing(setup):
+    make, clock, store = setup
+    runner, ticks, consumer, producer = make(DailyLlmWriter(FakeLlm(good_output("E1"))))
+    ticks["post-close"].queue.append(FakeMessage("schedule.tick", tick("daily-briefing-post-close", MORNING_AT)))
+    runner.run_once()
+    consumer.queue.append(FakeMessage("market.daily.responded", daily_response(
+        etfs=[etf_v2("TEST01", "TEST ETF", fetched="2026-10-19T16:30:02+09:00", rate="0.50")],
+        background=[{**MARKET, "fetchedAt": "2026-10-19T16:30:05+09:00"}])))
+    runner.run_once()
+    [(key, articles_request)] = sent(producer, "news.articles.requested")
+    assert key == "TEST01" and validate("news.articles.requested.v1.schema.json", articles_request) == []
+    [(_, filings_request)] = sent(producer, "news.filings.requested")
+    payload = articles_request["payload"]
+    consumer.queue.append(FakeMessage("news.articles.responded", json.dumps({
+        "eventId": "00000000-0000-4000-8000-000000000007", "eventType": "news.articles.responded",
+        "schemaVersion": 1, "occurredAt": "2026-10-20T08:45:01+09:00", "producedAt": "2026-10-20T08:45:01+09:00",
+        "correlationId": "c", "payload": {"jobId": payload["jobId"], "seq": payload["seq"], "symbol": "TEST01",
+                                          "articles": [], "truncated": False}})))
+    runner.run_once()
+    assert sent(producer, "briefing.daily.generated") == []
+    consumer.queue.append(FakeMessage("news.filings.responded", filings_response(
+        seq=filings_request["payload"]["seq"], filings=[])))
+    runner.run_once()
+    [(key, briefing)] = sent(producer, "briefing.daily.generated")
+    assert key == "post-close" and validate("briefing.daily.generated.v1.schema.json", briefing) == []
 
 
 def test_daily_no_response_is_resent_by_the_runner_timer_and_still_publishes(setup):

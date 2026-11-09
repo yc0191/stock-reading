@@ -157,7 +157,7 @@ def render_html(i: DailyInput, sections: tuple[Section, ...], output: DailyOutpu
         parts.append(_p(CONCLUSION_STYLE, _rate_spans(escape(conclusion(i)))))
         if chart is not None:
             parts.append(_chart(chart))
-    parts.extend(_section(s) for s in sections if s.name != ITEM_RESEARCH)
+    parts.extend(_section(s) for s in sections if s.name != ITEM_RESEARCH and not s.hidden)
     evidence = ""
     if output is not None:
         summary, evidence = _summary(sections, output)

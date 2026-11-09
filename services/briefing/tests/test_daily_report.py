@@ -8,6 +8,8 @@ from briefing.config import DailySettings
 from briefing.daily_report import (
     DAILY_DISCLAIMER,
     ITEM_ETFS,
+    ITEM_ETF_ARTICLES,
+    ITEM_MEMBER_ISSUES,
     ITEM_EXCHANGE,
     ITEM_FILINGS,
     ITEM_KR_REVIEW,
@@ -72,7 +74,8 @@ class FakeLlm:
 def test_morning_and_post_close_choose_their_own_items():
     assert [s.name for s in build_sections(daily_input())] == \
         [ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_KR_REVIEW]
-    assert [s.name for s in build_sections(daily_input("post-close"))] == ["그날 한국 증시", ITEM_ETFS]
+    assert [s.name for s in build_sections(daily_input("post-close"))] == \
+        ["그날 한국 증시", ITEM_ETFS, ITEM_ETF_ARTICLES, ITEM_FILINGS, ITEM_MEMBER_ISSUES]
 
 
 def test_each_missing_item_is_marked_no_data():

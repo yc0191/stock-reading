@@ -10,6 +10,7 @@ from briefing.daily_report import DailyLlmWriter
 from briefing.job_log import EntryType
 from briefing.status import CollectionRecord, JobRunRow
 from contracts import validate
+from fake_news import answer_news
 from test_daily_jobs import (
     KST,
     MORNING_AT,
@@ -105,6 +106,8 @@ def make():
         edition = "post-close" if edition_job == POST_CLOSE_JOB else "morning"
         core.on_schedule_tick(tick(edition_job, at), at, edition)
         core.on_daily_data_responded(with_operations() if answer == "default" else answer, at)
+        if edition == "post-close":
+            answer_news(core, requests, at)
         return core, requests, details
     return build
 

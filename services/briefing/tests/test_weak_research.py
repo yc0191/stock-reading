@@ -19,6 +19,7 @@ from briefing.report import parse_output as parse_move
 from briefing.research import QueryWriter, ResearchReason, ResearchStep
 from briefing.sentence_research import SentenceResearch, research_job_id
 from contracts import validate
+from fake_news import answer_news
 from fake_job_log import FakeJobLog
 from test_daily_jobs import (
     MORNING_AT,
@@ -519,6 +520,8 @@ class DailyFlow:
             close_rates = []
         self.core.on_daily_data_responded(
             daily_response(etfs=etfs, background=background, close_rates=close_rates), self.now)
+        if self.edition == "post-close":
+            answer_news(self.core, self.requests, self.now)
         if self.edition == "morning" and self.etfs != []:
             self.core.on_filings_responded(filings_response(), self.now)
 
