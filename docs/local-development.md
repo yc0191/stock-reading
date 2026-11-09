@@ -198,6 +198,7 @@ PYTHONPATH=services/briefing/src services/briefing/.venv/bin/python -m briefing.
 ```bash
 JAVA_HOME_21=<JDK 21 경로> scripts/manual-daily-briefing.sh                        # 가짜 LLM(로컬 가짜 서버)
 JAVA_HOME_21=<JDK 21 경로> DAILY_E2E_REAL_LLM=1 ANTHROPIC_API_KEY=... scripts/manual-daily-briefing.sh   # 실제 Claude
+JAVA_HOME_21=<JDK 21 경로> DAILY_E2E_SMTP_SINK=1 scripts/manual-daily-briefing.sh              # 발송기(셸의 SPRING_MAIL_* 는 지우고 SPRING_APPLICATION_JSON 으로 호스트·포트를 넣음)가 127.0.0.1 가짜 SMTP 수신 서버로만 보내고 받은 .eml 을 결과 폴더에 저장
 ```
 
 - 기본은 로컬 루프백의 가짜 Claude 서버를 SDK 주소(`ANTHROPIC_BASE_URL`)로 지정해 실제 호출이 없습니다. `DAILY_E2E_REAL_LLM=1`이면 셸 환경변수 `ANTHROPIC_API_KEY`로 실제 Claude를 부릅니다(키는 출력하지 않음).

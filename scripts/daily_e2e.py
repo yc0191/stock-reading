@@ -3,6 +3,10 @@
 하위 명령:
 - fake-llm <포트 파일>: 로컬 루프백에 가짜 Claude(메시지 API) 서버를 연다. 받은 입력의 첫 근거 번호를 인용한 요약 한 줄을
   돌려주고, 근거가 없으면 근거 부족으로 답한다. 고른 포트를 파일에 쓰고, 받은 호출 수는 /__stats 로 알려 준다.
+- smtp-sink <포트 파일> <메일 폴더>: 127.0.0.1 에서 받기만 하는 가짜 SMTP 수신 서버를 연다. 받은 메일을 .eml 로 폴더에
+  쓰고 어디로도 보내지 않는다. 암호화·인증은 받지 않는다(발송기 한 인스턴스만 이 서버로 보낸다).
+- smtp-json <포트>: 발송기를 가짜 SMTP 수신 서버로만 보내는 SPRING_APPLICATION_JSON 값을 출력한다. 호스트는 127.0.0.1 고정,
+  계정·암호는 비우고 인증·암호화는 끈다. 스프링은 이 값을 SPRING_MAIL_* 환경변수보다 먼저 쓰므로 셸에 남은 값이 새지 않는다.
 - seed: 가짜 수집 자료(market.insight 국내 일봉·세계지수·환율종합·시장종합·해외 일봉, filing.collected 공시)를
   계약 스키마로 검사한 뒤 일회용 Kafka 에 발행한다. 값은 모두 TEST·FAKE 접두의 가짜다.
 - ticks: 아침 판·마감 후 판 시작 신호(schedule.tick) 한 건씩을 발행한다.
@@ -42,6 +46,9 @@ JOB_TYPES = {"morning": "daily-briefing-morning", "post-close": "daily-briefing-
 HOLDINGS = {"TEST01": ("TESTA", "FAKEB"), "TEST02": ()}
 US_TICKERS = ("TESTA", "FAKEB")
 FAKE_STATEMENT = "[가짜 LLM] 시험용 요약 문장입니다."
+# 마감 후 판 입력의 판 이름과 ETF별 하루 등락 항목 이름(briefing/daily_report.py)
+POST_CLOSE_NAME = "마감 후 판"
+ETF_DAY_ITEM = "보유 ETF별 하루 등락"
 COMMON = {"broker.address.family": "v4"}
 
 
@@ -142,8 +149,11 @@ def seed_events(now: datetime, run_id: str) -> list[tuple[str, str | None, dict]
                                             "dataBody": {"out2": [{"cur_nm": "TEST CURRENCY", "cls_prc_p4": " 1000.0000"}]}},
             fetched)
     insight("market-summary", None, {"dataHeader": {"resultCode": "200"},
-                                     "dataBody": {"out1": [{"indx_nm": "TEST INDEX", "now_indx_p2": " 2500.00",
-                                                            "up_dwn_r_p2": "   0.40"}]}}, fetched)
+                                     "dataBody": {"out2": [
+                                         {"indx_nm": "KOSPI종합", "now_indx_p2": " 2500.00", "bdy_cmpr_p2": "   10.00",
+                                          "bdy_cmpr_ccd": "2", "up_dwn_r_p2": "   0.40"},
+                                         {"indx_nm": "KOSDAQ종합", "now_indx_p2": "  800.00", "bdy_cmpr_p2": "    4.00",
+                                          "bdy_cmpr_ccd": "5", "up_dwn_r_p2": "  -0.50"}]}}, fetched)
     insight("overseas-daily-price", "TESTA", _overseas(us_day, "   1.25"), fetched)
     insight("overseas-daily-price", "FAKEB", _overseas(us_day, "  -0.80"), fetched)
 
@@ -179,11 +189,25 @@ def schema_errors(topic: str, event: dict) -> list[str]:
 # ---- 가짜 LLM ----
 
 def fake_llm_output(user: str) -> str:
-    """입력의 첫 근거 번호를 인용한 요약 한 줄. 근거가 없으면 근거 부족."""
+    """입력의 첫 근거 번호를 인용한 요약 한 줄. 근거가 없으면 근거 부족.
+
+    마감 후 판(입력의 edition 이 "마감 후 판")은 그 판의 출력 형식으로 답한다: 요약 2줄과, 하루 등락이 있는 ETF마다
+    그 ETF의 하루 등락 번호를 인용한 이유 한 줄."""
     try:
-        refs = [e["ref"] for item in json.loads(user).get("items", []) for e in item.get("entries", []) if "ref" in e]
+        data = json.loads(user)
+        items = data.get("items", [])
+        refs = [e["ref"] for item in items for e in item.get("entries", []) if "ref" in e]
     except (ValueError, AttributeError, TypeError):
-        refs = []
+        data, items, refs = {}, [], []
+    if data.get("edition") == POST_CLOSE_NAME:
+        days = [e for item in items if item.get("name") == ETF_DAY_ITEM for e in item.get("entries", [])
+                if "ref" in e and "symbol" in e]
+        if not refs:
+            return json.dumps({"summary": [], "etfs": [], "notables": [], "insufficientEvidence": True})
+        etfs = [{"symbol": e["symbol"], "reason": FAKE_STATEMENT, "refs": [e["ref"]], "weak": False, "shortfall": ""}
+                for e in days]
+        return json.dumps({"summary": [FAKE_STATEMENT, FAKE_STATEMENT], "etfs": etfs, "notables": [],
+                           "insufficientEvidence": False}, ensure_ascii=False)
     if not refs:
         return json.dumps({"points": [], "insufficientEvidence": True})
     return json.dumps({"points": [{"statement": FAKE_STATEMENT, "refs": [refs[0]]}], "insufficientEvidence": False},
@@ -326,13 +350,73 @@ def check() -> None:
         raise SystemExit(1)
 
 
+def serve_smtp_sink(port_file: str, mail_dir: str) -> None:
+    """받기만 하는 SMTP 서버. 발송기가 실제 SMTP 없이 메일을 끝까지 만들어 내는지 보려는 용도라 중계하지 않는다."""
+    import socketserver
+
+    out = Path(mail_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    counter = iter(range(1, 10_000))
+    lock = threading.Lock()
+
+    class Handler(socketserver.StreamRequestHandler):
+        def reply(self, line: str) -> None:
+            self.wfile.write((line + "\r\n").encode())
+
+        def handle(self) -> None:
+            self.reply("220 sink ready")
+            while True:
+                raw = self.rfile.readline()
+                if not raw:
+                    return
+                cmd = raw.decode("utf-8", "replace").strip().upper()
+                if cmd.startswith("EHLO"):
+                    self.reply("250 sink")
+                elif cmd.startswith("DATA"):
+                    self.reply("354 end with <CRLF>.<CRLF>")
+                    body = bytearray()
+                    while True:
+                        line = self.rfile.readline()
+                        if not line or line in (b".\r\n", b".\n"):
+                            break
+                        body += line[1:] if line.startswith(b"..") else line
+                    with lock:
+                        number = next(counter)
+                    (out / f"mail-{number:02d}.eml").write_bytes(bytes(body))
+                    self.reply("250 queued")
+                elif cmd.startswith("QUIT"):
+                    self.reply("221 bye")
+                    return
+                else:
+                    self.reply("250 ok")
+
+    class Server(socketserver.ThreadingTCPServer):
+        allow_reuse_address = True
+        daemon_threads = True
+
+    with Server(("127.0.0.1", 0), Handler) as server:
+        Path(port_file).write_text(str(server.server_address[1]))
+        server.serve_forever()
+
+
+def smtp_sink_json(port: int) -> str:
+    return json.dumps({"spring": {"mail": {
+        "host": "127.0.0.1", "port": port, "username": "", "password": "",
+        "properties": {"mail.smtp.auth": False, "mail.smtp.starttls.enable": False,
+                       "mail.smtp.starttls.required": False}}}}, separators=(",", ":"))
+
+
 def main(argv: list[str]) -> None:
     if len(argv) >= 2 and argv[1] == "fake-llm" and len(argv) == 3:
         serve_fake_llm(argv[2])
+    elif len(argv) == 4 and argv[1] == "smtp-sink":
+        serve_smtp_sink(argv[2], argv[3])
+    elif len(argv) == 3 and argv[1] == "smtp-json" and argv[2].isdigit():
+        print(smtp_sink_json(int(argv[2])))
     elif len(argv) == 2 and argv[1] in ("seed", "ticks", "check"):
         {"seed": seed, "ticks": ticks, "check": check}[argv[1]]()
     else:
-        raise SystemExit("사용법: daily_e2e.py fake-llm <포트 파일> | seed | ticks | check")
+        raise SystemExit("사용법: daily_e2e.py fake-llm <포트 파일> | smtp-sink <포트 파일> <메일 폴더> | smtp-json <포트> | seed | ticks | check")
 
 
 if __name__ == "__main__":

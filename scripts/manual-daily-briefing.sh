@@ -9,6 +9,9 @@
 # 실제 시세·뉴스 검색 API 는 부르지 않는다. 수집 자료와 시작 신호는 scripts/daily_e2e.py 가 TEST 접두 가짜 값으로 넣는다.
 # 발송기는 드라이런만 한다(NOTIFIER_SEND_ENABLED=false). 수신 주소는 example.com 가짜 주소다.
 #
+# 메일: DAILY_E2E_SMTP_SINK=1 이면 이 실행의 발송기 한 인스턴스만 발송을 켜고 127.0.0.1 의 가짜 SMTP 수신 서버로 보낸다.
+#       받은 메일은 결과 폴더의 mail-<시각>/ 아래 .eml 로 남는다. 외부 SMTP·실제 주소로는 보내지 않고 .env 는 바꾸지 않는다.
+#
 # LLM: 기본은 가짜 Claude 서버(로컬 루프백)라 실제 호출이 없다.
 #      DAILY_E2E_REAL_LLM=1 이면 실제 Claude 를 부른다. 키는 셸 환경변수 ANTHROPIC_API_KEY 에서만 읽고 출력하지 않는다.
 #
@@ -16,6 +19,7 @@
 # 환경변수:
 #   DAILY_E2E_REAL_LLM   1 이면 실제 Claude(기본 가짜)
 #   DAILY_E2E_ENV_FILE   서비스 DB 계정(MARKET_/NEWS_/BRIEFING_DB_USER·PASSWORD)을 읽을 파일(기본 저장소 .env)
+#   DAILY_E2E_SMTP_SINK  1 이면 가짜 SMTP 수신 서버로 보낸다(기본 드라이런)
 #   DAILY_E2E_OUT_DIR    판 본문을 쓸 폴더(기본 임시 폴더, 저장소 안이면 거절)
 #   JAVA_HOME_21         JDK 21
 set -uo pipefail
@@ -39,7 +43,8 @@ RECIPIENT="daily-e2e@example.com"
 TMP=""
 KAFKA_STARTED=0
 DB_CREATED=0
-MARKET_PID="" NEWS_PID="" NOTIFIER_PID="" BRIEFING_PID="" FAKE_LLM_PID=""
+MARKET_PID="" NEWS_PID="" NOTIFIER_PID="" BRIEFING_PID="" FAKE_LLM_PID="" SINK_PID=""
+SMTP_SINK="${DAILY_E2E_SMTP_SINK:-0}"
 MARKET_JAR="" NEWS_JAR="" NOTIFIER_JAR=""
 
 fail() { echo "실패: $*" >&2; exit 1; }
@@ -96,6 +101,7 @@ cleanup() {
   trap - EXIT INT TERM
   local bad=0 label
   stop_pid "$NOTIFIER_PID" "$NOTIFIER_JAR" notifier || bad=1
+  stop_pid "$SINK_PID" "$TMP/smtp-sink" "가짜 SMTP 서버" || bad=1
   stop_pid "$BRIEFING_PID" "$TMP/briefing" briefing || bad=1
   stop_pid "$FAKE_LLM_PID" "$TMP/fake-llm" "가짜 LLM" || bad=1
   stop_pid "$NEWS_PID" "$NEWS_JAR" news || bad=1
@@ -148,7 +154,8 @@ for role in "$M_USER" "$N_USER" "$B_USER"; do
 done
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/daily-e2e.XXXXXX") || exit 1
-mkdir -p "$TMP/market" "$TMP/news" "$TMP/notifier" "$TMP/briefing" "$TMP/fake-llm"
+mkdir -p "$TMP/market" "$TMP/news" "$TMP/notifier" "$TMP/briefing" "$TMP/fake-llm" "$TMP/smtp-sink"
+MAIL_DIR="$OUT_DIR/mail-${RUN_ID}"
 
 echo "bootJar 빌드(market, news, notifier)"
 JAVA_HOME="$JAVA_HOME_21" ./gradlew -q :services:market:bootJar :services:news:bootJar :services:notifier:bootJar \
@@ -211,12 +218,37 @@ echo "news 기동"
 ) > "$TMP/news.log" 2>&1 &
 NEWS_PID=$!
 
-echo "notifier 기동(드라이런)"
+if [ "$SMTP_SINK" = 1 ]; then
+  echo "가짜 SMTP 수신 서버 기동"
+  "$PY" "$ROOT/scripts/daily_e2e.py" smtp-sink "$TMP/smtp-sink/port" "$MAIL_DIR" > "$TMP/smtp-sink.log" 2>&1 &
+  SINK_PID=$!
+  disown "$SINK_PID"
+  waited=0
+  until [ -s "$TMP/smtp-sink/port" ]; do
+    kill -0 "$SINK_PID" 2>/dev/null || fail "가짜 SMTP 서버가 시작 중에 끝났습니다"
+    [ "$waited" -ge 10 ] && fail "가짜 SMTP 서버가 10초 안에 준비되지 않았습니다"
+    sleep 1; waited=$((waited + 1))
+  done
+  echo "notifier 기동(가짜 SMTP 로만 발송)"
+else
+  echo "notifier 기동(드라이런)"
+fi
 (
   export SPRING_KAFKA_BOOTSTRAP_SERVERS="$BOOTSTRAP"
-  # 발송 스위치는 끈 채로 둔다. SMTP 설정은 넘기지 않는다.
-  export NOTIFIER_SEND_ENABLED=false NOTIFIER_RECIPIENT="$RECIPIENT" NOTIFIER_SENDER="$RECIPIENT"
+  export NOTIFIER_RECIPIENT="$RECIPIENT" NOTIFIER_SENDER="$RECIPIENT"
   unset SMTP_HOST SMTP_PORT SMTP_USERNAME SMTP_PASSWORD
+  if [ "$SMTP_SINK" = 1 ]; then
+    # 이 인스턴스에만 발송을 켠다. 목적지는 루프백 수신 서버뿐이라 암호화·인증은 끈다.
+    # 호스트·포트는 환경변수보다 먼저 쓰이는 SPRING_APPLICATION_JSON 으로 넣고, 셸에 남은 메일 설정은 지운다.
+    unset SPRING_MAIL_HOST SPRING_MAIL_PORT SPRING_MAIL_USERNAME SPRING_MAIL_PASSWORD
+    export NOTIFIER_SEND_ENABLED=true
+    SPRING_APPLICATION_JSON="$("$PY" "$ROOT/scripts/daily_e2e.py" smtp-json "$(cat "$TMP/smtp-sink/port")")" \
+      || fail "가짜 SMTP 설정을 만들지 못했습니다"
+    export SPRING_APPLICATION_JSON
+  else
+    # 발송 스위치는 끈 채로 둔다. SMTP 설정은 넘기지 않는다.
+    export NOTIFIER_SEND_ENABLED=false
+  fi
   export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
   cd "$TMP/notifier" && exec "$JAVA_HOME_21/bin/java" -jar "$NOTIFIER_JAR"
 ) > "$TMP/notifier.log" 2>&1 &
@@ -293,10 +325,14 @@ echo "저장 확인: 시세처리기 8건, 뉴스(공시) 1건"
 echo "아침 판·마감 후 판 시작 신호 넣기(예정 시각 $NOW)"
 "$PY" scripts/daily_e2e.py ticks || fail "시작 신호를 넣지 못했습니다"
 
-echo "발송기 드라이런 로그 대기(최대 120초)"
+# 실제 Claude 는 근거 약한 문장마다 재검색을 요청하고, 이 실행의 news 는 검색하지 않으므로 판이 재검색 전체 상한
+# (CoreSettings.research_total_limit, 15분)까지 기다렸다가 나간다. 그보다 길게 기다린다.
+if [ "$REAL_LLM" = 1 ]; then MAIL_WAIT=1020; else MAIL_WAIT=120; fi
+echo "발송기 로그 대기(최대 ${MAIL_WAIT}초)"
+if [ "$SMTP_SINK" = 1 ]; then SENT_PATTERN="email sent to="; else SENT_PATTERN="DRY-RUN (not sent)"; fi
 waited=0
-until [ "$(grep -c "DRY-RUN (not sent)" "$TMP/notifier.log")" -ge 2 ]; do
-  [ "$waited" -ge 120 ] && break
+until [ "$(grep -c -- "$SENT_PATTERN" "$TMP/notifier.log")" -ge 2 ]; do
+  [ "$waited" -ge "$MAIL_WAIT" ] && break
   sleep 2; waited=$((waited + 2))
 done
 
@@ -313,13 +349,25 @@ if [ "$REAL_LLM" != 1 ]; then
   calls=$(curl -s "$FAKE_LLM_URL/__stats" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["calls"])')
   echo "가짜 LLM 호출: $calls"
 fi
-echo "--- 발송기 드라이런"
-dry=$(grep -c "DRY-RUN (not sent)" "$TMP/notifier.log")
-echo "드라이런 메일: $dry"
-grep -o 'DRY-RUN (not sent) to=[^ ]* subject="[^"]*"' "$TMP/notifier.log" || true
-grep -qF "$RECIPIENT" "$TMP/notifier.log" && { echo "주소가 마스킹되지 않은 줄이 있습니다"; status=1; }
-grep -qF "email sent to=" "$TMP/notifier.log" && { echo "실제 발송 로그가 있습니다"; status=1; }
-[ "$dry" -ge 2 ] || status=1
+if [ "$SMTP_SINK" = 1 ]; then
+  echo "--- 발송기(가짜 SMTP 수신 서버)"
+  sent=$(grep -c "email sent to=" "$TMP/notifier.log")
+  echo "발송 로그: $sent"
+  received=$(ls "$MAIL_DIR"/*.eml 2>/dev/null | wc -l | tr -d ' ')
+  echo "수신 서버가 받은 메일: $received"
+  grep -qF "$RECIPIENT" "$TMP/notifier.log" && { echo "주소가 마스킹되지 않은 줄이 있습니다"; status=1; }
+  grep -qF "DRY-RUN (not sent)" "$TMP/notifier.log" && { echo "드라이런 로그가 섞여 있습니다"; status=1; }
+  [ "$sent" -ge 2 ] && [ "$received" -ge 2 ] || status=1
+  echo "받은 메일 폴더: $MAIL_DIR"
+else
+  echo "--- 발송기 드라이런"
+  dry=$(grep -c "DRY-RUN (not sent)" "$TMP/notifier.log")
+  echo "드라이런 메일: $dry"
+  grep -o 'DRY-RUN (not sent) to=[^ ]* subject="[^"]*"' "$TMP/notifier.log" || true
+  grep -qF "$RECIPIENT" "$TMP/notifier.log" && { echo "주소가 마스킹되지 않은 줄이 있습니다"; status=1; }
+  grep -qF "email sent to=" "$TMP/notifier.log" && { echo "실제 발송 로그가 있습니다"; status=1; }
+  [ "$dry" -ge 2 ] || status=1
+fi
 echo "판 본문: $RESULT_FILE"
 if [ "$status" = 0 ]; then echo "결과: 통과"; else
   echo "결과: 실패 — 서비스 로그 끝부분"
