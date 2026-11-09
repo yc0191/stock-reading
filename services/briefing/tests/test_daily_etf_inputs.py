@@ -23,7 +23,7 @@ from test_daily_jobs import (
     daily_response,
     etf_v2,
     filings_response,
-    good_output,
+    post_close_output,
     published,
     tick,
     POST_CLOSE_MARKET,
@@ -63,7 +63,7 @@ def close_rates():
 def start():
     def build(settings=DailySettings(), llm=None, etfs=None):
         requests, details = Requests(), Details()
-        llm = llm or FakeLlm(good_output("E1"))
+        llm = llm or FakeLlm(post_close_output())
         core = DailyCore(requests, DailyLlmWriter(llm, settings.llm_max_attempts, settings), details, settings)
         core.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
         core.on_daily_data_responded(daily_response(etfs=three_etfs() if etfs is None else etfs,
@@ -245,25 +245,23 @@ def test_member_issues_and_candidates_reach_the_claude_input_without_tickers_in_
     assert issue["etf"] == "TEST01" and issue["ticker"] == "TESTA" and issue["rate"] == "-3.50"
     assert issue["filingRefs"] == ["0000000001-26-000001"] and issue["ref"].startswith("M")
     candidates = llm_input(llm)["notableCandidates"]
-    assert [(k["kind"], k["symbols"]) for k in candidates] == [("memberIssue", ["TEST01"]),
-                                                              ("noReason", ["TEST03"])]
-    assert all(k["refs"] for k in candidates)
+    # 한 ETF의 구성 종목 이슈와 이유 없음은 후보가 아니라 ETF 줄과 결론 줄로 보인다.
+    assert candidates == []
     [event] = published(requests)
     body = event.value["payload"]["text"] + event.value["payload"]["html"]
     assert "TESTA" not in body and "FAKEB" not in body and "TESTC" not in body
-    assert "memberIssues=1" in caplog.text and "notables=2" in caplog.text and "filings=1" in caplog.text
+    assert "이유를 찾지 못한 ETF 1개" in body and "눈에 띄는 점" not in body
+    assert "memberIssues=1" in caplog.text and "notables=0" in caplog.text and "filings=1" in caplog.text
     assert "TESTA" not in caplog.text and "TEST01" not in caplog.text
 
 
 def test_the_member_issue_ref_is_accepted_and_a_ref_outside_the_list_is_still_rejected(start):
-    llm = FakeLlm(json.dumps({"points": [{"statement": "구성 종목이 영향을 줬을 수 있습니다.", "refs": ["M1"],
-                                          "weak": False, "shortfall": ""}], "insufficientEvidence": False}))
+    llm = FakeLlm(post_close_output(refs={"TEST01": ["M1"]}))
     c, requests, _, _ = start(llm=llm)
     answer_news(c, requests, POST_CLOSE_AT, filings=[FILING])
     assert published(requests)[0].value["payload"]["generatedBy"] == "llm"
 
-    wrong = json.dumps({"points": [{"statement": "없는 근거입니다.", "refs": ["M9"], "weak": False,
-                                    "shortfall": ""}], "insufficientEvidence": False})
+    wrong = post_close_output(refs={"TEST01": ["M9"]})
     bad = FakeLlm(wrong, wrong, wrong)
     c, requests, _, _ = start(llm=bad)
     answer_news(c, requests, POST_CLOSE_AT, filings=[FILING])

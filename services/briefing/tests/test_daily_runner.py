@@ -8,7 +8,7 @@ from briefing import main
 from briefing.daily_report import DailyLlmWriter
 from briefing.ports import FailureReason
 from contracts import validate
-from test_daily_jobs import MARKET, FakeLlm, daily_response, etf_v2, filings_response, good_output, tick
+from test_daily_jobs import MARKET, FakeLlm, daily_response, etf_v2, filings_response, good_output, post_close_output, tick
 from test_runner import Clock, FakeConsumer, FakeMessage, FakeProducer, FakeStore, sent
 
 KST = timezone(timedelta(hours=9))
@@ -84,7 +84,7 @@ def test_a_morning_tick_flows_to_a_daily_briefing(setup):
 
 def test_a_post_close_tick_flows_through_articles_and_filings_to_a_daily_briefing(setup):
     make, clock, store = setup
-    runner, ticks, consumer, producer = make(DailyLlmWriter(FakeLlm(good_output("E1"))))
+    runner, ticks, consumer, producer = make(DailyLlmWriter(FakeLlm(post_close_output(symbols=("TEST01",)))))
     ticks["post-close"].queue.append(FakeMessage("schedule.tick", tick("daily-briefing-post-close", MORNING_AT)))
     runner.run_once()
     consumer.queue.append(FakeMessage("market.daily.responded", daily_response(

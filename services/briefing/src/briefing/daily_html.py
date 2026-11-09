@@ -1,7 +1,8 @@
 """데일리 판 HTML 본문(인라인 스타일만). Kafka를 모르며 글자판과 같은 값을 인자로 받는다.
 
-순서는 글자판과 같다: 제목 → 결론(마감 후 판) → 차트(마감 후 판) → 항목별 숫자 → 요약 → 면책 → 서버 상태(마감 후 판,
-작게, '주의'가 있을 때만 그 줄이 주황) → 근거 목록(작게). 발송기는 html 칸을 받은 그대로 보내므로 이벤트 값
+아침 판 순서는 글자판과 같다: 제목 → 항목별 숫자 → 요약 → 면책 → 근거 목록(작게).
+마감 후 판도 글자판과 같은 순서다: 제목 → 결론 → 요약 2줄 → 눈에 띄는 점 → 차트 → 보유/관심별 ETF 줄(이유, ↳ 구성 종목 줄) →
+면책 → 서버 상태(작게, '주의'가 있을 때만 그 줄이 주황) → 출처(작게, 기사·공시는 원문 링크). 발송기는 html 칸을 받은 그대로 보내므로 이벤트 값
 (ETF 이름, LLM 문장, 근거 설명, 서버 상태 줄)은 모두 여기서 이스케이프한다.
 """
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from html import escape
+from urllib.parse import urlparse
 
 from briefing.daily_chart import CHART_ALT
 from briefing.daily_report import (
@@ -24,6 +26,7 @@ from briefing.daily_report import (
     section_title,
     summary_view,
 )
+from briefing.daily_post_close import PostCloseView, post_close_view, source_plain
 from briefing.events import EDITION_POST_CLOSE
 from briefing.llm_output import WEAK_NOTE_PREFIX
 
@@ -135,6 +138,64 @@ def _summary(sections: tuple[Section, ...], output: DailyOutput) -> tuple[str, s
     return "".join(parts), evidence
 
 
+def _cite(numbers: tuple[int, ...]) -> str:
+    return escape(f"[출처 {', '.join(str(n) for n in numbers)}]")
+
+
+def _weak(shortfall: str | None) -> str:
+    return _p(NOTE_STYLE, escape(f"{WEAK_NOTE_PREFIX}{shortfall}")) if shortfall else ""
+
+
+def _link(url: str | None) -> str:
+    """원문 링크. 기사·공시 주소는 받은 값이라 http(s)만 링크로 만든다."""
+    if not url or urlparse(url).scheme not in ("http", "https"):
+        return ""
+    return f' <a href="{escape(url)}" style="color:{MUTED_COLOR}">원문</a>'
+
+
+def _post_close_summary(v: PostCloseView) -> list[str]:
+    parts = []
+    if v.has_output:
+        parts.append(_p(HEADING_STYLE, "요약"))
+        if v.insufficient:
+            parts.append(_p(ITEM_STYLE, escape(DAILY_INSUFFICIENT)))
+        if v.summary:
+            items = "".join(f'<li style="{ITEM_STYLE}">{_rate_spans(escape(line))}</li>' for line in v.summary)
+            parts.append(f'<ul style="{LIST_STYLE}">{items}</ul>')
+    if v.notables:
+        parts.append(_p(HEADING_STYLE, "눈에 띄는 점"))
+        items = "".join(f'<li style="{ITEM_STYLE}">{_rate_spans(escape(statement))} {_cite(nums)}{_weak(shortfall)}</li>'
+                        for statement, nums, shortfall in v.notables)
+        parts.append(f'<ul style="{LIST_STYLE}">{items}</ul>')
+    return parts
+
+
+def _post_close_etfs(v: PostCloseView) -> str:
+    parts = [_p(HEADING_STYLE, f"■ {escape(v.etf_title)}")]
+    for title, rows in v.groups:
+        if title:
+            parts.append(_p(GROUP_STYLE, escape(title)))
+        items = []
+        for row in rows:
+            inner = _rate_spans(escape(row.line))
+            if row.reason is not None:
+                inner += _p(NOTE_STYLE, f"이유: {_rate_spans(escape(row.reason))} {_cite(row.numbers)}") + _weak(row.shortfall)
+            inner += "".join(_p(SMALL_STYLE, _rate_spans(escape(m))) for m in row.members)
+            items.append(f'<li style="{ITEM_STYLE}">{inner}</li>')
+        parts.append(f'<ul style="{LIST_STYLE}">{"".join(items)}</ul>')
+    if v.extra:
+        parts.append(_list(v.extra))
+    return "".join(parts)
+
+
+def _post_close_sources(v: PostCloseView) -> str:
+    if not v.sources:
+        return ""
+    rows = "".join(f'<li style="{SMALL_STYLE}">{escape(entry.kind)} · {escape(source_plain(entry))}{_link(entry.url)}</li>'
+                   for _, entry in v.sources)
+    return _p(SMALL_STYLE, "출처:") + f'<ol style="{LIST_STYLE};font-size:12px;color:{MUTED_COLOR}">{rows}</ol>'
+
+
 def _status(status_text: str) -> str:
     lines = []
     for raw in status_text.split("\n"):
@@ -152,11 +213,9 @@ def _status(status_text: str) -> str:
 def render_html(i: DailyInput, sections: tuple[Section, ...], output: DailyOutput | None,
                 status_text: str | None = None, chart: ChartSlot | None = None) -> str:
     title, scope = headline(i)
-    parts = [f'<h1 style="{TITLE_STYLE}">{escape(title)}</h1>', _p(RANGE_STYLE, escape(scope))]
     if i.edition == EDITION_POST_CLOSE:
-        parts.append(_p(CONCLUSION_STYLE, _rate_spans(escape(conclusion(i)))))
-        if chart is not None:
-            parts.append(_chart(chart))
+        return _render_post_close(i, sections, output, status_text, chart)
+    parts = [f'<h1 style="{TITLE_STYLE}">{escape(title)}</h1>', _p(RANGE_STYLE, escape(scope))]
     parts.extend(_section(s) for s in sections if s.name != ITEM_RESEARCH and not s.hidden)
     evidence = ""
     if output is not None:
@@ -166,5 +225,23 @@ def render_html(i: DailyInput, sections: tuple[Section, ...], output: DailyOutpu
     if status_text:
         parts.append(_status(status_text))
     parts.append(evidence)
+    return (f'<html lang="ko"><body style="{BODY_STYLE}"><div style="{WRAP_STYLE}">'
+            f'{"".join(parts)}</div></body></html>')
+
+
+def _render_post_close(i: DailyInput, sections: tuple[Section, ...], output: DailyOutput | None,
+                       status_text: str | None, chart: ChartSlot | None) -> str:
+    v = post_close_view(i, sections, output)
+    title, scope = headline(i)
+    parts = [f'<h1 style="{TITLE_STYLE}">{escape(title)}</h1>', _p(RANGE_STYLE, escape(scope)),
+             _p(CONCLUSION_STYLE, _rate_spans(escape(conclusion(i)))), _p(ITEM_STYLE, _rate_spans(escape(v.market))),
+             *_post_close_summary(v)]
+    if chart is not None:
+        parts.append(_chart(chart))
+    parts.append(_post_close_etfs(v))
+    parts.append(_p(DISCLAIMER_STYLE, escape(DAILY_DISCLAIMER)))
+    if status_text:
+        parts.append(_status(status_text))
+    parts.append(_post_close_sources(v))
     return (f'<html lang="ko"><body style="{BODY_STYLE}"><div style="{WRAP_STYLE}">'
             f'{"".join(parts)}</div></body></html>')

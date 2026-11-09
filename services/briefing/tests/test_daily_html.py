@@ -16,6 +16,8 @@ from briefing.daily_html import ChartSlot, render_html
 from briefing.daily_report import (
     DAILY_DISCLAIMER,
     DailyInput,
+    POINT_ETF,
+    POINT_NOTABLE,
     DailyOutput,
     EtfDay,
     Point,
@@ -52,8 +54,11 @@ FOUR = (etf("TEST01", "TEST 하나", "-1.50"), etf("TEST02", "TEST 둘", "+2.10"
         etf("TEST03", "TEST 셋", "0.40", "WATCH"), etf("TEST04", "TEST 넷", None, "WATCH"))
 
 
-def output(statement="요약 문장입니다."):
-    return DailyOutput((Point(statement, ("E1",), "더 필요한 자료"),), False)
+def output(statement="이유 문장입니다."):
+    """마감 후 판 출력: TEST01의 이유(근거 약함), 눈에 띄는 점 하나, 요약 2줄."""
+    return DailyOutput((Point(statement, ("E1",), "더 필요한 자료", POINT_ETF, "TEST01"),
+                        Point("눈에 띄는 점 문장입니다.", ("E2",), None, POINT_NOTABLE)), False,
+                       ("요약 첫 줄입니다.", "요약 둘째 줄입니다."))
 
 
 # ---- 결론 ----
@@ -140,16 +145,19 @@ def test_unknown_relation_gets_its_own_group_only_when_others_are_known():
 
 # ---- 글자판 ----
 
-def test_post_close_text_order_is_title_conclusion_facts_summary_disclaimer_status_evidence():
+def test_post_close_text_order_is_title_conclusion_summary_notables_etfs_disclaimer_status_sources():
     i = post_close(FOUR)
     sections = build_sections(i)
     text = daily_text(i, sections, output(), "──── 서버 상태 ────\n- 주의: 없음")
-    marks = ["[마감 후 판]", "결론:", "■ 그날 한국 증시", "[보유]", "[관심]", "요약:", DAILY_DISCLAIMER, "서버 상태"]
+    marks = ["[마감 후 판]", "결론:", "그날 한국 증시:", "요약:", "눈에 띄는 점:", "■ 보유·관심 ETF별 하루 등락", "[보유]",
+             "[관심]", DAILY_DISCLAIMER, "서버 상태", "출처:"]
     positions = [text.index(m) for m in marks]
     assert positions == sorted(positions)
     # 보유 ETF와 관심 ETF가 섞이지 않는다.
     assert text.index("TEST 둘(TEST02)") < text.index("[관심]") < text.index("TEST 셋(TEST03)")
-    assert "[근거 1]" in text
+    # 출처 번호는 본문에 나온 순서(눈에 띄는 점이 먼저)로 붙는다.
+    assert "- 눈에 띄는 점 문장입니다. [출처 1]" in text and "이유: 이유 문장입니다. [출처 2]" in text
+    assert "근거 약함: 더 필요한 자료" in text
 
 
 def test_truncation_note_stays_at_the_end_of_the_etf_item_in_both_forms():
@@ -178,10 +186,13 @@ def test_html_keeps_the_text_order_and_puts_status_small_and_only_attention_in_o
     i = post_close(FOUR)
     status = "──────── 서버 상태 (10-19 17:00 ~ 10-20 17:00) ────────\n- 수집: 장 시작 전 08:30\n- 주의: 호출 상한 건너뜀 5"
     html = render_html(i, build_sections(i), output(), status, ChartSlot("chart-day", False, ("TEST 넷",)))
-    marks = ["결론:", 'src="cid:chart-day"', "TEST 넷", "■ 그날 한국 증시", "요약", DAILY_DISCLAIMER, "서버 상태", "근거:"]
+    marks = ["결론:", "요약", "눈에 띄는 점", 'src="cid:chart-day"', "■ 보유·관심 ETF별 하루 등락", "이유: 이유 문장입니다.",
+             DAILY_DISCLAIMER, "서버 상태", "출처:"]
     assert [html.index(m) for m in marks] == sorted(html.index(m) for m in marks)
     assert html.count("#e65100") == 1 and "주의: 호출 상한 건너뜀 5</p>" in html
     assert "<style" not in html and "<script" not in html and "http" not in html
+    # 차트에서 뺀 자료 없음 ETF도 ETF 줄에는 이유 없이 자료 없음으로 남는다.
+    assert "자료 없음: TEST 넷" in html
     assert "font-family:'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic','맑은 고딕',sans-serif" in html
 
 
@@ -204,7 +215,8 @@ def test_rates_are_painted_by_direction_in_the_facts_and_the_conclusion():
 
 def test_every_value_from_the_event_is_escaped():
     risky = '<b>&"'
-    etfs = (etf("TEST01", f"TEST{risky}", "1.00"), etf("TEST02", f"NODATA{risky}", None))
+    etfs = (etf("TEST01", f"TEST{risky}", "1.00"), etf("TEST02", "TEST 둘", "2.00"),
+            etf("TEST03", f"NODATA{risky}", None))
     i = post_close(etfs)
     html = render_html(i, build_sections(i), output(risky), f"- 수집: {risky}\n- 주의: {risky}",
                        ChartSlot("chart-day", False, (f"NODATA{risky}",)))
@@ -231,7 +243,9 @@ def test_morning_html_has_no_conclusion_chart_or_status():
 def test_insufficient_evidence_html_says_so_without_the_sentences():
     i = post_close(FOUR)
     html = render_html(i, build_sections(i), DailyOutput((Point("숨길 문장", ("E1",)),), True))
-    assert "근거가 부족합니다" in html and "숨길 문장" not in html and "근거:" not in html
+    assert "근거가 부족합니다" in html and "숨길 문장" not in html and "출처:" not in html
+    text = daily_text(i, build_sections(i), DailyOutput((Point("숨길 문장", ("E1",)),), True))
+    assert "근거가 부족합니다" in text and "숨길 문장" not in text and "출처:" not in text
 
 
 # ---- 차트 ----

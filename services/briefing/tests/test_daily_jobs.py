@@ -150,6 +150,20 @@ def good_output(*refs):
                                    "refs": list(refs) or ["B1"]}], "insufficientEvidence": False})
 
 
+def post_close_output(symbols=("TEST01", "TEST02", "TEST03"), refs=None, weak=(), notables=(), summary=None,
+                      reasons=None, insufficient=False):
+    """마감 후 판 Claude 출력. ETF마다 이유 한 줄을 쓰고, 근거는 기본으로 그 ETF의 하루 등락 번호(E1부터)다."""
+    refs = refs or {}
+    etfs = [{"symbol": symbol, "reason": (reasons or {}).get(symbol, "시장 흐름과 함께 움직였을 수 있습니다."),
+             "refs": refs.get(symbol, [f"E{n}"]), "weak": symbol in weak,
+             "shortfall": "그 ETF를 직접 다룬 기사가 더 있어야 합니다." if symbol in weak else ""}
+            for n, symbol in enumerate(symbols, start=1)]
+    return json.dumps({"summary": ["국내 증시와 ETF가 함께 움직였습니다.", "일부 ETF는 근거가 약합니다."]
+                       if summary is None else summary,
+                       "etfs": [] if insufficient else etfs, "notables": list(notables),
+                       "insufficientEvidence": insufficient}, ensure_ascii=False)
+
+
 @pytest.fixture
 def core():
     def make(llm=None, settings=DailySettings()):
@@ -276,7 +290,7 @@ def test_post_close_edition_requests_the_filings_of_the_us_stocks_in_its_range(c
     [event] = published(requests)
     payload = event.value["payload"]
     assert payload["edition"] == "post-close" and payload["missingItems"] == []
-    assert ITEM_KR_TODAY in payload["text"] and ITEM_ETFS in payload["text"]
+    assert ITEM_ETFS in payload["text"] and f"{ITEM_KR_TODAY}: 코스피 " in payload["text"]
     assert "TEST01 +0.50%" in payload["text"]
     assert ITEM_US_INDEX not in payload["text"]
 
@@ -684,8 +698,7 @@ def test_an_empty_etf_is_kept_even_though_it_has_no_received_time(core, caplog):
 
 
 def test_the_llm_is_told_which_etf_is_empty_and_not_to_invent_its_numbers(core):
-    llm = FakeLlm(json.dumps({"points": [{"statement": "일부 ETF는 자료가 없습니다.", "refs": ["B1"],
-                                          "weak": False, "shortfall": ""}], "insufficientEvidence": False}))
+    llm = FakeLlm(post_close_output(symbols=("TEST01",)))
     c, requests, _, _ = post_close_core(core, llm)
     c.on_daily_data_responded(daily_response(etfs=[
         etf_v2(fetched="2026-10-20T16:30:02+09:00", rate="0.50"), etf_v2_missing(name="TEST ETF TWO")],

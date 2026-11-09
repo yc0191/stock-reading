@@ -21,7 +21,7 @@ from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
 from briefing.daily_chart import chart_bars, no_data_names, render_day_chart
 from briefing.daily_html import ChartSlot, render_html
-from briefing.daily_inputs import EtfArticles, member_issues, notable_candidates
+from briefing.daily_inputs import EtfArticles, member_issues, moves_with_market, notable_candidates
 from briefing.daily_report import (
     Section,
     EDITIONS_WITH_ETF_ARTICLES,
@@ -32,6 +32,7 @@ from briefing.daily_report import (
     DailyOutput,
     EtfDay,
     GENERATED_BY_LLM,
+    POINT_NOTABLE,
     build_llm_input,
     RELATION_HELD,
     RELATION_WATCH,
@@ -544,7 +545,7 @@ class DailyCore:
                        for symbol, state in job.news.items())
         filings = daily_input.filings or ()
         issues, issues_cut = member_issues(daily_input.etfs, daily_input.close_rates or (), filings, self.settings)
-        notables = notable_candidates(daily_input.etfs, issues, groups, filings, self.settings)
+        notables = notable_candidates(daily_input.etfs, self.settings)
         # 종목코드와 티커는 로그에 쓰지 않는다. 건수만 남긴다.
         log.info("daily %s collection: job=%s etfs=%d articles=%d articlesExcluded=%d articlesCut=%d "
                  "articlesTruncated=%d articlesNoResponse=%d filings=%d filingsExcluded=%d memberIssues=%d "
@@ -610,7 +611,7 @@ class DailyCore:
         self._accepted(draft.job, now, result.accepted, missing, sentence_no=no, round=round)
         points = list(draft.draft.output.points)
         points[no - 1] = result.point
-        output = DailyOutput(tuple(points), False)
+        output = replace(draft.draft.output, points=tuple(points))
         cited = tuple(dict.fromkeys(ref for p in points for ref in p.refs))
         weak = tuple(p.shortfall for p in points if p.shortfall)
         new = _Draft(llm_text(rewritten_input, sections, output), GENERATED_BY_LLM, cited, False, weak, output)
@@ -755,8 +756,14 @@ class DailySentences:
         output = draft.draft.output
         if output is None or output.insufficient_evidence:
             return ()
+        # 근거 약한 ETF 이유만 다시 찾는다. 눈에 띄는 점은 '근거 약함'을 그대로 보여 주고, 시장과 같은 방향(부호가 같고
+        # 차이가 설정값 이내)으로 움직인 ETF는 시장 전체의 움직임으로 설명되므로 따로 찾지 않는다.
+        etfs = {e.symbol: e for e in draft.input.etfs or ()}
         return tuple(WeakSentence(n, p.statement, p.shortfall)
-                     for n, p in enumerate(output.points, start=1) if p.shortfall)
+                     for n, p in enumerate(output.points, start=1)
+                     if p.shortfall and p.kind != POINT_NOTABLE
+                     and not (p.symbol in etfs and moves_with_market(etfs[p.symbol].rate, draft.input.background or (),
+                                                       self.core.settings)))
 
     def whole_insufficient(self, draft: DailyDraft) -> bool:
         return draft.draft.insufficient_evidence
@@ -774,6 +781,11 @@ class DailySentences:
         if sentence is not None:
             context["sentence"] = sentence.text
             context["shortfall"] = sentence.shortfall
+            output = draft.draft.output
+            point = output.points[sentence.no - 1] if output is not None and 0 < sentence.no <= len(output.points) else None
+            if point is not None and point.symbol is not None:
+                context["etf"] = next(({"symbol": e.symbol, "name": e.label()}
+                                       for e in draft.input.etfs or () if e.symbol == point.symbol), None)
         return context
 
     def target(self, draft: DailyDraft, research_id: str, sentence_no: int, round: int) -> ResearchTarget:

@@ -28,6 +28,7 @@ from test_daily_jobs import (
     etf,
     filings_response,
     good_output,
+    post_close_output,
     tick,
 )
 
@@ -170,12 +171,12 @@ def test_the_range_given_to_the_store_is_the_edition_range(make):
 
 
 def test_the_lines_are_also_added_to_an_llm_body_and_the_attention_has_no_rule_based_item(make):
-    llm = FakeLlm(good_output("B1"))
+    llm = FakeLlm(post_close_output(symbols=("TEST01",)))
     status = FakeStatus([completed(1)], [morning_run()])
     _, requests, _ = make(status, llm=llm)
     payload = only_event(requests)
     assert payload["generatedBy"] == "llm" and "요약:" in payload["text"]
-    assert payload["text"].index("투자 조언") < payload["text"].index("서버 상태") < payload["text"].index("근거:")
+    assert payload["text"].index("투자 조언") < payload["text"].index("서버 상태") < payload["text"].index("출처:")
     assert status_lines(payload["text"])[-1] == "- 주의: 호출 상한 건너뜀 5"
     # 숫자는 코드가 세므로 LLM 입력에 서버 상태가 들어가지 않는다.
     assert all("서버 상태" not in call[1] for call in llm.calls)

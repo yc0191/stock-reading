@@ -83,6 +83,8 @@ class DailySettings:
     opposite_move_percent: float = 0.5
     cluster_move_percent: float = 2.0
     cluster_min_size: int = 3
+    # 재검색에서 빼는 '시장과 같은 방향': ETF 등락과 코스피 종합 등락의 부호가 같고 두 등락률 차이(절댓값, %p)가 이 이내일 때만.
+    market_same_direction_gap_percent: float = 1.0
     # 세계지수 대륙구분 중 미국 지수가 든 값(market 설정 world-index-continents의 아메리카).
     us_index_target: str = "C"
     llm_max_attempts: int = 3

@@ -1,4 +1,4 @@
-"""마감 후 판의 미국 구성 종목 이슈와 눈에 띄는 점 후보 계산(daily_inputs)과 Claude 입력에 담기는 모양을 확인한다. 가짜 자료만 쓴다."""
+"""마감 후 판의 미국 구성 종목 이슈와 눈에 띄는 점 후보와 이유를 찾지 못한 ETF 수 계산(daily_inputs)과 Claude 입력에 담기는 모양을 확인한다. 가짜 자료만 쓴다."""
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -6,11 +6,10 @@ import pytest
 from briefing.config import DailySettings
 from briefing.daily_inputs import (
     KIND_CLUSTER,
-    KIND_MEMBER_ISSUE,
-    KIND_NO_REASON,
     KIND_OPPOSITE,
     EtfArticles,
     member_issues,
+    no_reason_count,
     notable_candidates,
 )
 from briefing.daily_report import (
@@ -126,8 +125,9 @@ def test_thresholds_come_from_the_settings():
 
 # ---- 눈에 띄는 점 후보 ----
 
-def kinds(etfs, issues=(), articles=(), filings=(), settings=S):
-    return [(c.kind, c.symbols) for c in notable_candidates(etfs, issues, articles, filings, settings)]
+def kinds(etfs, articles=(), settings=S):
+    # articles는 예전 호출 모양을 남긴 것으로, 후보 계산은 기사에 기대지 않는다.
+    return [(c.kind, c.symbols) for c in notable_candidates(etfs, settings)]
 
 
 def with_reason(*symbols):
@@ -165,25 +165,29 @@ def test_a_cluster_needs_three_etfs_moving_two_percent_in_the_same_direction():
     assert kinds(mixed, articles=arts) == []
 
 
-def test_an_etf_with_a_member_issue_is_a_candidate():
-    etf = etf_day("TEST01", "1.00", members=[member("TESTA", 1)])
-    issues, _ = member_issues([etf], [close("TESTA", "5.00")], [])
-    assert kinds([etf], issues, with_reason("TEST01")) == [(KIND_MEMBER_ISSUE, ("TEST01",))]
+def test_one_etf_alone_is_never_a_candidate_even_with_a_member_issue_or_no_reason():
+    # 구성 종목 이슈는 ETF 줄의 '↳'로, 이유 없음은 ETF 줄 이유로만 보인다.
+    etf = etf_day("TEST01", "0.10", members=[member("TESTA", 1)], tickers=("TESTA",))
+    assert member_issues([etf], [close("TESTA", "5.00")], [])[0] != ()
+    assert kinds([etf]) == []
 
 
-def test_an_etf_with_no_article_filing_or_member_issue_is_a_no_reason_candidate():
+def test_no_reason_count_needs_a_daily_move_an_answered_request_and_no_article_filing_or_member_issue():
     etfs = [etf_day("TEST01", "0.10", tickers=("TESTA",)), etf_day("TEST02", "0.10", tickers=("TESTB",)),
-            etf_day("TEST03", "0.10", tickers=("TESTC",))]
+            etf_day("TEST03", "0.10", tickers=("TESTC",)), etf_day("TEST04", "0.10", tickers=("TESTD",)),
+            etf_day("TEST05", "0.10", tickers=("TESTE",), members=[member("TESTE", 1)])]
     articles = [EtfArticles("TEST01", (article("a1"),), True), EtfArticles("TEST02", (), True),
-                EtfArticles("TEST03", (), True)]
-    assert kinds(etfs, articles=articles, filings=[filing("0000000001-26-000001", "TESTB")]) == \
-        [(KIND_NO_REASON, ("TEST03",))]
+                EtfArticles("TEST03", (), True), EtfArticles("TEST04", (), True), EtfArticles("TEST05", (), True)]
+    issues, _ = member_issues(etfs, [close("TESTE", "5.00")], [])
+    assert no_reason_count(etfs, issues, articles, [filing("0000000001-26-000001", "TESTB")]) == 2
 
 
-def test_an_etf_whose_articles_never_arrived_is_not_a_no_reason_candidate_but_an_empty_answer_is():
-    etfs = [etf_day("TEST01", "0.10"), etf_day("TEST02", "0.10")]
-    articles = [EtfArticles("TEST01", (), False), EtfArticles("TEST02", (), True)]
-    assert kinds(etfs, articles=articles) == [(KIND_NO_REASON, ("TEST02",))]
+def test_no_reason_count_does_not_count_an_unanswered_or_dayless_etf():
+    etfs = [etf_day("TEST01", "0.10"), etf_day("TEST02", "0.10"),
+            EtfDay("TEST03", None, None, None, None, None, (), False, None, "no-daily-price-in-range")]
+    articles = [EtfArticles("TEST01", (), False), EtfArticles("TEST02", (), True), EtfArticles("TEST03", (), True)]
+    assert no_reason_count(etfs, (), articles, ()) == 1
+    assert no_reason_count(etfs, (), (), ()) == 0
 
 
 def test_an_etf_without_a_daily_price_is_never_a_candidate():
@@ -193,7 +197,7 @@ def test_an_etf_without_a_daily_price_is_never_a_candidate():
 
 def test_candidate_thresholds_come_from_the_settings():
     etfs = [etf_day("TEST01", "1.00"), etf_day("TEST02", "-1.00")]
-    arts = with_reason("TEST01", "TEST02")
+    arts = ()
     assert kinds(etfs, articles=arts, settings=DailySettings(opposite_move_percent=1.5)) == []
     three = [etf_day(f"TEST0{n}", "1.00", sector=str(n)) for n in (1, 2)]
     assert kinds(three, articles=arts, settings=DailySettings(cluster_move_percent=1.0, cluster_min_size=2)) == \
@@ -208,13 +212,13 @@ def post_close_input(etfs, **kwargs):
     return DailyInput(**{**base, **kwargs})
 
 
-def test_articles_filings_member_issues_and_candidates_are_in_the_claude_input_with_refs():
+def test_articles_filings_and_member_issues_are_in_the_claude_input_with_refs():
     etf = etf_day("TEST01", "-2.50", members=[member("TESTA", 1)], tickers=("TESTA",))
     f = filing("0000000001-26-000001", "TESTA")
     issues, _ = member_issues([etf], [close("TESTA", "-4.00")], [f])
     i = post_close_input([etf], filings=(f,), member_issues=issues,
                          etf_articles=(EtfArticles("TEST01", (article("art-1", "TEST 제목"),), True),),
-                         notables=notable_candidates([etf], issues, [], [f]))
+                         notables=notable_candidates([etf]))
     llm = build_llm_input(i, build_sections(i))
     items = {item["name"]: item for item in llm["items"]}
     assert [e["ref"] for e in items[ITEM_ETF_ARTICLES]["entries"]] == ["art-1"]
@@ -223,7 +227,8 @@ def test_articles_filings_member_issues_and_candidates_are_in_the_claude_input_w
     [issue] = items[ITEM_MEMBER_ISSUES]["entries"]
     assert issue["ref"] == "M1" and issue["etf"] == "TEST01" and issue["ticker"] == "TESTA"
     assert issue["rate"] == "-4.00" and issue["filingRefs"] == ["0000000001-26-000001"]
-    assert llm["notableCandidates"] == [{"kind": KIND_MEMBER_ISSUE, "symbols": ["TEST01"], "refs": ["E1", "M1"]}]
+    # 한 ETF의 구성 종목 이슈는 후보가 아니다. 후보가 없는 날의 입력은 빈 목록이다.
+    assert llm["notableCandidates"] == []
 
 
 def test_the_morning_input_has_no_candidates_and_post_close_items_stay_out_of_the_body():
