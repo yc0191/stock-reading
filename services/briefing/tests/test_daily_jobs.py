@@ -33,6 +33,7 @@ from briefing.llm import LlmCallError
 from briefing.ports import FailureReason
 from contracts import validate
 from fake_job_log import FakeJobLog
+from fake_news import answer_news
 
 KST = timezone(timedelta(hours=9))
 TICK_ID = "8d3b5e17-6c2a-4f90-b1e4-7a9c0d2f3e68"
@@ -149,6 +150,20 @@ def good_output(*refs):
                                    "refs": list(refs) or ["B1"]}], "insufficientEvidence": False})
 
 
+def post_close_output(symbols=("TEST01", "TEST02", "TEST03"), refs=None, weak=(), notables=(), summary=None,
+                      reasons=None, insufficient=False):
+    """마감 후 판 Claude 출력. ETF마다 이유 한 줄을 쓰고, 근거는 기본으로 그 ETF의 하루 등락 번호(E1부터)다."""
+    refs = refs or {}
+    etfs = [{"symbol": symbol, "reason": (reasons or {}).get(symbol, "시장 흐름과 함께 움직였을 수 있습니다."),
+             "refs": refs.get(symbol, [f"E{n}"]), "weak": symbol in weak,
+             "shortfall": "그 ETF를 직접 다룬 기사가 더 있어야 합니다." if symbol in weak else ""}
+            for n, symbol in enumerate(symbols, start=1)]
+    return json.dumps({"summary": ["국내 증시와 ETF가 함께 움직였습니다.", "일부 ETF는 근거가 약합니다."]
+                       if summary is None else summary,
+                       "etfs": [] if insufficient else etfs, "notables": list(notables),
+                       "insufficientEvidence": insufficient}, ensure_ascii=False)
+
+
 @pytest.fixture
 def core():
     def make(llm=None, settings=DailySettings()):
@@ -259,17 +274,23 @@ def test_no_filings_request_when_no_etf_holds_us_stocks(core):
     assert ITEM_FILINGS not in event.value["payload"]["missingItems"]
 
 
-def test_post_close_edition_never_requests_filings(core):
+def test_post_close_edition_requests_the_filings_of_the_us_stocks_in_its_range(core):
     c, requests, _, _ = core()
     c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
     c.on_daily_data_responded(daily_response(etfs=[etf(fetched="2026-10-20T16:30:02+09:00", rate="0.50")],
                                              background=[{**MARKET, "fetchedAt": "2026-10-20T16:30:05+09:00"}]),
                               POST_CLOSE_AT)
-    assert requests.topic("news.filings.requested") == []
+    [filings] = requests.topic("news.filings.requested")
+    assert filings.value["payload"]["tickers"] == ["TESTA", "FAKEB"]
+    assert filings.value["payload"]["since"] == "2026-10-19T17:00:00+09:00"
+    assert filings.value["payload"]["until"] == "2026-10-20T17:00:00+09:00"
+    # 응답이 오기 전에는 판이 나가지 않는다.
+    assert published(requests) == []
+    answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
     payload = event.value["payload"]
     assert payload["edition"] == "post-close" and payload["missingItems"] == []
-    assert ITEM_KR_TODAY in payload["text"] and ITEM_ETFS in payload["text"]
+    assert ITEM_ETFS in payload["text"] and f"{ITEM_KR_TODAY}: 코스피 " in payload["text"]
     assert "TEST01 +0.50%" in payload["text"]
     assert ITEM_US_INDEX not in payload["text"]
 
@@ -299,6 +320,7 @@ def test_data_received_after_the_scheduled_time_or_before_the_range_is_dropped_w
         c.on_daily_data_responded(daily_response(
             etfs=[etf(fetched="2026-10-20T17:00:01+09:00"), etf("TEST02", fetched="2026-10-19T16:59:59+09:00")],
             background=[{**MARKET, "fetchedAt": "2026-10-20T17:00:01+09:00"}]), POST_CLOSE_AT)
+        answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
     assert event.value["payload"]["missingItems"] == [ITEM_KR_TODAY, ITEM_ETFS]
     assert "dropped 2 etfs" in caplog.text and "dropped 1 background" in caplog.text
@@ -311,6 +333,7 @@ def test_data_received_exactly_at_both_ends_of_the_range_is_kept(core):
     c.on_daily_data_responded(daily_response(
         etfs=[etf(fetched="2026-10-20T17:00:00+09:00"), etf("TEST02", fetched="2026-10-19T17:00:00+09:00")],
         background=[{**MARKET, "fetchedAt": "2026-10-20T17:00:00+09:00"}]), POST_CLOSE_AT)
+    answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
     assert event.value["payload"]["missingItems"] == []
 
@@ -491,6 +514,7 @@ def test_missing_items_are_recorded_with_every_field_filled(core):
     c, requests, _, details = core()
     c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
     c.on_daily_data_responded(daily_response(etfs=[], background=[]), POST_CLOSE_AT)
+    answer_news(c, requests, POST_CLOSE_AT)
     [record] = details.by_reason(REASON_MISSING_ITEMS)
     assert record.job_id == TICK_ID and record.stage == STAGE_COMPOSE
     [run] = details.starts
@@ -621,6 +645,7 @@ def test_an_etf_with_no_daily_price_is_written_as_no_data_with_its_name_and_reas
         etf_v2(fetched="2026-10-20T16:30:02+09:00", rate="0.50", name="TEST ETF ONE"),
         etf_v2_missing(name="TEST ETF TWO"),
         etf_v2_missing("TEST03", "daily-price-unreadable")], background=POST_CLOSE_MARKET), POST_CLOSE_AT)
+    answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
     payload = event.value["payload"]
     assert "TEST ETF ONE(TEST01) +0.50%" in payload["text"]
@@ -640,6 +665,7 @@ def test_when_every_etf_is_empty_the_whole_item_is_no_data_and_each_etf_is_still
     c, requests, _, _ = post_close_core(core)
     c.on_daily_data_responded(daily_response(etfs=[etf_v2_missing("TEST01"), etf_v2_missing("TEST02")],
                                              background=POST_CLOSE_MARKET), POST_CLOSE_AT)
+    answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
     payload = event.value["payload"]
     assert payload["missingItems"] == [f"{ITEM_ETFS}: TEST01, 범위 안에 받은 일봉이 없음",
@@ -653,6 +679,7 @@ def test_an_etf_with_one_null_value_and_no_reason_is_no_data_with_an_unknown_rea
     item["close"] = None
     del item["missingReason"]
     c.on_daily_data_responded(daily_response(etfs=[item], background=POST_CLOSE_MARKET), POST_CLOSE_AT)
+    answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
     text = event.value["payload"]["text"]
     assert "자료 없음: TEST03, 일봉 값이 비어 있고 이유를 받지 못함" in text
@@ -664,18 +691,19 @@ def test_an_empty_etf_is_kept_even_though_it_has_no_received_time(core, caplog):
     with caplog.at_level(logging.WARNING, logger="briefing.daily_jobs"):
         c.on_daily_data_responded(daily_response(etfs=[etf_v2_missing()], background=POST_CLOSE_MARKET),
                                   POST_CLOSE_AT)
+        answer_news(c, requests, POST_CLOSE_AT)
     assert "dropped" not in caplog.text
     assert "TEST02" not in caplog.text
     assert len(published(requests)) == 1
 
 
 def test_the_llm_is_told_which_etf_is_empty_and_not_to_invent_its_numbers(core):
-    llm = FakeLlm(json.dumps({"points": [{"statement": "일부 ETF는 자료가 없습니다.", "refs": ["B1"],
-                                          "weak": False, "shortfall": ""}], "insufficientEvidence": False}))
+    llm = FakeLlm(post_close_output(symbols=("TEST01",)))
     c, requests, _, _ = post_close_core(core, llm)
     c.on_daily_data_responded(daily_response(etfs=[
         etf_v2(fetched="2026-10-20T16:30:02+09:00", rate="0.50"), etf_v2_missing(name="TEST ETF TWO")],
         background=POST_CLOSE_MARKET), POST_CLOSE_AT)
+    answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
     assert event.value["payload"]["generatedBy"] == GENERATED_BY_LLM
     system, user, _ = llm.calls[0]
@@ -715,6 +743,7 @@ def test_a_v1_response_without_the_missing_reason_is_still_read(core):
     c, requests, _, _ = post_close_core(core)
     c.on_daily_data_responded(daily_response(etfs=[etf(fetched="2026-10-20T16:30:02+09:00", rate="0.50")],
                                              background=POST_CLOSE_MARKET), POST_CLOSE_AT)
+    answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
     assert "TEST01 +0.50%" in event.value["payload"]["text"]
     assert event.value["payload"]["missingItems"] == []

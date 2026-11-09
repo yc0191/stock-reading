@@ -19,6 +19,7 @@ from briefing.report import parse_output as parse_move
 from briefing.research import QueryWriter, ResearchReason, ResearchStep
 from briefing.sentence_research import SentenceResearch, research_job_id
 from contracts import validate
+from fake_news import answer_news
 from fake_job_log import FakeJobLog
 from test_daily_jobs import (
     MORNING_AT,
@@ -483,6 +484,40 @@ def daily_output(*points, insufficient=False):
     return json.dumps({"points": list(points), "insufficientEvidence": insufficient}, ensure_ascii=False)
 
 
+class DailyLlm(FakeLlm):
+    """판마다 같은 문장 목록(points)으로 쓴 응답을 마감 후 판 출력 형식으로 바꿔 주는 가짜 LLM.
+
+    처음 쓰기에서 n번째 문장은 n번째 ETF의 이유가 되고(입력 순서), 남는 ETF는 튼튼한 이유로 뒤에 채운다.
+    ETF가 없으면 문장은 눈에 띄는 점이 된다. 다시 쓰기 응답은 두 판 모두 points 하나라 그대로 둔다."""
+
+    def __init__(self, edition, *outputs):
+        super().__init__(*outputs)
+        self.edition = edition
+
+    def complete(self, system, user, output_schema):
+        output = super().complete(system, user, output_schema)
+        if self.edition != "post-close" or "다시 쓰기 요청" in system or isinstance(output, Exception):
+            return output
+        return self._post_close(json.loads(output), json.loads(user))
+
+    @staticmethod
+    def _post_close(data, user):
+        if data["insufficientEvidence"]:
+            return json.dumps({"summary": [], "etfs": [], "notables": [], "insufficientEvidence": True})
+        day = next(i for i in user["items"] if i["name"] == "보유 ETF별 하루 등락")["entries"]
+        etfs, notables = [], []
+        for n, p in enumerate(data["points"]):
+            if n < len(day):
+                etfs.append({"symbol": day[n]["symbol"], "reason": p["statement"], "refs": p["refs"],
+                             "weak": p["weak"], "shortfall": p["shortfall"]})
+            elif user["notableCandidates"]:
+                notables.append(p)
+        etfs += [{"symbol": e["symbol"], "reason": "시장 흐름과 함께 움직였을 수 있습니다.", "refs": [e["ref"]],
+                  "weak": False, "shortfall": ""} for e in day[len(etfs):]]
+        return json.dumps({"summary": ["첫째 줄입니다.", "둘째 줄입니다."], "etfs": etfs, "notables": notables,
+                           "insufficientEvidence": False}, ensure_ascii=False)
+
+
 class DailyFlow:
     """판 하나를 자료 수집 -> 요약 -> 문장 단위 재검색 -> 다시 쓰기까지 돌리는 도우미."""
 
@@ -490,7 +525,7 @@ class DailyFlow:
         self.edition = edition
         self.job_type, self.at, self.ref = EDITIONS[edition]
         self.requests, self.records = Requests(), FakeJobLog()
-        self.report_llm, self.query_llm = FakeLlm(*report_outputs), FakeLlm(*query_outputs)
+        self.report_llm, self.query_llm = DailyLlm(edition, *report_outputs), FakeLlm(*query_outputs)
         daily_settings = DailySettings()
         self.sentences = SentenceResearch(
             QueryWriter(self.query_llm, settings.max_research_queries, settings.research_query_attempts),
@@ -512,13 +547,17 @@ class DailyFlow:
             # 마감 후 판의 범위는 그날 오후라 그 안에 받은 값으로 바꾼다.
             fetched = "2026-10-20T16:30:02+09:00"
             if etfs is None:
-                etfs = [etf(fetched=fetched)]
+                # 마감 후 판은 ETF마다 이유 한 줄을 쓰므로 문장 세 개를 담을 ETF 셋을 둔다.
+                etfs = [etf(fetched=fetched), etf("TEST02", tickers=(), fetched=fetched),
+                        etf("TEST03", tickers=(), fetched=fetched)]
             else:
                 etfs = [{**e, "fetchedAt": fetched} for e in etfs]
             background = [{**MARKET, "fetchedAt": "2026-10-20T16:30:05+09:00"}]
             close_rates = []
         self.core.on_daily_data_responded(
             daily_response(etfs=etfs, background=background, close_rates=close_rates), self.now)
+        if self.edition == "post-close":
+            answer_news(self.core, self.requests, self.now)
         if self.edition == "morning" and self.etfs != []:
             self.core.on_filings_responded(filings_response(), self.now)
 
@@ -868,7 +907,9 @@ def test_daily_without_etf_data_skips_the_research_and_publishes_the_first_resul
     # 기사 조회 요청에는 종목코드가 필수라 보유 ETF 자료가 없으면 재검색하지 않는다.
     assert flow.query_llm.calls == [] and flow.research_requests() == []
     (event,) = flow.published()
-    assert (WEAK_NOTE_PREFIX + SHORTFALL) in event.value["payload"]["text"]
+    # 눈에 띄는 점 후보가 없는 날은 그 절이 없고, 후보 없이 쓴 점은 가짜 LLM이 버린다.
+    text = event.value["payload"]["text"]
+    assert "눈에 띄는 점" not in text and (WEAK_NOTE_PREFIX + SHORTFALL) not in text
 
 
 def test_daily_research_symbol_is_the_first_etf_code_in_sorted_order():

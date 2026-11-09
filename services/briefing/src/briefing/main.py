@@ -282,8 +282,7 @@ class BriefingRunner:
             # 재검색 완료 알림과 재검색 기사 응답은 재검색 쪽이 먼저 가져가고, 아니면 근거 조회 작업으로 넘긴다.
             COLLECTION_COMPLETED_TOPIC: self._on_collection_completed,
             HISTORY_RESPONDED_TOPIC: self.core.on_history_responded,
-            ARTICLES_RESPONDED_TOPIC: lambda m, now: self.sentences.on_articles_responded(m, now)
-            or self.core.on_articles_responded(m, now),
+            ARTICLES_RESPONDED_TOPIC: self._on_articles_responded,
             CONTEXT_RESPONDED_TOPIC: self.core.on_context_responded,
             FILINGS_RESPONDED_TOPIC: self._on_filings_responded,
             DAILY_DATA_RESPONDED_TOPIC: self.daily.on_daily_data_responded,
@@ -317,6 +316,13 @@ class BriefingRunner:
             else:
                 self.status_store.save_collection(record)
         self.sentences.on_collection_completed(message, now) or self.core.on_collection_completed(message, now)
+
+    def _on_articles_responded(self, message: str | bytes, now: datetime) -> None:
+        # 재검색 기사 응답은 재검색 쪽이 먼저 가져가고, 아니면 급변동 작업과 마감 후 판 작업이 각자 모르는 jobId는 넘긴다.
+        if self.sentences.on_articles_responded(message, now):
+            return
+        self.core.on_articles_responded(message, now)
+        self.daily.on_articles_responded(message, now)
 
     def _on_filings_responded(self, message: str | bytes, now: datetime) -> None:
         # 급변동 작업과 데일리 판 작업이 같은 토픽으로 공시 응답을 받는다. 각자 모르는 jobId는 넘긴다.

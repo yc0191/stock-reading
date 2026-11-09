@@ -71,6 +71,20 @@ class DailySettings:
     max_filings: int = 20
     # LLM 입력에 넣는 ETF 구성 종목 수(ETF마다). 비중 순위가 높은 종목부터 넣는다.
     max_etf_members: int = 10
+    # 마감 후 판: ETF마다 요청하는 기사 건수(최신순). 범위는 판 범위와 같다.
+    etf_max_articles: int = 5
+    # 마감 후 판의 미국 구성 종목 이슈: 비중 상위 몇 개 안의 종목을 보는지, 직전 미국 장 등락률 절댓값(%)이 이 이상이면
+    # 이슈, ETF마다 보여 주는 종목 수 상한. 범위 안 공시가 있는 종목도 이슈다.
+    member_rank_limit: int = 10
+    member_move_percent: float = 3.0
+    member_issues_per_etf: int = 3
+    # 마감 후 판의 눈에 띄는 점 후보: 업종이 같은 ETF 둘이 반대로 움직였다고 볼 최소 등락률 절댓값(%),
+    # 같은 방향으로 크게 움직였다고 볼 등락률 절댓값(%)과 묶음으로 치는 최소 ETF 수.
+    opposite_move_percent: float = 0.5
+    cluster_move_percent: float = 2.0
+    cluster_min_size: int = 3
+    # 재검색에서 빼는 '시장과 같은 방향': ETF 등락과 코스피 종합 등락의 부호가 같고 두 등락률 차이(절댓값, %p)가 이 이내일 때만.
+    market_same_direction_gap_percent: float = 1.0
     # 세계지수 대륙구분 중 미국 지수가 든 값(market 설정 world-index-continents의 아메리카).
     us_index_target: str = "C"
     llm_max_attempts: int = 3

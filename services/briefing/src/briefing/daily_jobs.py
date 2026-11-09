@@ -21,8 +21,10 @@ from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
 from briefing.daily_chart import chart_bars, no_data_names, render_day_chart
 from briefing.daily_html import ChartSlot, render_html
+from briefing.daily_inputs import EtfArticles, member_issues, moves_with_market, notable_candidates
 from briefing.daily_report import (
     Section,
+    EDITIONS_WITH_ETF_ARTICLES,
     EDITIONS_WITH_FILINGS,
     GENERATED_BY_RULE,
     DailyInput,
@@ -30,6 +32,7 @@ from briefing.daily_report import (
     DailyOutput,
     EtfDay,
     GENERATED_BY_LLM,
+    POINT_NOTABLE,
     build_llm_input,
     RELATION_HELD,
     RELATION_WATCH,
@@ -42,6 +45,7 @@ from briefing.daily_report import (
 )
 from briefing.events import (
     EDITION_POST_CLOSE,
+    ARTICLES_REQUESTED_TOPIC,
     FILINGS_REQUESTED_TOPIC,
     JOB_TYPE_BY_EDITION,
     OutboundEvent,
@@ -96,10 +100,12 @@ SCHEDULE_TICK = "schedule.tick"
 DAILY_DATA_REQUESTED_TOPIC = "market.daily.requested"
 DAILY_DATA_RESPONDED = "market.daily.responded"
 FILINGS_RESPONDED = "news.filings.responded"
+ARTICLES_RESPONDED = "news.articles.responded"
 
 # 작업 기록의 단계와 사유. 끝내 실패한 사유는 FailureReason 값을 그대로 쓴다.
 STAGE_DAILY_DATA = "daily-data-request"
 STAGE_FILINGS = "filings-request"
+STAGE_ETF_ARTICLES = "etf-articles-request"
 STAGE_LLM = "llm"
 STAGE_COMPOSE = "compose"
 REASON_RESENT = "no_response_resent"
@@ -139,6 +145,22 @@ class _Draft:
 
 
 @dataclass
+class _EtfNews:
+    """ETF 하나의 기사 요청 상태. seq는 작업 안에서 겹치지 않는 번호이고 다시 보낼 때마다 새 번호를 쓴다."""
+
+    seq: int = 0
+    attempts: int = 0
+    sent_at: datetime | None = None
+    received: bool = False
+    given_up: bool = False
+    articles: tuple[Article, ...] = ()
+    truncated: bool = False
+
+    def awaiting(self) -> bool:
+        return self.sent_at is not None and not self.received and not self.given_up
+
+
+@dataclass
 class _DailyJob:
     job_id: str
     edition: str
@@ -158,6 +180,11 @@ class _DailyJob:
     background: tuple[Background, ...] | None = None
     filings_data: tuple[Filing, ...] | None = None
     filings_truncated: bool = False
+    # 마감 후 판: ETF 종목코드마다 기사 요청 상태와, 받은 응답 원문(작업 기록용)
+    news: dict[str, _EtfNews] = field(default_factory=dict)
+    news_seq: int = 0
+    news_payloads: list[dict] = field(default_factory=list)
+    news_cut: int = 0
     excluded: dict[str, int] = field(default_factory=dict)
     sent: list[_Sent] = field(default_factory=list)
     first_failure: tuple[FailureReason, str, int] | None = None
@@ -165,7 +192,8 @@ class _DailyJob:
     researching: bool = False
 
     def waiting(self) -> bool:
-        return (self.data.awaiting() and not self.data_given_up) or (self.filings.awaiting() and not self.filings_given_up)
+        return (self.data.awaiting() and not self.data_given_up) or (self.filings.awaiting() and not self.filings_given_up) \
+            or any(n.awaiting() for n in self.news.values())
 
 
 @dataclass
@@ -245,11 +273,41 @@ class DailyCore:
         job.close_rates, job.background = self._recheck_state(job, close_rates, background)
         job.etfs_truncated = truncated
         tickers = tuple(dict.fromkeys(t for etf in job.etfs for t in etf.tickers))
-        # 공시는 아침 판만 쓰고, 미국 종목이 없으면 해당 없음이라 요청하지 않는다.
+        if job.edition in EDITIONS_WITH_ETF_ARTICLES:
+            for symbol in dict.fromkeys(etf.symbol for etf in job.etfs):
+                self._send_articles(job, symbol, now)
+        # 미국 종목이 없으면 공시는 해당 없음이라 요청하지 않는다.
         if job.edition in EDITIONS_WITH_FILINGS and tickers:
             self._send_filings(job, now)
-        else:
-            self._finish(job, now)
+        # 보낸 요청의 응답이 남아 있으면 _finish가 기다린다.
+        self._finish(job, now)
+
+    def on_articles_responded(self, message: str | bytes, now: datetime) -> None:
+        """마감 후 판이 ETF마다 보낸 기사 요청의 응답. 급변동 작업의 응답도 같은 토픽으로 오므로 모르는 작업은 조용히 넘긴다."""
+        payload = response_payload(message, ARTICLES_RESPONDED)
+        job = self._jobs.get(payload["jobId"])
+        if job is None:
+            return
+        state = job.news.get(payload.get("symbol"))
+        if state is None or payload["seq"] != state.seq or not state.awaiting():
+            log.info("stale daily articles response ignored: job=%s seq=%s", job.job_id, payload["seq"])
+            return
+        try:
+            articles = tuple(
+                Article(a["articleId"], a["title"], a["summary"], parse_timestamp(a["publishedAt"]),
+                        a["publisher"], a["url"])
+                for a in payload["articles"])
+            truncated = bool(payload["truncated"])
+        except (KeyError, TypeError) as error:
+            raise ValueError(f"malformed {ARTICLES_RESPONDED} event: {error!r}") from error
+        in_range = sorted((a for a in articles if job.range_start <= a.published_at <= job.scheduled_for),
+                          key=lambda a: a.published_at, reverse=True)
+        self._note_excluded(job, "articles", len(articles) - len(in_range))
+        kept = tuple(in_range[:self.settings.etf_max_articles])
+        job.news_cut += len(in_range) - len(kept)
+        state.received, state.articles, state.truncated = True, kept, truncated or len(kept) < len(in_range)
+        job.news_payloads.append(payload)
+        self._finish(job, now)
 
     def on_filings_responded(self, message: str | bytes, now: datetime) -> None:
         """급변동 작업의 공시 응답도 같은 토픽으로 오므로, 모르는 작업의 응답은 조용히 넘긴다."""
@@ -296,12 +354,30 @@ class DailyCore:
                 else:
                     self._resent(job, job.filings, STAGE_FILINGS, FILINGS_RESPONDED, now)
                     self._send_filings(job, now)
+            if job.job_id in self._jobs:
+                self._tick_articles(job, now)
+
+    def _tick_articles(self, job: _DailyJob, now: datetime) -> None:
+        """답이 없는 ETF의 기사 요청을 다시 보내거나, 시도 횟수를 다 쓰면 그 ETF는 기사 없음으로 포기한다."""
+        for symbol, state in list(job.news.items()):
+            if not state.awaiting() or now - state.sent_at < self.settings.response_timeout:
+                continue
+            if state.attempts >= self.settings.max_attempts:
+                self._give_up(job, state, STAGE_ETF_ARTICLES, FailureReason.NEWS_NO_RESPONSE, ARTICLES_RESPONDED, now,
+                              attempts=state.attempts)
+                state.given_up = True
+            else:
+                self._resent(job, state, STAGE_ETF_ARTICLES, ARTICLES_RESPONDED, now, attempts=state.attempts)
+                self._send_articles(job, symbol, now)
+        self._finish(job, now)
 
     def next_deadline(self) -> datetime | None:
         deadlines = [exchange.sent_at + self.settings.response_timeout
                      for job in self._jobs.values()
                      for exchange, given_up in ((job.data, job.data_given_up), (job.filings, job.filings_given_up))
                      if exchange.awaiting() and not given_up]
+        deadlines.extend(n.sent_at + self.settings.response_timeout
+                         for job in self._jobs.values() for n in job.news.values() if n.awaiting())
         return min(deadlines) if deadlines else None
 
     # ---- 요청 ----
@@ -323,6 +399,23 @@ class DailyCore:
             payload["includeOperations"] = True
         job.sent.append(_Sent(DAILY_DATA_REQUESTED_TOPIC, seq, now, payload))
         self.requests.send(daily_data_request(job.correlation_id, now, payload))
+
+    def _send_articles(self, job: _DailyJob, symbol: str, now: datetime) -> None:
+        state = job.news.setdefault(symbol, _EtfNews())
+        job.news_seq += 1
+        state.seq, state.sent_at = job.news_seq, now
+        state.attempts += 1
+        payload = {
+            "jobId": job.job_id,
+            "seq": state.seq,
+            "symbol": symbol,
+            "since": format_timestamp(job.range_start),
+            "until": format_timestamp(job.scheduled_for),
+            "maxArticles": self.settings.etf_max_articles,
+        }
+        job.sent.append(_Sent(ARTICLES_REQUESTED_TOPIC, state.seq, now, payload))
+        self.requests.send(request_event(ARTICLES_REQUESTED_TOPIC, "news.articles.requested", job.correlation_id, now,
+                                         payload))
 
     def _send_filings(self, job: _DailyJob, now: datetime) -> None:
         seq = next_seq(job.filings, now)
@@ -378,12 +471,14 @@ class DailyCore:
             "requestRange": {"since": format_timestamp(job.range_start), "asOf": format_timestamp(job.scheduled_for)},
             "requests": [{"request": s.request, "seq": s.seq, "sentAt": format_timestamp(s.sent_at),
                           "payload": s.payload} for s in job.sent],
-            "received": {name: payload for name, payload in ((DAILY_DATA_RESPONDED, job.data_payload),
-                                                             (FILINGS_RESPONDED, job.filings_payload))
-                         if payload is not None},
-            "notReceived": [name for name, exchange in ((DAILY_DATA_RESPONDED, job.data),
-                                                        (FILINGS_RESPONDED, job.filings))
-                            if exchange.seq and not exchange.received],
+            "received": {**{name: payload for name, payload in ((DAILY_DATA_RESPONDED, job.data_payload),
+                                                                (FILINGS_RESPONDED, job.filings_payload))
+                            if payload is not None},
+                         **({ARTICLES_RESPONDED: job.news_payloads} if job.news_payloads else {})},
+            "notReceived": [*(name for name, exchange in ((DAILY_DATA_RESPONDED, job.data),
+                                                           (FILINGS_RESPONDED, job.filings))
+                              if exchange.seq and not exchange.received),
+                            *([ARTICLES_RESPONDED] if any(not n.received for n in job.news.values()) else [])],
             "excluded": dict(job.excluded),
         }
         data.update(extra)
@@ -397,16 +492,19 @@ class DailyCore:
             sentence_no=sentence_no, round=round, error_type=error_type, attempts=attempts,
             data=self._related_data(job, **extra)))
 
-    def _resent(self, job: _DailyJob, exchange: Exchange, stage: str, event_type: str, now: datetime) -> None:
-        self._detail(job, stage, EntryType.RESENT, REASON_RESENT, "Timeout", exchange.seq, now,
+    def _resent(self, job: _DailyJob, exchange: Exchange | _EtfNews, stage: str, event_type: str, now: datetime,
+                attempts: int | None = None) -> None:
+        self._detail(job, stage, EntryType.RESENT, REASON_RESENT, "Timeout",
+                     attempts if attempts is not None else exchange.seq, now,
                      timedOut={"response": event_type, "seq": exchange.seq})
 
-    def _give_up(self, job: _DailyJob, exchange: Exchange, stage: str, reason: FailureReason, event_type: str,
-                 now: datetime) -> None:
+    def _give_up(self, job: _DailyJob, exchange: Exchange | _EtfNews, stage: str, reason: FailureReason,
+                 event_type: str, now: datetime, attempts: int | None = None) -> None:
         detail = f"no {event_type} within the time limit"
-        self._detail(job, stage, EntryType.STEP_FAILED, reason.value, "Timeout", exchange.seq, now,
+        tries = attempts if attempts is not None else exchange.seq
+        self._detail(job, stage, EntryType.STEP_FAILED, reason.value, "Timeout", tries, now,
                      timedOut={"response": event_type, "seq": exchange.seq})
-        self._first_failure(job, reason, detail, exchange.seq)
+        self._first_failure(job, reason, detail, tries)
 
     def _first_failure(self, job: _DailyJob, reason: FailureReason, detail: str, attempts: int) -> None:
         if job.first_failure is None:
@@ -429,6 +527,8 @@ class DailyCore:
             filings=job.filings_data,
             filings_truncated=job.filings_truncated,
         )
+        if job.edition in EDITIONS_WITH_ETF_ARTICLES:
+            daily_input = self._with_etf_inputs(job, daily_input)
         sections = build_sections(daily_input, self.settings)
         draft = self._write(job, now, daily_input, sections)
         # 문장 단위 재검색이 시작되면 그 흐름이 끝난 뒤 발행한다. 시작하지 않으면 바로 발행한다.
@@ -436,6 +536,25 @@ class DailyCore:
             and self.sentences.begin(job.edition, job.job_id, DailyDraft(job, daily_input, sections, draft), now)
         if not job.researching:
             self._publish(job, now, daily_input, sections, draft)
+
+    def _with_etf_inputs(self, job: _DailyJob, daily_input: DailyInput) -> DailyInput:
+        """마감 후 판의 ETF별 기사, 미국 구성 종목 이슈, 눈에 띄는 점 후보를 모아 입력에 더한다."""
+        if daily_input.etfs is None:
+            return daily_input
+        groups = tuple(EtfArticles(symbol, state.articles, state.received, state.truncated)
+                       for symbol, state in job.news.items())
+        filings = daily_input.filings or ()
+        issues, issues_cut = member_issues(daily_input.etfs, daily_input.close_rates or (), filings, self.settings)
+        notables = notable_candidates(daily_input.etfs, self.settings)
+        # 종목코드와 티커는 로그에 쓰지 않는다. 건수만 남긴다.
+        log.info("daily %s collection: job=%s etfs=%d articles=%d articlesExcluded=%d articlesCut=%d "
+                 "articlesTruncated=%d articlesNoResponse=%d filings=%d filingsExcluded=%d memberIssues=%d "
+                 "memberIssuesCut=%d notables=%d",
+                 job.edition, job.job_id, len(daily_input.etfs), sum(len(g.articles) for g in groups),
+                 job.excluded.get("articles", 0), job.news_cut, sum(1 for g in groups if g.truncated),
+                 sum(1 for g in groups if not g.received), len(filings), job.excluded.get("filings", 0),
+                 len(issues), issues_cut, len(notables))
+        return replace(daily_input, etf_articles=groups, member_issues=issues, notables=notables)
 
     def _write(self, job: _DailyJob, now: datetime, daily_input: DailyInput,
                sections: tuple[Section, ...]) -> _Draft:
@@ -492,7 +611,7 @@ class DailyCore:
         self._accepted(draft.job, now, result.accepted, missing, sentence_no=no, round=round)
         points = list(draft.draft.output.points)
         points[no - 1] = result.point
-        output = DailyOutput(tuple(points), False)
+        output = replace(draft.draft.output, points=tuple(points))
         cited = tuple(dict.fromkeys(ref for p in points for ref in p.refs))
         weak = tuple(p.shortfall for p in points if p.shortfall)
         new = _Draft(llm_text(rewritten_input, sections, output), GENERATED_BY_LLM, cited, False, weak, output)
@@ -637,8 +756,14 @@ class DailySentences:
         output = draft.draft.output
         if output is None or output.insufficient_evidence:
             return ()
+        # 근거 약한 ETF 이유만 다시 찾는다. 눈에 띄는 점은 '근거 약함'을 그대로 보여 주고, 시장과 같은 방향(부호가 같고
+        # 차이가 설정값 이내)으로 움직인 ETF는 시장 전체의 움직임으로 설명되므로 따로 찾지 않는다.
+        etfs = {e.symbol: e for e in draft.input.etfs or ()}
         return tuple(WeakSentence(n, p.statement, p.shortfall)
-                     for n, p in enumerate(output.points, start=1) if p.shortfall)
+                     for n, p in enumerate(output.points, start=1)
+                     if p.shortfall and p.kind != POINT_NOTABLE
+                     and not (p.symbol in etfs and moves_with_market(etfs[p.symbol].rate, draft.input.background or (),
+                                                       self.core.settings)))
 
     def whole_insufficient(self, draft: DailyDraft) -> bool:
         return draft.draft.insufficient_evidence
@@ -656,6 +781,11 @@ class DailySentences:
         if sentence is not None:
             context["sentence"] = sentence.text
             context["shortfall"] = sentence.shortfall
+            output = draft.draft.output
+            point = output.points[sentence.no - 1] if output is not None and 0 < sentence.no <= len(output.points) else None
+            if point is not None and point.symbol is not None:
+                context["etf"] = next(({"symbol": e.symbol, "name": e.label()}
+                                       for e in draft.input.etfs or () if e.symbol == point.symbol), None)
         return context
 
     def target(self, draft: DailyDraft, research_id: str, sentence_no: int, round: int) -> ResearchTarget:

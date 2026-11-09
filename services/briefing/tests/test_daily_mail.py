@@ -10,6 +10,7 @@ from briefing.config import DailySettings
 from briefing.daily_jobs import CHART_FAILED_ITEM, CHART_OVERSIZED_ITEM, DailyCore
 from briefing.daily_report import DailyLlmWriter
 from contracts import validate
+from fake_news import answer_news
 from test_daily_jobs import (
     MORNING_AT,
     MORNING_JOB,
@@ -22,6 +23,7 @@ from test_daily_jobs import (
     etf_v2,
     etf_v2_missing,
     good_output,
+    post_close_output,
     tick,
     POST_CLOSE_MARKET,
 )
@@ -41,16 +43,18 @@ def etfs(relation=True):
     return items
 
 
-def run(edition="post-close", settings=None, llm=True, answer_etfs=None, ref=None, whole_event=False):
+def run(edition="post-close", settings=None, llm=True, answer_etfs=None, ref=None, whole_event=False, output=None):
     requests, details = Requests(), Details()
     settings = settings or DailySettings()
-    writer = DailyLlmWriter(FakeLlm(good_output(ref or ("E1" if edition == "post-close" else "B1"))),
-                            settings.llm_max_attempts) if llm else None
+    output = output or (post_close_output() if edition == "post-close" else good_output(ref or "B1"))
+    writer = DailyLlmWriter(FakeLlm(output), settings.llm_max_attempts) if llm else None
     core = DailyCore(requests, writer, details, settings)
     job, at = (POST_CLOSE_JOB, POST_CLOSE_AT) if edition == "post-close" else (MORNING_JOB, MORNING_AT)
     core.on_schedule_tick(tick(job, at), at, edition)
     background = POST_CLOSE_MARKET if edition == "post-close" else None
     core.on_daily_data_responded(daily_response(etfs=answer_etfs or etfs(), background=background), at)
+    if edition == "post-close":
+        answer_news(core, requests, at)
     if edition == "morning":
         from test_daily_jobs import filings_response
         core.on_filings_responded(filings_response(), at)
@@ -66,7 +70,7 @@ def test_post_close_event_carries_text_html_and_one_chart_the_html_points_at():
     assert f'src="cid:{image["contentId"]}"' in payload["html"]
     assert payload["text"].splitlines()[3].startswith("결론: 보유 2개 중 1개 상승")
     assert "결론: 보유 2개 중 1개 상승" in payload["html"]
-    assert payload["generatedBy"] == "llm" and "미국 지수가 오른 가운데" in payload["html"]
+    assert payload["generatedBy"] == "llm" and "시장 흐름과 함께 움직였을 수 있습니다." in payload["html"]
     # 그림에서 빠진 자료 없음 ETF는 자료 없음 목록에 그대로 있다.
     assert payload["missingItems"] == ["보유 ETF별 하루 등락: TEST 넷, 범위 안에 받은 일봉이 없음"]
 
@@ -103,7 +107,7 @@ def test_an_unknown_relation_value_is_treated_as_no_relation():
 
 
 def test_no_chart_is_drawn_when_no_etf_has_a_value():
-    payload, _ = run(answer_etfs=[etf_v2_missing("TEST04", name="TEST 넷")], ref="B1")
+    payload, _ = run(answer_etfs=[etf_v2_missing("TEST04", name="TEST 넷")], output=post_close_output(symbols=(), reasons={}))
     assert "images" not in payload and "결론: 등락 자료 없음" in payload["text"] and "cid:" not in payload["html"]
 
 
@@ -145,10 +149,10 @@ def test_one_chart_is_kept_at_an_image_count_limit_of_one():
 
 
 def test_an_event_over_the_event_limit_loses_only_the_chart():
-    payload, _ = run(settings=DailySettings(max_event_bytes=6000))
+    payload, _ = run(settings=DailySettings(max_event_bytes=8000))
     assert "images" not in payload and "차트 없음(크기 초과)" in payload["html"]
     assert CHART_OVERSIZED_ITEM in payload["missingItems"]
-    assert len(json.dumps(payload).encode("utf-8")) < 6000
+    assert len(json.dumps(payload).encode("utf-8")) < 8000
 
 
 def test_a_chart_failure_still_sends_the_mail_and_logs_no_detail(monkeypatch, caplog):
