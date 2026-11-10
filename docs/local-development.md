@@ -203,6 +203,7 @@ JAVA_HOME_21=<JDK 21 경로> DAILY_E2E_SMTP_SINK=1 scripts/manual-daily-briefing
 
 - 기본은 로컬 루프백의 가짜 Claude 서버를 SDK 주소(`ANTHROPIC_BASE_URL`)로 지정해 실제 호출이 없습니다. `DAILY_E2E_REAL_LLM=1`이면 셸 환경변수 `ANTHROPIC_API_KEY`로 실제 Claude를 부릅니다(키는 출력하지 않음).
 - 서비스 DB 계정은 `.env`(또는 `DAILY_E2E_ENV_FILE`)의 `MARKET_/NEWS_/BRIEFING_DB_USER·PASSWORD`를 읽고, 판 본문은 `DAILY_E2E_OUT_DIR`(기본 임시 폴더, 저장소 안은 거절)에 씁니다.
+- 결과에는 Claude 호출 수(브리핑 로그에서 Claude SDK의 HTTP 요청 줄을 셈, 다시 보낸 요청 포함)와 드라이런 메일마다 제목·HTML 글자 수·그림 수와 크기가 나옵니다. 가짜 모드에서는 가짜 서버가 받은 호출 수도 함께 나옵니다.
 
 ## 이메일 발송기 (`notifier`)
 
