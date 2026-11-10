@@ -3,7 +3,10 @@ package dev.stockreading.collector.holdings;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +28,7 @@ class ReceivedHoldings implements HoldingsPort {
     private static final Set<String> TRACKED = Set.of("HELD", "WATCH");
 
     private volatile List<String> allTickers = List.of();
+    private volatile Map<String, List<String>> etfsByTicker = Map.of();
     private volatile boolean received;
 
     void update(HoldingsPayload payload) {
@@ -42,6 +46,14 @@ class ReceivedHoldings implements HoldingsPort {
                         .thenComparing(m -> m.rank() == null ? Integer.MAX_VALUE : m.rank())
                         .thenComparing(m -> m.memberSymbol()))
                 .forEach(m -> tickers.add(m.memberSymbol()));
+        Map<String, Set<String>> etfs = new TreeMap<>();
+        payload.memberships().stream()
+                .filter(m -> "KR".equals(m.etfMarket()) && tracked.contains(m.etfSymbol())
+                        && "US".equals(m.memberMarket()))
+                .forEach(m -> etfs.computeIfAbsent(m.memberSymbol(), k -> new TreeSet<>()).add(m.etfSymbol()));
+        Map<String, List<String>> etfsByTicker = new TreeMap<>();
+        etfs.forEach((ticker, set) -> etfsByTicker.put(ticker, List.copyOf(set)));
+        this.etfsByTicker = Map.copyOf(etfsByTicker);
         this.allTickers = List.copyOf(tickers);
         this.received = true;
         // 코드와 티커는 보유 종목이 드러나므로 개수만 남긴다.
@@ -54,5 +66,10 @@ class ReceivedHoldings implements HoldingsPort {
             log.warn("보유 종목 목록을 아직 받지 못했습니다(market.holdings). 빈 목록으로 처리합니다");
         }
         return allTickers;
+    }
+
+    @Override
+    public List<String> etfsHolding(String ticker) {
+        return etfsByTicker.getOrDefault(ticker, List.of());
     }
 }

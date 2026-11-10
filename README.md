@@ -33,6 +33,7 @@ flowchart LR
     M <-->|"시세 이력, 배경 자료, 판 자료<br/>market.history.*<br/>market.context.*<br/>market.daily.*"| B
     NW <-->|"기사, 공시<br/>news.articles.*<br/>news.filings.*"| B
     M -->|"보유 종목 목록<br/>market.holdings"| C
+    M -->|"보유 종목 목록<br/>market.holdings"| NW
     NW -->|"검색어 목록<br/>news.search-queries"| C
     M --- DB
     NW --- DB

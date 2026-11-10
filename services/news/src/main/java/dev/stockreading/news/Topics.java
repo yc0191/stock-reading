@@ -20,8 +20,10 @@ public class Topics {
     public static final String NEWS_FILINGS_REQUESTED = "news.filings.requested";
     public static final String NEWS_FILINGS_RESPONDED = "news.filings.responded";
     public static final String NEWS_SEARCH_QUERY_LIST = "news.search-queries";
+    public static final String MARKET_HOLDINGS = "market.holdings";
     public static final int PARTITIONS = 3;
-    // 키가 하나인 압축 토픽(마지막 목록만 남음)이라 파티션 1개이며, 생산 쪽(news)과 소비 쪽(collector) 선언이 같아야 한다.
+    // 키가 하나인 압축 토픽(마지막 목록만 남음)이라 파티션 1개이며, 생산 쪽과 소비 쪽 선언이 같아야 한다
+    // (news.search-queries 는 생산 news·소비 collector, market.holdings 는 생산 market·소비 collector, news).
     public static final int LIST_PARTITIONS = 1;
 
     @Bean
@@ -58,6 +60,12 @@ public class Topics {
     @Bean
     NewTopic newsSearchQueriesTopic() {
         return TopicBuilder.name(NEWS_SEARCH_QUERY_LIST).partitions(LIST_PARTITIONS).replicas(1)
+                .config(TopicConfig.CLEANUP_POLICY_CONFIG, TopicConfig.CLEANUP_POLICY_COMPACT).build();
+    }
+
+    @Bean
+    NewTopic marketHoldingsTopic() {
+        return TopicBuilder.name(MARKET_HOLDINGS).partitions(LIST_PARTITIONS).replicas(1)
                 .config(TopicConfig.CLEANUP_POLICY_CONFIG, TopicConfig.CLEANUP_POLICY_COMPACT).build();
     }
 }

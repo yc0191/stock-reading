@@ -13,4 +13,10 @@ public interface HoldingsPort {
      * 여러 ETF가 같은 종목을 담아도 한 번만 조회하기 위한 것이다. 목록을 아직 받지 못했으면 빈 목록이다.
      */
     List<String> allTickers();
+
+    /**
+     * 그 미국 티커를 구성 종목으로 담은 관심 ETF 코드 목록(코드 순). 담은 ETF가 없거나 목록을 아직 받지 못했으면 빈 목록이다.
+     * 미국 티커로 건 뉴스 검색이 제대로 되지 않았을 때, 그 기사가 함께 나가는 ETF의 수집도 불완전으로 알리는 데 쓴다.
+     */
+    List<String> etfsHolding(String ticker);
 }

@@ -46,17 +46,18 @@ class ReceivedSearchQueriesTest {
     }
 
     @Test
-    void tagsTheArticleEventCannotCarryAreDroppedAndAQueryWithNoTagLeftIsDropped() {
-        // 미국 티커 태그는 기사 이벤트의 종목코드 형식(6자리 코드 또는 *)에 맞지 않아 기사가 통째로 버려지므로 받을 때 거른다.
+    void usTickerTagsAreKeptAndOnlyTagsTheArticleEventCannotCarryAreDropped() {
+        // 기사 이벤트의 종목 형식은 국내 6자리 코드, 미국 티커(종류 구분 "-"), "*"다. 그 밖의 형식은 기사가 통째로 버려지므로 받을 때 거른다.
         received.update(new SearchQueriesPayload("h", List.of(
                 new Query("섞인 태그", List.of("TEST01", "FAKE-B", "fake")),
                 new Query("미국만", List.of("FAKE")),
                 new Query("  ", List.of("TEST01")),
-                new Query("태그 없음", List.of()))));
+                new Query("태그 없음", List.of()),
+                new Query("형식 밖", List.of("fake", "TOOLONGX")))));
 
-        assertThat(received.queries()).hasSize(1);
-        assertThat(received.queries().get(0).query()).isEqualTo("섞인 태그");
-        assertThat(received.queries().get(0).symbols()).containsExactly("TEST01");
+        assertThat(received.queries()).extracting(NewsQuery::query).containsExactly("섞인 태그", "미국만");
+        assertThat(received.queries().get(0).symbols()).containsExactly("TEST01", "FAKE-B");
+        assertThat(received.queries().get(1).symbols()).containsExactly("FAKE");
     }
 
     @Test
@@ -66,7 +67,7 @@ class ReceivedSearchQueriesTest {
         listener.onQueries(ContractSchemas.sample("news.search-queries.sample.json"));
 
         assertThat(received.queries()).extracting(NewsQuery::query)
-                .containsExactly("테스트 ETF 하나", "Fake Corp", "가짜 시장 이슈");
+                .containsExactly("테스트 ETF 하나", "Fake Corp", "Fake Corp stock", "가짜 시장 이슈");
     }
 
     @Test
@@ -76,7 +77,7 @@ class ReceivedSearchQueriesTest {
 
         listener.onQueries("{\"eventId\":\"x\",\"schemaVersion\":1,\"payload\":{\"contentHash\":\"h\"}}");
 
-        assertThat(received.queries()).hasSize(3);
+        assertThat(received.queries()).hasSize(4);
     }
 
     @Test

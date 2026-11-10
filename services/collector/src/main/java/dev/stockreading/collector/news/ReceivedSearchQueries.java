@@ -23,8 +23,8 @@ class ReceivedSearchQueries implements SearchQueriesPort {
     private static final Logger log = LoggerFactory.getLogger(ReceivedSearchQueries.class);
 
     // news.collected 의 종목코드 형식이다. 이 형식이 아닌 태그가 붙은 기사는 발행 단계에서 통째로 버려지므로
-    // 받는 단계에서 걸러 낸다. 미국 티커 태그는 뉴스 쪽 태그 칸이 넓어진 뒤에 쓸 수 있다.
-    private static final Pattern PUBLISHABLE_SYMBOL = Pattern.compile("[0-9A-Z]{6}|\\*");
+    // 받는 단계에서 걸러 낸다.
+    private static final Pattern PUBLISHABLE_SYMBOL = Pattern.compile("\\*|[A-Z0-9]{1,6}([.-][A-Z0-9]{1,2})?");
 
     private volatile List<NewsQuery> queries;
 

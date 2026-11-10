@@ -32,6 +32,7 @@ import org.springframework.kafka.support.SendResult;
 
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.ContractSchemas;
+import dev.stockreading.collector.holdings.HoldingsPort;
 import dev.stockreading.collector.news.NewsCollection;
 import dev.stockreading.collector.news.NewsCollector;
 import dev.stockreading.collector.news.NewsItem;
@@ -50,6 +51,7 @@ class CollectionCompletedPublishTest {
     private NewsCollector collector;
     private KafkaTemplate<String, String> kafka;
     private NewsPublisher publisher;
+    private HoldingsPort holdings;
     private final ObjectMapper mapper = JsonMapper.builder().build();
 
     @SuppressWarnings("unchecked")
@@ -58,7 +60,8 @@ class CollectionCompletedPublishTest {
         collector = mock(NewsCollector.class);
         kafka = mock(KafkaTemplate.class);
         when(kafka.send(anyString(), anyString(), anyString())).thenReturn(CompletableFuture.completedFuture(null));
-        publisher = new NewsPublisher(collector, kafka, mapper, CLOCK);
+        holdings = mock(HoldingsPort.class);
+        publisher = new NewsPublisher(collector, kafka, mapper, CLOCK, holdings);
     }
 
     @Test
@@ -90,6 +93,18 @@ class CollectionCompletedPublishTest {
 
         assertThat(ContractSchemas.validate(SCHEMA, completionJson())).isEmpty();
         assertThat(incomplete()).containsExactly("TEST02", "TEST03");
+    }
+
+    @Test
+    void incompleteUsTickersAreReportedAsTheEtfsThatHoldThem() throws IOException {
+        when(holdings.etfsHolding("FAKE")).thenReturn(List.of("TEST01", "TEST02"));
+        when(holdings.etfsHolding("FAKE-B")).thenReturn(List.of("TEST02"));
+        collect(new LinkedHashSet<>(List.of("FAKE", "FAKE-B", "FAKE-C", "TEST03")));
+
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
+
+        assertThat(ContractSchemas.validate(SCHEMA, completionJson())).isEmpty();
+        assertThat(incomplete()).containsExactly("TEST01", "TEST02", "TEST03");
     }
 
     @Test

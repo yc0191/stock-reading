@@ -73,6 +73,29 @@ class SearchQueryIntegrationTest {
     }
 
     @Test
+    void generatedQueriesAreInsertedOnceAndNeverOverwriteWhatTheOperatorHas() {
+        repository.insertAll(SearchQuerySpec.parse("직접 만든=FAKE-A;Same Name=TEST01"));
+        java.util.Map<String, java.util.List<String>> byName = new java.util.LinkedHashMap<>();
+        byName.put("Fake One", List.of("FAKE-A", "FAKE-B"));   // FAKE-A 는 이미 검색어가 있어 빠진다
+        byName.put("Fake Two", List.of("FAKE-A"));              // 모든 종목에 이미 검색어가 있어 만들지 않는다
+        byName.put("Same Name", List.of("FAKE-C"));             // 같은 글자의 검색어가 이미 있어 그 행을 건드리지 않는다
+        byName.put("Fake Three", List.of("FAKE-D", "FAKE-E"));
+
+        assertThat(repository.insertGenerated(byName)).isEqualTo(2);
+        assertThat(repository.insertGenerated(byName)).isZero();
+
+        SearchQuerySnapshot snapshot = repository.readSnapshot();
+        assertThat(snapshot.queries()).extracting(Query::query)
+                .containsExactlyInAnyOrder("직접 만든", "Same Name", "Fake One", "Fake Three");
+        assertThat(snapshot.queries()).filteredOn(q -> q.query().equals("Fake One"))
+                .singleElement().satisfies(q -> assertThat(q.symbols()).containsExactly("FAKE-B"));
+        assertThat(snapshot.queries()).filteredOn(q -> q.query().equals("Same Name"))
+                .singleElement().satisfies(q -> assertThat(q.symbols()).containsExactly("TEST01"));
+        assertThat(snapshot.queries()).filteredOn(q -> q.query().equals("Fake Three"))
+                .singleElement().satisfies(q -> assertThat(q.symbols()).containsExactly("FAKE-D", "FAKE-E"));
+    }
+
+    @Test
     void editingTheTablesDirectlyChangesTheHashAndAQueryWithNoTagIsLeftOut() {
         repository.insertAll(SearchQuerySpec.parse("통합 검색어 하나=TEST01"));
         String before = repository.readSnapshot().contentHash();

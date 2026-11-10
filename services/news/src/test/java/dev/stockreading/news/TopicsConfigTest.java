@@ -21,12 +21,15 @@ class TopicsConfigTest {
                     assertThat(topics.values()).extracting(NewTopic::name)
                             .containsExactlyInAnyOrder("news.collected", "news.articles.requested",
                                     "news.articles.responded", "filing.collected", "news.filings.requested",
-                                    "news.filings.responded", "news.search-queries");
+                                    "news.filings.responded", "news.search-queries", "market.holdings");
                     // 목록 토픽만 파티션이 하나이고 마지막 값만 남는 압축 토픽이며, 생산·소비 서비스가 같은 값으로 선언해야 한다.
-                    assertThat(topics.values().stream().filter(t -> !t.name().equals("news.search-queries")))
+                    assertThat(topics.values().stream()
+                            .filter(t -> !t.name().equals("news.search-queries") && !t.name().equals("market.holdings")))
                             .extracting(NewTopic::numPartitions).containsOnly(3);
                     assertThat(topics.get("newsSearchQueriesTopic").numPartitions()).isEqualTo(1);
                     assertThat(topics.get("newsSearchQueriesTopic").configs()).containsEntry("cleanup.policy", "compact");
+                    assertThat(topics.get("marketHoldingsTopic").numPartitions()).isEqualTo(1);
+                    assertThat(topics.get("marketHoldingsTopic").configs()).containsEntry("cleanup.policy", "compact");
                 });
     }
 }

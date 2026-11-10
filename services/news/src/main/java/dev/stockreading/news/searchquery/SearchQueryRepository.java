@@ -1,9 +1,12 @@
 package dev.stockreading.news.searchquery;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -68,5 +71,35 @@ class SearchQueryRepository {
                 }
             }
         });
+    }
+
+    /**
+     * 종목 이름으로 만든 검색어를 넣고 새로 넣은 검색어 수를 돌려준다. 이미 검색어가 붙은 종목은 빼고, 같은 글자의 검색어가
+     * 이미 있으면 그 행을 건드리지 않고 건너뛴다. 한 트랜잭션이라 중간에 실패하면 아무것도 남지 않는다.
+     */
+    int insertGenerated(Map<String, ? extends Collection<String>> symbolsByName) {
+        Integer created = transaction.execute(status -> {
+            Set<String> tagged = new HashSet<>(jdbc.sql("SELECT DISTINCT symbol FROM search_query_symbol")
+                    .query(String.class).list());
+            int count = 0;
+            for (Map.Entry<String, ? extends Collection<String>> entry : symbolsByName.entrySet()) {
+                List<String> symbols = entry.getValue().stream().filter(s -> !tagged.contains(s)).sorted().toList();
+                if (symbols.isEmpty()) {
+                    continue;
+                }
+                Long id = jdbc.sql("INSERT INTO search_query (query) VALUES (:query) ON CONFLICT (query) DO NOTHING RETURNING id")
+                        .param("query", entry.getKey()).query(Long.class).optional().orElse(null);
+                if (id == null) {
+                    continue;
+                }
+                for (String symbol : symbols) {
+                    jdbc.sql("INSERT INTO search_query_symbol (query_id, symbol) VALUES (:id, :symbol)")
+                            .param("id", id).param("symbol", symbol).update();
+                }
+                count++;
+            }
+            return count;
+        });
+        return created == null ? 0 : created;
     }
 }

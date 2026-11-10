@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 import dev.stockreading.news.Topics;
 import dev.stockreading.news.event.ArticlesPayload;
 import dev.stockreading.news.event.EventFactory;
+import dev.stockreading.news.holdings.ReceivedHoldings;
 import tools.jackson.databind.ObjectMapper;
 
 @Component
@@ -33,8 +34,11 @@ class ArticlesRequestListener {
     private final ArticleQueryRepository repository;
     private final ArticlesPublisher publisher;
     private final ObjectMapper mapper;
+    private final ReceivedHoldings holdings;
 
-    ArticlesRequestListener(ArticleQueryRepository repository, ArticlesPublisher publisher, ObjectMapper mapper) {
+    ArticlesRequestListener(ArticleQueryRepository repository, ArticlesPublisher publisher, ObjectMapper mapper,
+            ReceivedHoldings holdings) {
+        this.holdings = holdings;
         this.repository = repository;
         this.publisher = publisher;
         this.mapper = mapper;
@@ -54,9 +58,10 @@ class ArticlesRequestListener {
 
         int limit = Math.min(request.maxArticles(), MAX_ARTICLES_CAP);
         // 한 건 더 읽어 건수 때문에 잘렸는지 판단한다.
+        // ETF 로 꺼내면 그 ETF 자체 기사가 먼저, 구성 종목 기사가 그다음이다(태그는 기사 주제 그대로 두고 꺼낼 때 넓힌다).
         // 재검색 작업 id 가 있으면 그 작업이 찾은 기사만 읽고 종목 조건은 보지 않는다(symbol 은 응답 짝짓기에만 쓴다).
         List<ArticleQueryRepository.StoredArticle> rows = request.researchJobId() == null
-                ? repository.findByRange(request.symbol(), since, until, limit + 1)
+                ? repository.findByRange(request.symbol(), holdings.membersOf(request.symbol()), since, until, limit + 1)
                 : repository.findByResearchJob(UUID.fromString(request.researchJobId()), since, until, limit + 1);
         boolean truncated = rows.size() > limit;
 

@@ -40,6 +40,19 @@ class ReceivedHoldingsTest {
     }
 
     @Test
+    void etfsHoldingATickerListsOnlyTrackedEtfsInCodeOrderAndTheListIsReplacedByTheNext() {
+        holdings.update(new HoldingsPayload("h", List.of(etf("TEST02", "WATCH"), etf("TEST01", "HELD"), etf("TEST03", "NONE")),
+                List.of(member("TEST02", "US", "FAKEA", 1), member("TEST01", "US", "FAKEA", 2),
+                        member("TEST03", "US", "FAKEA", 1), member("TEST03", "US", "FAKEB", 2))));
+
+        assertThat(holdings.etfsHolding("FAKEA")).containsExactly("TEST01", "TEST02");
+        assertThat(holdings.etfsHolding("FAKEB")).isEmpty();
+
+        holdings.update(new HoldingsPayload("h2", List.of(etf("TEST01", "HELD")), List.of()));
+        assertThat(holdings.etfsHolding("FAKEA")).isEmpty();
+    }
+
+    @Test
     void onlyHeldOrWatchedKrEtfsAndTheirUsMembersCount() {
         holdings.update(new HoldingsPayload("h", List.of(
                 etf("TEST01", "HELD"), etf("TEST02", "NONE"), new Instrument("STOCK", "KR", "TEST03", "HELD"),
