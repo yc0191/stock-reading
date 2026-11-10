@@ -345,9 +345,13 @@ echo "--- 브리핑 로그"
 grep -cE "daily (morning|post-close) started" "$TMP/briefing.log" | sed 's/^/판 시작: /'
 grep -c "published daily briefing" "$TMP/briefing.log" | sed 's/^/판 발행: /'
 grep -c "daily LLM attempt" "$TMP/briefing.log" | sed 's/^/LLM 거부·실패 시도: /'
-if [ "$REAL_LLM" != 1 ]; then
+# Claude SDK 의 HTTP 클라이언트가 요청마다 남기는 줄을 센다. 다시 보낸 요청도 한 번씩 들어간다.
+llm_requests=$(grep -cE "HTTP Request: POST [^ ]*/v1/messages" "$TMP/briefing.log")
+if [ "$REAL_LLM" = 1 ]; then
+  echo "실제 Claude 호출: $llm_requests"
+else
   calls=$(curl -s "$FAKE_LLM_URL/__stats" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["calls"])')
-  echo "가짜 LLM 호출: $calls"
+  echo "가짜 LLM 호출: $calls (브리핑 로그의 요청 줄 $llm_requests)"
 fi
 if [ "$SMTP_SINK" = 1 ]; then
   echo "--- 발송기(가짜 SMTP 수신 서버)"
@@ -363,7 +367,9 @@ else
   echo "--- 발송기 드라이런"
   dry=$(grep -c "DRY-RUN (not sent)" "$TMP/notifier.log")
   echo "드라이런 메일: $dry"
-  grep -o 'DRY-RUN (not sent) to=[^ ]* subject="[^"]*"' "$TMP/notifier.log" || true
+  # HTML 이 있는 메일은 제목 뒤에 HTML 글자 수와 그림 수·크기가 붙는다.
+  grep -oE 'DRY-RUN \(not sent\) to=[^ ]* subject="[^"]*"( html=[0-9]+chars images=[0-9]+\[[^]]*\])?' \
+    "$TMP/notifier.log" || true
   grep -qF "$RECIPIENT" "$TMP/notifier.log" && { echo "주소가 마스킹되지 않은 줄이 있습니다"; status=1; }
   grep -qF "email sent to=" "$TMP/notifier.log" && { echo "실제 발송 로그가 있습니다"; status=1; }
   [ "$dry" -ge 2 ] || status=1

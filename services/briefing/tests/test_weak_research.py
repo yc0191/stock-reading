@@ -18,6 +18,7 @@ from briefing.llm_output import InvalidLlmOutput, WEAK_NOTE_PREFIX, output_weak_
 from briefing.report import parse_output as parse_move
 from briefing.research import QueryWriter, ResearchReason, ResearchStep
 from briefing.sentence_research import SentenceResearch, research_job_id
+from briefing.status import parse_collection
 from contracts import validate
 from fake_news import answer_news
 from fake_job_log import FakeJobLog
@@ -533,7 +534,7 @@ class DailyLlm(FakeLlm):
 class DailyFlow:
     """판 하나를 자료 수집 -> 요약 -> 문장 단위 재검색 -> 다시 쓰기까지 돌리는 도우미."""
 
-    def __init__(self, edition, report_outputs, query_outputs, etfs=None, settings=S):
+    def __init__(self, edition, report_outputs, query_outputs, etfs=None, settings=S, status=None):
         self.edition = edition
         self.job_type, self.at, self.ref = EDITIONS[edition]
         self.requests, self.records = Requests(), FakeJobLog()
@@ -545,7 +546,7 @@ class DailyFlow:
         self.research = self.sentences.research
         self.core = DailyCore(
             self.requests, DailyLlmWriter(self.report_llm, daily_settings.llm_max_attempts), self.records,
-            daily_settings, sentences=self.sentences)
+            daily_settings, sentences=self.sentences, status=status)
         self.now = self.at
         self.etfs = etfs
 
@@ -931,6 +932,47 @@ def test_daily_research_steps_are_logged_under_the_same_job_id_with_sentence_num
     assert rejected.data["llm"]["rejectReason"]
     received = next(e for e in entries if e.stage == "filter")
     assert received.data["usable"][0]["articleId"] == "r1" and received.data["collectorCompletion"]["jobType"] == "research-news"
+
+
+class RangedStatus:
+    """StatusPort 가짜. DB 구현처럼 끝난 시각이 범위(양끝 포함) 안인 수집 완료만 돌려준다."""
+
+    def __init__(self):
+        self.collections = []
+
+    def save_collection(self, record):
+        self.collections.append(record)
+        return True
+
+    def collections_between(self, since, until):
+        return [c for c in self.collections if since <= c.finished_at <= until]
+
+    def job_runs_between(self, since, until):
+        return []
+
+
+def test_post_close_server_status_counts_the_research_this_edition_sent_after_its_as_of():
+    status = RangedStatus()
+    flow = DailyFlow("post-close", [], [], status=status)
+    flow.report_llm.outputs = [
+        daily_output(point("지수가 오른 가운데 자료가 있습니다.", flow.ref),
+                     point("업종 소식이 영향을 줬을 수 있습니다.", flow.ref, SHORTFALL)),
+        daily_output(point("다시 찾은 기사가 영향을 줬을 수 있습니다.", "r1")),
+    ]
+    flow.query_llm.outputs = [queries(*QUERIES)]
+    flow.to_first_report()
+    flow.complete(flow.rid(2))
+    # 운영에서는 main이 받은 재검색 완료를 저장소에 남긴다. 완료 시각은 판 기준 시각보다 늦다.
+    status.save_collection(parse_collection(envelope("collection.completed", {
+        "jobType": "research-news", "scheduledFor": flow.now.isoformat(), "startedAt": flow.now.isoformat(),
+        "finishedAt": flow.now.isoformat(), "publishedCount": 1, "incompleteSymbols": [],
+        "researchJobId": flow.rid(2)})))
+    flow.stable([in_range(flow)], flow.rid(2))
+
+    (event,) = flow.published()
+    text = event.value["payload"]["text"]
+    (news_line,) = [line for line in text.split("\n") if line.startswith("- 뉴스:")]
+    assert news_line.endswith("· 재검색 1회")
 
 
 def test_daily_without_etf_data_skips_the_research_and_publishes_the_first_result():
