@@ -3,14 +3,17 @@ package dev.stockreading.notifier;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +25,8 @@ import dev.stockreading.notifier.mail.DailyEmailComposer;
 import dev.stockreading.notifier.mail.EmailComposer;
 import dev.stockreading.notifier.mail.EmailMessage;
 import dev.stockreading.notifier.mail.MailSenderPort;
+import dev.stockreading.notifier.recipient.Recipient;
+import dev.stockreading.notifier.recipient.RecipientPort;
 import tools.jackson.databind.json.JsonMapper;
 
 class DailyBriefingListenerTest {
@@ -30,6 +35,7 @@ class DailyBriefingListenerTest {
     private static final String BRIEFING_SAMPLE_ID = "9b7d1f20-3a4c-4e8b-b5d6-2c1a0f9e8d77";
 
     private MailSenderPort mailSender;
+    private RecipientPort recipients;
     private String sample;
     private String briefingSample;
     private NotifierProperties properties;
@@ -38,23 +44,26 @@ class DailyBriefingListenerTest {
     @BeforeEach
     void setUp() throws IOException {
         mailSender = mock(MailSenderPort.class);
+        recipients = mock(RecipientPort.class);
+        when(recipients.forEdition(any())).thenReturn(List.of(new Recipient(1, "to@example.com")));
+        when(recipients.forMove(any())).thenReturn(List.of(new Recipient(1, "to@example.com")));
         sample = ContractSchemas.sample("briefing.daily.generated.sample.json");
         briefingSample = ContractSchemas.sample("briefing.generated.sample.json");
         limit(6);
     }
 
     private void limit(int maxPerHour) {
-        properties = new NotifierProperties(false, "from@example.com", "to@example.com", "[시뮬레이션]", maxPerHour);
+        properties = new NotifierProperties(false, "from@example.com", "[시뮬레이션]", maxPerHour);
         limiter = new SendRateLimiter(properties, new TestClock(Instant.parse("2026-10-20T08:00:00Z")));
     }
 
     private DailyBriefingListener listener() {
-        return new DailyBriefingListener(JsonMapper.builder().build(), new DailyEmailComposer(properties), mailSender, limiter);
+        return new DailyBriefingListener(JsonMapper.builder().build(), new DailyEmailComposer(properties), mailSender, recipients);
     }
 
     // 건별 메일과 같은 한도 장치를 함께 쓰는지 보려고 같은 limiter로 만든다.
     private BriefingListener moveListener() {
-        return new BriefingListener(JsonMapper.builder().build(), new EmailComposer(properties), mailSender, limiter);
+        return new BriefingListener(JsonMapper.builder().build(), new EmailComposer(properties), mailSender, limiter, recipients);
     }
 
     private String withEventId(String id) {
@@ -70,7 +79,7 @@ class DailyBriefingListenerTest {
         listener().onDailyBriefing(sample);
 
         ArgumentCaptor<EmailMessage> email = ArgumentCaptor.forClass(EmailMessage.class);
-        verify(mailSender).send(email.capture());
+        verify(mailSender).send(eq("to@example.com"), email.capture());
         assertThat(email.getValue().subject()).isEqualTo("[시뮬레이션] 마감 후 판 데일리 브리핑 2026-10-20");
         assertThat(email.getValue().body()).contains("자료 없음 항목: etf-daily-change:TEST02");
     }
@@ -82,7 +91,7 @@ class DailyBriefingListenerTest {
         listener.onDailyBriefing(sample);
         listener.onDailyBriefing(sample);
 
-        verify(mailSender, times(1)).send(any());
+        verify(mailSender, times(1)).send(any(), any());
     }
 
     @Test
@@ -94,48 +103,53 @@ class DailyBriefingListenerTest {
                 .replace("\"edition\": \"post-close\"", "\"edition\": \"morning\""));
 
         ArgumentCaptor<EmailMessage> email = ArgumentCaptor.forClass(EmailMessage.class);
-        verify(mailSender, times(2)).send(email.capture());
+        verify(mailSender, times(2)).send(eq("to@example.com"), email.capture());
         assertThat(email.getAllValues()).extracting(EmailMessage::subject).containsExactly(
                 "[시뮬레이션] 마감 후 판 데일리 브리핑 2026-10-20",
                 "[시뮬레이션] 아침 판 데일리 브리핑 2026-10-20");
     }
 
     @Test
-    void aDailyBriefingIsEmailedEvenWhenTheHourlyLimitIsAlreadyReached() {
+    void aDailyBriefingIsEmailedEvenWhenTheRecipientsMoveLimitIsAlreadyReached() {
         limit(1);
         moveListener().onBriefing(briefingWithEventId("11111111-1111-4111-8111-111111111111")); // 한도를 채운다
 
         listener().onDailyBriefing(sample);
 
-        verify(mailSender, times(2)).send(any());
-        assertThat(limiter.hasCapacity()).isFalse();
+        verify(mailSender, times(2)).send(any(), any());
+        assertThat(limiter.hasCapacity(1)).isFalse();
     }
 
     @Test
-    void aSentDailyBriefingCountsTowardTheLimitSoALaterMoveEmailIsBlocked() {
+    void aSentDailyBriefingDoesNotCountTowardTheMoveLimit() {
         limit(1);
 
         listener().onDailyBriefing(sample);
         moveListener().onBriefing(briefingSample);
 
-        ArgumentCaptor<EmailMessage> email = ArgumentCaptor.forClass(EmailMessage.class);
-        verify(mailSender, times(1)).send(email.capture());
-        assertThat(email.getValue().subject()).contains("데일리 브리핑");
+        verify(mailSender, times(2)).send(eq("to@example.com"), any());
+        assertThat(limiter.hasCapacity(1)).isFalse(); // 건별 메일 한 통이 한도를 채웠다
     }
 
     @Test
-    void aFailedSendIsRetriedLaterAndDoesNotCountTowardTheLimit() {
-        limit(1);
+    void aFailedSendIsRetriedLaterAndSentOnce() {
         DailyBriefingListener listener = listener();
-        doThrow(new IllegalStateException("smtp down")).doNothing().when(mailSender).send(any());
+        doThrow(new IllegalStateException("smtp down")).doNothing().when(mailSender).send(any(), any());
 
         assertThatThrownBy(() -> listener.onDailyBriefing(sample)).isInstanceOf(IllegalStateException.class);
-        assertThat(limiter.hasCapacity()).isTrue(); // 실패한 발송은 세지 않는다
         listener.onDailyBriefing(sample); // Kafka 에러 핸들러가 같은 메시지를 다시 전달한다
         listener.onDailyBriefing(sample);
 
-        verify(mailSender, times(2)).send(any());
-        assertThat(limiter.hasCapacity()).isFalse();
+        verify(mailSender, times(2)).send(any(), any());
+    }
+
+    @Test
+    void aRecipientLookupFailurePropagatesSoTheKafkaErrorHandlerRetries() {
+        when(recipients.forEdition(any())).thenThrow(new IllegalStateException("db down"));
+
+        assertThatThrownBy(() -> listener().onDailyBriefing(sample)).isInstanceOf(IllegalStateException.class);
+
+        verify(mailSender, never()).send(any(), any());
     }
 
     @ParameterizedTest
@@ -153,8 +167,7 @@ class DailyBriefingListenerTest {
     void aMalformedMessageIsSkippedWithoutSendingOrThrowing(String message) {
         listener().onDailyBriefing(message);
 
-        verify(mailSender, never()).send(any());
-        assertThat(limiter.hasCapacity()).isTrue();
+        verify(mailSender, never()).send(any(), any());
     }
 
     @Test
@@ -164,6 +177,27 @@ class DailyBriefingListenerTest {
         listener.onDailyBriefing("{broken");
         listener.onDailyBriefing(sample);
 
-        verify(mailSender, times(1)).send(any());
+        verify(mailSender, times(1)).send(any(), any());
+    }
+
+    @Test
+    void theRecipientsAreChosenByTheEditionAndEachGetsAnEmail() {
+        when(recipients.forEdition("post-close")).thenReturn(
+                List.of(new Recipient(1, "to@example.com"), new Recipient(2, "other@example.com")));
+
+        listener().onDailyBriefing(sample);
+
+        verify(recipients).forEdition("post-close");
+        verify(mailSender).send(eq("to@example.com"), any());
+        verify(mailSender).send(eq("other@example.com"), any());
+    }
+
+    @Test
+    void withNoRecipientsNothingIsSentAndTheMessageIsConsumed() {
+        when(recipients.forEdition(any())).thenReturn(List.of());
+
+        listener().onDailyBriefing(sample);
+
+        verify(mailSender, never()).send(any(), any());
     }
 }

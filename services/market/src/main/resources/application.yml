@@ -39,11 +39,7 @@ market:
   prev-close-fields: ${MARKET_PREV_CLOSE_FIELDS:dataBody.bdy_cls_prc,dataBody.sprc,dataBody.krx_bdy_clpr}
   prev-close-threshold-percent: 3.00
   holdings:
-    # 보유 ETF와 구성 종목이 담긴 UTF-8 JSON 파일의 경로. 파일은 저장소 밖에 두고 경로만 환경변수로 준다.
-    # 종목 테이블(instrument)이 비어 있을 때 시작하면서 한 번만 이 파일로 채운다. 행이 있으면 파일은 읽지 않고,
-    # 그 뒤의 고침은 테이블을 직접 고친다. 비어 있으면(파일도 없으면) 보유 종목이 없는 것으로 본다.
-    file: ${HOLDINGS_FILE:}
-    # 종목 테이블이 바뀌었는지 확인하는 간격. 바뀌었을 때만 market.holdings 이벤트로 전체 목록을 낸다.
+    # 종목 표(etf, stock, etf_stock_map)나 개인 포트폴리오가 바뀌었는지 확인하는 간격. 바뀌었을 때만 market.holdings 이벤트로 전체 목록을 낸다.
     check-interval: PT30S
   context:
     # 배경 자료 응답(market.context)의 안전 상한. 요청값의 원본은 브리핑 설정이고, 요청이 이보다 크면 이 값까지만 준다.
@@ -59,12 +55,11 @@ market:
     # 연휴가 길어도 직전 영업일 행이 남도록 max-age보다 길게 둔다.
     world-index-prev-lookback: P7D
   members:
-    # ETF 상위 구성 종목 자동 조회. 출처 주소와 ETF별 번호는 저장소에 두지 않고 환경변수로만 받는다.
-    # url-template이 비어 있으면 자동 조회를 하지 않고, 구성 종목은 종목 테이블을 직접 고친다.
-    # url-template에는 {fundId}(출처가 ETF를 부르는 번호)와 {date}(yyyy.MM.dd, 기준일) 자리가 있다.
+    # ETF 상위 구성 종목 자동 조회. 출처 주소는 저장소에 두지 않고 환경변수로만 받는다.
+    # url-template이 비어 있으면 자동 조회를 하지 않고, 구성 종목은 etf_stock_map을 직접 고친다.
+    # url-template에는 {fundId}(출처가 ETF를 부르는 번호, etf.constituent_source_id)와 {date}(yyyy.MM.dd, 기준일) 자리가 있다.
+    # 번호가 없는 ETF는 자동 조회하지 않는다.
     url-template: ${MEMBERS_URL_TEMPLATE:}
-    # "ETF코드:번호"를 쉼표로 이은 값. 여기에 없는 ETF는 자동 조회하지 않는다.
-    fund-ids: ${MEMBERS_FUND_IDS:}
     # 요청마다 보내는 식별 문자열. 연락처가 필요하면 환경변수로 바꾼다(ASCII만).
     user-agent: ${MEMBERS_USER_AGENT:stock-reading-members/1.0}
     # 구성 종목에 담을 상위 개수(주식만).

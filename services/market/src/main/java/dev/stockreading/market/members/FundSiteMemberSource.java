@@ -98,7 +98,7 @@ class FundSiteMemberSource implements MemberSourcePort {
             throw new MemberSourceException("unexpected shape");
         }
         // 같은 종목코드가 두 행 이상 오면 한 종목이 여러 묶음으로 나뉜 것으로 보고 비중을 합친다.
-        // 합치지 않으면 한 종목이 상위 10개에 두 번 들어가 etf_member의 (etf, 종목) 키가 깨진다.
+        // 합치지 않으면 한 종목이 상위 10개에 두 번 들어가 etf_stock_map의 (etf, 종목) 키가 깨진다.
         Map<String, Candidate> byCode = new LinkedHashMap<>();
         int skippedMarket = 0;
         for (JsonNode row : rows) {

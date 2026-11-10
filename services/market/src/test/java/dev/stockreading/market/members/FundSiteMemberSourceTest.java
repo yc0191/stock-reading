@@ -68,7 +68,7 @@ class FundSiteMemberSourceTest {
 
     private FundSiteMemberSource source(int topCount) {
         String template = "http://127.0.0.1:" + server.getAddress().getPort() + "/pdf/{fundId}.do?base={date}";
-        return new FundSiteMemberSource(new MemberSourceProperties(template, "TEST01:F1", "test-agent/1.0", topCount,
+        return new FundSiteMemberSource(new MemberSourceProperties(template, "test-agent/1.0", topCount,
                 Duration.ZERO, Duration.ofSeconds(5), DayOfWeek.MONDAY), JsonMapper.builder().build());
     }
 

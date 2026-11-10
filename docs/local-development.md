@@ -45,10 +45,8 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 
 | 설정 키 | 설명 |
 |---|---|
-| `market.holdings.file` | 보유 종목 JSON 파일의 경로(환경변수 `HOLDINGS_FILE`). 종목 테이블이 비어 있을 때 시작하면서 한 번만 이 파일로 채웁니다. 행이 있으면 파일을 읽지도 않습니다. 파일 모양은 아래 "보유 종목 파일"을 봅니다 |
-| `market.holdings.check-interval` | 종목 테이블이 바뀌었는지 확인하는 간격(기본 30초). 바뀌었을 때만 `market.holdings` 이벤트로 전체 목록을 냅니다 |
-| `market.members.url-template` | ETF 구성 종목 자동 조회의 요청 주소 틀(환경변수 `MEMBERS_URL_TEMPLATE`). `{fundId}`와 `{date}`(yyyy.MM.dd) 자리가 있습니다. 비어 있으면 자동 조회를 하지 않고 종목 테이블을 직접 고칩니다. 아래 "ETF 구성 종목 자동 조회"를 봅니다 |
-| `market.members.fund-ids` | 자동 조회할 ETF와 출처가 ETF를 부르는 번호(`MEMBERS_FUND_IDS`, `ETF코드:번호`를 쉼표로 이음). 여기에 없는 ETF는 조회하지 않습니다 |
+| `market.holdings.check-interval` | 종목 표(`etf`, `stock`, `etf_stock_map`)와 개인 포트폴리오가 바뀌었는지 확인하는 간격(기본 30초). 바뀌었을 때만 `market.holdings` 이벤트로 전체 목록을 냅니다 |
+| `market.members.url-template` | ETF 구성 종목 자동 조회의 요청 주소 틀(환경변수 `MEMBERS_URL_TEMPLATE`). `{fundId}`와 `{date}`(yyyy.MM.dd) 자리가 있습니다. 비어 있으면 자동 조회를 하지 않고 `etf_stock_map`을 직접 고칩니다. ETF별 출처 번호는 환경변수가 아니라 `etf.constituent_source_id`에 있습니다. 아래 "ETF 구성 종목 자동 조회"를 봅니다 |
 | `market.members.user-agent` | 요청마다 보내는 식별 문자열(`MEMBERS_USER_AGENT`, ASCII만) |
 | `market.members.top-count`, `fetch-day`, `call-interval`, `timeout` | 담을 상위 개수(기본 10), 평소 조회 요일(기본 월요일), 출처를 연달아 부르는 사이의 쉼(기본 2초), 요청 제한 시간(기본 10초) |
 | `market.context.max-age` | 기준 시각보다 이 기간 넘게 이른 자료는 없음으로 봅니다 |
@@ -235,12 +233,15 @@ JAVA_HOME_21=<JDK 21 경로> DAILY_E2E_SMTP_SINK=1 scripts/manual-daily-briefing
 | 설정 | 설명 |
 |---|---|
 | `NOTIFIER_SEND_ENABLED` | `true`일 때만 실제 발송 |
-| `NOTIFIER_SENDER` / `NOTIFIER_RECIPIENT` | 발신/수신 주소. **개인정보이므로 `.env`에만** 둡니다. SES 샌드박스에서는 둘 다 SES에서 인증된 주소여야 함 |
+| `NOTIFIER_SENDER` | 발신 주소. **개인정보이므로 `.env`에만** 둡니다. SES 샌드박스에서는 받는 사람 주소도 SES에서 인증된 주소여야 함 |
+| `NOTIFIER_DB_USER` / `NOTIFIER_DB_PASSWORD` | 받는 사람을 고르려고 `personal` 스키마와 `market.etf`·`market.stock`을 읽는 읽기 전용 계정. 받는 주소는 설정값이 아니라 `personal.member_mail`에 있고, 메일을 보내기 직전에 읽습니다 |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | SES 콘솔의 "SMTP settings"에서 만든 전용 자격증명(STARTTLS) |
-| `NOTIFIER_MAX_PER_HOUR` | 시간당 발송 한도. 건별 메일의 초과분은 보내지 않고 로그만 남김. 데일리 브리핑 메일은 한도에 막히지 않고 항상 보내되 보낸 수는 한도에 더하므로, 그 뒤 건별 메일이 막힐 수 있음 |
+| `NOTIFIER_MAX_PER_HOUR` | 받는 사람 한 명당 시간당 급변동 메일 수(받는 사람이 한 명이면 전체 시간당 한도와 같음). 한도에 찬 받는 사람은 건너뛰고 다른 받는 사람에게는 보내며, 건너뛴 인원 수를 경고 로그에 남김(주소는 남기지 않음). 데일리 브리핑 판(아침·마감 후) 메일은 이 한도에 세지도 막히지도 않음 |
 | `NOTIFIER_SUBJECT_PREFIX` | 제목 머리말. 데이터가 가짜인 동안 진짜 투자 정보로 오해하지 않도록 |
 
 발송기는 데일리 브리핑 결과 토픽 `briefing.daily.generated`도 브리핑과 같은 파티션 수로 선언합니다(`Topics`). 이 토픽의 메시지 한 건(판 하나)마다 메일 한 통을 만듭니다(`DailyBriefingListener`). 제목은 머리말 뒤에 판 종류와 날짜(이번 발송 시각의 한국 날짜)를 붙인 `[시뮬레이션] 아침 판 데일리 브리핑 2026-10-20` 꼴이고, 본문은 받은 글 뒤에 자료 없음 항목, 다룬 범위, 추적 ID, 생성 방식을 붙입니다. 메시지에 선택 칸 `html`이 있으면 글자판과 HTML, 인라인 그림(`images`)을 묶은 메일로 보내고 같은 꼬리를 HTML 끝에 작은 글씨로 붙이며, 없으면 글자 메일입니다. `images` 중 잘못된 그림(깨진 base64, png·jpeg·gif가 아닌 형식, 공백·꺾쇠·줄바꿈이 든 Content-ID, 빈 데이터)은 그 그림만 빼고 나머지로 묶음 메일을 그대로 보내며, 모두 잘못돼도 HTML 묶음 메일은 나갑니다. 뺀 그림 수와 이유 종류만 경고 로그에 남깁니다. 드라이런 로그에는 HTML 글자 수와 그림 크기만 남기고 내용은 찍지 않습니다.
+
+받는 사람 조회가 DB 오류로 실패하면 예외가 그대로 올라가 Kafka 오류 처리가 몇 초 간격으로 세 번 다시 시도하고, 그래도 실패하면 그 메시지는 건너뜁니다. 즉 DB 오류가 재시도 시간(약 9초)보다 길면 그 메일은 보내지지 않습니다(재시도 시간은 아직 바꾸지 않았습니다).
 
 안전 규칙(모두 테스트로 검증): 설정이 없으면 드라이런, 발송을 켰는데 주소/호스트가 비어 있으면 **시작 단계에서 실패**, 같은 브리핑은 한 번만 발송(건별·데일리 모두 `eventId` 기준), 필수 값이 빠지거나 형식이 잘못된 메시지는 보내지 않고 건너뜀, 로그에는 주소를 **마스킹**해서만 출력.
 
@@ -272,7 +273,6 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 | `NEWS_SEARCH_CALL_INTERVAL_MS` | 검색어를 연달아 호출할 때 호출 사이의 대기(밀리초). 0이면 기다리지 않으며, 짧으면 제공자가 429로 거절할 수 있습니다([측정 기록](test-history/S01-real-api/call-interval.md)) |
 | `NEWS_RESEARCH_MAX_QUERIES` | 브리핑의 뉴스 재검색 요청(`news.research.requested`) 하나에서 실제로 검색할 검색어 수 상한(기본 3). 넘는 검색어는 버립니다. 검색어마다 하루 검색 호출 상한(`NEWS_SEARCH_DAILY_CALL_LIMIT`)을 한 번씩 쓰고, 상한에 걸리거나 검색이 실패하면 완료 알림의 `incompleteSymbols`에 요청 종목을 담습니다. 0 이하이면 시작 단계에서 실패합니다 |
 | `DART_API_KEY` | 공시 API 키 |
-| `HOLDINGS_FILE` | 시세처리기가 종목 테이블을 처음 채울 때 읽는 보유 종목 JSON 파일의 경로. 파일은 저장소 밖(UTF-8)에 두고 경로만 `.env`에 적습니다. 테이블이 비어 있을 때만 읽으며, 비어 있고 파일도 없으면 보유 종목이 없는 것으로 봅니다. 모양은 아래 "보유 종목 파일"을 봅니다. 수집기는 이 파일이나 설정을 읽지 않고 시세처리기가 알리는 목록(`market.holdings`)만 씁니다 |
 | `NEWS_QUERIES_FILE` | 뉴스 서비스가 검색어 테이블을 처음 채울 때 읽는 파일의 경로. 파일은 저장소 밖(UTF-8)에 두고 경로만 `.env`에 적습니다. 내용은 `검색어=종목코드,종목코드;검색어2=*` 형식이며(항목은 `;`나 줄바꿈으로 나눔) 종목은 국내 종목코드, 미국 티커(종류 구분은 `-`, `.`로 적어도 같은 종목), `*`(시장 전체)입니다. 검색어 테이블이 비어 있을 때만 읽으며, 형식이 틀리면 시작 단계에서 실패하고 메시지에는 몇 번째 항목인지만 적습니다. 그 뒤의 고침은 테이블(`news.search_query`, `news.search_query_symbol`)을 직접 고칩니다 |
 | `EDGAR_USER_AGENT` | SEC EDGAR 요청의 User-Agent. SEC가 요구하는 `회사명 연락이메일` 형식입니다. 연락 이메일은 개인 정보이므로 `.env`에만 둡니다. 비어 있으면 공시를 조회하지 않습니다 |
 | `EDGAR_FORMS` | 수집할 공시 형식. 쉼표로 구분합니다. 비어 있거나 형식이 틀리면 시작 단계에서 실패합니다 |
@@ -400,25 +400,56 @@ python3 scripts/load_config.py --only briefing
 - 자격증명은 `AWS_PROFILE` 환경변수나 `--profile` 옵션으로 지정합니다. 지역은 기본이 시드니이고 `--region`으로 바꿀 수 있습니다.
 - 읽기 전용 IAM 자격증명이 필요합니다: [`infra/iam/README.md`](../infra/iam/README.md)
 
-### 보유 종목 파일
+### 업무 데이터와 DB 계정
 
-`instrument`(종목)와 `etf_member`(ETF 구성) 테이블이 보유 종목의 원본입니다. 시세처리기는 시작할 때 `instrument`가 비어 있으면 `HOLDINGS_FILE`이 가리키는 UTF-8 JSON 파일로 한 번만 채우고, 행이 있으면 파일을 읽지 않습니다(파일이 없거나 비어 있어도 정상 시작). 그 뒤의 고침은 테이블을 직접 고칩니다. 30초마다 두 테이블을 읽어 내용이 바뀌었을 때만(재시작 뒤 첫 확인은 한 번 무조건) 전체 목록을 `market.holdings` 이벤트로 내고, 수집기가 재시작 없이 새 목록을 씁니다. 종목은 한 번만 적고, ETF에 담긴 관계는 ETF의 `members`에만 적습니다. 파일은 보유 종목이 드러나므로 저장소 밖에 두며, 저장소에는 가짜 값 예시([`docs/examples/holdings.example.json`](examples/holdings.example.json))만 있습니다.
+종목, 구성 종목, 뉴스 검색어, 멤버, 메일 수신 설정, 포트폴리오 같은 업무 데이터는 환경변수나 파일이 아니라 DB가 원본입니다. 비밀값과 실행 설정(Parameter Store → 로더 → `.env`)과 나뉘며, 값은 사람이 SQL로 넣고 서비스는 재시작할 때(발송기는 메일 보내기 직전에) 읽습니다. 이 방식으로 보유 종목 파일 설정, 펀드 번호 설정, 수신자 설정은 없어졌습니다. 수집기·뉴스가 `COLLECTOR_SYMBOLS`, `ETF_US_HOLDINGS`, `NEWS_SEARCH_QUERIES`를 DB로 옮겨 읽는 일은 이 변경에 들어 있지 않고 다음 작업입니다.
 
-- 맨 위는 종목 배열이고, 항목마다 `kind`(`ETF`/`STOCK`), `market`(`KR`/`US`/`JP` 등 영문 대문자 2~4자), `symbol`, 선택으로 `name`, `tracks`(ETF만), `sector`, `relation`(`HELD`/`WATCH`/`NONE`, 기본 `NONE`)을 가집니다.
-- ETF는 `members` 배열(`market`, `symbol`, 선택 `name`, `weight`(%, 0~100, 소수 4자리까지), `rank`(비중 순위, 없으면 적힌 순서))을 가집니다. ETF 안에만 나오는 종목은 `relation`이 `NONE`인 `STOCK` 종목으로 만들어지고, 같은 종목이 여러 곳에 나와도 종목 행은 하나입니다.
-- 국내 ETF의 `symbol`은 6자리 숫자·대문자입니다. 종류 구분이 있는 티커는 `.`로 적어도 `-`로 맞춰 저장합니다.
-- 테이블이 비어 있을 때 파일이 없거나 형식이 틀리면 시작이 실패합니다. 메시지에는 값 대신 몇 번째 항목(구성 종목)인지와 오류 종류만 적고, 경로와 값은 로그에 남기지 않습니다(종목·관계 개수만 남깁니다).
-- 응답: `market.context.responded`와 `market.daily.responded`의 `etf`(선택)에 ETF 이름, 추종 대상, 업종과 구성 종목(시장, 심볼, 이름, 비중, 순위)이 담깁니다. 변동 종목이 ETF가 아니면 `etf`가 없습니다. `market.daily.responded`(v2)의 `etf`에는 판 요청의 시간 범위 안에 상위 구성 변경이 반영됐을 때만 `memberChanges`(`since`, `asOf`, `removed`, `added`, `moved`)가 더해지며, 바뀐 것이 없으면 칸이 없습니다.
+| 스키마 | 표 | 내용 |
+|---|---|---|
+| `market`(주인: 시세처리기) | `etf`, `stock`, `etf_stock_map` | ETF, 주식, ETF가 담은 종목(비중·순위는 연결 표). 한 주식이 여러 ETF에 담길 수 있습니다. `etf.constituent_source_id`가 있는 ETF만 구성 종목을 자동 조회하고, `search_by_name`을 켠 종목은 이름을 뉴스 검색어로 씁니다 |
+| `market` | `news_keyword`, `macro_keyword`, `news_keyword_map`, `macro_keyword_map`, 뷰 `news_search_target` | 뉴스 검색어와 거시 주제(환율·금리 등), 검색어가 속한 대상(ETF·주식·거시 주제 중 정확히 하나). 뷰는 검색어와 기사에 달 종목 태그를 계산해 줍니다(거시 주제는 연결된 종목, 연결이 없으면 시장 전체 `*`) |
+| `personal`(주인: `PERSONAL_OWNER_DB_USER`) | `member`, `member_mail`, `member_portfolio`, 뷰 `active_portfolio`, `collect_target` | 멤버, 멤버의 메일 주소·수신 설정(급변동·아침 판·마감 후 판), 멤버가 담은 ETF·주식(`HELD` 보유 / `WATCH` 관심). 뷰 `active_portfolio`는 사용 중인 멤버의 포트폴리오만, `collect_target`은 사용 중인 멤버 포트폴리오를 합쳐 국내 1초 시세 대상(`KR_QUOTE`)과 미국 일봉 대상(`US_DAILY`, 포트폴리오 ETF의 미국 구성 종목 포함)을 줍니다 |
+
+DB 계정 키(값은 `.env`에만 두고 문서에는 적지 않습니다. 형식은 `.env.example`):
+
+| 키 | 설명 |
+|---|---|
+| `PERSONAL_OWNER_DB_USER` / `PERSONAL_OWNER_DB_PASSWORD` | `personal` 스키마의 주인 계정. 마이그레이션(Flyway)이 이 계정으로 표를 만듭니다 |
+| `PERSONAL_WRITER_DB_USER` / `PERSONAL_WRITER_DB_PASSWORD` | 값을 넣고 고치는 계정(사람이 SQL을 실행할 때 씁니다). `personal` 전체를 읽고 쓰며 `market.etf`·`market.stock`을 읽습니다 |
+| `COLLECTOR_DB_USER` / `COLLECTOR_DB_PASSWORD` | 수집기 계정. `personal.collect_target`과 `market.news_search_target` 두 뷰만 읽습니다 |
+| `NOTIFIER_DB_USER` / `NOTIFIER_DB_PASSWORD` | 발송기 계정(읽기 전용). 받는 사람을 고르려고 `member`, `member_mail`, `member_portfolio`와 `market.etf`·`market.stock`을 읽습니다 |
+
+SQL로 값을 넣는 예시(모두 가짜 값입니다. 전체는 [`docs/examples/holdings.example.sql`](examples/holdings.example.sql)):
+
+```sql
+-- market 계정: ETF와 주식
+INSERT INTO market.etf (market, symbol, name) VALUES ('KR', 'TEST01', 'TEST ETF ONE');
+INSERT INTO market.stock (market, symbol, name) VALUES ('US', 'FAKEA', 'FAKE CORP A');
+-- 쓰기 계정: 멤버, 메일 수신 설정, 포트폴리오
+INSERT INTO personal.member (name) VALUES ('TEST MEMBER');
+INSERT INTO personal.member_mail (member_id, email)
+SELECT id, 'member@example.com' FROM personal.member WHERE name = 'TEST MEMBER';
+INSERT INTO personal.member_portfolio (member_id, etf_id, relation)
+SELECT m.id, e.id, 'HELD' FROM personal.member m, market.etf e WHERE m.name = 'TEST MEMBER' AND e.symbol = 'TEST01';
+```
+
+- **계정과 권한:** `member_mail`(개인정보)은 발송기(`NOTIFIER_DB_USER`)와 쓰기 계정(`PERSONAL_WRITER_DB_USER`)만 읽습니다. 시세처리기는 사용 중인 멤버의 포트폴리오만 보여 주는 뷰 `personal.active_portfolio`만 읽어 종목의 보유·관심 구분을 계산하고(`member`·`member_mail`·`member_portfolio`는 읽지 못하며, 사용 중이 아닌 멤버만 담은 종목은 `NONE`)(한 명이라도 보유면 `HELD`, 아니면 `WATCH`, 아무도 담지 않으면 `NONE`), 수집기(`COLLECTOR_DB_USER`)는 `personal.collect_target`과 `market.news_search_target` 두 뷰만 읽습니다. 계정과 권한은 `infra/db/personal/init.sql`이 만들고 표는 `infra/db/personal/migration/`의 Flyway 파일이 만듭니다. 모든 키는 `.env.example`에 있습니다.
+- **만드는 순서:** `personal` 표가 `market.etf`·`market.stock`을 가리키므로 market 표 → 계정·권한 → personal 표 순서입니다. 로컬 Compose는 `docker compose -f infra/compose/docker-compose.yml --env-file .env up -d`가 `market-migrate` → `personal-init` → `personal-migrate`를 차례로 한 번씩 실행합니다. 번호 파일을 더한 뒤에는 `run --rm market-migrate`와 `run --rm personal-migrate`로 다시 적용합니다. `scripts/test-all.sh`와 `scripts/manual-daily-briefing.sh`는 같은 순서를 `scripts/personal-db-lib.sh`로 테스트 DB에 적용합니다.
+- **기존 DB 이전:** market의 V10 마이그레이션이 옛 `instrument`·`etf_member`와 이력(`etf_member_history`→`etf_stock_history`)·원문(`etf_member_raw`→`etf_stock_raw`)의 기존 행을 새 표로 옮깁니다. 단 보유·관심 구분과 ETF의 업종은 새 표에 칸이 없어 옮겨지지 않으므로 포트폴리오와 `constituent_source_id`는 아래 SQL로 다시 넣습니다.
+- **처음 값 넣기:** 값은 저장소 밖 비공개 SQL로만 넣습니다. 형식은 가짜 값 예시 [`docs/examples/holdings.example.sql`](examples/holdings.example.sql)을 따르고, market 표는 시세처리기 계정으로, `personal` 표는 쓰기 계정으로 `psql -v ON_ERROR_STOP=1 -U <계정> -d <데이터베이스> -f <파일>`로 실행합니다. 로컬과 운영 실행은 각각 사람이 결정합니다. 나중에 값을 바꾸는 기능(CUD)은 따로 만듭니다.
+- **반영 시점:** 시세처리기는 30초마다 표가 바뀌었는지 확인해 `market.holdings`로 알립니다(포트폴리오가 바뀌어도 반영). 시작 순서 때문에 `personal` 스키마가 아직 없으면 경고만 남기고 다음 주기에 다시 시도합니다. 발송기는 메일을 보내기 직전에 받는 사람을 고릅니다: 급변동은 사용 중이고 급변동 수신을 켠 멤버 중 그 종목을 포트폴리오에 가진 멤버, 아침·마감 후 판은 사용 중이고 그 판 수신을 켠 멤버(지금은 전체 판)입니다. 0명이면 보내지 않고 경고만 남기며 로그의 주소는 가립니다.
+- **응답:** `market.context.responded`와 `market.daily.responded`의 `etf`(선택)에 ETF 이름, 추종 대상, 업종과 구성 종목(시장, 심볼, 이름, 비중, 순위)이 담깁니다. ETF 표에는 업종 칸이 없어 업종은 비어 있습니다. 변동 종목이 ETF가 아니면 `etf`가 없습니다. `market.daily.responded`(v2)의 `etf`에는 판 요청의 시간 범위 안에 상위 구성 변경이 반영됐을 때만 `memberChanges`(`since`, `asOf`, `removed`, `added`, `moved`)가 더해지며, 바뀐 것이 없으면 칸이 없습니다.
+- **미구현:** 데일리 판을 멤버 포트폴리오별로 맞춰 만드는 일은 배포 뒤로 미뤘고 이번에는 표 구조만 있습니다.
 
 ### ETF 구성 종목 자동 조회
 
-`collect-members` tick(수집기가 평일 하루 한 번 발행)을 시세처리기가 받아, 출처를 설정한 ETF의 상위 구성 종목(주식만, 비중 상위 10개)을 받아 바뀐 것만 반영합니다. 전용 consumer group(`market-members`)으로 받습니다. `schedule.tick`은 파티션이 1개라 다른 리스너와 그룹이 같으면 tick이 누락되기 때문입니다.
+`collect-members` tick(수집기가 평일 하루 한 번 발행)을 시세처리기가 받아, 출처 번호(`etf.constituent_source_id`)가 있는 ETF의 상위 구성 종목(주식만, 비중 상위 10개)을 받아 바뀐 것만 반영합니다. 전용 consumer group(`market-members`)으로 받습니다. `schedule.tick`은 파티션이 1개라 다른 리스너와 그룹이 같으면 tick이 누락되기 때문입니다.
 
-- **주기:** 평소에는 한 주에 한 번(`market.members.fetch-day`), 지수 교체일이 든 달에는 매일 받습니다. 교체 일정은 `index_rebalance_schedule` 테이블(`tracks`, `effective_date`, 선택 `note`)에 사람이 1년에 한 번 직접 넣습니다. `tracks`는 `instrument.tracks`와 같은 값이어야 ETF와 이어집니다. 일정이 없는 ETF는 주 1회만 받습니다. 아직 구성을 한 번도 받지 않은 ETF는 요일을 기다리지 않고 다음 조회 때 바로 받습니다.
-- **반영:** 받은 상위 구성의 종목·순위가 이전과 다를 때만 `etf_member_history`에 새 행을 넣고, 같은 때 `etf_member`(현재 구성)도 맞춥니다. 종목이 들어오거나 나가거나, 상위 10개 안의 순위만 바뀌어도 바뀐 것으로 봅니다. 비중과 이름은 비교하지 않습니다. 그대로면 이력 행의 마지막 확인일(`last_seen_on`)만 고치고, `etf_member`의 비중(`weight`)은 새로 받은 값으로 맞춥니다(비중은 `market.holdings` 해시에 없어 다시 내보내지 않습니다). 이미 관리 중인 종목(`HELD`·`WATCH`이거나 이름이 있는 행)의 이름은 출처 이름으로 바꾸지 않고, 이름이 빈 `NONE` 행에만 채웁니다. 새 구성 종목은 구성으로만 아는 종목(`NONE`)으로 넣고, 어느 ETF에도 담기지 않게 된 `NONE` 종목은 지웁니다. 바뀐 `etf_member`는 기존 경로(30초 확인)로 `market.holdings`에 실려 뉴스 검색어에도 반영됩니다.
-- **원문 보관:** 받을 때마다 응답 원문을 그대로 `etf_member_raw`(ETF, 기준일, 상태 코드, 원문, 받은 시각)에 저장합니다. 상태가 200이 아니거나 모양이 달라 실패한 응답도 해석 전에 저장합니다(너무 큰 응답은 제외). `etf_member_history`의 구성은 이 원문에서 주식만 골라 상위 10개로 줄인 계산 결과입니다. 행은 받을 때마다 늘며 지우는 절차는 아직 없습니다.
+- **주기:** 평소에는 한 주에 한 번(`market.members.fetch-day`), 지수 교체일이 든 달에는 매일 받습니다. 교체 일정은 `index_rebalance_schedule` 테이블(`tracks`, `effective_date`, 선택 `note`)에 사람이 1년에 한 번 직접 넣습니다. `tracks`는 `etf.tracks`와 같은 값이어야 ETF와 이어집니다. 일정이 없는 ETF는 주 1회만 받습니다. 아직 구성을 한 번도 받지 않은 ETF는 요일을 기다리지 않고 다음 조회 때 바로 받습니다.
+- **반영:** 받은 상위 구성의 종목·순위가 이전과 다를 때만 `etf_stock_history`에 새 행을 넣고, 같은 때 `etf_stock_map`(현재 구성) 줄도 맞춥니다. 종목이 들어오거나 나가거나, 상위 10개 안의 순위만 바뀌어도 바뀐 것으로 봅니다. 비중과 이름은 비교하지 않습니다. 그대로면 이력 행의 마지막 확인일(`last_seen_on`)만 고치고, `etf_stock_map`의 비중(`weight`)은 새로 받은 값으로 맞춥니다(비중은 `market.holdings` 해시에 없어 다시 내보내지 않습니다). 이미 이름이 있는 주식의 이름은 출처 이름으로 바꾸지 않고 이름이 빈 행에만 채웁니다. 새 구성 종목은 `stock` 행으로 넣고, 구성에서 빠진 주식도 `stock` 행은 지우지 않습니다(개인 포트폴리오가 가리킬 수 있어서). 바뀐 `etf_stock_map`은 기존 경로(30초 확인)로 `market.holdings`에 실려 뉴스 검색어에도 반영됩니다.
+- **원문 보관:** 받을 때마다 응답 원문을 그대로 `etf_stock_raw`(ETF, 기준일, 상태 코드, 원문, 받은 시각)에 저장합니다. 상태가 200이 아니거나 모양이 달라 실패한 응답도 해석 전에 저장합니다(너무 큰 응답은 제외). `etf_stock_history`의 구성은 이 원문에서 주식만 골라 상위 10개로 줄인 계산 결과입니다. 행은 받을 때마다 늘며 지우는 절차는 아직 없습니다.
 - **실패:** 출처가 응답하지 않거나, 상태가 200이 아니거나, 응답 모양이 다르거나, 주식 행이 하나도 없으면 그 ETF는 이전 구성을 그대로 두고 로그에 오류 종류만 남기며(주소·종목코드는 남기지 않음) 다음 ETF로 넘어갑니다. 비중이 숫자가 아니거나 0~100을 벗어난 응답도 모양이 다른 응답으로 봅니다.
-- **수동 ETF:** `MEMBERS_FUND_IDS`에 없는 ETF는 자동으로 받지 않고, 종목 테이블을 직접 고칩니다.
+- **수동 ETF:** 출처 번호가 없는 ETF는 자동으로 받지 않고, `etf_stock_map`을 직접 고칩니다.
 - **판에 싣기:** 데일리 응답은 판 요청 시간 범위 안에 반영된 변경만 `memberChanges`로 싣습니다. `since`는 바뀌기 전 구성을 마지막으로 확인한 날, `asOf`는 바뀐 구성을 처음 받은 날입니다. 범위 안에 변경이 여러 번이면 첫 변경 직전 구성과 마지막 구성을 비교하고, 되돌아왔으면 싣지 않습니다.
 - **조회 기준:** 출처에는 오늘 직전 평일을 기준일로 요청합니다. 공휴일은 따로 보지 않으며, 그날 자료가 없어 비어 오면 실패로 처리됩니다. 주식만 거르는 기준은 "비중이 있고 종목코드가 주식 코드 모양"이며, 시장은 코드가 숫자로 시작하는 6자리면 `KR`, 미국 티커 모양(영문 대문자 1~5자, 종류 구분 `-`·`.` 1자)이면 `US`이며(출처가 해외 종목코드를 `<티커> US Equity`처럼 거래소 꼬리를 붙여 주면 꼬리를 떼고, 종류 구분 `/`는 `-`로 바꿉니다) 그 밖의 코드(숫자 4자리 등 다른 해외 코드)는 후보에서 빼고 개수만 로그에 남깁니다. 같은 종목코드가 응답에 두 행 이상이면 비중을 합쳐 한 번만 넣습니다. 마지막 확인일이 7일 넘게 지난 ETF는 조회 요일과 상관없이 받을 차례로 봅니다(공휴일 다음 조회가 실패해도 다음 주까지 기다리지 않게). 해외 종목 코드 모양과 채권·파생·다른 ETF가 실제 응답에서 어떻게 보이는지는 아직 실제 응답으로 확인하지 못했습니다(미확인).
 - **결정: 시세처리기의 첫 외부 호출.** 지금까지 시세처리기는 외부를 호출하지 않고 수집기가 받아 준 자료만 읽었습니다. 구성 종목은 호출이 주 1회 수준으로 적고(ETF마다 한 번, 한 번에 약 수십 KB), 받은 결과를 곧바로 이력·종목 테이블에 반영해야 하며, 종목 테이블을 쓰는 서비스가 시세처리기뿐이라 시세처리기가 직접 호출합니다. 수집기가 받으면 응답을 이벤트로 옮기고 다시 시세처리기가 받아 테이블에 쓰는 단계가 더해집니다. 이 호출은 시세 제공자 API(`CallRateLimit` 대상)와 무관한 운용사 공개 페이지이며, 출처 주소와 ETF별 번호는 설정값으로만 받습니다. 출처는 문서화된 API가 아니라 사이트 내부용이어서 응답 모양이 예고 없이 바뀔 수 있고, 그래서 모양이 다르면 일부만 읽지 않고 실패로 둡니다.
@@ -439,7 +470,7 @@ scripts/test-all.sh --plan   # 아무것도 띄우지 않고 실행 순서만 �
 
 - 실제 DB 테스트는 개발용 Postgres 컨테이너(`stock-postgres`) 안에 이 실행만의 테스트 전용 데이터베이스(`stock_test_run_<시각>_<pid>`)를 만들고, 서비스 스키마를 `.env`의 서비스 계정 소유로 만들고 브리핑 테이블은 Flyway로 만든 뒤 돌리고 지웁니다. 개발용 데이터베이스의 데이터는 건드리지 않습니다.
 - 컨테이너가 꺼져 있으면 켜고, 끝나도 끄지 않습니다. 서비스 계정은 만들거나 바꾸지 않습니다.
-- `.env`에 `MARKET_DB_USER`, `MARKET_DB_PASSWORD`, `NEWS_DB_USER`, `NEWS_DB_PASSWORD`, `BRIEFING_DB_USER`, `BRIEFING_DB_PASSWORD`가 있어야 합니다.
+- `.env`에 `MARKET_DB_USER`, `MARKET_DB_PASSWORD`, `NEWS_DB_USER`, `NEWS_DB_PASSWORD`, `BRIEFING_DB_USER`, `BRIEFING_DB_PASSWORD`와 personal 계정 키(`PERSONAL_OWNER_DB_USER`·`_PASSWORD`, `PERSONAL_WRITER_DB_USER`·`_PASSWORD`, `COLLECTOR_DB_USER`·`_PASSWORD`, `NOTIFIER_DB_USER`·`_PASSWORD`)가 있어야 하고, 그 계정이 이미 만들어져 있어야 합니다(전체 실행은 계정을 만들지 않으며, 없으면 `서비스 계정 <이름> 이 없음`으로 실패합니다). 계정은 관리자 계정으로 `infra/db/personal/init.sql`을 실행하면 만들어집니다(위 "업무 데이터와 DB 계정"). 테스트 DB에는 market 표 → personal 계정·권한 → personal 표 → 브리핑 표 순서로 Flyway를 적용합니다.
 - 결과 표는 지도의 기능마다 돌았음, 건너뜀(이유), 실패를 보여 주고, 하나라도 실패하면 종료 코드 1입니다. 이전 실행이 남긴 테스트 데이터베이스나 컨테이너가 보이면 지우지 않고 지우는 명령을 안내합니다.
 
 **오래된 DB 볼륨에는 news·브리핑 계정이 없을 수 있습니다.** 계정은 초기화 스크립트(`infra/compose/postgres/init/`)가 DB 볼륨을 처음 만들 때만 만들므로, news·브리핑 계정 스크립트가 생기기 전에 만든 볼륨에는 그 계정이 없습니다. 이때 전체 실행은 `서비스 계정 <이름> 이 없음`으로 실제 DB 단계를 실패로 표시합니다. 대처는 위 "DB 준비와 다시 만들기"처럼 볼륨을 지우고 다시 띄우는 것입니다(모든 서비스의 개발용 DB 데이터가 사라집니다).
@@ -457,11 +488,12 @@ MARKET_IT_DB_URL="jdbc:postgresql://127.0.0.1:$PORT/demo" MARKET_IT_DB_USER=post
 docker rm -f market-it-pg
 ```
 
-켜는 환경변수는 서비스마다 세 개씩입니다. 서비스끼리 같은 컨테이너를 이어 쓰지 말고 따로 띄웁니다.
+켜는 환경변수는 대체로 서비스마다 세 개씩입니다. 서비스끼리 같은 컨테이너를 이어 쓰지 말고 따로 띄웁니다.
 
 | 대상 | 켜는 환경변수 | 주소 형식 |
 |---|---|---|
 | 시세처리기 (`:services:market`) | `MARKET_IT_DB_URL`, `MARKET_IT_DB_USER`, `MARKET_IT_DB_PASSWORD` | `jdbc:postgresql://...` |
+| 발송기 받는 사람·personal 권한 (`:services:notifier`) | `NOTIFIER_IT_DB_URL`, `NOTIFIER_IT_DB_USER`, `NOTIFIER_IT_DB_PASSWORD`와 계정별 `WRITER_IT_DB_USER`·`_PASSWORD`, `COLLECTOR_IT_DB_USER`·`_PASSWORD`, `MARKET_IT_DB_USER`·`_PASSWORD` | `jdbc:postgresql://...`. market·personal 표가 만들어진 DB를 가정합니다. market 테스트(보유 구분·검색어 뷰·구성 종목 이력)도 쓰기 계정 `WRITER_IT_DB_USER`·`_PASSWORD`가 더 필요하고, 옛 표 이관 테스트는 비워도 되는 별도 스키마 이름을 `MARKET_IT_DB_MIGRATION_SCHEMA`로 받습니다 |
 | 뉴스 저장 (`:services:news`) | `NEWS_IT_DB_URL`, `NEWS_IT_DB_USER`, `NEWS_IT_DB_PASSWORD` | `jdbc:postgresql://...` |
 | 브리핑 (`pytest services/briefing`) | `BRIEFING_IT_DB_URL`, `BRIEFING_IT_DB_USER`, `BRIEFING_IT_DB_PASSWORD` | `postgresql://...`. `briefing` 스키마에 Flyway(`services/briefing/db/migration`)를 먼저 적용한 DB를 가정합니다 |
 
@@ -492,7 +524,7 @@ TEST_ALL_AWS_PROFILE=<AWS 프로필> scripts/test-all.sh --live
 | `TEST_ALL_LIVE_SYMBOL` | `/stock-reading/dev/collector/test-live-symbol`. 시세를 부를 종목 하나(6자리 숫자) |
 | `BROKER_APP_KEY`, `BROKER_APP_SECRET` | `/stock-reading/dev/collector/` 아래의 시세 앱키·시크릿 |
 | `ANTHROPIC_API_KEY` | `/stock-reading/dev/briefing/anthropic-api-key` |
-| `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `NOTIFIER_SENDER`, `NOTIFIER_RECIPIENT` (선택 `SMTP_PORT`) | `/stock-reading/dev/notifier/` 아래의 메일 설정 |
+| `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `NOTIFIER_SENDER`, `TEST_ALL_LIVE_RECIPIENT` (선택 `SMTP_PORT`) | `/stock-reading/dev/notifier/` 아래의 메일 설정. `TEST_ALL_LIVE_RECIPIENT`(파라미터 `recipient`)는 앱이 읽지 않고, 테스트 DB의 가짜 멤버에 넣는 받는 주소로만 씁니다 |
 
 `BRIEFING_LLM_MODEL`(선택)만은 실행 환경변수나 `.env`에서 읽습니다.
 
@@ -532,7 +564,7 @@ MOVE_REPLAY_INPUT=<저장소 밖>/snapshots.tsv MOVE_REPLAY_EXCLUDE=<저장소 �
 
 ## 후속
 
-- **보유 종목과 뉴스 검색어 테이블:** 만들었고 서비스가 테이블을 씁니다. 시세처리기는 `instrument`·`etf_member`가 바뀔 때만 `market.holdings`로, 뉴스는 `search_query`·`search_query_symbol`이 바뀔 때만 `news.search-queries`로 전체 목록을 내고(둘 다 마지막 값만 남는 압축 토픽), 수집기가 받아 씁니다. 두 테이블이 비어 있을 때만 `HOLDINGS_FILE`·`NEWS_QUERIES_FILE`로 처음 채웁니다. 남은 일: 배포 환경에서 테이블을 채우고 고치는 방법(지금은 SQL로 직접). 기사 태그 칸은 미국 티커도 담도록 넓혔고(`news_article_symbol.symbol` 16자, `news.collected`의 종목 형식), 미국 구성 종목 검색어는 종목 이름으로 저절로 만들어집니다(위 "뉴스 검색어와 기사 태그").
+- **보유 종목과 뉴스 검색어 테이블:** 시세처리기의 종목 표는 DB가 원본이 되었습니다(위 "업무 데이터와 DB 계정"). 시세처리기는 표와 포트폴리오가 바뀔 때만 `market.holdings`로 전체 목록을 내고, 뉴스는 `search_query`·`search_query_symbol`이 바뀔 때만 `news.search-queries`로 냅니다(둘 다 마지막 값만 남는 압축 토픽). 뉴스의 검색어 표를 `market.news_search_target` 뷰로 바꾸고 수집기가 `personal.collect_target`을 읽게 하는 일은 다음 작업입니다. 남은 일: 값을 바꾸는 기능(CUD). 기사 태그 칸은 미국 티커도 담도록 넓혔고(`news_article_symbol.symbol` 16자, `news.collected`의 종목 형식), 미국 구성 종목 검색어는 종목 이름으로 저절로 만들어집니다(위 "뉴스 검색어와 기사 태그").
 - **검색어와 태그 개선:** 정했고 구현했습니다. 태그는 기사 주제로 두고 꺼낼 때 구성 관계로 넓히며, 미국 구성 종목 검색어는 이름으로 만듭니다. 남은 일: 이름이 영어라 검색이 잘 맞는지 실제 기사로 확인하고(맞지 않으면 테이블에서 검색어를 고침), 더는 관심 ETF가 담지 않는 종목의 만들어진 검색어를 정리하는 방법(지금은 지우지 않음).
 - **휴장일 발송 관리:** 휴장일에는 데일리 브리핑 시작 tick도 발행하지 않아 판이 나가지 않습니다. 판정하지 못한 날은 영업일로 보고 평소대로 나갑니다.
 - **마감 후 판의 그날 급변동과 근거:** 마감 후 판에는 그날 급변동 건별 리포트를 요약하는 항목이 아직 없습니다. 건별 리포트를 어디서 읽을지와 함께 정합니다.

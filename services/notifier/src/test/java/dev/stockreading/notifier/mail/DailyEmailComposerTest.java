@@ -51,7 +51,7 @@ class DailyEmailComposerTest {
     }
 
     private static DailyEmailComposer composer(String prefix) {
-        return new DailyEmailComposer(new NotifierProperties(false, "from@example.com", "to@example.com", prefix, 6));
+        return new DailyEmailComposer(new NotifierProperties(false, "from@example.com", prefix, 6));
     }
 
     @Test

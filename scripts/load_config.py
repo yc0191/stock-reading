@@ -19,7 +19,9 @@ ENV_NAMES = {
     "smtp-username": "SMTP_USERNAME",
     "smtp-password": "SMTP_PASSWORD",
     "sender": "NOTIFIER_SENDER",
-    "recipient": "NOTIFIER_RECIPIENT",
+    # 앱은 받는 주소를 읽지 않는다(DB 의 member_mail 에서 고름). 전체 실행 스크립트(test-all.sh --live)가
+    # 테스트 DB 의 가짜 멤버에 넣을 시험용 주소로만 쓴다.
+    "recipient": "TEST_ALL_LIVE_RECIPIENT",
 }
 
 # collector 는 선택 그룹이다: 없어도 notifier 설정 반영을 막지 않는다.
@@ -30,6 +32,7 @@ COLLECTOR_ENV_NAMES = {
     "broker-base-url": "BROKER_BASE_URL",
     # 전체 실행 스크립트(test-all.sh --live)가 실제 시세를 부를 기준 종목 하나.
     "test-live-symbol": "TEST_ALL_LIVE_SYMBOL",
+
     "naver-client-id": "NEWS_SEARCH_CLIENT_ID",
     "naver-client-secret": "NEWS_SEARCH_CLIENT_SECRET",
     "news-search-base-url": "NEWS_SEARCH_BASE_URL",

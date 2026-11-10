@@ -23,23 +23,20 @@ class SmtpMailSender implements MailSenderPort {
 
     private final JavaMailSender mailSender;
     private final String sender;
-    private final String recipient;
 
     SmtpMailSender(JavaMailSender mailSender, NotifierProperties properties) {
-        if (isBlank(properties.sender()) || isBlank(properties.recipient())) {
-            throw new IllegalStateException(
-                    "notifier.sender and notifier.recipient must be set when notifier.send-enabled=true");
+        if (isBlank(properties.sender())) {
+            throw new IllegalStateException("notifier.sender must be set when notifier.send-enabled=true");
         }
         if (mailSender instanceof JavaMailSenderImpl impl && isBlank(impl.getHost())) {
             throw new IllegalStateException("spring.mail.host (SMTP_HOST) must be set when notifier.send-enabled=true");
         }
         this.mailSender = mailSender;
         this.sender = properties.sender();
-        this.recipient = properties.recipient();
     }
 
     @Override
-    public void send(EmailMessage message) {
+    public void send(String recipient, EmailMessage message) {
         try {
             MimeMessage mime = mailSender.createMimeMessage();
             // HTML이 있으면 글자판+HTML(alternative)에 인라인 그림(related)을 묶은 multipart로 만든다.

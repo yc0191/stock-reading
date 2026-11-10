@@ -4,8 +4,13 @@ spring:
   main:
     web-application-type: none
   config:
-    # 로컬 개발용 비밀값(SMTP 자격증명, 수신자)은 저장소 루트의 git 제외 .env에서 가져온다.
+    # 로컬 개발용 비밀값(SMTP 자격증명, DB 비밀번호)은 저장소 루트의 git 제외 .env에서 가져온다.
     import: optional:file:./.env[.properties],optional:file:../../.env[.properties]
+  # 받는 사람을 고르려고 personal 스키마와 market.etf·market.stock을 읽는다. 읽기 전용 계정이며 쓰지 않는다.
+  datasource:
+    url: jdbc:postgresql://localhost:5432/${POSTGRES_DB:stock}
+    username: ${NOTIFIER_DB_USER:notifier_svc}
+    password: ${NOTIFIER_DB_PASSWORD:}
   kafka:
     bootstrap-servers: localhost:9092
     consumer:
@@ -28,9 +33,8 @@ spring:
       mail.smtp.writetimeout: 10000
 
 notifier:
-  # false = 드라이런(로그만). 실제 발송에는 .env에 NOTIFIER_SEND_ENABLED=true와 SMTP_*, 발신·수신 주소가 필요하다.
+  # false = 드라이런(로그만). 실제 발송에는 .env에 NOTIFIER_SEND_ENABLED=true와 SMTP_*, 발신 주소가 필요하다. 받는 사람은 DB(member_mail)에서 고른다.
   send-enabled: ${NOTIFIER_SEND_ENABLED:false}
   sender: ${NOTIFIER_SENDER:}
-  recipient: ${NOTIFIER_RECIPIENT:}
   subject-prefix: ${NOTIFIER_SUBJECT_PREFIX:[시뮬레이션]}
   max-per-hour: ${NOTIFIER_MAX_PER_HOUR:6}

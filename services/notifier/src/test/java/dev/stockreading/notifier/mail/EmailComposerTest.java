@@ -28,7 +28,7 @@ class EmailComposerTest {
     }
 
     private static EmailComposer composer(String prefix) {
-        return new EmailComposer(new NotifierProperties(false, "from@example.com", "to@example.com", prefix, 6));
+        return new EmailComposer(new NotifierProperties(false, "from@example.com", prefix, 6));
     }
 
     @Test

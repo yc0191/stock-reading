@@ -78,6 +78,71 @@ services:
       postgres:
         condition: service_healthy
 
+  # market 표를 Flyway로 먼저 만든다(services/market/src/main/resources/db/migration). personal 스키마가 market.etf·market.stock을
+  # 가리키므로 personal보다 먼저 끝나 있어야 한다. Java 서비스(market)가 기동할 때 적용하는 것과 같은 파일이라 이어서 기동해도 충돌하지 않는다.
+  market-migrate:
+    image: flyway/flyway:12.4.0
+    container_name: stock-market-migrate
+    command: migrate
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      FLYWAY_USER: ${MARKET_DB_USER}
+      FLYWAY_PASSWORD: ${MARKET_DB_PASSWORD}
+      FLYWAY_SCHEMAS: market
+      FLYWAY_DEFAULT_SCHEMA: market
+      FLYWAY_CREATE_SCHEMAS: "false"
+      FLYWAY_LOCATIONS: filesystem:/flyway/sql
+    volumes:
+      - ../../services/market/src/main/resources/db/migration:/flyway/sql:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # personal 스키마의 계정과 권한을 만든다(infra/db/personal/init.sql). 여러 번 돌려도 같다. market 표가 만들어진 뒤에 돈다.
+  personal-init:
+    image: pgvector/pgvector:0.8.7-pg17-trixie
+    container_name: stock-personal-init
+    entrypoint: ["psql", "-v", "ON_ERROR_STOP=1", "-f", "/init/init.sql"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB}
+      PGUSER: ${POSTGRES_ADMIN_USER}
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      MARKET_DB_USER: ${MARKET_DB_USER}
+      PERSONAL_OWNER_DB_USER: ${PERSONAL_OWNER_DB_USER}
+      PERSONAL_OWNER_DB_PASSWORD: ${PERSONAL_OWNER_DB_PASSWORD}
+      PERSONAL_WRITER_DB_USER: ${PERSONAL_WRITER_DB_USER}
+      PERSONAL_WRITER_DB_PASSWORD: ${PERSONAL_WRITER_DB_PASSWORD}
+      COLLECTOR_DB_USER: ${COLLECTOR_DB_USER}
+      COLLECTOR_DB_PASSWORD: ${COLLECTOR_DB_PASSWORD}
+      NOTIFIER_DB_USER: ${NOTIFIER_DB_USER}
+      NOTIFIER_DB_PASSWORD: ${NOTIFIER_DB_PASSWORD}
+    volumes:
+      - ../db/personal/init.sql:/init/init.sql:ro
+    depends_on:
+      market-migrate:
+        condition: service_completed_successfully
+
+  # personal 표(멤버·메일·포트폴리오)를 Flyway로 만든다(infra/db/personal/migration). market 표와 계정이 만들어진 뒤에 돈다.
+  # 새 파일을 더한 뒤에는 `docker compose -f infra/compose/docker-compose.yml --env-file .env run --rm personal-migrate`로 다시 적용한다.
+  personal-migrate:
+    image: flyway/flyway:12.4.0
+    container_name: stock-personal-migrate
+    command: ["migrate", "-placeholders.market_user=${MARKET_DB_USER}", "-placeholders.collector_user=${COLLECTOR_DB_USER}", "-placeholders.notifier_user=${NOTIFIER_DB_USER}", "-placeholders.writer_user=${PERSONAL_WRITER_DB_USER}"]
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      FLYWAY_USER: ${PERSONAL_OWNER_DB_USER}
+      FLYWAY_PASSWORD: ${PERSONAL_OWNER_DB_PASSWORD}
+      FLYWAY_SCHEMAS: personal
+      FLYWAY_DEFAULT_SCHEMA: personal
+      FLYWAY_CREATE_SCHEMAS: "false"
+      FLYWAY_LOCATIONS: filesystem:/flyway/sql
+    volumes:
+      - ../db/personal/migration:/flyway/sql:ro
+    depends_on:
+      personal-init:
+        condition: service_completed_successfully
+
   # 개발 전용 GUI이며 localhost에만 열린다. Kafka UI: http://localhost:8080  Adminer: http://localhost:8081
   kafka-ui:
     image: provectuslabs/kafka-ui:v0.7.2

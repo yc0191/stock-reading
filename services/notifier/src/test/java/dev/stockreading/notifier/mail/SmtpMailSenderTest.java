@@ -26,18 +26,18 @@ class SmtpMailSenderTest {
         return client;
     }
 
-    private static NotifierProperties properties(String sender, String recipient) {
-        return new NotifierProperties(true, sender, recipient, "", 6);
+    private static NotifierProperties properties(String sender) {
+        return new NotifierProperties(true, sender, "", 6);
     }
 
     @Test
     void deliversKoreanSubjectAndBodyIntact() throws Exception {
-        var sender = new SmtpMailSender(smtpClient(), properties("from@example.com", "to@example.com"));
+        var sender = new SmtpMailSender(smtpClient(), properties("from@example.com"));
         var email = new EmailMessage(
                 "[시뮬레이션] [TEST01] 하락 -1.50% 브리핑",
                 "[TEST01] 16:00 기준 하락 -1.50% (10,000 → 9,850)\n※ 투자 조언이 아닙니다.");
 
-        sender.send(email);
+        sender.send("to@example.com", email);
 
         MimeMessage[] received = GREEN_MAIL.getReceivedMessages();
         assertThat(received).hasSize(1);
@@ -48,10 +48,8 @@ class SmtpMailSenderTest {
     }
 
     @Test
-    void refusesToStartWithoutARecipientOrSender() {
-        assertThatThrownBy(() -> new SmtpMailSender(smtpClient(), properties("from@example.com", "")))
-                .isInstanceOf(IllegalStateException.class).hasMessageContaining("recipient");
-        assertThatThrownBy(() -> new SmtpMailSender(smtpClient(), properties(null, "to@example.com")))
+    void refusesToStartWithoutASender() {
+        assertThatThrownBy(() -> new SmtpMailSender(smtpClient(), properties(null)))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("sender");
     }
 
@@ -66,9 +64,9 @@ class SmtpMailSenderTest {
             }
         };
         failing.setHost("localhost");
-        var sender = new SmtpMailSender(failing, properties("from@example.com", "to@example.com"));
+        var sender = new SmtpMailSender(failing, properties("from@example.com"));
 
-        assertThatThrownBy(() -> sender.send(new EmailMessage("subject", "body")))
+        assertThatThrownBy(() -> sender.send("to@example.com", new EmailMessage("subject", "body")))
                 .isInstanceOf(MailDeliveryException.class)
                 .hasMessageContaining("554 Access denied")
                 .hasMessageNotContaining("to@example.com")
@@ -80,20 +78,20 @@ class SmtpMailSenderTest {
     void refusesToStartWithoutAnSmtpHost() {
         var noHost = new JavaMailSenderImpl();
 
-        assertThatThrownBy(() -> new SmtpMailSender(noHost, properties("from@example.com", "to@example.com")))
+        assertThatThrownBy(() -> new SmtpMailSender(noHost, properties("from@example.com")))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("SMTP_HOST");
     }
 
     @Test
     void htmlMailArrivesAsTextPlusHtmlWithTheInlineImageAttached() throws Exception {
-        var sender = new SmtpMailSender(smtpClient(), properties("from@example.com", "to@example.com"));
+        var sender = new SmtpMailSender(smtpClient(), properties("from@example.com"));
         byte[] png = java.util.Base64.getDecoder().decode(
                 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==");
         var email = new EmailMessage("[시뮬레이션] 아침 판 데일리 브리핑", "글자판 본문 한글",
                 "<html><body><p>HTML 본문 한글</p><img src=\"cid:chart-1\"></body></html>",
                 java.util.List.of(new EmailMessage.InlineImage("chart-1", "image/png", png)));
 
-        sender.send(email);
+        sender.send("to@example.com", email);
 
         MimeMessage[] received = GREEN_MAIL.getReceivedMessages();
         assertThat(received).hasSize(1);
@@ -141,9 +139,9 @@ class SmtpMailSenderTest {
 
     private static java.util.List<String> sendDailyAndListInlineContentIds(
             java.util.List<dev.stockreading.notifier.event.DailyBriefingEnvelope.Image> images) throws Exception {
-        var props = properties("from@example.com", "to@example.com");
+        var props = properties("from@example.com");
         var email = new DailyEmailComposer(props).compose(daily(images));
-        new SmtpMailSender(smtpClient(), props).send(email);
+        new SmtpMailSender(smtpClient(), props).send("to@example.com", email);
 
         MimeMessage[] received = GREEN_MAIL.getReceivedMessages();
         assertThat(received).hasSize(1);
@@ -204,9 +202,9 @@ class SmtpMailSenderTest {
 
     @Test
     void textOnlyMailIsStillASinglePartPlainMail() throws Exception {
-        var sender = new SmtpMailSender(smtpClient(), properties("from@example.com", "to@example.com"));
+        var sender = new SmtpMailSender(smtpClient(), properties("from@example.com"));
 
-        sender.send(new EmailMessage("subject", "plain body"));
+        sender.send("to@example.com", new EmailMessage("subject", "plain body"));
 
         MimeMessage[] received = GREEN_MAIL.getReceivedMessages();
         assertThat(received[0].isMimeType("text/plain")).isTrue();

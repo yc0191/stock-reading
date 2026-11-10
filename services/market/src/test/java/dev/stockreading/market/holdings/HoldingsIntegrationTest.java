@@ -10,36 +10,27 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import dev.stockreading.market.DisposableDatabase;
+
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import tools.jackson.databind.json.JsonMapper;
-
 /**
- * 종목·ETF 구성 테이블의 마이그레이션, 파일과 똑같이 맞추기, 조회를 실제 Postgres로 확인한다. 세 환경변수가 모두 있을 때만 실행하며,
- * 대상은 비어 있는 새 DB(public 스키마)라고 가정한다. 이 테이블만 쓰므로 다른 테스트 클래스와 데이터가 겹치지 않는다.
+ * ETF·주식 표와 연결 표, 개인 포트폴리오로 계산하는 보유·관심 구분, 목록 조회를 실제 Postgres로 확인한다.
+ * 환경변수가 모두 있을 때만 실행하며, 시세처리기 계정으로 market 표를 읽고 쓰기 계정(WRITER_IT_DB_*)으로 personal 표를 채운다.
+ * personal 스키마가 먼저 만들어져 있어야 한다(전체 실행 스크립트가 준비한다). 이 테스트는 시작할 때 두 스키마의 관련 표를 비운다.
  */
 @EnabledIfEnvironmentVariable(named = "MARKET_IT_DB_URL", matches = ".+")
 @EnabledIfEnvironmentVariable(named = "MARKET_IT_DB_USER", matches = ".+")
 @EnabledIfEnvironmentVariable(named = "MARKET_IT_DB_PASSWORD", matches = ".+")
+@EnabledIfEnvironmentVariable(named = "WRITER_IT_DB_USER", matches = ".+")
+@EnabledIfEnvironmentVariable(named = "WRITER_IT_DB_PASSWORD", matches = ".+")
 class HoldingsIntegrationTest {
 
-    private static final String FIRST = """
-            [
-              {"kind": "ETF", "market": "KR", "symbol": "TEST01", "name": "TEST ETF ONE", "tracks": "TEST INDEX",
-               "sector": "TEST SECTOR", "relation": "HELD",
-               "members": [
-                 {"market": "US", "symbol": "FAKEA", "name": "FAKE CORP A", "weight": 12.5, "rank": 1},
-                 {"market": "US", "symbol": "FAKE.B", "weight": 8.25, "rank": 2},
-                 {"market": "KR", "symbol": "TEST09", "rank": 3}]},
-              {"kind": "ETF", "market": "KR", "symbol": "TEST02", "relation": "WATCH",
-               "members": [{"market": "US", "symbol": "FAKEA", "weight": 30}]}
-            ]
-            """;
-
     private static JdbcClient jdbc;
+    private static JdbcClient writer;
     private static HoldingsRepository repository;
 
     @BeforeAll
@@ -47,44 +38,96 @@ class HoldingsIntegrationTest {
         String url = System.getenv("MARKET_IT_DB_URL");
         String user = System.getenv("MARKET_IT_DB_USER");
         String password = System.getenv("MARKET_IT_DB_PASSWORD");
+        DisposableDatabase.require(JdbcClient.create(new DriverManagerDataSource(url, user, password)));
         Flyway.configure().dataSource(url, user, password).locations("classpath:db/migration").load().migrate();
         DriverManagerDataSource dataSource = new DriverManagerDataSource(url, user, password);
         jdbc = JdbcClient.create(dataSource);
+        writer = JdbcClient.create(new DriverManagerDataSource(url, System.getenv("WRITER_IT_DB_USER"),
+                System.getenv("WRITER_IT_DB_PASSWORD")));
         repository = new HoldingsRepository(jdbc,
                 new TransactionTemplate(new DataSourceTransactionManager(dataSource)));
     }
 
     @BeforeEach
     void startEmpty() {
-        repository.replaceAll(HoldingsPlan.empty());
+        // 포트폴리오가 종목 행을 가리키므로 personal 쪽을 먼저 비운다.
+        writer.sql("DELETE FROM personal.member_portfolio").update();
+        writer.sql("DELETE FROM personal.member").update();
+        jdbc.sql("DELETE FROM etf_stock_map").update();
+        jdbc.sql("DELETE FROM etf").update();
+        jdbc.sql("DELETE FROM stock").update();
+        etf("TEST01", "TEST ETF ONE", "TEST INDEX");
+        etf("TEST02", null, null);
+        etf("TEST03", null, null);
+        stock("US", "FAKEA", "FAKE CORP A");
+        stock("US", "FAKE-B", null);
+        stock("KR", "TEST09", null);
+        map("TEST01", "FAKEA", "12.5", 1);
+        map("TEST01", "FAKE-B", "8.25", 2);
+        map("TEST01", "TEST09", null, 3);
+        map("TEST02", "FAKEA", "30", 1);
     }
 
-    private static HoldingsPlan plan(String json) {
-        return HoldingsFileParser.parse(json, JsonMapper.builder().build());
+    private static void etf(String symbol, String name, String tracks) {
+        jdbc.sql("INSERT INTO etf (market, symbol, name, tracks) VALUES ('KR', :symbol, :name, :tracks)")
+                .param("symbol", symbol).param("name", name).param("tracks", tracks).update();
+    }
+
+    private static void stock(String market, String symbol, String name) {
+        jdbc.sql("INSERT INTO stock (market, symbol, name) VALUES (:market, :symbol, :name)")
+                .param("market", market).param("symbol", symbol).param("name", name).update();
+    }
+
+    private static void map(String etf, String stock, String weight, int rank) {
+        jdbc.sql("""
+                        INSERT INTO etf_stock_map (etf_id, stock_id, weight, rank)
+                        VALUES ((SELECT id FROM etf WHERE symbol = :etf), (SELECT id FROM stock WHERE symbol = :stock),
+                                :weight, :rank)
+                        """)
+                .param("etf", etf).param("stock", stock)
+                .param("weight", weight == null ? null : new BigDecimal(weight)).param("rank", rank).update();
+    }
+
+    private static long member(String name) {
+        return writer.sql("INSERT INTO personal.member (name) VALUES (:name) RETURNING id").param("name", name)
+                .query(Long.class).single();
+    }
+
+    private static void portfolioEtf(long memberId, String etf, String relation) {
+        writer.sql("""
+                        INSERT INTO personal.member_portfolio (member_id, etf_id, relation)
+                        VALUES (:member, (SELECT id FROM market.etf WHERE symbol = :etf), :relation)
+                        """)
+                .param("member", memberId).param("etf", etf).param("relation", relation).update();
+    }
+
+    private static void portfolioStock(long memberId, String stock, String relation) {
+        writer.sql("""
+                        INSERT INTO personal.member_portfolio (member_id, stock_id, relation)
+                        VALUES (:member, (SELECT id FROM market.stock WHERE symbol = :stock), :relation)
+                        """)
+                .param("member", memberId).param("stock", stock).param("relation", relation).update();
     }
 
     @Test
-    void sharedStockIsOneInstrumentRowAndEachEtfGetsItsOwnMemberRow() {
-        repository.replaceAll(plan(FIRST));
-
-        assertThat(count("instrument")).isEqualTo(5);
-        assertThat(count("etf_member")).isEqualTo(4);
-        assertThat(jdbc.sql("SELECT count(*) FROM instrument WHERE symbol = 'FAKEA'").query(Long.class).single())
+    void sharedStockIsOneStockRowAndEachEtfGetsItsOwnMapRow() {
+        assertThat(count("etf")).isEqualTo(3);
+        assertThat(count("stock")).isEqualTo(3);
+        assertThat(count("etf_stock_map")).isEqualTo(4);
+        assertThat(jdbc.sql("SELECT count(*) FROM stock WHERE symbol = 'FAKEA'").query(Long.class).single())
                 .isEqualTo(1);
-        assertThat(jdbc.sql("SELECT count(*) FROM etf_member em JOIN instrument m ON m.id = em.member_id "
-                + "WHERE m.symbol = 'FAKEA'").query(Long.class).single()).isEqualTo(2);
+        assertThat(jdbc.sql("SELECT count(*) FROM etf_stock_map m JOIN stock s ON s.id = m.stock_id "
+                + "WHERE s.symbol = 'FAKEA'").query(Long.class).single()).isEqualTo(2);
     }
 
     @Test
     void etfInfoAndTickersAreReadBackInRankOrder() {
-        repository.replaceAll(plan(FIRST));
-
         assertThat(repository.topTickers("TEST01")).containsExactly("FAKEA", "FAKE-B");
         assertThat(repository.topTickers("TEST99")).isEmpty();
         EtfInfo info = repository.etfInfo("TEST01").orElseThrow();
         assertThat(info.name()).isEqualTo("TEST ETF ONE");
         assertThat(info.tracks()).isEqualTo("TEST INDEX");
-        assertThat(info.sector()).isEqualTo("TEST SECTOR");
+        assertThat(info.sector()).isNull();
         assertThat(info.members()).extracting(EtfInfo.Member::symbol).containsExactly("FAKEA", "FAKE-B", "TEST09");
         assertThat(info.members().get(0).weight()).isEqualByComparingTo(new BigDecimal("12.5"));
         assertThat(info.members().get(0).name()).isEqualTo("FAKE CORP A");
@@ -95,67 +138,70 @@ class HoldingsIntegrationTest {
     }
 
     @Test
-    void trackedEtfsAreKrEtfsHeldOrWatchedInCodeOrderWithTheirRelationAndLeaveOutNoneAndMembers() {
-        repository.replaceAll(plan("""
-                [{"kind": "ETF", "market": "KR", "symbol": "TEST03", "relation": "WATCH"},
-                 {"kind": "ETF", "market": "KR", "symbol": "TEST01", "relation": "HELD",
-                  "members": [{"market": "US", "symbol": "FAKEA", "rank": 1}]},
-                 {"kind": "ETF", "market": "KR", "symbol": "TEST02", "relation": "NONE"},
-                 {"kind": "ETF", "market": "KR", "symbol": "TEST04"}]
-                """));
+    void relationIsHeldIfAnyMemberHoldsItElseWatchIfAnyMemberWatchesItElseNone() {
+        long first = member("MEMBER ONE");
+        long second = member("MEMBER TWO");
+        portfolioEtf(first, "TEST01", "WATCH");
+        portfolioEtf(second, "TEST01", "HELD");
+        portfolioEtf(first, "TEST02", "WATCH");
+        portfolioStock(second, "FAKEA", "HELD");
 
-        assertThat(repository.trackedEtfs()).containsExactly(
-                new HoldingsPort.TrackedEtf("TEST01", "HELD"), new HoldingsPort.TrackedEtf("TEST03", "WATCH"));
-        assertThat(repository.trackedEtfs()).extracting(HoldingsPort.TrackedEtf::relation)
-                .containsExactly("HELD", "WATCH");
+        HoldingsSnapshot snapshot = repository.readSnapshot();
+
+        assertThat(snapshot.instruments()).hasSize(6);
+        assertThat(relationOf(snapshot, "TEST01")).isEqualTo("HELD");
+        assertThat(relationOf(snapshot, "TEST02")).isEqualTo("WATCH");
+        assertThat(relationOf(snapshot, "TEST03")).isEqualTo("NONE");
+        assertThat(relationOf(snapshot, "FAKEA")).isEqualTo("HELD");
+        assertThat(relationOf(snapshot, "FAKE-B")).isEqualTo("NONE");
+        assertThat(snapshot.instruments()).filteredOn(i -> i.symbol().startsWith("TEST0") && !i.symbol().equals("TEST09"))
+                .extracting(i -> i.kind()).containsOnly("ETF");
+        assertThat(snapshot.instruments()).filteredOn(i -> i.symbol().equals("FAKEA"))
+                .extracting(i -> i.kind()).containsExactly("STOCK");
     }
 
     @Test
-    void trackedEtfsAreEmptyWhenTheTableIsEmpty() {
+    void aPortfolioOfADisabledMemberDoesNotCount() {
+        long off = member("MEMBER OFF");
+        writer.sql("UPDATE personal.member SET enabled = FALSE WHERE id = :id").param("id", off).update();
+        portfolioEtf(off, "TEST02", "HELD");
+        portfolioEtf(off, "TEST03", "WATCH");
+        portfolioEtf(member("MEMBER ON"), "TEST01", "WATCH");
+
+        HoldingsSnapshot snapshot = repository.readSnapshot();
+
+        assertThat(relationOf(snapshot, "TEST01")).isEqualTo("WATCH");
+        assertThat(relationOf(snapshot, "TEST02")).isEqualTo("NONE");
+        assertThat(relationOf(snapshot, "TEST03")).isEqualTo("NONE");
+        assertThat(repository.trackedEtfs()).containsExactly(new HoldingsPort.TrackedEtf("TEST01", "WATCH"));
+    }
+
+    private static String relationOf(HoldingsSnapshot snapshot, String symbol) {
+        return snapshot.instruments().stream().filter(i -> i.symbol().equals(symbol)).findFirst().orElseThrow()
+                .relation();
+    }
+
+    @Test
+    void trackedEtfsAreKrEtfsInAPortfolioInCodeOrderWithTheirRelationAndLeaveOutOthers() {
+        long first = member("MEMBER ONE");
+        portfolioEtf(first, "TEST03", "WATCH");
+        portfolioEtf(first, "TEST01", "HELD");
+        portfolioStock(first, "FAKEA", "HELD");
+
+        assertThat(repository.trackedEtfs()).containsExactly(
+                new HoldingsPort.TrackedEtf("TEST01", "HELD"), new HoldingsPort.TrackedEtf("TEST03", "WATCH"));
+    }
+
+    @Test
+    void trackedEtfsAreEmptyWhenNobodyHoldsAnEtf() {
         assertThat(repository.trackedEtfs()).isEmpty();
     }
 
     @Test
-    void syncingAgainWithADifferentFileMakesTheTablesIdenticalToIt() {
-        repository.replaceAll(plan(FIRST));
-        repository.replaceAll(plan("""
-                [{"kind": "ETF", "market": "KR", "symbol": "TEST01", "name": "TEST ETF RENAMED",
-                  "members": [{"market": "US", "symbol": "FAKEC", "weight": 50}]}]
-                """));
-
-        assertThat(count("instrument")).isEqualTo(2);
-        assertThat(count("etf_member")).isEqualTo(1);
-        assertThat(repository.topTickers("TEST01")).containsExactly("FAKEC");
-        assertThat(repository.topTickers("TEST02")).isEmpty();
-        assertThat(repository.etfInfo("TEST01").orElseThrow().name()).isEqualTo("TEST ETF RENAMED");
-        assertThat(repository.etfInfo("TEST01").orElseThrow().tracks()).isNull();
-    }
-
-    @Test
-    void syncingTheSameFileTwiceChangesNothing() {
-        repository.replaceAll(plan(FIRST));
-        repository.replaceAll(plan(FIRST));
-
-        assertThat(count("instrument")).isEqualTo(5);
-        assertThat(count("etf_member")).isEqualTo(4);
-    }
-
-    @Test
-    void isEmptyReflectsWhetherTheInstrumentTableHasRows() {
-        assertThat(repository.isEmpty()).isTrue();
-
-        repository.replaceAll(plan(FIRST));
-
-        assertThat(repository.isEmpty()).isFalse();
-    }
-
-    @Test
     void readSnapshotReturnsTheWholeListWithNamesAndRanksAndTheHashChangesOnlyWhenTheTablesChange() {
-        repository.replaceAll(plan(FIRST));
-
         HoldingsSnapshot snapshot = repository.readSnapshot();
 
-        assertThat(snapshot.instruments()).hasSize(5);
+        assertThat(snapshot.instruments()).hasSize(6);
         assertThat(snapshot.memberships()).hasSize(4);
         assertThat(snapshot.instruments()).anySatisfy(i -> {
             assertThat(i.symbol()).isEqualTo("FAKEA");
@@ -171,28 +217,24 @@ class HoldingsIntegrationTest {
             assertThat(m.memberSymbol()).isEqualTo("FAKE-B");
             assertThat(m.rank()).isEqualTo(2);
         });
-        assertThat(snapshot.memberships()).anySatisfy(m -> {
-            assertThat(m.etfSymbol()).isEqualTo("TEST02");
-            // 파일에 rank가 없으면 파서가 적힌 순서(1부터)로 채운다.
-            assertThat(m.rank()).isEqualTo(1);
-        });
         String before = snapshot.contentHash();
-        // 같은 내용으로 다시 채워도(updated_at만 바뀜) 해시는 같다.
-        repository.replaceAll(plan(FIRST));
+        // updated_at만 바뀌어도 해시는 같다.
+        jdbc.sql("UPDATE etf SET updated_at = now()").update();
         assertThat(repository.readSnapshot().contentHash()).isEqualTo(before);
-        // 테이블을 직접 고치면 해시가 달라진다.
-        jdbc.sql("UPDATE instrument SET relation = 'WATCH' WHERE symbol = 'TEST01'").update();
-        assertThat(repository.readSnapshot().contentHash()).isNotEqualTo(before);
+        // 개인 포트폴리오가 바뀌면 relation이 달라져 해시가 달라진다.
+        portfolioEtf(member("MEMBER ONE"), "TEST01", "WATCH");
+        String afterPortfolio = repository.readSnapshot().contentHash();
+        assertThat(afterPortfolio).isNotEqualTo(before);
+        // 구성 관계를 직접 고쳐도 달라진다.
+        jdbc.sql("UPDATE etf_stock_map SET rank = 9 WHERE rank = 2").update();
+        assertThat(repository.readSnapshot().contentHash()).isNotEqualTo(afterPortfolio);
     }
 
     @Test
     void readSnapshotKeepsANullRankWhenTheTableRowHasNone() {
-        repository.replaceAll(plan(FIRST));
-        // 테이블은 rank를 비워 둘 수 있으므로 SQL로 직접 넣어 확인한다.
-        jdbc.sql("INSERT INTO instrument (kind, market, symbol) VALUES ('STOCK', 'US', 'FAKENR')").update();
-        jdbc.sql("INSERT INTO etf_member (etf_id, member_id) "
-                + "SELECT e.id, m.id FROM instrument e, instrument m "
-                + "WHERE e.symbol = 'TEST01' AND m.symbol = 'FAKENR'").update();
+        stock("US", "FAKENR", null);
+        jdbc.sql("INSERT INTO etf_stock_map (etf_id, stock_id) "
+                + "SELECT e.id, s.id FROM etf e, stock s WHERE e.symbol = 'TEST01' AND s.symbol = 'FAKENR'").update();
 
         assertThat(repository.readSnapshot().memberships()).anySatisfy(m -> {
             assertThat(m.memberSymbol()).isEqualTo("FAKENR");
@@ -201,38 +243,32 @@ class HoldingsIntegrationTest {
     }
 
     @Test
-    void emptyPlanClearsBothTables() {
-        repository.replaceAll(plan(FIRST));
-        repository.replaceAll(HoldingsPlan.empty());
+    void emptyTablesGiveAnEmptyList() {
+        jdbc.sql("DELETE FROM etf_stock_map").update();
+        jdbc.sql("DELETE FROM etf").update();
+        jdbc.sql("DELETE FROM stock").update();
 
-        assertThat(count("instrument")).isZero();
-        assertThat(count("etf_member")).isZero();
+        HoldingsSnapshot snapshot = repository.readSnapshot();
+
+        assertThat(snapshot.instruments()).isEmpty();
+        assertThat(snapshot.memberships()).isEmpty();
     }
 
     @Test
-    void failedSyncKeepsThePreviousState() {
-        repository.replaceAll(plan(FIRST));
-        // 없는 종목을 가리키는 구성 관계로 중간에 실패시킨다.
-        HoldingsPlan broken = new HoldingsPlan(plan(FIRST).instruments(), java.util.List.of(
-                new HoldingsPlan.Membership("KR", "TEST01", "US", "NOSUCH", null, 1)));
+    void aStockInAPortfolioCannotBeDeleted() {
+        portfolioStock(member("MEMBER ONE"), "FAKEA", "HELD");
 
-        assertThatThrownBy(() -> repository.replaceAll(broken)).isInstanceOf(RuntimeException.class);
-
-        assertThat(count("etf_member")).isEqualTo(4);
-        assertThat(repository.topTickers("TEST01")).containsExactly("FAKEA", "FAKE-B");
+        assertThatThrownBy(() -> jdbc.sql("DELETE FROM stock WHERE symbol = 'FAKEA'").update())
+                .isInstanceOf(RuntimeException.class);
     }
 
     @Test
     void tableRulesRejectBadRows() {
-        repository.replaceAll(plan(FIRST));
-
-        assertThatThrownBy(() -> jdbc.sql("INSERT INTO instrument (kind, market, symbol, tracks) "
-                + "VALUES ('STOCK', 'US', 'FAKEZ', 'X')").update()).isInstanceOf(RuntimeException.class);
-        assertThatThrownBy(() -> jdbc.sql("INSERT INTO instrument (kind, market, symbol) "
-                + "VALUES ('STOCK', 'US', 'FAKEA')").update()).isInstanceOf(RuntimeException.class);
-        assertThatThrownBy(() -> jdbc.sql("UPDATE etf_member SET weight = 100.5").update())
+        assertThatThrownBy(() -> stock("US", "FAKEA", "DUPLICATE")).isInstanceOf(RuntimeException.class);
+        assertThatThrownBy(() -> etf("TEST01", "DUPLICATE", null)).isInstanceOf(RuntimeException.class);
+        assertThatThrownBy(() -> jdbc.sql("UPDATE etf_stock_map SET weight = 100.5").update())
                 .isInstanceOf(RuntimeException.class);
-        assertThatThrownBy(() -> jdbc.sql("UPDATE etf_member SET rank = 0").update())
+        assertThatThrownBy(() -> jdbc.sql("UPDATE etf_stock_map SET rank = 0").update())
                 .isInstanceOf(RuntimeException.class);
     }
 

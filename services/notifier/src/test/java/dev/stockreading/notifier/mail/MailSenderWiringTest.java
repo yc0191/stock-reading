@@ -51,8 +51,7 @@ class MailSenderWiringTest {
     void enablingSendingSwitchesToSmtpOnly() {
         runner.withPropertyValues(
                         "notifier.send-enabled=true",
-                        "notifier.sender=from@example.com",
-                        "notifier.recipient=to@example.com")
+                        "notifier.sender=from@example.com")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context).hasSingleBean(SmtpMailSender.class);
@@ -61,8 +60,8 @@ class MailSenderWiringTest {
     }
 
     @Test
-    void enablingSendingWithoutARecipientFailsFastInsteadOfSilentlyDoingNothing() {
-        runner.withPropertyValues("notifier.send-enabled=true", "notifier.sender=from@example.com")
+    void enablingSendingWithoutASenderFailsFastInsteadOfSilentlyDoingNothing() {
+        runner.withPropertyValues("notifier.send-enabled=true")
                 .run(context -> assertThat(context).hasFailed());
     }
 }

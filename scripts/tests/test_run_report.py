@@ -425,7 +425,7 @@ def test_plan_with_live_lists_the_briefing_and_mail_step():
 def test_script_checks_every_live_key_before_calling_anything():
     text = SCRIPT.read_text(encoding="utf-8")
     keys = text.split('LIVE_KEYS="', 1)[1].split('"', 1)[0].split()
-    assert {"BROKER_APP_KEY", "TEST_ALL_LIVE_SYMBOL", "ANTHROPIC_API_KEY", "SMTP_HOST", "NOTIFIER_RECIPIENT"} <= set(keys)
+    assert {"BROKER_APP_KEY", "TEST_ALL_LIVE_SYMBOL", "ANTHROPIC_API_KEY", "SMTP_HOST", "TEST_ALL_LIVE_RECIPIENT"} <= set(keys)
     # 키 확인이 bootJar·Kafka 기동보다 앞에 있어야 한다.
     body = text.split("run_live() {", 1)[1]
     assert body.index("fetch_live_params") < body.index("missing_live_keys") < body.index("bootJar") < body.index("docker run")

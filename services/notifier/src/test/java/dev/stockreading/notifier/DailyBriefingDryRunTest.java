@@ -1,9 +1,13 @@
 package dev.stockreading.notifier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,6 +24,8 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import dev.stockreading.notifier.mail.MailSenderPort;
+import dev.stockreading.notifier.recipient.Recipient;
+import dev.stockreading.notifier.recipient.RecipientPort;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -40,6 +46,13 @@ class DailyBriefingDryRunTest {
         }
 
         @Bean
+        RecipientPort recipientPort() {
+            RecipientPort port = mock(RecipientPort.class);
+            when(port.forEdition(any())).thenReturn(List.of(new Recipient(1, "reader@example.com")));
+            return port;
+        }
+
+        @Bean
         Clock clock() {
             return new TestClock(Instant.parse("2026-10-20T08:00:00Z"));
         }
@@ -47,8 +60,7 @@ class DailyBriefingDryRunTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withUserConfiguration(Wiring.class)
-            .withPropertyValues("notifier.recipient=reader@example.com", "notifier.subject-prefix=[시뮬레이션]",
-                    "notifier.max-per-hour=6");
+            .withPropertyValues("notifier.subject-prefix=[시뮬레이션]", "notifier.max-per-hour=6");
 
     private ListAppender<ILoggingEvent> logs;
 

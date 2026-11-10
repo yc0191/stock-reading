@@ -13,7 +13,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
-/** 구성 종목 이력(etf_member_history)과 교체 일정을 읽고 쓰며, 구성이 바뀌면 종목 테이블의 구성(etf_member)도 맞춘다. */
+/** 구성 종목 이력(etf_stock_history)과 교체 일정을 읽고 쓰며, 구성이 바뀌면 ETF 구성 연결 표(etf_stock_map)도 맞춘다. */
 @Repository
 class MemberRepository implements MemberChangesPort {
 
@@ -32,18 +32,19 @@ class MemberRepository implements MemberChangesPort {
         this.mapper = mapper;
     }
 
-    /** 자동 조회 대상 후보: 관계가 HELD 또는 WATCH인 국내 ETF. */
+    /** 자동 조회 대상: 출처 번호(constituent_source_id)가 있는 국내 ETF. 번호가 없는 ETF는 구성 종목을 직접 고친다. */
     List<Target> targets() {
         return jdbc.sql("""
-                        SELECT id, symbol, tracks FROM instrument
-                        WHERE kind = 'ETF' AND market = 'KR' AND relation IN ('HELD', 'WATCH')
+                        SELECT id, symbol, tracks, constituent_source_id FROM etf
+                        WHERE market = 'KR' AND constituent_source_id IS NOT NULL AND btrim(constituent_source_id) <> ''
                         ORDER BY symbol
                         """)
-                .query((rs, rowNum) -> new Target(rs.getLong("id"), rs.getString("symbol"), rs.getString("tracks")))
+                .query((rs, rowNum) -> new Target(rs.getLong("id"), rs.getString("symbol"), rs.getString("tracks"),
+                        rs.getString("constituent_source_id").strip()))
                 .list();
     }
 
-    record Target(long etfId, String symbol, String tracks) {
+    record Target(long etfId, String symbol, String tracks, String fundId) {
     }
 
     /** today가 든 달에 이 지수의 교체일이 있으면 true. */
@@ -63,7 +64,7 @@ class MemberRepository implements MemberChangesPort {
     /** 가장 최근 이력 행. 아직 없으면 빈 값. */
     Optional<Latest> latest(long etfId) {
         return jdbc.sql("""
-                        SELECT id, members, last_seen_on FROM etf_member_history
+                        SELECT id, members, last_seen_on FROM etf_stock_history
                         WHERE etf_id = :etf ORDER BY applied_at DESC, id DESC LIMIT 1
                         """)
                 .param("etf", etfId)
@@ -76,18 +77,18 @@ class MemberRepository implements MemberChangesPort {
     }
 
     /**
-     * 구성이 그대로일 때: 이력은 마지막으로 확인한 날만 고치고, 종목 테이블의 비중(etf_member.weight)은 새로 받은 값으로 맞춘다.
+     * 구성이 그대로일 때: 이력은 마지막으로 확인한 날만 고치고, 연결 표의 비중(etf_stock_map.weight)은 새로 받은 값으로 맞춘다.
      * 비중은 구성 비교와 holdings 해시에 들어가지 않으므로 고쳐도 변경으로 보지 않는다.
      */
     void touch(long historyId, long etfId, List<Member> members, LocalDate today) {
         transaction.executeWithoutResult(status -> {
-            jdbc.sql("UPDATE etf_member_history SET last_seen_on = :today WHERE id = :id AND last_seen_on < :today")
+            jdbc.sql("UPDATE etf_stock_history SET last_seen_on = :today WHERE id = :id AND last_seen_on < :today")
                     .param("today", today).param("id", historyId).update();
             for (Member m : members) {
                 jdbc.sql("""
-                                UPDATE etf_member SET weight = :weight
+                                UPDATE etf_stock_map SET weight = :weight
                                 WHERE etf_id = :etf
-                                  AND member_id = (SELECT id FROM instrument WHERE market = :market AND symbol = :symbol)
+                                  AND stock_id = (SELECT id FROM stock WHERE market = :market AND symbol = :symbol)
                                 """)
                         .param("weight", m.weight() == null ? null : new BigDecimal(m.weight()))
                         .param("etf", etfId).param("market", m.market()).param("symbol", m.symbol()).update();
@@ -95,10 +96,10 @@ class MemberRepository implements MemberChangesPort {
         });
     }
 
-    /** 받은 응답 원문을 그대로 남긴다(실패한 응답 포함). 이력(etf_member_history)은 이 원문에서 계산한 결과다. */
+    /** 받은 응답 원문을 그대로 남긴다(실패한 응답 포함). 이력(etf_stock_history)은 이 원문에서 계산한 결과다. */
     void saveRaw(long etfId, LocalDate baseDate, int httpStatus, String body) {
         jdbc.sql("""
-                        INSERT INTO etf_member_raw (etf_id, base_date, http_status, body)
+                        INSERT INTO etf_stock_raw (etf_id, base_date, http_status, body)
                         VALUES (:etf, :baseDate, :status, :body)
                         """)
                 .param("etf", etfId).param("baseDate", baseDate).param("status", httpStatus).param("body", body)
@@ -106,51 +107,45 @@ class MemberRepository implements MemberChangesPort {
     }
 
     /**
-     * 새 구성을 이력에 넣고 종목 테이블의 이 ETF 구성을 같게 맞춘다. 한 트랜잭션이라 중간에 실패하면 이전 상태가 남는다.
-     * 관리 중인 종목(HELD·WATCH이거나 이름이 이미 있는 행)의 이름은 출처 이름으로 바꾸지 않는다.
-     * 구성 종목 중 처음 보는 종목은 구성으로만 아는 종목(NONE)으로 넣고, 어느 ETF에도 담기지 않게 된 NONE 종목은 지운다.
+     * 새 구성을 이력에 넣고 이 ETF의 연결 표(etf_stock_map) 줄을 같게 맞춘다. 한 트랜잭션이라 중간에 실패하면 이전 상태가 남는다.
+     * 연결 줄만 고치고 stock 행은 지우지 않는다(개인 포트폴리오가 주식 행을 가리킬 수 있다). 이미 이름이 있는 주식의 이름은
+     * 출처 이름으로 바꾸지 않고, 처음 보는 구성 종목은 새 stock 행으로 넣는다.
      */
     void record(long etfId, List<Member> members, LocalDate today) {
         transaction.executeWithoutResult(status -> {
             jdbc.sql("""
-                            INSERT INTO etf_member_history (etf_id, members, first_seen_on, last_seen_on)
+                            INSERT INTO etf_stock_history (etf_id, members, first_seen_on, last_seen_on)
                             VALUES (:etf, CAST(:members AS jsonb), :today, :today)
                             """)
                     .param("etf", etfId).param("members", mapper.writeValueAsString(members)).param("today", today)
                     .update();
-            jdbc.sql("DELETE FROM etf_member WHERE etf_id = :etf").param("etf", etfId).update();
+            jdbc.sql("DELETE FROM etf_stock_map WHERE etf_id = :etf").param("etf", etfId).update();
             for (Member m : members) {
-                long memberId = jdbc.sql("""
-                                INSERT INTO instrument (kind, market, symbol, name, relation, updated_at)
-                                VALUES ('STOCK', :market, :symbol, :name, 'NONE', now())
+                long stockId = jdbc.sql("""
+                                INSERT INTO stock (market, symbol, name)
+                                VALUES (:market, :symbol, :name)
                                 ON CONFLICT (market, symbol) DO UPDATE
-                                    SET name = CASE WHEN instrument.relation = 'NONE' AND instrument.name IS NULL
-                                                    THEN EXCLUDED.name ELSE instrument.name END,
-                                        updated_at = now()
+                                    SET name = COALESCE(stock.name, EXCLUDED.name),
+                                        updated_at = CASE WHEN stock.name IS NULL AND EXCLUDED.name IS NOT NULL
+                                                          THEN now() ELSE stock.updated_at END
                                 RETURNING id
                                 """)
                         .param("market", m.market()).param("symbol", m.symbol()).param("name", m.name())
                         .query(Long.class).single();
-                jdbc.sql("INSERT INTO etf_member (etf_id, member_id, weight, rank) VALUES (:etf, :member, :weight, :rank)")
-                        .param("etf", etfId).param("member", memberId)
+                jdbc.sql("INSERT INTO etf_stock_map (etf_id, stock_id, weight, rank) VALUES (:etf, :stock, :weight, :rank)")
+                        .param("etf", etfId).param("stock", stockId)
                         .param("weight", m.weight() == null ? null : new BigDecimal(m.weight()))
                         .param("rank", m.rank()).update();
             }
-            jdbc.sql("""
-                            DELETE FROM instrument
-                            WHERE kind = 'STOCK' AND relation = 'NONE'
-                              AND NOT EXISTS (SELECT 1 FROM etf_member WHERE member_id = instrument.id)
-                            """)
-                    .update();
         });
     }
 
     @Override
     public Optional<MemberChanges> changes(String etfCode, OffsetDateTime since, OffsetDateTime asOf) {
         List<MemberChangeFinder.Row> rows = jdbc.sql("""
-                        SELECT h.members, h.first_seen_on, h.last_seen_on, h.applied_at FROM etf_member_history h
-                        JOIN instrument e ON e.id = h.etf_id
-                        WHERE e.kind = 'ETF' AND e.market = 'KR' AND e.symbol = :etf AND h.applied_at <= :asOf
+                        SELECT h.members, h.first_seen_on, h.last_seen_on, h.applied_at FROM etf_stock_history h
+                        JOIN etf e ON e.id = h.etf_id
+                        WHERE e.market = 'KR' AND e.symbol = :etf AND h.applied_at <= :asOf
                         ORDER BY h.applied_at DESC, h.id DESC LIMIT :limit
                         """)
                 .param("etf", etfCode).param("asOf", asOf).param("limit", HISTORY_READ_LIMIT)

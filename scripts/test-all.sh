@@ -7,7 +7,7 @@
 #   --plan  아무것도 띄우지 않고 실행 순서만 보여 준다.
 #
 # 실제 DB 테스트는 개발용 stock-postgres 안에 이 실행만의 stock_test_run_<시각>_<pid> 데이터베이스를 만들어 쓰고 지운다.
-# 꺼져 있던 stock-postgres 는 켜고 끝나도 끄지 않는다. 서비스 계정은 만들거나 바꾸지 않는다.
+# 꺼져 있던 stock-postgres 는 켜고 끝나도 끄지 않는다. 서비스 계정은 만들거나 바꾸지 않는다(personal 계정 4개도 .env 에 있고 이미 만들어져 있어야 한다).
 # 서비스 계정 비밀번호는 .env 에서, --live 의 키는 Parameter Store 에서 필요한 키만 골라 읽어 자식 프로세스 환경변수로만 넘기고 출력하지 않는다.
 #
 # 환경변수(모두 선택):
@@ -17,7 +17,7 @@
 #   TEST_ALL_AWS_PROFILE  --live 가 Parameter Store 를 읽을 AWS CLI 프로필. --live 에서는 필수이고,
 #                         엉뚱한 계정을 읽지 않도록 기본 자격증명 방식으로 넘어가지 않는다
 #   --live 전용: BROKER_BASE_URL, BROKER_APP_KEY, BROKER_APP_SECRET, TEST_ALL_LIVE_SYMBOL(6자리),
-#               ANTHROPIC_API_KEY, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, NOTIFIER_SENDER, NOTIFIER_RECIPIENT
+#               ANTHROPIC_API_KEY, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, NOTIFIER_SENDER, TEST_ALL_LIVE_RECIPIENT
 #               (선택: SMTP_PORT, BRIEFING_LLM_MODEL)
 #               (BRIEFING_LLM_MODEL 을 뺀 위 키는) 실행할 때마다 Parameter Store 에서 새로 읽어 임시 폴더에만 두고,
 #               실행 환경변수와 .env 의 같은 키는 쓰지 않는다. 하나라도 비면 시세를 부르기 전에 실패로 끝낸다.
@@ -49,8 +49,9 @@ if [ "$PLAN" = 1 ]; then
   echo "2. 브리핑: pytest services/briefing"
   echo "3. 설정 로더·지도 검사: pytest -c scripts/pytest.ini scripts/tests"
   echo "4. 실제 DB 준비: stock-postgres 확인(꺼져 있으면 켬), stock_test_run_<시각>_<pid> 데이터베이스와 market·news·briefing 스키마 생성,"
-  echo "   브리핑 테이블은 Flyway(flyway/flyway 이미지, services/briefing/db/migration)로 만듦. 브리핑보다 먼저 적용되며, 이미지가 없으면 처음 한 번 받음"
-  echo "5. 실제 DB 테스트: 지도에서 고른 market·news·브리핑 실제 DB 테스트"
+  echo "   테이블은 Flyway(flyway/flyway 이미지)로 만듦: market → personal 계정·권한(infra/db/personal/init.sql) → personal 순서(personal 이 market 표를 가리킴), 브리핑은 그다음."
+  echo "   이미지가 없으면 처음 한 번 받음"
+  echo "5. 실제 DB 테스트: 지도에서 고른 market·news·notifier·브리핑 실제 DB 테스트"
   if [ "$LIVE" = 1 ]; then
     echo "6. 시세 흐름 실제: 일회용 Kafka, market(테스트 전용 데이터베이스), collector(실제 시세, 종목 1개), tick 1건, 저장 확인"
     echo "6b. 브리핑·메일 실제: news·notifier(발송 켬, [테스트], 1통)·briefing(실제 LLM) 기동, 가짜 변동·기사·수집 완료 넣기,"
@@ -76,6 +77,9 @@ KAFKA_LABEL="stock-reading.test-all"
 PG_CONTAINER="stock-postgres"
 # 브리핑 테이블을 만드는 Flyway. 버전은 market·news가 쓰는 Flyway와 맞춘다. infra/compose/docker-compose.yml의 briefing-migrate와 같다.
 FLYWAY_IMAGE="flyway/flyway:12.4.0"
+# market → personal 계정·권한 → personal 표를 만드는 함수(migrate_market, init_personal, migrate_personal). 매뉴얼 실행 스크립트와 같이 쓴다.
+# shellcheck source=scripts/personal-db-lib.sh
+. "$ROOT/scripts/personal-db-lib.sh"
 ENV_FILE="${TEST_ALL_ENV_FILE:-$ROOT/.env}"
 PY="${TEST_ALL_PYTHON:-$ROOT/services/briefing/.venv/bin/python}"
 LOCK_DIR="$ROOT/build/test-all.lock"
@@ -83,7 +87,8 @@ LIVE_OUT_DIR="$ROOT/build/test-all-live"
 JAVA_SERVICES="collector market news notifier"
 
 # 바깥에서 들어온 켜는 변수가 기본 단계에 섞이면 엉뚱한 데이터베이스로 실제 DB 테스트가 돈다. 필요한 단계에서만 넣는다.
-unset MARKET_IT_DB_URL MARKET_IT_DB_USER MARKET_IT_DB_PASSWORD NEWS_IT_DB_URL NEWS_IT_DB_USER NEWS_IT_DB_PASSWORD \
+unset MARKET_IT_DB_URL MARKET_IT_DB_USER MARKET_IT_DB_PASSWORD MARKET_IT_DB_MIGRATION_SCHEMA NEWS_IT_DB_URL NEWS_IT_DB_USER NEWS_IT_DB_PASSWORD \
+  WRITER_IT_DB_USER WRITER_IT_DB_PASSWORD COLLECTOR_IT_DB_USER COLLECTOR_IT_DB_PASSWORD NOTIFIER_IT_DB_URL NOTIFIER_IT_DB_USER NOTIFIER_IT_DB_PASSWORD \
   BRIEFING_IT_DB_URL BRIEFING_IT_DB_USER BRIEFING_IT_DB_PASSWORD \
   QUOTE_FLOW_LIVE_DB_URL QUOTE_FLOW_LIVE_DB_USER QUOTE_FLOW_LIVE_DB_PASSWORD \
   BRIEFING_FLOW_LIVE_KAFKA BRIEFING_FLOW_LIVE_RUN_ID BRIEFING_FLOW_LIVE_DB_URL BRIEFING_FLOW_LIVE_DB_USER \
@@ -317,6 +322,7 @@ fi
 # ---------------------------------------------------------------- 4. 실제 DB 준비
 
 M_USER="" M_PW="" N_USER="" N_PW="" B_USER="" B_PW=""
+PO_USER="" PO_PW="" PW_USER="" PW_PW="" PC_USER="" PC_PW="" PN_USER="" PN_PW=""
 DB_FAIL_REASON=""
 
 warn_leftovers() {
@@ -361,17 +367,23 @@ prepare_db() {
     sleep 1; waited=$((waited + 1))
   done
   if [ ! -f "$ENV_FILE" ]; then DB_FAIL_REASON=".env 가 없음(TEST_ALL_ENV_FILE)"; return 1; fi
-  for key in MARKET_DB_USER MARKET_DB_PASSWORD NEWS_DB_USER NEWS_DB_PASSWORD BRIEFING_DB_USER BRIEFING_DB_PASSWORD; do
+  for key in MARKET_DB_USER MARKET_DB_PASSWORD NEWS_DB_USER NEWS_DB_PASSWORD BRIEFING_DB_USER BRIEFING_DB_PASSWORD \
+      PERSONAL_OWNER_DB_USER PERSONAL_OWNER_DB_PASSWORD PERSONAL_WRITER_DB_USER PERSONAL_WRITER_DB_PASSWORD \
+      COLLECTOR_DB_USER COLLECTOR_DB_PASSWORD NOTIFIER_DB_USER NOTIFIER_DB_PASSWORD; do
     if [ -z "$(dotenv_value "$key")" ]; then DB_FAIL_REASON=".env 에 $key 가 없음"; return 1; fi
   done
   M_USER=$(dotenv_value MARKET_DB_USER); M_PW=$(dotenv_value MARKET_DB_PASSWORD)
   N_USER=$(dotenv_value NEWS_DB_USER); N_PW=$(dotenv_value NEWS_DB_PASSWORD)
   B_USER=$(dotenv_value BRIEFING_DB_USER); B_PW=$(dotenv_value BRIEFING_DB_PASSWORD)
-  for role in "$M_USER" "$N_USER" "$B_USER"; do
+  PO_USER=$(dotenv_value PERSONAL_OWNER_DB_USER); PO_PW=$(dotenv_value PERSONAL_OWNER_DB_PASSWORD)
+  PW_USER=$(dotenv_value PERSONAL_WRITER_DB_USER); PW_PW=$(dotenv_value PERSONAL_WRITER_DB_PASSWORD)
+  PC_USER=$(dotenv_value COLLECTOR_DB_USER); PC_PW=$(dotenv_value COLLECTOR_DB_PASSWORD)
+  PN_USER=$(dotenv_value NOTIFIER_DB_USER); PN_PW=$(dotenv_value NOTIFIER_DB_PASSWORD)
+  for role in "$M_USER" "$N_USER" "$B_USER" "$PO_USER" "$PW_USER" "$PC_USER" "$PN_USER"; do
     # SQL 에 그대로 넣으므로 이름 형식을 먼저 확인한다.
     if ! [[ "$role" =~ ^[a-z_][a-z0-9_]*$ ]]; then DB_FAIL_REASON=".env 의 서비스 계정 이름 형식이 맞지 않음"; return 1; fi
     found=$(printf "SELECT 1 FROM pg_roles WHERE rolname = '%s';\n" "$role" | admin_sql 2>/dev/null)
-    if [ "$found" != 1 ]; then DB_FAIL_REASON="서비스 계정 $role 이 없음(계정은 만들지 않음, docs/local-development.md 참고)"; return 1; fi
+    if [ "$found" != 1 ]; then DB_FAIL_REASON="서비스 계정 $role 이 없음(계정은 만들지 않음, docs/local-development.md 참고: personal 계정은 infra/db/personal/init.sql 로 만듦)"; return 1; fi
   done
   warn_leftovers
   if ! printf 'CREATE DATABASE "%s";\n' "$DB_NAME" | admin_sql >/dev/null; then
@@ -382,10 +394,15 @@ prepare_db() {
 CREATE SCHEMA market AUTHORIZATION "$M_USER";
 CREATE SCHEMA news AUTHORIZATION "$N_USER";
 CREATE SCHEMA briefing AUTHORIZATION "$B_USER";
+-- 옛 표 이관(market V10) 테스트가 쓰는 별도 스키마. 이름은 MARKET_IT_DB_MIGRATION_SCHEMA 로 넘긴다.
+CREATE SCHEMA market_migrate_it AUTHORIZATION "$M_USER";
 SQL
   then
     DB_FAIL_REASON="서비스 스키마를 만들지 못함"; return 1
   fi
+  if ! migrate_market; then DB_FAIL_REASON="market 표 Flyway 적용 실패(docker 이미지 $FLYWAY_IMAGE)"; return 1; fi
+  if ! init_personal; then DB_FAIL_REASON="personal 계정·권한 스크립트 실패(infra/db/personal/init.sql)"; return 1; fi
+  if ! migrate_personal; then DB_FAIL_REASON="personal 표 Flyway 적용 실패(docker 이미지 $FLYWAY_IMAGE)"; return 1; fi
   if ! migrate_briefing; then DB_FAIL_REASON="브리핑 테이블 Flyway 적용 실패(docker 이미지 $FLYWAY_IMAGE)"; return 1; fi
 }
 
@@ -406,7 +423,7 @@ JDBC_URL="jdbc:postgresql://127.0.0.1:5432/$DB_NAME"
 PG_URL="postgresql://127.0.0.1:5432/$DB_NAME"
 
 run_db_tests() {
-  local line group names name gradle_args="" java_groups="" briefing_files="" rc=0 path
+  local line group names name gradle_args="" notifier_args="" java_groups="" briefing_files="" rc=0 path
   # 지도(docs/test-map)에서 켜는 조건이 *_IT_DB_* 인 테스트를 고른다. 새 실제 DB 테스트를 지도에 올리면 여기에 들어온다.
   while read -r group names; do
     [ -n "$group" ] || continue
@@ -415,6 +432,11 @@ run_db_tests() {
         java_groups="$java_groups $group"
         gradle_args="$gradle_args :services:$group:cleanTest :services:$group:test"
         for name in $names; do gradle_args="$gradle_args --tests $name"; done ;;
+      notifier)
+        # 같은 테스트 DB 의 personal 표를 market 테스트와 함께 쓰므로 market 이 끝난 뒤 따로 돌린다(gradle 이 프로젝트를 병렬로 돌리기 때문).
+        java_groups="$java_groups $group"
+        notifier_args=":services:notifier:cleanTest :services:notifier:test"
+        for name in $names; do notifier_args="$notifier_args --tests $name"; done ;;
       briefing)
         for name in $names; do
           path=$(find services/briefing/tests -name "$name" -o -name "$name.py" | head -1)
@@ -429,8 +451,13 @@ run_db_tests() {
       # shellcheck disable=SC2086
       (
         export MARKET_IT_DB_URL="$JDBC_URL" MARKET_IT_DB_USER="$M_USER" MARKET_IT_DB_PASSWORD="$M_PW"
+        export MARKET_IT_DB_MIGRATION_SCHEMA=market_migrate_it
         export NEWS_IT_DB_URL="$JDBC_URL" NEWS_IT_DB_USER="$N_USER" NEWS_IT_DB_PASSWORD="$N_PW"
-        ./gradlew $gradle_args --no-build-cache
+        export WRITER_IT_DB_USER="$PW_USER" WRITER_IT_DB_PASSWORD="$PW_PW"
+        export COLLECTOR_IT_DB_USER="$PC_USER" COLLECTOR_IT_DB_PASSWORD="$PC_PW"
+        export NOTIFIER_IT_DB_URL="$JDBC_URL" NOTIFIER_IT_DB_USER="$PN_USER" NOTIFIER_IT_DB_PASSWORD="$PN_PW"
+        if [ -n "$gradle_args" ]; then ./gradlew $gradle_args --no-build-cache || exit 1; fi
+        if [ -n "$notifier_args" ]; then ./gradlew $notifier_args --no-build-cache || exit 1; fi
       ) || rc=1
       collect_java db "$java_groups"
     else
@@ -497,7 +524,7 @@ live_value() {
 }
 
 # 브리핑·메일 단계까지 필요한 키. 시세를 부르기 전에 모두 확인해 메일 설정이 빠졌는데 시세만 부르는 일이 없게 한다.
-LIVE_KEYS="BROKER_BASE_URL BROKER_APP_KEY BROKER_APP_SECRET TEST_ALL_LIVE_SYMBOL ANTHROPIC_API_KEY SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER NOTIFIER_RECIPIENT"
+LIVE_KEYS="BROKER_BASE_URL BROKER_APP_KEY BROKER_APP_SECRET TEST_ALL_LIVE_SYMBOL ANTHROPIC_API_KEY SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER TEST_ALL_LIVE_RECIPIENT"
 
 missing_live_keys() {
   local key missing=""
@@ -623,6 +650,27 @@ run_live() {
 LIVE_BRIEF_FAIL_REASON=""
 LIVE_REPORT_FILE="$LIVE_OUT_DIR/briefing-${RUN_ID}.txt"
 
+# 시세 흐름 단계가 쓰는 종목(TEST_ALL_LIVE_SYMBOL)을 ETF 로 넣고, 그 종목을 담은 멤버와 받는 주소를 테스트 DB 에 넣는다.
+seed_live_member() {
+  local symbol address
+  symbol=$(live_value TEST_ALL_LIVE_SYMBOL)
+  address=$(live_value TEST_ALL_LIVE_RECIPIENT)
+  [[ "$symbol" =~ ^[0-9]{6}$ ]] || return 1
+  # 주소는 명령줄이 아니라 환경변수로 넘긴다(\getenv). SQL 에 넣기 전에 따옴표·공백이 없는 주소 모양인지 확인한다.
+  [[ "$address" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]] || return 1
+  LIVE_MEMBER_ADDRESS="$address" docker exec -i -e LIVE_MEMBER_ADDRESS "$PG_CONTAINER" \
+    sh -c 'psql -qAtX -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$1"' sh "$DB_NAME" >/dev/null <<SQL
+\\getenv address LIVE_MEMBER_ADDRESS
+INSERT INTO market.etf (market, symbol, name) VALUES ('KR', '$symbol', 'TEST LIVE ETF') ON CONFLICT (market, symbol) DO NOTHING;
+INSERT INTO personal.member (name) VALUES ('TEST LIVE MEMBER');
+INSERT INTO personal.member_mail (member_id, email)
+SELECT max(id), :'address' FROM personal.member WHERE name = 'TEST LIVE MEMBER';
+INSERT INTO personal.member_portfolio (member_id, etf_id, relation)
+SELECT (SELECT max(id) FROM personal.member WHERE name = 'TEST LIVE MEMBER'), id, 'HELD'
+FROM market.etf WHERE symbol = '$symbol' AND market = 'KR';
+SQL
+}
+
 run_live_briefing() {
   local svc_dir="$TMP/svc" bootstrap="localhost:$KAFKA_PORT" llm_key llm_model
   llm_key=$(live_value ANTHROPIC_API_KEY)
@@ -644,15 +692,20 @@ run_live_briefing() {
     *) LIVE_BRIEF_FAIL_REASON="news 가 120초 안에 준비되지 않음"; return 1 ;;
   esac
 
+  # 받는 사람은 DB 에서 고르므로 테스트 DB 에 멤버·메일·포트폴리오를 한 줄씩 넣는다. 주소는 임시 폴더 파일(권한 600)로만 넘기고 출력하지 않는다.
+  echo "테스트 멤버 1명 넣기(받는 사람은 DB 에서 고름)"
+  seed_live_member || { LIVE_BRIEF_FAIL_REASON="테스트 멤버를 넣지 못함"; return 1; }
+
   echo "notifier 기동(테스트용: 실제 발송, 제목 앞 [테스트], 시간당 1통)"
   (
     export SPRING_KAFKA_BOOTSTRAP_SERVERS="$bootstrap"
+    export SPRING_DATASOURCE_URL="$JDBC_URL" SPRING_DATASOURCE_USERNAME="$PN_USER" SPRING_DATASOURCE_PASSWORD="$PN_PW"
     # 발송 스위치는 이 프로세스 환경에만 둔다. .env 는 읽지도 쓰지도 않는다(임시 폴더에서 띄움).
     export NOTIFIER_SEND_ENABLED=true NOTIFIER_SUBJECT_PREFIX="[테스트]" NOTIFIER_MAX_PER_HOUR=1
     SMTP_HOST=$(live_value SMTP_HOST) SMTP_USERNAME=$(live_value SMTP_USERNAME)
     SMTP_PASSWORD=$(live_value SMTP_PASSWORD) SMTP_PORT=$(live_value SMTP_PORT)
-    NOTIFIER_SENDER=$(live_value NOTIFIER_SENDER) NOTIFIER_RECIPIENT=$(live_value NOTIFIER_RECIPIENT)
-    export SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER NOTIFIER_RECIPIENT
+    NOTIFIER_SENDER=$(live_value NOTIFIER_SENDER)
+    export SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER
     if [ -n "$SMTP_PORT" ]; then export SMTP_PORT; else unset SMTP_PORT; fi
     # 제목의 한글 머리말이 환경변수에서 깨지지 않게 JVM 이 UTF-8 로 읽게 한다.
     export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
@@ -746,7 +799,7 @@ else
   stage cleanup "정리" fail "남은 것이 있음(위 안내 참고)" $((SECONDS - t))
 fi
 CLEANED=1
-M_PW="" N_PW="" B_PW=""
+M_PW="" N_PW="" B_PW="" PO_PW="" PW_PW="" PC_PW="" PN_PW=""
 
 # ---------------------------------------------------------------- 8. 결과 표
 

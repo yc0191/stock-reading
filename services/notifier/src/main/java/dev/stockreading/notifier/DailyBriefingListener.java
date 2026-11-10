@@ -1,6 +1,7 @@
 package dev.stockreading.notifier;
 
 import java.time.format.DateTimeParseException;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -13,12 +14,14 @@ import dev.stockreading.notifier.event.DailyBriefingEnvelope;
 import dev.stockreading.notifier.mail.DailyEmailComposer;
 import dev.stockreading.notifier.mail.EmailMessage;
 import dev.stockreading.notifier.mail.MailSenderPort;
+import dev.stockreading.notifier.recipient.Recipient;
+import dev.stockreading.notifier.recipient.RecipientPort;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 /**
  * briefing.daily.generated -> 판마다 이메일 한 통. 최소 한 번 처리: 발송이 성공한 뒤에만 오프셋을 커밋한다.
- * 데일리 메일은 하루 정해진 통이라 시간당 한도로 막지 않고, 보낸 수만 한도에 더한다(그 뒤 건별 메일이 막힐 수 있다).
+ * 데일리 메일은 하루 정해진 통이라 시간당 한도로 막지도, 한도에 세지도 않는다(급변동 메일 한도와 무관).
  */
 @Component
 class DailyBriefingListener {
@@ -29,17 +32,17 @@ class DailyBriefingListener {
     private final ObjectMapper mapper;
     private final DailyEmailComposer composer;
     private final MailSenderPort mailSender;
-    private final SendRateLimiter rateLimiter;
+    private final RecipientPort recipients;
 
-    // 건별 메일과 같은 메모리 기반 중복 방지(실행 중에만 유지).
+    // 건별 메일과 같은 메모리 기반 중복 방지(실행 중에만 유지). 키는 이벤트와 받는 사람의 조합이다.
     private final Set<String> sentDailies = ConcurrentHashMap.newKeySet();
 
     DailyBriefingListener(ObjectMapper mapper, DailyEmailComposer composer, MailSenderPort mailSender,
-            SendRateLimiter rateLimiter) {
+            RecipientPort recipients) {
         this.mapper = mapper;
         this.composer = composer;
         this.mailSender = mailSender;
-        this.rateLimiter = rateLimiter;
+        this.recipients = recipients;
     }
 
     @KafkaListener(topics = Topics.DAILY_BRIEFING_GENERATED, groupId = "notifier")
@@ -63,17 +66,26 @@ class DailyBriefingListener {
             return;
         }
 
-        if (sentDailies.contains(daily.eventId())) {
-            log.info("duplicate daily briefing ignored eventId={}", daily.eventId());
+        // 받는 사람은 보내기 직전에 고른다. 없으면 보내지 않는다(처리는 끝난 것으로 본다).
+        List<Recipient> targets = recipients.forEdition(daily.payload().edition());
+        if (targets.isEmpty()) {
+            log.warn("no recipients for daily briefing; not emailed eventId={} edition={}", daily.eventId(),
+                    daily.payload().edition());
             return;
         }
-        mailSender.send(email); // 실패하면 예외를 던진다 -> Kafka 에러 핸들러가 재시도한다
-        rateLimiter.recordSent();
+        for (Recipient target : targets) {
+            String key = daily.eventId() + ":" + target.mailId();
+            if (sentDailies.contains(key)) {
+                log.info("duplicate daily briefing ignored eventId={} mailId={}", daily.eventId(), target.mailId());
+                continue;
+            }
+            mailSender.send(target.address(), email); // 실패하면 예외를 던진다 -> Kafka 에러 핸들러가 재시도한다
 
-        if (sentDailies.size() >= MAX_REMEMBERED) {
-            sentDailies.clear();
+            if (sentDailies.size() >= MAX_REMEMBERED) {
+                sentDailies.clear();
+            }
+            sentDailies.add(key);
         }
-        sentDailies.add(daily.eventId());
     }
 
     private static boolean hasRequiredFields(DailyBriefingEnvelope daily) {

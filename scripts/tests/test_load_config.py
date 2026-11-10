@@ -46,7 +46,7 @@ def test_profile_is_passed_when_given(tmp_path):
 def test_all_parameters_map_to_env_names():
     updates, ignored = lc.to_env_updates(full_parameters())
     assert updates["SMTP_HOST"] == "v-smtp-host"
-    assert updates["NOTIFIER_RECIPIENT"] == "v-recipient"
+    assert updates["TEST_ALL_LIVE_RECIPIENT"] == "v-recipient"
     assert set(updates) == set(lc.ENV_NAMES.values())
     assert ignored == []
 
