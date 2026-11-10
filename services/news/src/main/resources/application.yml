@@ -27,3 +27,12 @@ spring:
       compression-type: gzip
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+news:
+  search-queries:
+    # "검색어=종목코드,종목코드;검색어2=*" 글이 담긴 UTF-8 파일의 경로. 파일은 저장소 밖에 두고 경로만 환경변수로 준다.
+    # 검색어 테이블(search_query)이 비어 있을 때 시작하면서 한 번만 이 파일로 채운다. 행이 있으면 파일은 읽지 않고,
+    # 그 뒤의 고침은 테이블을 직접 고친다. 비어 있으면 검색어가 없는 것으로 본다.
+    file: ${NEWS_QUERIES_FILE:}
+    # 검색어 테이블이 바뀌었는지 확인하는 간격. 바뀌었을 때만 news.search-queries 이벤트로 전체 목록을 낸다.
+    check-interval: PT30S

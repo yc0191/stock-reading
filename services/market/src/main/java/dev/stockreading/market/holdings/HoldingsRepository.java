@@ -6,10 +6,13 @@ import java.util.List;
 import java.util.Optional;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.support.TransactionTemplate;
 
-/** instrument와 etf_member 테이블을 파일의 목표 상태와 똑같이 맞추고, 맞춘 테이블에서 ETF 구성을 읽는다. */
+import dev.stockreading.market.event.HoldingsPayload;
+
+/** instrument와 etf_member 테이블에서 ETF 구성을 읽고, 처음 채울 때 목표 상태로 맞춘다. */
 @Repository
 class HoldingsRepository implements HoldingsPort {
 
@@ -19,6 +22,40 @@ class HoldingsRepository implements HoldingsPort {
     HoldingsRepository(JdbcClient jdbc, TransactionTemplate transaction) {
         this.jdbc = jdbc;
         this.transaction = transaction;
+    }
+
+    boolean isEmpty() {
+        return jdbc.sql("SELECT NOT EXISTS (SELECT 1 FROM instrument)").query(Boolean.class).single();
+    }
+
+    /**
+     * 두 테이블의 전체 목록을 한 번에 읽는다. 읽는 중에 다른 쪽이 고치면 종목과 구성 관계가 어긋나게 읽히므로
+     * 한 트랜잭션(REPEATABLE READ)에서 두 번 읽는다.
+     */
+    HoldingsSnapshot readSnapshot() {
+        TransactionTemplate readOnly = new TransactionTemplate(transaction.getTransactionManager());
+        readOnly.setReadOnly(true);
+        readOnly.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        return readOnly.execute(status -> {
+            List<HoldingsPayload.Instrument> instruments = jdbc.sql(
+                            "SELECT kind, market, symbol, relation, name FROM instrument")
+                    .query((rs, rowNum) -> new HoldingsPayload.Instrument(rs.getString("kind"),
+                            rs.getString("market"), rs.getString("symbol"), rs.getString("relation"),
+                            rs.getString("name")))
+                    .list();
+            List<HoldingsPayload.Membership> memberships = jdbc.sql("""
+                            SELECT e.market AS etf_market, e.symbol AS etf_symbol, m.market AS member_market,
+                                   m.symbol AS member_symbol, em.rank
+                            FROM etf_member em
+                            JOIN instrument e ON e.id = em.etf_id
+                            JOIN instrument m ON m.id = em.member_id
+                            """)
+                    .query((rs, rowNum) -> new HoldingsPayload.Membership(rs.getString("etf_market"),
+                            rs.getString("etf_symbol"), rs.getString("member_market"),
+                            rs.getString("member_symbol"), (Integer) rs.getObject("rank")))
+                    .list();
+            return new HoldingsSnapshot(instruments, memberships);
+        });
     }
 
     /**

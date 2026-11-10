@@ -1,6 +1,7 @@
 package dev.stockreading.market;
 
 import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.common.config.TopicConfig;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.TopicBuilder;
@@ -22,7 +23,10 @@ public class Topics {
     public static final String MARKET_CONTEXT_RESPONDED = "market.context.responded";
     public static final String MARKET_DAILY_REQUESTED = "market.daily.requested";
     public static final String MARKET_DAILY_RESPONDED = "market.daily.responded";
+    public static final String MARKET_HOLDINGS = "market.holdings";
     public static final int PARTITIONS = 3;
+    // 보유 종목 목록은 키가 하나인 압축 토픽이라 파티션 하나로 충분하고, 소비자(수집기, 뉴스)의 선언과 같아야 한다.
+    public static final int HOLDINGS_PARTITIONS = 1;
 
     @Bean
     NewTopic marketSnapshotTopic() {
@@ -72,5 +76,12 @@ public class Topics {
     @Bean
     NewTopic marketDailyRespondedTopic() {
         return TopicBuilder.name(MARKET_DAILY_RESPONDED).partitions(PARTITIONS).replicas(1).build();
+    }
+
+    // 키가 고정이고 마지막 목록만 남는 압축 토픽이다. 새로 시작한 소비자가 마지막 목록을 받는다.
+    @Bean
+    NewTopic marketHoldingsTopic() {
+        return TopicBuilder.name(MARKET_HOLDINGS).partitions(HOLDINGS_PARTITIONS).replicas(1)
+                .config(TopicConfig.CLEANUP_POLICY_CONFIG, TopicConfig.CLEANUP_POLICY_COMPACT).build();
     }
 }

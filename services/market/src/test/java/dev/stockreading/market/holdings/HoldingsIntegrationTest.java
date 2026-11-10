@@ -141,6 +141,66 @@ class HoldingsIntegrationTest {
     }
 
     @Test
+    void isEmptyReflectsWhetherTheInstrumentTableHasRows() {
+        assertThat(repository.isEmpty()).isTrue();
+
+        repository.replaceAll(plan(FIRST));
+
+        assertThat(repository.isEmpty()).isFalse();
+    }
+
+    @Test
+    void readSnapshotReturnsTheWholeListWithNamesAndRanksAndTheHashChangesOnlyWhenTheTablesChange() {
+        repository.replaceAll(plan(FIRST));
+
+        HoldingsSnapshot snapshot = repository.readSnapshot();
+
+        assertThat(snapshot.instruments()).hasSize(5);
+        assertThat(snapshot.memberships()).hasSize(4);
+        assertThat(snapshot.instruments()).anySatisfy(i -> {
+            assertThat(i.symbol()).isEqualTo("FAKEA");
+            assertThat(i.name()).isEqualTo("FAKE CORP A");
+            assertThat(i.relation()).isEqualTo("NONE");
+        });
+        assertThat(snapshot.instruments()).anySatisfy(i -> {
+            assertThat(i.symbol()).isEqualTo("FAKE-B");
+            assertThat(i.name()).isNull();
+        });
+        assertThat(snapshot.memberships()).anySatisfy(m -> {
+            assertThat(m.etfSymbol()).isEqualTo("TEST01");
+            assertThat(m.memberSymbol()).isEqualTo("FAKE-B");
+            assertThat(m.rank()).isEqualTo(2);
+        });
+        assertThat(snapshot.memberships()).anySatisfy(m -> {
+            assertThat(m.etfSymbol()).isEqualTo("TEST02");
+            // 파일에 rank가 없으면 파서가 적힌 순서(1부터)로 채운다.
+            assertThat(m.rank()).isEqualTo(1);
+        });
+        String before = snapshot.contentHash();
+        // 같은 내용으로 다시 채워도(updated_at만 바뀜) 해시는 같다.
+        repository.replaceAll(plan(FIRST));
+        assertThat(repository.readSnapshot().contentHash()).isEqualTo(before);
+        // 테이블을 직접 고치면 해시가 달라진다.
+        jdbc.sql("UPDATE instrument SET relation = 'WATCH' WHERE symbol = 'TEST01'").update();
+        assertThat(repository.readSnapshot().contentHash()).isNotEqualTo(before);
+    }
+
+    @Test
+    void readSnapshotKeepsANullRankWhenTheTableRowHasNone() {
+        repository.replaceAll(plan(FIRST));
+        // 테이블은 rank를 비워 둘 수 있으므로 SQL로 직접 넣어 확인한다.
+        jdbc.sql("INSERT INTO instrument (kind, market, symbol) VALUES ('STOCK', 'US', 'FAKENR')").update();
+        jdbc.sql("INSERT INTO etf_member (etf_id, member_id) "
+                + "SELECT e.id, m.id FROM instrument e, instrument m "
+                + "WHERE e.symbol = 'TEST01' AND m.symbol = 'FAKENR'").update();
+
+        assertThat(repository.readSnapshot().memberships()).anySatisfy(m -> {
+            assertThat(m.memberSymbol()).isEqualTo("FAKENR");
+            assertThat(m.rank()).isNull();
+        });
+    }
+
+    @Test
     void emptyPlanClearsBothTables() {
         repository.replaceAll(plan(FIRST));
         repository.replaceAll(HoldingsPlan.empty());

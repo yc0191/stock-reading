@@ -33,16 +33,13 @@ def test_values_are_fake():
         target = event["payload"].get("target")
         if target is not None:
             assert target.startswith(("TEST", "FAKE")) or len(target) == 1
-    assert de.holdings_setting() == "TEST01=TESTA,FAKEB"
 
 
-def test_holdings_file_matches_the_collector_setting():
+def test_holdings_file_is_a_fake_krx_etf_list_with_us_members_in_rank_order():
     items = json.loads(de.holdings_file_json())
     from_file = {item["symbol"]: [m["symbol"] for m in item["members"] if m["market"] == "US"] for item in items}
-    from_setting = dict(part.split("=") for part in de.holdings_setting().split(";"))
 
-    # 미국 종목이 있는 ETF 의 티커 목록이 ETF_US_HOLDINGS 와 같아야 시세처리기가 시작한다.
-    assert {etf: ",".join(t) for etf, t in from_file.items() if t} == from_setting
+    assert from_file == {"TEST01": ["TESTA", "FAKEB"], "TEST02": []}
     assert all(item["kind"] == "ETF" and item["market"] == "KR" for item in items)
 
 

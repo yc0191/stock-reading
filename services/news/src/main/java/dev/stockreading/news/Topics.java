@@ -1,6 +1,7 @@
 package dev.stockreading.news;
 
 import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.common.config.TopicConfig;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.TopicBuilder;
@@ -18,7 +19,10 @@ public class Topics {
     public static final String FILING_COLLECTED = "filing.collected";
     public static final String NEWS_FILINGS_REQUESTED = "news.filings.requested";
     public static final String NEWS_FILINGS_RESPONDED = "news.filings.responded";
+    public static final String NEWS_SEARCH_QUERY_LIST = "news.search-queries";
     public static final int PARTITIONS = 3;
+    // 키가 하나인 압축 토픽(마지막 목록만 남음)이라 파티션 1개이며, 생산 쪽(news)과 소비 쪽(collector) 선언이 같아야 한다.
+    public static final int LIST_PARTITIONS = 1;
 
     @Bean
     NewTopic newsCollectedTopic() {
@@ -49,5 +53,11 @@ public class Topics {
     @Bean
     NewTopic newsFilingsRespondedTopic() {
         return TopicBuilder.name(NEWS_FILINGS_RESPONDED).partitions(PARTITIONS).replicas(1).build();
+    }
+
+    @Bean
+    NewTopic newsSearchQueriesTopic() {
+        return TopicBuilder.name(NEWS_SEARCH_QUERY_LIST).partitions(LIST_PARTITIONS).replicas(1)
+                .config(TopicConfig.CLEANUP_POLICY_CONFIG, TopicConfig.CLEANUP_POLICY_COMPACT).build();
     }
 }

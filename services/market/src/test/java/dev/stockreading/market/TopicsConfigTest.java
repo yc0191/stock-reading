@@ -12,7 +12,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 class TopicsConfigTest {
 
     @Test
-    void declaresSnapshotMoveInsightHistoryContextAndDailyTopicsWithThreePartitions() {
+    void declaresTheTopicsWithAgreedPartitionsAndKeepsOnlyTheLastHoldingsList() {
         new ApplicationContextRunner()
                 .withUserConfiguration(Topics.class)
                 .run(context -> {
@@ -22,8 +22,13 @@ class TopicsConfigTest {
                             .containsExactlyInAnyOrder("market.snapshot", "market.snapshot.failed", "market.move",
                                     "market.insight", "market.history.requested", "market.history.responded",
                                     "market.context.requested", "market.context.responded",
-                                    "market.daily.requested", "market.daily.responded");
-                    assertThat(topics.values()).extracting(NewTopic::numPartitions).containsOnly(3);
+                                    "market.daily.requested", "market.daily.responded", "market.holdings");
+                    // 보유 종목 목록만 파티션이 하나이고, 소비자(수집기, 뉴스)도 같은 값으로 선언해야 한다.
+                    assertThat(topics.values().stream().filter(t -> !t.name().equals("market.holdings")))
+                            .extracting(NewTopic::numPartitions).containsOnly(3);
+                    NewTopic holdings = topics.get("marketHoldingsTopic");
+                    assertThat(holdings.numPartitions()).isEqualTo(1);
+                    assertThat(holdings.configs()).containsEntry("cleanup.policy", "compact");
                 });
     }
 }
