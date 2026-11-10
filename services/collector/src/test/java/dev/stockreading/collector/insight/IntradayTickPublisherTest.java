@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import java.io.IOException;
 import java.time.Clock;
@@ -25,10 +26,14 @@ import org.springframework.scheduling.annotation.Scheduled;
 
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.ContractSchemas;
+import dev.stockreading.collector.marketdata.MarketDayPort;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 class IntradayTickPublisherTest {
+
+    private static final MarketDayPort OPEN = () -> true;
+    private static final MarketDayPort HOLIDAY = () -> false;
 
     private static final IntradayProperties DEFAULTS =
             new IntradayProperties(true, "0 */5 9-15 * * MON-FRI", "09:00", "15:30", 15_000);
@@ -40,7 +45,7 @@ class IntradayTickPublisherTest {
 
     private void publishAt(String instant) {
         Clock clock = Clock.fixed(Instant.parse(instant), ZoneId.of("Asia/Seoul"));
-        new IntradayTickPublisher(DEFAULTS, kafka, mapper, clock).publishIntradayTick();
+        new IntradayTickPublisher(DEFAULTS, OPEN, kafka, mapper, clock).publishIntradayTick();
     }
 
     @Test
@@ -97,6 +102,7 @@ class IntradayTickPublisherTest {
                 .withBean(KafkaTemplate.class, () -> mock(KafkaTemplate.class))
                 .withBean(ObjectMapper.class, () -> JsonMapper.builder().build())
                 .withBean(Clock.class, Clock::systemUTC)
+                .withBean(MarketDayPort.class, () -> OPEN)
                 .withUserConfiguration(Wiring.class, IntradayTickPublisher.class);
 
         runner.run(context -> {
@@ -140,5 +146,15 @@ class IntradayTickPublisherTest {
 
         assertThat(properties.start()).isEqualTo("09:00");
         assertThat(properties.end()).isEqualTo("15:30");
+    }
+
+    @Test
+    void marketHolidayPublishesNoIntradayTickEvenInsideTradingHours() {
+        // 2026-10-21(수) 10:05 한국 시간, 시간대 안이지만 휴장일로 판정된 경우
+        Clock clock = Clock.fixed(Instant.parse("2026-10-21T01:05:00Z"), ZoneId.of("Asia/Seoul"));
+
+        new IntradayTickPublisher(DEFAULTS, HOLIDAY, kafka, mapper, clock).publishIntradayTick();
+
+        verifyNoInteractions(kafka);
     }
 }

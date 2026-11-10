@@ -29,7 +29,7 @@ class BrokerClientLiveSmokeTest {
         String symbol = System.getenv("BROKER_PROBE_SYMBOLS").split(",")[0].trim();
         var properties = new BrokerProperties(System.getenv("BROKER_BASE_URL"), System.getenv("BROKER_APP_KEY"),
                 System.getenv("BROKER_APP_SECRET"), 10, 10);
-        var client = new BrokerClient(properties, JsonMapper.builder().build(), Clock.systemDefaultZone());
+        var client = new BrokerClient(properties, JsonMapper.builder().build(), Clock.systemDefaultZone(), CallRateLimiter.perSecond(10));
         try {
             step("price", () -> client.currentPrice(symbol) != null ? "ok" : "empty");
             step("market-summary", () -> "len=" + client.marketSummaryRaw().length());

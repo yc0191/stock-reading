@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import java.io.IOException;
 import java.time.Clock;
@@ -19,10 +20,14 @@ import org.springframework.scheduling.annotation.Scheduled;
 
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.ContractSchemas;
+import dev.stockreading.collector.marketdata.MarketDayPort;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 class PostCloseTickPublisherTest {
+
+    private static final MarketDayPort OPEN = () -> true;
+    private static final MarketDayPort HOLIDAY = () -> false;
 
     @SuppressWarnings("unchecked")
     @Test
@@ -31,7 +36,7 @@ class PostCloseTickPublisherTest {
         ObjectMapper mapper = JsonMapper.builder().build();
         Clock clock = Clock.fixed(Instant.parse("2026-10-20T07:30:00Z"), ZoneId.of("Asia/Seoul"));
 
-        new PostCloseTickPublisher(kafka, mapper, clock).publishPostCloseTick();
+        new PostCloseTickPublisher(OPEN, kafka, mapper, clock).publishPostCloseTick();
 
         ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
         verify(kafka).send(eq(Topics.SCHEDULE_TICK), eq("collect-post-close"), value.capture());
@@ -57,6 +62,7 @@ class PostCloseTickPublisherTest {
                 .withBean(KafkaTemplate.class, () -> mock(KafkaTemplate.class))
                 .withBean(ObjectMapper.class, () -> JsonMapper.builder().build())
                 .withBean(Clock.class, Clock::systemUTC)
+                .withBean(MarketDayPort.class, () -> OPEN)
                 .withUserConfiguration(PostCloseTickPublisher.class);
 
         runner.run(context -> assertThat(context).doesNotHaveBean(PostCloseTickPublisher.class));
@@ -64,5 +70,16 @@ class PostCloseTickPublisherTest {
                 .run(context -> assertThat(context).doesNotHaveBean(PostCloseTickPublisher.class));
         runner.withPropertyValues("collector.insight.schedule.enabled=true")
                 .run(context -> assertThat(context).hasSingleBean(PostCloseTickPublisher.class));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void marketHolidayPublishesNoPostCloseTick() {
+        KafkaTemplate<String, String> kafka = mock(KafkaTemplate.class);
+        Clock clock = Clock.fixed(Instant.parse("2026-10-09T07:30:00Z"), ZoneId.of("Asia/Seoul"));
+
+        new PostCloseTickPublisher(HOLIDAY, kafka, JsonMapper.builder().build(), clock).publishPostCloseTick();
+
+        verifyNoInteractions(kafka);
     }
 }

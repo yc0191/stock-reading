@@ -19,10 +19,11 @@ import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.Envelope;
 import dev.stockreading.collector.event.EventFactory;
 import dev.stockreading.collector.event.TickPayload;
+import dev.stockreading.collector.marketdata.MarketDayPort;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * 장중 작업의 schedule.tick 만 발행한다. 휴장일은 판정하지 않으므로 평일 휴장일에도 발행된다.
+ * 장중 작업의 schedule.tick 만 발행한다. 휴장일(시세 제공자의 장 운영 상태로 판정, 판정하지 못하면 영업일)에는 발행하지 않는다.
  * cron 이 주기를 정하고, 평일과 시작·끝 시각(한국 시간) 밖이면 발행하지 않는다.
  * collector.intraday.enabled 가 true 일 때만 빈이 만들어진다(기본 꺼짐).
  */
@@ -35,13 +36,15 @@ class IntradayTickPublisher {
     private static final Logger log = LoggerFactory.getLogger(IntradayTickPublisher.class);
 
     private final IntradayProperties properties;
+    private final MarketDayPort marketDay;
     private final KafkaTemplate<String, String> kafka;
     private final ObjectMapper mapper;
     private final Clock clock;
 
-    IntradayTickPublisher(IntradayProperties properties, KafkaTemplate<String, String> kafka,
+    IntradayTickPublisher(IntradayProperties properties, MarketDayPort marketDay, KafkaTemplate<String, String> kafka,
                           ObjectMapper mapper, Clock clock) {
         this.properties = properties;
+        this.marketDay = marketDay;
         this.kafka = kafka;
         this.mapper = mapper;
         this.clock = clock;
@@ -52,6 +55,10 @@ class IntradayTickPublisher {
         OffsetDateTime scheduledFor = OffsetDateTime.now(clock).truncatedTo(ChronoUnit.SECONDS);
         if (!withinHours(scheduledFor)) {
             log.debug("intraday tick skipped outside hours scheduledFor={}", scheduledFor);
+            return;
+        }
+        if (!marketDay.isBusinessDay()) {
+            log.info("schedule.tick skipped on market holiday jobType={}", JOB_COLLECT_INTRADAY);
             return;
         }
         String scheduledForText = EventFactory.format(scheduledFor);

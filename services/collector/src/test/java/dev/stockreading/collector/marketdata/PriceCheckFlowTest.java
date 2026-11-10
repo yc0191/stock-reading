@@ -40,7 +40,7 @@ import tools.jackson.databind.json.JsonMapper;
 class PriceCheckFlowTest {
 
     // @Configuration 을 달지 않는다. 달면 같은 패키지를 스캔하는 다른 조립 테스트가 이 설정까지 읽어 빈이 겹친다.
-    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, InsightProperties.class,
+    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, MarketStatusProperties.class, InsightProperties.class,
             PriceCheckProperties.class})
     @ComponentScan(basePackages = "dev.stockreading.collector.marketdata")
     // 다른 패키지의 tick 처리기는 이 하나만 올린다.

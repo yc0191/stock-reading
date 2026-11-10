@@ -19,6 +19,7 @@ import dev.stockreading.collector.insight.InsightProperties;
 import dev.stockreading.collector.insight.InsightSourcePort;
 import dev.stockreading.collector.marketdata.BrokerProperties;
 import dev.stockreading.collector.marketdata.MarketDataPort;
+import dev.stockreading.collector.marketdata.MarketStatusProperties;
 import dev.stockreading.collector.marketdata.PriceCheckProperties;
 import dev.stockreading.collector.news.NewsCollector;
 import dev.stockreading.collector.news.NewsSearchPort;
@@ -30,7 +31,7 @@ import tools.jackson.databind.json.JsonMapper;
 class DataSourceWiringTest {
 
     @Configuration
-    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, NewsSearchProperties.class, DartProperties.class,
+    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, MarketStatusProperties.class, NewsSearchProperties.class, DartProperties.class,
             InsightProperties.class, PriceCheckProperties.class})
     @ComponentScan(basePackages = {
             "dev.stockreading.collector.marketdata",

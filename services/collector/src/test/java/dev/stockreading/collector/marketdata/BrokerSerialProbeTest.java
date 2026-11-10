@@ -65,7 +65,7 @@ class BrokerSerialProbeTest {
                     var broker = new BrokerProperties(System.getenv("BROKER_BASE_URL"), System.getenv("BROKER_APP_KEY"),
                             System.getenv("BROKER_APP_SECRET"), 10,
                             Integer.parseInt(env("BROKER_MAX_CALLS_PER_SECOND", "0")));
-                    var client = new BrokerClient(broker, mapper, Clock.systemDefaultZone());
+                    var client = new BrokerClient(broker, mapper, Clock.systemDefaultZone(), CallRateLimiter.perSecond(10));
                     CallRateLimit limiter = CallRateLimiter.perSecond(broker.maxCallsPerSecond());
                     var marketData = new BrokerMarketData(client, new CollectorProperties(symbols, 1_000, 0), broker,
                             limiter, priceCheck);

@@ -15,7 +15,10 @@ import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Function;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import tools.jackson.databind.JsonNode;
@@ -28,6 +31,10 @@ import tools.jackson.databind.node.ObjectNode;
 class BrokerClient {
 
     static final String RESULT_OK = "200";
+    private static final int HTTP_UNAUTHORIZED = 401;
+    // 재시도 호출도 호출하는 쪽과 같은 상한 장치를 거친다. 호출 스레드를 오래 잡지 않도록 짧게만 기다린다.
+    private static final Duration RETRY_LIMITER_WAIT = Duration.ofSeconds(1);
+    private static final Logger log = LoggerFactory.getLogger(BrokerClient.class);
     private static final String HEADER_IP = "127.0.0.1";
     private static final String HEADER_MAC = "00:00:00:00:00:00";
     private static final DateTimeFormatter PROCESS_TIME = DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS");
@@ -48,13 +55,15 @@ class BrokerClient {
     private final ObjectMapper mapper;
     private final Clock clock;
     private final HttpClient http;
+    private final CallRateLimit limiter;
     private final ReentrantLock issueLock = new ReentrantLock();
 
     private volatile Token token;
     private volatile TokenFailure lastTokenFailure;
 
-    BrokerClient(BrokerProperties properties, ObjectMapper mapper, Clock clock) {
+    BrokerClient(BrokerProperties properties, ObjectMapper mapper, Clock clock, CallRateLimit limiter) {
         this.properties = properties;
+        this.limiter = limiter;
         this.mapper = mapper;
         this.clock = clock;
         this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(properties.timeoutSeconds())).build();
@@ -145,6 +154,56 @@ class BrokerClient {
     }
 
     private Reply post(String path, ObjectNode dataBody, boolean authorized) {
+        if (authorized) {
+            return withTokenRetry(bearer -> send(path, dataBody, bearer));
+        }
+        return send(path, dataBody, null);
+    }
+
+    // 토큰이 거부되면(HTTP 401) 메모리의 토큰을 버리고 새로 발급해 한 번만 다시 시도한다.
+    // 재시도도 거부되면 그 실패를 그대로 올리므로 다음 호출은 처음부터 새 토큰으로 시작한다.
+    private <T> T withTokenRetry(Function<String, T> call) {
+        String used = token();
+        try {
+            return call.apply(used);
+        } catch (BrokerApiException e) {
+            if (e.httpStatus() == null || e.httpStatus() != HTTP_UNAUTHORIZED) {
+                throw e;
+            }
+            discardToken(used);
+            if (!limiter.tryAcquire(RETRY_LIMITER_WAIT)) {
+                log.warn("broker token rejected http={}; discarded it but no call slot for the retry, giving up",
+                        HTTP_UNAUTHORIZED);
+                throw e;
+            }
+            log.warn("broker token rejected http={}; discarded it and reissuing once", HTTP_UNAUTHORIZED);
+            try {
+                T result = call.apply(token());
+                log.warn("broker call succeeded after token reissue");
+                return result;
+            } catch (BrokerApiException retryFailure) {
+                log.warn("broker call failed again after token reissue type={} http={}",
+                        retryFailure.failureType(), retryFailure.httpStatus());
+                throw retryFailure;
+            }
+        }
+    }
+
+    // 동시에 거부된 호출들이 이미 새로 발급된 토큰까지 버리지 않도록, 거부된 그 토큰일 때만 버린다.
+    private void discardToken(String rejected) {
+        issueLock.lock();
+        try {
+            Token current = token;
+            if (current != null && current.value().equals(rejected)) {
+                token = null;
+                lastTokenFailure = null;
+            }
+        } finally {
+            issueLock.unlock();
+        }
+    }
+
+    private Reply send(String path, ObjectNode dataBody, String bearer) {
         if (isBlank(properties.baseUrl()) || isBlank(properties.appKey()) || isBlank(properties.appSecret())) {
             throw new BrokerApiException(FailureType.TOKEN_ISSUE_FAILED,
                     "BROKER_BASE_URL / BROKER_APP_KEY / BROKER_APP_SECRET 이 설정되지 않았습니다");
@@ -158,8 +217,8 @@ class BrokerClient {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(properties.baseUrl() + path))
                 .timeout(Duration.ofSeconds(properties.timeoutSeconds()))
                 .header("Content-Type", "application/json");
-        if (authorized) {
-            builder.header("Authorization", "Bearer " + token());
+        if (bearer != null) {
+            builder.header("Authorization", "Bearer " + bearer);
         }
         HttpRequest httpRequest = builder.POST(HttpRequest.BodyPublishers.ofString(
                 mapper.writeValueAsString(request), StandardCharsets.UTF_8)).build();
@@ -300,8 +359,18 @@ class BrokerClient {
         return postRaw("/api/v1/ivsa0070", mapper.createObjectNode());
     }
 
+    // 장 운영 상태. 휴장일 판정에 쓴다. 경로는 설정으로 받고(공개 저장소에 제공자 고유 이름을 두지 않는다),
+    // 판정 전체 시간 상한을 지키도록 요청 제한 시간을 호출하는 쪽이 정한다.
+    String marketStatusRaw(String statusPath, Duration timeout) {
+        return withTokenRetry(bearer -> sendRaw(statusPath, mapper.createObjectNode(), bearer, timeout));
+    }
+
     // post() 와 같은 요청 형식이며, 성공 여부만 확인하고 응답 본문은 그대로 돌려준다.
     private String postRaw(String path, ObjectNode dataBody) {
+        return withTokenRetry(bearer -> sendRaw(path, dataBody, bearer, Duration.ofSeconds(properties.timeoutSeconds())));
+    }
+
+    private String sendRaw(String path, ObjectNode dataBody, String bearer, Duration timeout) {
         if (isBlank(properties.baseUrl()) || isBlank(properties.appKey()) || isBlank(properties.appSecret())) {
             throw new BrokerApiException(FailureType.TOKEN_ISSUE_FAILED,
                     "BROKER_BASE_URL / BROKER_APP_KEY / BROKER_APP_SECRET 이 설정되지 않았습니다");
@@ -313,20 +382,26 @@ class BrokerClient {
         request.set("dataBody", dataBody);
 
         HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(properties.baseUrl() + path))
-                .timeout(Duration.ofSeconds(properties.timeoutSeconds()))
+                .timeout(timeout)
                 .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + token())
+                .header("Authorization", "Bearer " + bearer)
                 .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(request), StandardCharsets.UTF_8))
                 .build();
         try {
             HttpResponse<String> response = http.send(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() == HTTP_UNAUTHORIZED) {
+                // 거부 응답은 본문이 JSON 이 아닐 수 있어 파싱하기 전에 걸러야 재발급 재시도가 동작한다.
+                throw new BrokerApiException(FailureType.HTTP_ERROR, "시세 API 오류 http=" + HTTP_UNAUTHORIZED,
+                        HTTP_UNAUTHORIZED, null, null, null);
+            }
             JsonNode responseHeader = mapper.readTree(response.body()).path("dataHeader");
             if (response.statusCode() != 200 || !RESULT_OK.equals(responseHeader.path("resultCode").asString(""))) {
                 // 서버 문구는 외부 원문이라 남기지 않고 원인 구분용 코드만 남긴다.
                 throw new BrokerApiException(
                         response.statusCode() != 200 ? FailureType.HTTP_ERROR : FailureType.RESULT_CODE_FAILED,
                         "시세 API 오류 http=" + response.statusCode()
-                                + " processCode=" + safeCode(responseHeader.path("processCode").asString("")));
+                                + " processCode=" + safeCode(responseHeader.path("processCode").asString("")),
+                        response.statusCode(), null, null, null);
             }
             return response.body().trim();
         } catch (tools.jackson.core.JacksonException e) {

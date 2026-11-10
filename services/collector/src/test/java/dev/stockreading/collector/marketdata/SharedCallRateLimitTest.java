@@ -55,7 +55,7 @@ class SharedCallRateLimitTest {
 
     // @Configuration 을 붙이면 같은 패키지를 스캔하는 다른 테스트가 이 설정까지 읽어 빈이 겹친다.
     // 명시적으로 등록할 때만 쓰이게 표시 없이 둔다.
-    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, InsightProperties.class,
+    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, MarketStatusProperties.class, InsightProperties.class,
             PriceCheckProperties.class})
     @ComponentScan(basePackages = "dev.stockreading.collector.marketdata")
     static class Wiring {
@@ -134,7 +134,7 @@ class SharedCallRateLimitTest {
             return granted;
         };
         var broker = new BrokerProperties(server.baseUrl(), "k", "s", 5, maxCalls);
-        var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK);
+        var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10));
         var quotes = new BrokerMarketData(client, new CollectorProperties(SYMBOLS, 1_000, 3_000), broker, shared, PriceChecks.fake());
         var overseas = new BrokerInsightSource(client, insightProperties(), shared);
 
@@ -237,7 +237,7 @@ class SharedCallRateLimitTest {
     }
 
     // 장중 조회는 insight 패키지 안에서만 보이므로 그 패키지까지 스캔하고, 바깥 의존은 가짜로 채운다.
-    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, InsightProperties.class,
+    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, MarketStatusProperties.class, InsightProperties.class,
             IntradayProperties.class, PriceCheckProperties.class})
     @ComponentScan(basePackages = {"dev.stockreading.collector.marketdata", "dev.stockreading.collector.insight"})
     static class IntradayWiring {
@@ -309,7 +309,7 @@ class SharedCallRateLimitTest {
 
     private BrokerInsightSource source(CallRateLimit limiter) {
         var broker = new BrokerProperties(server.baseUrl(), "k", "s", 5, 10);
-        var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK);
+        var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10));
         return new BrokerInsightSource(client, insightProperties(), limiter);
     }
 

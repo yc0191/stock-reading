@@ -253,8 +253,10 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 | `COLLECTOR_MARKET_DATA_SOURCE` | `simulator` 또는 `broker` |
 | `BROKER_BASE_URL` / `BROKER_APP_KEY` / `BROKER_APP_SECRET` | 시세 제공자의 주소와 키. `broker`일 때 필요 |
 | `COLLECTOR_TICK_INTERVAL_MS` | `schedule.tick`(수집) 발행 간격(밀리초). 타이머(`COLLECTOR_SCHEDULE_ENABLED=true`)가 켜져 있을 때만 쓰입니다. `scheduledFor`가 초 단위라 1000보다 작게 두면 같은 초의 tick이 중복으로 버려집니다 |
-| `COLLECTOR_QUOTE_START` / `COLLECTOR_QUOTE_END` | 1초 시세 tick(`collect`)을 발행하는 시간대(한국 시간 `HH:mm`, 양끝 포함, 끝 시각은 분 단위라 `15:30`이면 15:30:59까지). 평일 이 시간대 밖에서는 발행하지 않습니다. 장 밖에서는 현재가가 전일 종가 그대로라 조회해도 쓸 값이 없고, 그 시간에도 응답 칸이 깨져 오기 때문입니다. 뉴스 tick(`collect-news`)은 이 시간대와 상관없이 발행합니다. 휴장일은 판정하지 않아 평일 휴장일에도 발행됩니다 |
+| `COLLECTOR_QUOTE_START` / `COLLECTOR_QUOTE_END` | 1초 시세 tick(`collect`)을 발행하는 시간대(한국 시간 `HH:mm`, 양끝 포함, 끝 시각은 분 단위라 `15:30`이면 15:30:59까지). 평일 이 시간대 밖에서는 발행하지 않습니다. 장 밖에서는 현재가가 전일 종가 그대로라 조회해도 쓸 값이 없고, 그 시간에도 응답 칸이 깨져 오기 때문입니다. 뉴스 tick(`collect-news`)은 이 시간대와 상관없이 발행합니다. 휴장일에는 발행하지 않습니다(장 운영 상태 조회로 판정, 아래 `BROKER_MARKET_STATUS_*`) |
 | `COLLECTOR_MAX_TICK_AGE_MS` | 현재보다 이만큼 이상 오래된 tick은 조회하지 않고 종목마다 `TICK_SKIPPED` 실패 이벤트로 기록합니다(`exceptionType` 없음). 이와 별개로, 응답이 느려지거나 시작 준비 중에 tick이 쌓여 한 번에 여러 개 받으면 `scheduledFor`가 가장 늦은 tick 하나만 조회하고 나머지는 종목마다 `TICK_SKIPPED`, `exceptionType=SupersededByNewerTick`으로 기록합니다. 쌓인 tick을 모두 조회하면 같은 1초에 호출이 몰려 `BROKER_MAX_CALLS_PER_SECOND`에 걸리기 때문입니다. 같은 `scheduledFor`의 tick은 두 번째부터 이벤트 없이 버립니다(메모리 기록이라 재시작하면 잊습니다) |
+| `BROKER_MARKET_STATUS_PATH` / `BROKER_MARKET_STATUS_TODAY_FIELD` / `BROKER_MARKET_STATUS_BUSINESS_DAY_FIELD` | 휴장일 판정에 쓰는 장 운영 상태 조회의 경로와 응답 칸 이름(현재 일자, 기준 영업일). 값은 제공자 문서에서 확인해 .env·Parameter Store에 넣으며 저장소에는 두지 않습니다. 하나라도 비어 있으면 시작할 때 경고를 한 번 남기고 늘 영업일로 봅니다 |
+| `BROKER_MARKET_STATUS_TIMEOUT` | 휴장일 한 번 판정에 쓰는 전체 시간 상한(기본 `5s`). 넘으면 남은 시도를 하지 않고 영업일로 봅니다. 모두 실패한 직후 1분은 다시 묻지 않습니다 |
 | `BROKER_MAX_CALLS_PER_SECOND` | 초당 시세 호출 상한. 종목 수가 이보다 많으면 시작할 때 경고하고, 넘친 종목은 그 tick에서 호출하지 않고 `TICK_SKIPPED` 실패 이벤트로 기록합니다. 상한 때문임은 `exceptionType=RateLimited`로 구분하며, 나중에 계약에 정식 실패 종류가 생기면 바꿀 수 있습니다. **종목 수와 같게 두면 오래 돌 때 일부 호출을 놓치고 처리도 느려지므로 종목 수의 1.2배 이상으로 두세요**([측정 기록](test-history/S03-quote-fixed-load/results.md), 가짜 서버로 쟀을 때. 1.1배까지는 가짜 서버 시험에서 놓침이 없었지만 처리 시간이 길었습니다, [R012](test-history/S03-quote-fixed-load/results.md)). 값을 올릴 때는 실제 서버가 5분을 버틴 가장 높은 속도가 초당 12회이고 13회부터 걸렸다는 점을 넘지 않게 합니다([S04](test-history/S04-quote-real-api/results.md)). 제공자의 공식 한도는 앱 전체 초당 40회, API별 초당 20회입니다 |
 | `BROKER_PRICE_CHECK_ENABLED` | 기본 `true`. 시세 응답마다 현재가를 같은 응답의 전일대비·등락률·고가·저가와 맞춰 보고, 판단할 수 있는 검사 중 과반이 어긋나면 시세 이벤트를 보내지 않고 `FIELD_MISMATCH` 실패 이벤트로 기록합니다. 어느 검사에 걸렸는지는 `exceptionType=FieldMismatch:CHANGE+RATE`처럼(`CHANGE` 전일대비, `RATE` 등락률, `HIGH_LOW` 고가·저가), 응답 원문은 `responseRaw`에 담깁니다(토큰 값은 가림). 비교 칸이 비었거나 숫자가 아닌 검사는 판단하지 않고, 판단할 검사가 하나도 없으면 통과시킵니다. 로그에는 종목 코드와 검사 이름만 남습니다. `false`면 검사하지 않습니다 |
 | `BROKER_PRICE_CHECK_TOLERANCE` | 위 검사의 허용 오차(가격 비율, 기본 `0.003` = 0.3%, 0 이상 1 미만이 아니면 시작 단계에서 실패). 호가 사이 가운데 값으로 체결되면 현재가가 호가 단위 사이 값으로 오는데 전일대비·등락률은 호가 단위 가격으로 계산돼 와서, 0이면 멀쩡한 값도 버립니다 |
@@ -269,11 +271,11 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 | `HOLDINGS_FILE` | 시세처리기가 읽는 보유 종목 JSON 파일의 경로. 파일은 저장소 밖(UTF-8)에 두고 경로만 `.env`에 적습니다. 비어 있으면 보유 종목이 없는 것으로 봅니다. 모양은 아래 "보유 종목 파일"을 봅니다 |
 | `EDGAR_USER_AGENT` | SEC EDGAR 요청의 User-Agent. SEC가 요구하는 `회사명 연락이메일` 형식입니다. 연락 이메일은 개인 정보이므로 `.env`에만 둡니다. 비어 있으면 공시를 조회하지 않습니다 |
 | `EDGAR_FORMS` | 수집할 공시 형식. 쉼표로 구분합니다. 비어 있거나 형식이 틀리면 시작 단계에서 실패합니다 |
-| `COLLECTOR_INSIGHT_SCHEDULE_ENABLED` | `true`일 때만 장 마감 후 조회 tick(`collect-post-close`)을 발행합니다. 휴장일은 판정하지 않아 휴장일에도 발행됩니다 |
+| `COLLECTOR_INSIGHT_SCHEDULE_ENABLED` | `true`일 때만 장 마감 후 조회 tick(`collect-post-close`)을 발행합니다. 휴장일에는 발행하지 않습니다(장 운영 상태 조회로 판정, 아래 `BROKER_MARKET_STATUS_*`) |
 | `COLLECTOR_INSIGHT_CRON` | 마감 후 조회 시각. 한국 시간 기준 cron(초 분 시 일 월 요일) |
-| `COLLECTOR_PRE_OPEN_ENABLED` | `true`일 때만 장 시작 전 수집 tick(`collect-pre-open`)을 발행합니다. 휴장일은 판정하지 않아 휴장일에도 발행됩니다. 공시는 이 tick에서만 받으므로 꺼 두면 공시를 수집하지 않습니다 |
+| `COLLECTOR_PRE_OPEN_ENABLED` | `true`일 때만 장 시작 전 수집 tick(`collect-pre-open`)을 발행합니다. 휴장일에는 발행하지 않습니다(장 운영 상태 조회로 판정, 아래 `BROKER_MARKET_STATUS_*`). 공시는 이 tick에서만 받으므로 꺼 두면 공시를 수집하지 않습니다 |
 | `COLLECTOR_PRE_OPEN_CRON` | 장 시작 전 수집 시각. 한국 시간 기준 cron |
-| `COLLECTOR_DAILY_BRIEFING_ENABLED` | `true`일 때만 데일리 브리핑 시작 tick(아침 판 `daily-briefing-morning`, 마감 후 판 `daily-briefing-post-close`)을 발행합니다. 수집기는 신호만 보내고 자료를 새로 모으지 않습니다. 휴장일은 판정하지 않아 휴장일에도 발행됩니다 |
+| `COLLECTOR_DAILY_BRIEFING_ENABLED` | `true`일 때만 데일리 브리핑 시작 tick(아침 판 `daily-briefing-morning`, 마감 후 판 `daily-briefing-post-close`)을 발행합니다. 수집기는 신호만 보내고 자료를 새로 모으지 않습니다. 휴장일에는 발행하지 않습니다(장 운영 상태 조회로 판정, 아래 `BROKER_MARKET_STATUS_*`) |
 | `COLLECTOR_DAILY_BRIEFING_MORNING_CRON` | 아침 판 시작 시각. 한국 시간 기준 cron이며 장 시작 전 수집 뒤로 둡니다. `-`를 주면 이 판만 발행하지 않습니다 |
 | `COLLECTOR_DAILY_BRIEFING_POST_CLOSE_CRON` | 마감 후 판 시작 시각. 한국 시간 기준 cron이며 장 마감 후 조회 뒤로 둡니다. `-`를 주면 이 판만 발행하지 않습니다 |
 | `COLLECTOR_INTRADAY_ENABLED` | `true`일 때만 장중 수집 tick(`collect-intraday`)을 발행합니다. 코드 기본은 꺼짐이고, 운영에서는 `true`로 켭니다 |
@@ -281,7 +283,7 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 | `COLLECTOR_INTRADAY_START` / `COLLECTOR_INTRADAY_END` | 장중 수집 시작·끝 시각(`HH:mm`, 양끝 포함). 이 밖의 tick은 조회하지 않습니다 |
 | `COLLECTOR_INTRADAY_STAGGER_MS` | 장중 조회 사이 대기(밀리초). 같은 초에 몰려 시세 조회가 호출 상한에 걸리지 않게 나눠 부릅니다 |
 
-장중 수집은 환율종합, 시장종합, 세계지수(아시아, 아메리카)를 시차를 두고 조회해 마감 후 조회와 같은 `market.insight`로 보냅니다. 시세 조회와 같은 호출 상한을 거치며, 휴장일은 판정하지 않습니다. 기본값은 `application.yml`의 `collector.intraday.*`입니다.
+장중 수집은 환율종합, 시장종합, 세계지수(아시아, 아메리카)를 시차를 두고 조회해 마감 후 조회와 같은 `market.insight`로 보냅니다. 시세 조회와 같은 호출 상한을 거치며, 휴장일에는 발행하지 않습니다. 기본값은 `application.yml`의 `collector.intraday.*`입니다.
 
 마감 후 조회(일봉, 세계지수, 환율종합, 시장종합)는 `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 동작하며, 응답 원문을 `market.insight` 이벤트로 발행합니다. 일봉의 시장구분과 조회 건수, 세계지수의 대륙 목록은 `application.yml`의 `collector.insight.*`에 기본값이 있습니다.
 
@@ -490,13 +492,13 @@ MOVE_REPLAY_INPUT=<저장소 밖>/snapshots.tsv MOVE_REPLAY_EXCLUDE=<저장소 �
 - **작업 기록 보관 기간:** `briefing.job_run`과 `briefing.job_log`는 줄을 지우지 않고 쌓습니다. LLM 입력·원래 응답을 그대로 담아 커지므로 보관 기간과 정리 방법(오래된 `job_log` 줄만 지울지, `job_run`까지 지울지)을 정합니다.
 - **뉴스 수집 완료 테이블:** `briefing.collection_completed`는 배포 뒤부터 쌓이므로 배포 당일 마감 후 판의 뉴스 줄 숫자가 적을 수 있습니다. 이 테이블의 보관 기간과 정리 방법은 아직 정하지 않았습니다.
 - **장중 수집을 켤지:** 정했습니다. 11-04·11-05 장중 실수집에서 환율종합, 시장종합, 세계지수의 응답을 받아 모양을 확인했고, 운영에서는 `COLLECTOR_INTRADAY_ENABLED=true`로 켭니다. 코드 기본값은 꺼짐을 유지합니다.
-- **휴장일 판정:** 1초 시세·마감 후·장 시작 전·장중 수집 모두 휴장일을 판정하지 않아 휴장일에도 tick을 발행합니다. 판정할지와 휴장일 목록을 어디서 받을지 정합니다.
+- **휴장일 판정:** 시세 제공자의 장 운영 상태 조회로 판정하며, 판정하지 못하면 영업일로 봅니다. 실제 휴장일(주말·공휴일) 응답으로는 아직 규칙을 확인하지 못했으니 다음 비영업일에 확인합니다.
 
 ## 후속
 
 - **보유 종목과 뉴스 검색어 테이블:** 보유 종목 테이블(시세처리기 `instrument`, `etf_member`)은 만들었고, 배포 전까지는 시작할 때 보유 종목 파일(`HOLDINGS_FILE`)로 맞춥니다. 수집기는 아직 `ETF_US_HOLDINGS`를, 뉴스 검색어는 `NEWS_SEARCH_QUERIES`를 설정으로 읽습니다. 수집기의 종목 읽기와 종목에 연결된 검색어 테이블(news)로 옮깁니다.
 - **검색어와 태그 개선:** 태그는 검색어 설정에서 정해져 저장 때 고정됩니다. 다른 종목 태그지만 관련 있는 기사를 근거에 넣는 방법과 미국 종목 검색어를 정합니다. 당장은 검색어 설정에 관련 종목 태그를 함께 적어 운영합니다.
-- **휴장일 발송 관리:** 데일리 브리핑은 휴장일을 판정하지 않아 휴장일에도 평일이면 판이 나갑니다(자료가 없으면 항목마다 `자료 없음`). 휴장일에 보낼지 건너뛸지와 판정 방법을 정합니다.
+- **휴장일 발송 관리:** 휴장일에는 데일리 브리핑 시작 tick도 발행하지 않아 판이 나가지 않습니다. 판정하지 못한 날은 영업일로 보고 평소대로 나갑니다.
 - **마감 후 판의 그날 급변동과 근거:** 마감 후 판에는 그날 급변동 건별 리포트를 요약하는 항목이 아직 없습니다. 건별 리포트를 어디서 읽을지와 함께 정합니다.
 - **LLM 2단계:** 1단계 LLM이 모은 자료의 중복을 없애고 거른 뒤, 2단계 LLM이 분석해 리포트를 씁니다.
 

@@ -65,7 +65,7 @@ class QuoteFixedLoadTest {
             }
             int cap = Integer.parseInt(env("QUOTE_LOAD_CAP", "0"));
             var broker = new BrokerProperties(server.baseUrl(), "load-key", "load-secret", 10, cap > 0 ? cap : n);
-            var client = new BrokerClient(broker, JsonMapper.builder().build(), Clock.systemDefaultZone());
+            var client = new BrokerClient(broker, JsonMapper.builder().build(), Clock.systemDefaultZone(), CallRateLimiter.perSecond(10));
             var marketData = new BrokerMarketData(client, new CollectorProperties(symbols, 1_000, STALE_MILLIS), broker,
                     CallRateLimiter.perSecond(broker.maxCallsPerSecond()),
                     PriceChecks.fake());

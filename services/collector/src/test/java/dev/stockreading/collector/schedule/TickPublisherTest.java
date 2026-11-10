@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import java.io.IOException;
 import java.lang.reflect.Method;
@@ -28,10 +29,14 @@ import org.springframework.scheduling.annotation.Scheduled;
 
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.ContractSchemas;
+import dev.stockreading.collector.marketdata.MarketDayPort;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 class TickPublisherTest {
+
+    private static final MarketDayPort OPEN = () -> true;
+    private static final MarketDayPort HOLIDAY = () -> false;
 
     // 화요일 16:00(한국 시간): 시세 시간대 밖
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-10-20T07:00:00Z"), ZoneId.of("Asia/Seoul"));
@@ -43,7 +48,7 @@ class TickPublisherTest {
 
     @Test
     void newsTickIsKeyedByJobTypeAndMatchesTheContract() throws IOException {
-        new TickPublisher(HOURS, kafka, mapper, CLOCK).publishCollectNewsTick();
+        new TickPublisher(HOURS, OPEN, kafka, mapper, CLOCK).publishCollectNewsTick();
 
         ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
         verify(kafka).send(eq(Topics.SCHEDULE_TICK), eq("collect-news"), value.capture());
@@ -98,7 +103,7 @@ class TickPublisherTest {
     @ValueSource(strings = {"2026-10-19T23:00:00Z", "2026-10-20T07:00:00Z", "2026-10-24T01:00:00Z"})
     void newsTickIsPublishedOutsideTheQuoteHours(String instant) {
         Clock clock = Clock.fixed(Instant.parse(instant), ZoneId.of("Asia/Seoul"));
-        new TickPublisher(HOURS, kafka, mapper, clock).publishCollectNewsTick();
+        new TickPublisher(HOURS, OPEN, kafka, mapper, clock).publishCollectNewsTick();
 
         verify(kafka).send(eq(Topics.SCHEDULE_TICK), eq("collect-news"), anyString());
     }
@@ -145,7 +150,7 @@ class TickPublisherTest {
 
     private void publishCollectAt(String instant) {
         Clock clock = Clock.fixed(Instant.parse(instant), ZoneId.of("Asia/Seoul"));
-        new TickPublisher(HOURS, kafka, mapper, clock).publishCollectTick();
+        new TickPublisher(HOURS, OPEN, kafka, mapper, clock).publishCollectTick();
     }
 
     @Test
@@ -171,6 +176,32 @@ class TickPublisherTest {
                 .withBean(KafkaTemplate.class, () -> kafka)
                 .withBean(ObjectMapper.class, () -> mapper)
                 .withBean(Clock.class, () -> CLOCK)
+                .withBean(MarketDayPort.class, () -> OPEN)
                 .withUserConfiguration(TickPublisher.class);
+    }
+
+    @Test
+    void marketHolidayStopsTheQuoteTickButKeepsTheNewsTick() {
+        // 2026-10-20(화) 10:00 한국 시간, 시세 시간대 안이지만 휴장일로 판정된 경우
+        Clock clock = Clock.fixed(Instant.parse("2026-10-20T01:00:00Z"), ZoneId.of("Asia/Seoul"));
+        TickPublisher publisher = new TickPublisher(HOURS, HOLIDAY, kafka, mapper, clock);
+
+        publisher.publishCollectTick();
+        verifyNoInteractions(kafka);
+
+        publisher.publishCollectNewsTick();
+        verify(kafka).send(eq(Topics.SCHEDULE_TICK), eq("collect-news"), anyString());
+    }
+
+    @Test
+    void marketDayIsNotAskedOutsideQuoteHours() {
+        // 시간대 밖(16:00)에서는 장 운영 상태 조회를 부르지 않는다. 하루 조회 횟수를 줄이기 위해서다.
+        MarketDayPort mustNotBeAsked = () -> {
+            throw new AssertionError("시간대 밖에서는 장 운영 상태를 묻지 않아야 합니다");
+        };
+
+        new TickPublisher(HOURS, mustNotBeAsked, kafka, mapper, CLOCK).publishCollectTick();
+
+        verifyNoInteractions(kafka);
     }
 }
