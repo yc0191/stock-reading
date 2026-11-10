@@ -225,15 +225,16 @@ def _quote_line(ops: Operations | None) -> str:
     return line
 
 
-def _news_line(collections: list[CollectionRecord] | None) -> str:
+def _news_line(collections: list[CollectionRecord] | None, current_research_count: int) -> str:
     if collections is None:
         return f"- 뉴스: {NO_DATA}"
     regular = [c for c in collections if not c.is_research()]
-    research = [c for c in collections if c.is_research()]
+    # 이번 판의 재검색은 판 기준 시각 뒤에 끝나 범위 안 수집 완료에 없으므로 보낸 요청 수를 따로 더한다.
+    research = sum(1 for c in collections if c.is_research()) + current_research_count
     incomplete = sum(1 for c in regular if c.incomplete_symbols)
     articles = sum(c.published_count for c in regular)
     return (f"- 뉴스: 정기 수집 {len(regular)}회 · 일부 종목 빠짐 {incomplete}회 · 기사 {_count(articles)}건"
-            f" · 재검색 {len(research)}회")
+            f" · 재검색 {research}회")
 
 
 @dataclass
@@ -334,7 +335,8 @@ def _attention(ops: Operations | None, collections: list[CollectionRecord] | Non
 
 def build_status_report(*, range_start: datetime, as_of: datetime, current_job_id: str, current_rule_based: bool,
                         operations: Operations | None, collections: list[CollectionRecord] | None,
-                        runs: list[JobRunRow] | None, stuck_after: timedelta) -> StatusReport:
+                        runs: list[JobRunRow] | None, stuck_after: timedelta,
+                        current_research_count: int = 0) -> StatusReport:
     """서버 상태 4줄과 주의 한 줄. 값을 받지 못한 부분은 '자료 없음'으로 쓰고 missing에 이름을 남긴다."""
     runs_without_current = None if runs is None else [r for r in runs if r.job_id != current_job_id]
     header = f"──────── 서버 상태 ({_clock_with_date(range_start)} ~ {_clock_with_date(as_of)}) ────────"
@@ -342,7 +344,7 @@ def build_status_report(*, range_start: datetime, as_of: datetime, current_job_i
     lines = [header,
              _collection_line(operations),
              _quote_line(operations),
-             _news_line(collections),
+             _news_line(collections, current_research_count),
              _briefing_line(runs_without_current),
              "- 주의: " + (" · ".join(attention) if attention else "없음")]
     missing = []

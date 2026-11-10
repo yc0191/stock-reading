@@ -629,7 +629,8 @@ class DailyCore:
 
     # ---- 서버 상태 절 ----
 
-    def _status_report(self, job: _DailyJob, now: datetime, draft: _Draft) -> StatusReport | None:
+    def _status_report(self, job: _DailyJob, now: datetime, draft: _Draft,
+                       research_count: int) -> StatusReport | None:
         """마감 후 판 끝에 붙일 서버 상태 절. 만들지 못해도 판은 나간다."""
         if job.edition != EDITION_POST_CLOSE or self.status is None:
             return None
@@ -639,7 +640,7 @@ class DailyCore:
                 current_rule_based=draft.generated_by == GENERATED_BY_RULE, operations=job.operations,
                 collections=self.status.collections_between(job.range_start, job.scheduled_for),
                 runs=self.status.job_runs_between(job.range_start, job.scheduled_for),
-                stuck_after=self.settings.stuck_after)
+                stuck_after=self.settings.stuck_after, current_research_count=research_count)
         except Exception as error:  # noqa: BLE001 - 서버 상태는 덤이라 실패해도 본문을 막지 않는다
             log.warning("server status section failed for job %s: %s", job.job_id, type(error).__name__)
             return StatusReport(NO_STATUS_TEXT, ("서버 상태: 전체(만들지 못함)",))
@@ -695,7 +696,7 @@ class DailyCore:
                  draft: _Draft, research_count: int = 0) -> None:
         missing = missing_items(sections)
         by_ref = {e.ref: e for s in sections for e in s.entries}
-        report = self._status_report(job, now, draft)
+        report = self._status_report(job, now, draft, research_count)
         status_text = report.text if report is not None else None
         if report is not None:
             missing = [*missing, *report.missing]
