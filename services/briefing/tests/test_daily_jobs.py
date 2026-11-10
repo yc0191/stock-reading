@@ -20,6 +20,7 @@ from briefing.daily_jobs import (
 from briefing.daily_report import (
     GENERATED_BY_LLM,
     GENERATED_BY_RULE,
+    ITEM_ETF_ARTICLES,
     ITEM_ETFS,
     ITEM_EXCHANGE,
     ITEM_FILINGS,
@@ -146,9 +147,21 @@ def filings_response(seq=1, filings=None, job_id=TICK_ID):
     })
 
 
-def good_output(*refs):
+def morning_output(*refs, symbols=("TEST01",), directions=None, **extra):
+    """아침 판 Claude 출력. 요약 한 줄, ETF마다 방향 예상 한 줄(근거는 refs, 기본 B1), 환율·금리 이슈 칸."""
+    cited = list(refs) or ["B1"]
+    etfs = [{"symbol": symbol, "direction": (directions or {}).get(symbol, "상승"),
+             "reason": "미국 지수가 오른 영향을 줄 수 있습니다.", "refs": cited, "weak": False, "shortfall": ""}
+            for symbol in symbols]
+    issue = {"statement": "환율이 영향을 줄 수 있습니다.", "refs": cited, "weak": False, "shortfall": ""}
     return json.dumps({"points": [{"statement": "미국 지수가 오른 가운데 공시가 나왔을 수 있습니다.",
-                                   "refs": list(refs) or ["B1"]}], "insufficientEvidence": False})
+                                   "refs": cited}], "etfs": etfs, "fxIssue": issue,
+                       "rateIssue": {**issue, "statement": "받은 자료에 금리 관련 기사가 없습니다.", "refs": [],
+                                     "weak": True, "shortfall": "금리 기사가 더 있어야 합니다."},
+                       "insufficientEvidence": False, **extra}, ensure_ascii=False)
+
+
+good_output = morning_output
 
 
 def post_close_output(symbols=("TEST01", "TEST02", "TEST03"), refs=None, weak=(), notables=(), summary=None,
@@ -220,6 +233,7 @@ def test_the_same_tick_is_handled_once(core):
     c.on_schedule_tick(tick(), MORNING_AT, "morning")
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
+    answer_news(c, requests, MORNING_AT)
     c.on_schedule_tick(tick(), MORNING_AT + timedelta(seconds=5), "morning")
     assert len(requests.topic("market.daily.requested")) == 1
     assert len(published(requests)) == 1
@@ -269,6 +283,7 @@ def test_no_filings_request_when_no_etf_holds_us_stocks(core):
     c.on_schedule_tick(tick(), MORNING_AT, "morning")
     c.on_daily_data_responded(daily_response(etfs=[etf(tickers=())], close_rates=[]), MORNING_AT)
     assert requests.topic("news.filings.requested") == []
+    answer_news(c, requests, MORNING_AT)
     [event] = published(requests)
     text = event.value["payload"]["text"]
     assert "해당 없음" in text
@@ -301,6 +316,7 @@ def test_morning_edition_uses_us_markets_filings_and_the_previous_korean_session
     c.on_schedule_tick(tick(), MORNING_AT, "morning")
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
+    answer_news(c, requests, MORNING_AT)
     [event] = published(requests)
     payload = event.value["payload"]
     assert payload["missingItems"] == [] and payload["generatedBy"] == GENERATED_BY_RULE
@@ -373,7 +389,8 @@ def test_daily_data_is_resent_with_a_new_seq_and_given_up_after_the_last_attempt
     [event] = published(requests)
     payload = event.value["payload"]
     assert payload["generatedBy"] == GENERATED_BY_RULE
-    assert payload["missingItems"] == [ITEM_US_INDEX, "환율", "미국 종목 직전 장 등락", ITEM_FILINGS, ITEM_KR_REVIEW]
+    assert payload["missingItems"] == [ITEM_US_INDEX, "환율", "미국 종목 직전 장 등락", ITEM_FILINGS, ITEM_KR_REVIEW,
+                                         ITEM_ETF_ARTICLES]
     assert payload["text"].count(NO_DATA) >= 5
     assert requests.topic("news.filings.requested") == []
 
@@ -400,6 +417,7 @@ def test_filings_no_response_still_sends_the_edition_and_records_one_failure(cor
     c, requests, failures, details = core()
     c.on_schedule_tick(tick(), MORNING_AT, "morning")
     c.on_daily_data_responded(daily_response(), MORNING_AT)
+    answer_news(c, requests, MORNING_AT, filings_silent=True)
     for n in (1, 2, 3):
         c.on_tick(MORNING_AT + timedelta(seconds=10 * n))
     [event] = published(requests)
@@ -422,13 +440,14 @@ def test_llm_writes_the_summary_and_cites_only_given_refs(core):
     c.on_schedule_tick(tick(), MORNING_AT, "morning")
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
+    answer_news(c, requests, MORNING_AT)
     [event] = published(requests)
     payload = event.value["payload"]
     assert payload["generatedBy"] == GENERATED_BY_LLM
     assert "요약:" in payload["text"] and "[근거 1, 2]" in payload["text"]
     assert "투자 조언" in payload["text"]
     assert failures.records == []
-    assert [e.entry_type for e in details.records] == [EntryType.REPORT_WRITTEN]
+    assert [e.entry_type for e in details.records] == [EntryType.REPORT_WRITTEN, EntryType.ETF_OUTLOOK]
     [result] = details.results()
     assert (result.status, result.generated_by, result.failure_reason) == (RunStatus.SUCCEEDED, GeneratedBy.LLM, None)
     _, user, schema = llm.calls[0]
@@ -443,6 +462,7 @@ def test_rejected_llm_attempts_are_each_recorded_even_when_the_edition_succeeds(
     c.on_schedule_tick(tick(), MORNING_AT, "morning")
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
+    answer_news(c, requests, MORNING_AT)
     [event] = published(requests)
     assert event.value["payload"]["generatedBy"] == GENERATED_BY_LLM
     assert failures.records == []
@@ -461,6 +481,7 @@ def test_llm_failing_every_time_falls_back_to_the_rule_based_body_and_records_ll
     c.on_schedule_tick(tick(), MORNING_AT, "morning")
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
+    answer_news(c, requests, MORNING_AT)
     [event] = published(requests)
     payload = event.value["payload"]
     assert payload["generatedBy"] == GENERATED_BY_RULE
@@ -480,6 +501,7 @@ def test_insufficient_evidence_is_marked_in_the_body(core):
     c.on_schedule_tick(tick(), MORNING_AT, "morning")
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
+    answer_news(c, requests, MORNING_AT)
     [event] = published(requests)
     assert event.value["payload"]["generatedBy"] == GENERATED_BY_LLM
     assert "요약할 근거가 부족합니다" in event.value["payload"]["text"]
@@ -501,6 +523,7 @@ def test_every_failure_is_logged_but_the_result_line_names_the_first_one(core):
     c, requests, failures, details = core(llm)
     c.on_schedule_tick(tick(), MORNING_AT, "morning")
     c.on_daily_data_responded(daily_response(), MORNING_AT)
+    answer_news(c, requests, MORNING_AT, filings_silent=True)
     for n in (1, 2, 3):
         c.on_tick(MORNING_AT + timedelta(seconds=10 * n))
     assert [f.reason for f in failures.records] == [FailureReason.FILINGS_NO_RESPONSE, FailureReason.LLM_ERROR]
@@ -535,6 +558,7 @@ def test_records_and_events_carry_no_keys_or_personal_data(core, caplog, monkeyp
         c.on_schedule_tick(tick(), MORNING_AT, "morning")
         c.on_daily_data_responded(daily_response(), MORNING_AT)
         c.on_filings_responded(filings_response(), MORNING_AT)
+        answer_news(c, requests, MORNING_AT)
     dumped = json.dumps([e.value for e in requests.sent], ensure_ascii=False) \
         + json.dumps([r.data for r in details.records], ensure_ascii=False) + caplog.text
     for forbidden in ("sk-test-secret-value", "@", "quantity", "amount", "수량", "금액"):
@@ -560,6 +584,7 @@ def test_every_edition_leaves_one_result_line_with_body_cited_evidence_missing_i
     c.on_schedule_tick(tick(), MORNING_AT, "morning")
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
+    answer_news(c, requests, MORNING_AT)
 
     [event] = published(requests)
     [result] = details.results()
@@ -581,6 +606,7 @@ def test_the_accepted_llm_attempt_keeps_its_input_and_original_response(core):
     c.on_schedule_tick(tick(), MORNING_AT, "morning")
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
+    answer_news(c, requests, MORNING_AT)
 
     [accepted] = details.of_type(EntryType.REPORT_WRITTEN)
     assert accepted.attempts == 2 and accepted.error_type is None and accepted.stage == STAGE_LLM
@@ -595,6 +621,7 @@ def test_edition_is_not_published_when_its_log_could_not_be_saved(caplog):
         c.on_schedule_tick(tick(), MORNING_AT, "morning")
         c.on_daily_data_responded(daily_response(), MORNING_AT)
         c.on_filings_responded(filings_response(), MORNING_AT)
+        answer_news(c, requests, MORNING_AT)
 
     assert published(requests) == []
     assert "result event not published" in caplog.text and "TEST01" not in caplog.text
@@ -722,6 +749,7 @@ def test_morning_edition_ignores_an_empty_etf_in_its_missing_items(core):
     c.on_schedule_tick(tick(), MORNING_AT, "morning")
     c.on_daily_data_responded(daily_response(etfs=[etf_v2_missing("TEST01", tickers=("TESTA",))]), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
+    answer_news(c, requests, MORNING_AT)
     [event] = published(requests)
     # 아침 판에는 보유 ETF 항목이 없어 ETF 칸은 빠진 항목에 오르지 않는다.
     assert event.value["payload"]["missingItems"] == []
@@ -736,6 +764,7 @@ def test_an_etf_without_a_daily_price_still_gets_us_stocks_filings_and_research(
     assert filings.value["payload"]["tickers"] == ["TESTA", "FAKEB"]
     assert filings.value["payload"]["symbol"] == "TEST01"
     c.on_filings_responded(filings_response(), MORNING_AT)
+    answer_news(c, requests, MORNING_AT)
     [event] = published(requests)
     text = event.value["payload"]["text"]
     assert "미국 종목 1개(전체 2개 중)" in text and "8-K 공시" in text

@@ -2,6 +2,7 @@ package dev.stockreading.market.context;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -91,6 +92,26 @@ class ContextIntegrationTest {
 
         assertThat(rows).hasSize(2);
         assertThat(rates).containsExactly(new ContextPayload.IndexRate(
+                "CTIDX", "CT INDEX", "20261010", "102.00", "20261009", "100.00", "2.00"));
+    }
+
+    @Test
+    void previousCloseReceivedBeforeTheRequestSinceIsReadThroughTheLookbackRange() {
+        OffsetDateTime asOf = OffsetDateTime.parse("2026-06-13T00:00:00Z");
+        OffsetDateTime since = asOf.minusHours(1);
+        OffsetDateTime readFrom = asOf.minusDays(7);
+        insert("world_index", "CTZ", worldIndex("20261010", " 102.00"), asOf.minusMinutes(5));
+        // since보다 이르게 받았지만 읽는 하한(7일 전)과 같은 시각이라 읽혀야 하는 직전 행과, 1초 일찍 받아 읽히지 않는 행.
+        insert("world_index", "CTZ", worldIndex("20261009", " 100.00"), readFrom);
+        insert("world_index", "CTZ", worldIndex("20261008", "  10.00"), readFrom.minusSeconds(1));
+
+        MarketBackground background = new MarketBackground(
+                repository, new WorldIndexRates(JsonMapper.builder().build()), Duration.ofDays(7));
+
+        ContextPayload.Background world = background.market(List.of("CTZ"), since, asOf, 32_768).get(2);
+
+        assertThat(world.status()).isEqualTo("ok");
+        assertThat(world.indexRates()).containsExactly(new ContextPayload.IndexRate(
                 "CTIDX", "CT INDEX", "20261010", "102.00", "20261009", "100.00", "2.00"));
     }
 

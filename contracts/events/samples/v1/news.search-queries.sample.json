@@ -1,0 +1,17 @@
+{
+  "eventId": "7b3d9e41-2c85-4a6f-b0d7-1f8a5c3e9d02",
+  "eventType": "news.search-queries",
+  "schemaVersion": 1,
+  "occurredAt": "2026-11-10T10:00:30+09:00",
+  "producedAt": "2026-11-10T10:00:30.040+09:00",
+  "correlationId": "search-queries-change-2026-11-10T10:00:30+09:00",
+  "payload": {
+    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "queries": [
+      { "query": "테스트 ETF 하나", "symbols": ["TEST01"] },
+      { "query": "Fake Corp", "symbols": ["TEST01", "TEST02"] },
+      { "query": "Fake Corp stock", "symbols": ["FAKE", "FAKE-B"] },
+      { "query": "가짜 시장 이슈", "symbols": ["*"] }
+    ]
+  }
+}

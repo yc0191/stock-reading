@@ -4,12 +4,14 @@
 
 | 기능 | 대상 | 단위 | 가상 | 실제 |
 |---|---|---|---|---|
-| 앱 시작, 토픽 선언 | NewsApplication, Topics | TopicsConfigTest | 해당 없음 - 토픽을 선언할 뿐 외부 의존을 부르지 않음 | 해당 없음 - 외부 의존을 부르지 않음 |
+| 앱 시작, 토픽 선언(검색어·보유 종목 목록 토픽은 압축·파티션 1) | NewsApplication, Topics | TopicsConfigTest | 해당 없음 - 토픽을 선언할 뿐 외부 의존을 부르지 않음 | 해당 없음 - 외부 의존을 부르지 않음 |
 | 발행 이벤트의 모양 | ArticlesPayload, Envelope, EventFactory | ArticlesContractTest | 해당 없음 - 값만 담으며 발행 흐름은 기사 조회 응답 행에서 확인 | 해당 없음 - 외부 의존을 부르지 않음 |
 | 기사 저장(수신, 중복 제거, 재검색 표시와 처음 찾은 작업 id) | ArticleKey, NewsArticle, NewsArticleRepository, NewsEnvelope, NewsListener | ArticleKeyTest, NewsContractTest | NewsListenerTest | NewsArticleStorageIntegrationTest [DB, 켜는 조건: NEWS_IT_DB_URL·NEWS_IT_DB_USER·NEWS_IT_DB_PASSWORD] |
 | 기사 처리 실패 보관과 복구 | ErrorHandlerConfig, FailedEvent, FailedEventRecoverer, FailedEventRepository | 해당 없음 - 실패 처리는 Kafka 소비와 저장소를 함께 써서 가상 칸에서 확인 | ErrorHandlerConfigTest, FailedEventRecovererTest | 없음 - 실패 보관 테이블의 실제 DB 테스트는 이번 정비 범위(기사 저장·조회) 밖이라 아직 없음 [DB] |
 | 공시 저장과 조회 | Filing, FilingEnvelope, FilingListener, FilingQuery, FilingRepository, StoredFiling | FilingContractTest | FilingListenerTest, FilingQueryTest | FilingIntegrationTest [DB, 켜는 조건: NEWS_IT_DB_URL·NEWS_IT_DB_USER·NEWS_IT_DB_PASSWORD] |
-| 기사 조회 응답(종목·기간, 재검색 작업 id) | ArticleQueryRepository, ArticlesPublisher, ArticlesRequestEnvelope, ArticlesRequestListener | ArticlesContractTest | ArticlesPublisherTest, ArticlesRequestListenerTest | ArticleQueryIntegrationTest [DB, 켜는 조건: NEWS_IT_DB_URL·NEWS_IT_DB_USER·NEWS_IT_DB_PASSWORD]; scripts/test_briefing_flow_live.py [서비스 흐름, 켜는 조건: test-all.sh --live] |
+| 기사 조회 응답(종목·기간, 재검색 작업 id, ETF는 자체 기사 먼저 그다음 구성 종목 기사) | ArticleQueryRepository, ArticlesPublisher, ArticlesRequestEnvelope, ArticlesRequestListener | ArticlesContractTest | ArticlesPublisherTest, ArticlesRequestListenerTest | ArticleQueryIntegrationTest [DB, 켜는 조건: NEWS_IT_DB_URL·NEWS_IT_DB_USER·NEWS_IT_DB_PASSWORD]; scripts/test_briefing_flow_live.py [서비스 흐름, 켜는 조건: test-all.sh --live] |
 | 공시 조회 응답 | FilingQueryRepository, FilingsPayload, FilingsPublisher, FilingsRequestEnvelope, FilingsRequestListener | FilingsContractTest | FilingsRequestListenerTest | FilingsQueryIntegrationTest [DB, 켜는 조건: NEWS_IT_DB_URL·NEWS_IT_DB_USER·NEWS_IT_DB_PASSWORD] |
+| 뉴스 검색어 테이블(빈 테이블일 때만 파일로 처음 채우기, 테이블이 바뀔 때만 전체 검색어 목록 발행, 내용 해시, 재시작 때 한 번 발행, 발행 실패 재시도) | SearchQueriesChangeWatcher, SearchQueriesPayload, SearchQueriesPublisher, SearchQueryProperties, SearchQueryRepository, SearchQuerySeeder, SearchQuerySnapshot, SearchQuerySpec | SearchQuerySnapshotTest, SearchQuerySpecTest, SearchQueriesContractTest | SearchQueriesChangeWatcherTest, SearchQuerySeederTest | SearchQueryIntegrationTest [DB, 켜는 조건: NEWS_IT_DB_URL·NEWS_IT_DB_USER·NEWS_IT_DB_PASSWORD]; 없음 - 실제 Kafka로 바뀔 때만 발행되는지는 사람이 로컬 실행으로 확인하며 자동 테스트는 아직 없음 [서비스 흐름] |
+| 보유 종목 목록 수신(마지막 목록 받기, 구성 관계 보관, 재시작 때 옛 목록 묶음은 마지막 목록으로만 검색어 만들기)과 미국 구성 종목 검색어 이름으로 만들기(기존 검색어는 덮어쓰지 않음) | GeneratedSearchQueries, HoldingsEnvelope, HoldingsListener, ReceivedHoldings | GeneratedSearchQueriesTest | HoldingsListenerTest | SearchQueryIntegrationTest [DB, 켜는 조건: NEWS_IT_DB_URL·NEWS_IT_DB_USER·NEWS_IT_DB_PASSWORD]; 없음 - 실제 Kafka에서 재시작해도 마지막 목록을 받는지는 사람이 로컬 실행으로 확인하며 자동 테스트는 아직 없음 [서비스 흐름] |
 
 테스트 도우미: ContractSchemas

@@ -25,26 +25,26 @@ public class NewsCollector {
     private final Clock clock;
     private final DailyCallLimit dailyCallLimit;
     private final NewsCallPause pause;
-    private final List<NewsQuery> configuredQueries;
+    private final SearchQueriesPort searchQueries;
 
-    NewsCollector(NewsSearchPort search, NewsSearchProperties properties, Clock clock, NewsCallPause pause) {
+    NewsCollector(NewsSearchPort search, NewsSearchProperties properties, Clock clock, NewsCallPause pause,
+            SearchQueriesPort searchQueries) {
         this.search = search;
         this.properties = properties;
         this.clock = clock;
         this.pause = pause;
         this.dailyCallLimit = new DailyCallLimit(properties.dailyCallLimit(), clock);
-        // 설정 오타로 모든 기사가 조용히 버려지지 않도록 시작할 때 한 번 검증해서 보관한다.
-        this.configuredQueries = NewsQuery.parseValidated(properties.queries());
+        this.searchQueries = searchQueries;
     }
 
-    /** 설정(collector.news-search.queries)의 검색어로 수집한다. */
+    /** 뉴스 서비스가 알린 검색어(news.search-queries)로 수집한다. 목록을 아직 받지 못했으면 IllegalStateException 이다. */
     public List<NewsItem> collect() {
-        return collect(configuredQueries);
+        return collect(searchQueries.queries());
     }
 
     /** collect() 와 같지만 제대로 모으지 못했을 수 있는 종목과 시작 시각도 함께 돌려준다. */
     public NewsCollection collectWithStatus() {
-        return collectWithStatus(configuredQueries);
+        return collectWithStatus(searchQueries.queries());
     }
 
     public List<NewsItem> collect(List<NewsQuery> queries) {

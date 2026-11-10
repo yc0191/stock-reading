@@ -1,5 +1,6 @@
 """데일리 판의 결론·보유/관심 묶음·HTML·차트 그림을 확인한다. 외부 의존 없이 값만 넣어 돌린다."""
 import logging
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -85,7 +86,8 @@ def test_conclusion_says_no_data_when_no_etf_has_a_value():
 def test_conclusion_leaves_out_a_rise_or_fall_that_did_not_happen():
     text = conclusion(post_close((etf("TEST01", "TEST 하나", "1.00"), etf("TEST02", "TEST 둘", "0.00"))))
     assert "가장 크게 오름 TEST 하나 +1.0%" in text and "내림" not in text
-    flat = conclusion(post_close((etf("TEST01", "TEST 하나", "0.00"),)))
+    # 일자가 판을 만든 날이 아니면 장 시작 전이 아니라 마감 뒤에도 등락이 없던 것이다.
+    flat = conclusion(post_close((replace(etf("TEST01", "TEST 하나", "0.00"), date="20261019"),)))
     assert flat == "결론: 보유 1개 중 0개 상승"
 
 

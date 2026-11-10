@@ -215,3 +215,54 @@ def test_a_moves_grouped_line_is_accepted_and_read_back_with_every_grouped_move(
     ((entry_type, attempts, data),) = fetch(
         connect, f"SELECT entry_type, attempts, data::text FROM {LOG_TABLE} WHERE job_id = 'it-group-1'")
     assert (entry_type, attempts) == ("moves-grouped", 2) and json.loads(data) == {"moves": moves}
+
+
+# ---- 마감 후 판이 읽는 그날 아침 예상과 급변동 ----
+
+KST = timezone(timedelta(hours=9))
+# 다른 테스트의 자료(2026-10-20)와 겹치지 않는 날짜와 종목으로 정한다.
+REVIEW_DAY = datetime(2026, 3, 3, tzinfo=KST)
+
+
+def start_at(store, job_id, kind, at, raw="{}", target=None):
+    assert store.start(JobStart(job_id, kind, raw, target or {"symbol": "ITR001", "moveAt": at.isoformat()}, at))
+
+
+def test_the_morning_outlook_of_the_korean_day_is_read_back_newest_first(store):
+    morning = REVIEW_DAY.replace(hour=8, minute=45)
+    start_at(store, "it-review-morning-1", JobKind.MORNING, morning)
+    start_at(store, "it-review-morning-prev", JobKind.MORNING, morning - timedelta(days=1))
+    start_at(store, "it-review-post", JobKind.POST_CLOSE, morning)
+    for job_id, at, n in (("it-review-morning-1", morning, 1), ("it-review-morning-1", morning + timedelta(minutes=5), 2),
+                          ("it-review-morning-prev", morning - timedelta(days=1), 3), ("it-review-post", morning, 4)):
+        store.record(entry(job_id, EntryType.ETF_OUTLOOK, data={"n": n, "outlooks": []}, occurred_at=at))
+
+    # 자정 경계의 기록은 한국 시간 날짜로 가른다(UTC 날짜로 가르면 같은 날로 잘못 잡힌다).
+    start_at(store, "it-review-morning-night", JobKind.MORNING, REVIEW_DAY + timedelta(days=1, minutes=30))
+    store.record(entry("it-review-morning-night", EntryType.ETF_OUTLOOK, data={"n": 5, "outlooks": []},
+                       occurred_at=REVIEW_DAY + timedelta(days=1, minutes=30)))
+
+    found = store.morning_outlooks(REVIEW_DAY.date())
+
+    assert [d["n"] for d in found] == [2, 1]
+
+
+def test_the_moves_started_in_the_range_are_read_back_with_their_results(store):
+    day = REVIEW_DAY + timedelta(days=10)
+    event = json.dumps({"payload": {"symbol": "ITR001", "changePercent": 2.1}})
+    first, second, other_day = day.replace(hour=10, minute=15), day.replace(hour=13, minute=20), day - timedelta(days=1)
+    start_at(store, "it-review-move-1", JobKind.MOVE, first, event)
+    start_at(store, "it-review-move-2", JobKind.MOVE, second, event.replace("2.1", "-1.8"))
+    start_at(store, "it-review-move-3", JobKind.MOVE, other_day, event)
+    start_at(store, "it-review-move-4", JobKind.MORNING, first)
+    store.finish(JobResult("it-review-move-1", RunStatus.SUCCEEDED, first + timedelta(minutes=2),
+                           generated_by=GeneratedBy.LLM))
+    store.finish(JobResult("it-review-move-2", RunStatus.FAILED, second + timedelta(minutes=2),
+                           failure_reason="test-failure"))
+
+    runs = store.moves_between(day, day.replace(hour=17))
+
+    assert [(r.job_id, r.symbol, r.move_at, r.change_percent, r.status, r.generated_by, r.failure_reason)
+            for r in runs] == [
+        ("it-review-move-1", "ITR001", first, 2.1, "succeeded", "llm", None),
+        ("it-review-move-2", "ITR001", second, -1.8, "failed", None, "test-failure")]

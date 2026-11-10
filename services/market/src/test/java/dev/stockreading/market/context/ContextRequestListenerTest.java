@@ -69,7 +69,7 @@ class ContextRequestListenerTest {
     }
 
     private ContextRequestListener listener() {
-        return listener(new ContextProperties(Duration.ofDays(4), 32_768, 100, List.of("C", "S")));
+        return listener(new ContextProperties(Duration.ofDays(4), 32_768, 100, List.of("C", "S"), Duration.ofDays(7)));
     }
 
     private static String request() throws IOException {
@@ -172,8 +172,8 @@ class ContextRequestListenerTest {
     void requestedTickerLimitAboveTheSafetyLimitIsCappedAndExactlyTheLimitIsNotTruncated() throws IOException {
         when(holdings.topTickers("TEST01")).thenReturn(List.of("FAKEA", "FAKEB", "FAKEC"));
 
-        ContextPayload capped = answer(listener(new ContextProperties(Duration.ofDays(4), 32_768, 3, List.of())),
-                request());
+        ContextPayload capped = answer(listener(
+                new ContextProperties(Duration.ofDays(4), 32_768, 3, List.of(), Duration.ofDays(7))), request());
 
         assertThat(capped.tickers()).hasSize(3);
         assertThat(capped.truncated()).isFalse();
@@ -189,7 +189,8 @@ class ContextRequestListenerTest {
         answer(listener(), tenDays);
 
         verify(repository).latest(BackgroundKind.EXCHANGE_RATE_SUMMARY, null, SINCE, AS_OF);
-        verify(repository).worldIndexRows("C", SINCE, AS_OF);
+        // 직전 영업일 행은 요청 범위보다 이른 lookback(7일 전)부터 읽는다.
+        verify(repository).worldIndexRows("C", AS_OF.minusDays(7), AS_OF);
         verify(repository).latest(BackgroundKind.DAILY_PRICE, "TEST01", SINCE, AS_OF);
         verify(closeRateQuery).find("FAKEA", AS_OF, SINCE);
     }
@@ -231,8 +232,8 @@ class ContextRequestListenerTest {
         when(repository.latest(eq(BackgroundKind.DAILY_PRICE), any(), any(), any()))
                 .thenReturn(Optional.of(stored(raw, "2026-10-20T15:55:01+09:00")));
 
-        ContextPayload payload = answer(listener(new ContextProperties(Duration.ofDays(4), 100, 100, List.of())),
-                request());
+        ContextPayload payload = answer(listener(
+                new ContextProperties(Duration.ofDays(4), 100, 100, List.of(), Duration.ofDays(7))), request());
 
         assertThat(payload.background().get(2).status()).isEqualTo("too-large");
         assertThat(payload.background().get(2).responseBytes()).isEqualTo(raw.length());
@@ -241,7 +242,7 @@ class ContextRequestListenerTest {
     @Test
     void worldIndexCarriesTheRawResponseAndTheComputedRates() throws IOException {
         String current = worldIndex("20261020", " 102.00");
-        when(repository.worldIndexRows("C", SINCE, AS_OF)).thenReturn(List.of(
+        when(repository.worldIndexRows("C", AS_OF.minusDays(7), AS_OF)).thenReturn(List.of(
                 stored(current, "2026-10-20T15:55:05+09:00"),
                 stored(worldIndex("20261019", " 100.00"), "2026-10-19T15:55:05+09:00")));
 
@@ -251,6 +252,72 @@ class ContextRequestListenerTest {
         assertThat(world.response()).isEqualTo(current);
         assertThat(world.indexRates()).containsExactly(new ContextPayload.IndexRate(
                 "TESTIX", "TEST INDEX", "20261020", "102.00", "20261019", "100.00", "2.00"));
+    }
+
+    @Test
+    void previousCloseReceivedBeforeTheRequestedSinceIsStillUsed() throws IOException {
+        // 마감 후 판처럼 요청 범위가 짧아도 직전 영업일 행은 범위 밖에서 찾는다. 배경 원문은 범위 안의 행만 쓴다.
+        OffsetDateTime oneHour = AS_OF.minusHours(1);
+        String request = request().replace("\"since\": \"2026-10-16T16:00:31+09:00\"",
+                "\"since\": \"" + EventFactory.format(oneHour) + "\"");
+        String current = worldIndex("20261020", " 102.00");
+        when(repository.worldIndexRows("C", AS_OF.minusDays(7), AS_OF)).thenReturn(List.of(
+                stored(current, "2026-10-20T15:55:05+09:00"),
+                stored(worldIndex("20261019", " 100.00"), "2026-10-19T15:55:05+09:00")));
+
+        ContextPayload.Background world = answer(listener(), request).background().get(2);
+
+        assertThat(world.response()).isEqualTo(current);
+        assertThat(world.indexRates()).containsExactly(new ContextPayload.IndexRate(
+                "TESTIX", "TEST INDEX", "20261020", "102.00", "20261019", "100.00", "2.00"));
+    }
+
+    @Test
+    void worldIndexRowsOnlyBeforeTheRequestedSinceAreMissing() throws IOException {
+        OffsetDateTime oneHour = AS_OF.minusHours(1);
+        String request = request().replace("\"since\": \"2026-10-16T16:00:31+09:00\"",
+                "\"since\": \"" + EventFactory.format(oneHour) + "\"");
+        when(repository.worldIndexRows("C", AS_OF.minusDays(7), AS_OF)).thenReturn(List.of(
+                stored(worldIndex("20261019", " 100.00"), "2026-10-19T15:55:05+09:00")));
+
+        ContextPayload.Background world = answer(listener(), request).background().get(2);
+
+        assertThat(world.status()).isEqualTo("missing");
+    }
+
+    @Test
+    void previousCloseSkipsRowsOlderThanTheLookbackLaterThanAsOfAndOfTheSameBusinessDay() throws IOException {
+        OffsetDateTime oneHour = AS_OF.minusHours(1);
+        String request = request().replace("\"since\": \"2026-10-16T16:00:31+09:00\"",
+                "\"since\": \"" + EventFactory.format(oneHour) + "\"");
+        String current = worldIndex("20261020", " 102.00");
+        // 실제 저장소는 asOf 뒤 행을 주지 않지만 가짜는 그대로 주므로, 계산이 스스로 걸러내는지 본다.
+        when(repository.worldIndexRows("C", AS_OF.minusDays(7), AS_OF)).thenReturn(List.of(
+                stored(current, "2026-10-20T15:55:05+09:00"),
+                stored(worldIndex("20261020", " 101.00"), "2026-10-20T12:00:00+09:00"),
+                stored(worldIndex("20261019", "  90.00"), EventFactory.format(AS_OF.plusSeconds(1))),
+                stored(worldIndex("20261019", " 100.00"), "2026-10-19T15:55:05+09:00"),
+                stored(worldIndex("20261013", "  50.00"), EventFactory.format(AS_OF.minusDays(7).minusSeconds(1)))));
+
+        ContextPayload.Background world = answer(listener(), request).background().get(2);
+
+        assertThat(world.indexRates()).containsExactly(new ContextPayload.IndexRate(
+                "TESTIX", "TEST INDEX", "20261020", "102.00", "20261019", "100.00", "2.00"));
+    }
+
+    @Test
+    void onlyARowOlderThanTheLookbackGivesNoPreviousClose() throws IOException {
+        OffsetDateTime oneHour = AS_OF.minusHours(1);
+        String request = request().replace("\"since\": \"2026-10-16T16:00:31+09:00\"",
+                "\"since\": \"" + EventFactory.format(oneHour) + "\"");
+        when(repository.worldIndexRows("C", AS_OF.minusDays(7), AS_OF)).thenReturn(List.of(
+                stored(worldIndex("20261020", " 102.00"), "2026-10-20T15:55:05+09:00"),
+                stored(worldIndex("20261013", "  50.00"), EventFactory.format(AS_OF.minusDays(7).minusSeconds(1)))));
+
+        ContextPayload.Background world = answer(listener(), request).background().get(2);
+
+        assertThat(world.indexRates()).containsExactly(new ContextPayload.IndexRate(
+                "TESTIX", "TEST INDEX", "20261020", "102.00", null, null, null));
     }
 
     @Test

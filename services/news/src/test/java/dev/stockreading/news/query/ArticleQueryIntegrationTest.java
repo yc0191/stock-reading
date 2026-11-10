@@ -7,6 +7,7 @@ import static org.mockito.Mockito.verify;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import org.flywaydb.core.Flyway;
@@ -18,6 +19,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import dev.stockreading.news.event.ArticlesPayload;
+import dev.stockreading.news.holdings.ReceivedHoldings;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -57,6 +59,12 @@ class ArticleQueryIntegrationTest {
         insert("q-other", SINCE.plusHours(3), "ITQ002");
         insert("q-until", UNTIL, "ITQ001");
         insert("q-after", UNTIL.plusSeconds(1), "ITQ001");
+        // 구성 종목 기사. 국내 코드, 미국 티커(종류 구분 "-" 포함)를 모두 태그 칸에 넣을 수 있어야 한다.
+        insert("m-old-us", SINCE.plusMinutes(10), "ITM-US", "ITMEM1");
+        insert("m-new-kr", UNTIL.minusMinutes(10), "ITMEM1");
+        insert("m-new-us-b", UNTIL.minusMinutes(5), "ITUS-B");
+        insert("m-with-etf", UNTIL.minusMinutes(1), "ITMEM1", "ITQ003");
+        insert("m-own", SINCE.plusMinutes(5), "ITQ003");
 
         // 재검색 기사는 요청 종목(ITQ001)과 "*" 가 아닌 태그를 붙인다. 작업 id 로 읽을 때 종목 조건을 보지 않는지 확인하고,
         // 종목으로 읽는 기존 테스트의 결과에는 섞이지 않게 한다.
@@ -89,7 +97,7 @@ class ArticleQueryIntegrationTest {
     @Test
     void requestWithAResearchJobIdIsAnsweredWithThatJobsArticlesUnderTheRequestSymbol() {
         ArticlesPublisher publisher = mock(ArticlesPublisher.class);
-        ArticlesRequestListener listener = new ArticlesRequestListener(repository, publisher, JsonMapper.builder().build());
+        ArticlesRequestListener listener = new ArticlesRequestListener(repository, publisher, JsonMapper.builder().build(), mock(ReceivedHoldings.class));
 
         listener.onRequest(request(100).replace("\"maxArticles\":100", "\"maxArticles\":100,\"researchJobId\":\""
                 + RESEARCH_JOB + "\""));
@@ -102,7 +110,7 @@ class ArticleQueryIntegrationTest {
 
     @Test
     void returnsTheSymbolAndMarketWideArticlesInRangeNewestFirst() {
-        List<ArticleQueryRepository.StoredArticle> found = repository.findByRange("ITQ001", SINCE, UNTIL, 100);
+        List<ArticleQueryRepository.StoredArticle> found = repository.findByRange("ITQ001", Set.of(), SINCE, UNTIL, 100);
 
         // 기간 양끝은 포함하고, 두 태그를 모두 가진 기사는 한 번만, 다른 종목의 기사는 빠진다.
         assertThat(found).extracting(ArticleQueryRepository.StoredArticle::title)
@@ -112,15 +120,42 @@ class ArticleQueryIntegrationTest {
     }
 
     @Test
+    void etfArticlesComeFirstThenMemberArticlesWithoutDuplicatesEachNewestFirst() {
+        List<ArticleQueryRepository.StoredArticle> found = repository.findByRange("ITQ003",
+                Set.of("ITMEM1", "ITUS-B"), SINCE, UNTIL, 100);
+
+        // ETF 자체(ITQ003, "*") 기사가 최신순으로 먼저, 구성 종목 기사가 그다음 최신순이다. m-with-etf 는 두 쪽에 걸려도 앞에만 나온다.
+        assertThat(found).extracting(ArticleQueryRepository.StoredArticle::title).containsExactly(
+                "m-with-etf", "q-both", "q-market", "m-own",
+                "m-new-us-b", "m-new-kr", "m-old-us");
+    }
+
+    @Test
+    void etfArticlesSurviveTheLimitEvenWhenMemberArticlesAreNewerAndMoreNumerous() {
+        List<ArticleQueryRepository.StoredArticle> found = repository.findByRange("ITQ003",
+                Set.of("ITMEM1", "ITUS-B"), SINCE, UNTIL, 4);
+
+        assertThat(found).extracting(ArticleQueryRepository.StoredArticle::title)
+                .containsExactly("m-with-etf", "q-both", "q-market", "m-own");
+    }
+
+    @Test
+    void noMembersReadsOnlyTheSymbolsOwnArticles() {
+        assertThat(repository.findByRange("ITQ003", Set.of(), SINCE, UNTIL, 100))
+                .extracting(ArticleQueryRepository.StoredArticle::title)
+                .containsExactly("m-with-etf", "q-both", "q-market", "m-own");
+    }
+
+    @Test
     void limitKeepsTheNewestArticles() {
-        assertThat(repository.findByRange("ITQ001", SINCE, UNTIL, 2))
+        assertThat(repository.findByRange("ITQ001", Set.of(), SINCE, UNTIL, 2))
                 .extracting(ArticleQueryRepository.StoredArticle::title).containsExactly("q-until", "q-both");
     }
 
     @Test
     void responseIsCutAtMaxArticlesAndMarkedTruncated() {
         ArticlesPublisher publisher = mock(ArticlesPublisher.class);
-        ArticlesRequestListener listener = new ArticlesRequestListener(repository, publisher, JsonMapper.builder().build());
+        ArticlesRequestListener listener = new ArticlesRequestListener(repository, publisher, JsonMapper.builder().build(), mock(ReceivedHoldings.class));
 
         listener.onRequest(request(3));
 

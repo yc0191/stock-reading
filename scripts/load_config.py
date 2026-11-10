@@ -35,7 +35,6 @@ COLLECTOR_ENV_NAMES = {
     "news-search-base-url": "NEWS_SEARCH_BASE_URL",
     "news-search-id-header": "NEWS_SEARCH_ID_HEADER",
     "news-search-secret-header": "NEWS_SEARCH_SECRET_HEADER",
-    "news-search-queries": "NEWS_SEARCH_QUERIES",
 }
 
 # briefing 도 선택 그룹이다: 키가 없으면 브리핑이 규칙 기반 리포트로 동작하므로 다른 그룹 반영을 막지 않는다.

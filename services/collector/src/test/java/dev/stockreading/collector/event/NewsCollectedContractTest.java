@@ -56,9 +56,17 @@ class NewsCollectedContractTest {
     }
 
     @Test
-    void lowercaseOrShortSymbolIsRejected() throws IOException {
+    void lowercaseSymbolOrOneThatIsNotATickerShapeIsRejected() throws IOException {
         assertRejected(sample().replace("\"TEST01\"", "\"test01\""));
-        assertRejected(sample().replace("\"TEST01\"", "\"TEST1\""));
+        assertRejected(sample().replace("\"TEST01\"", "\"TEST-ABC\""));
+        assertRejected(sample().replace("\"TEST01\"", "\"\""));
+    }
+
+    @Test
+    void usTickersWithAndWithoutShareClassAreAccepted() throws IOException {
+        for (String symbol : new String[] {"FAKE", "FAKE-B", "TEST1"}) {
+            assertThat(ContractSchemas.validate(SCHEMA, sample().replace("\"TEST01\"", "\"" + symbol + "\""))).isEmpty();
+        }
     }
 
     @Test

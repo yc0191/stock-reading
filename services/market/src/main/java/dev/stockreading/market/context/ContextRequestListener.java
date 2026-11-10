@@ -33,7 +33,7 @@ class ContextRequestListener {
     ContextRequestListener(BackgroundRepository repository, WorldIndexRates worldIndexRates,
             OverseasCloseRateQuery closeRateQuery, HoldingsPort holdings, ContextProperties properties,
             ContextPublisher publisher, ObjectMapper mapper) {
-        this.marketBackground = new MarketBackground(repository, worldIndexRates);
+        this.marketBackground = new MarketBackground(repository, worldIndexRates, properties.worldIndexPrevLookback());
         this.closeRateQuery = closeRateQuery;
         this.holdings = holdings;
         this.properties = properties;

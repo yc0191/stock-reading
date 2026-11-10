@@ -138,7 +138,6 @@ def test_news_search_settings_map_to_the_env_names_the_collector_reads():
         "news-search-base-url": "NEWS_SEARCH_BASE_URL",
         "news-search-id-header": "NEWS_SEARCH_ID_HEADER",
         "news-search-secret-header": "NEWS_SEARCH_SECRET_HEADER",
-        "news-search-queries": "NEWS_SEARCH_QUERIES",
     }
     parameters = [collector_param(short, f"v-{short}") for short in names]
     updates, ignored = lc.to_env_updates(parameters, lc.COLLECTOR_PREFIX, lc.COLLECTOR_ENV_NAMES)
@@ -171,24 +170,18 @@ def test_main_writes_live_symbol_without_printing_it(tmp_path, capsys):
     assert "TEST01" not in out and "broker.invalid" not in out
 
 
-def test_queries_value_with_separators_is_written_as_is(tmp_path):
-    # 검색어 설정은 '=', ',', ';' 를 쓰는 형식이라 값이 그대로 .env 에 들어가야 한다.
-    env = tmp_path / ".env"
-    queries = "테스트검색어=TEST01,TEST02;테스트검색어2=*"
-
-    def run(cmd, **kwargs):
-        params = full_parameters() if "/notifier" in cmd[cmd.index("--path") + 1] \
-            else [collector_param("news-search-queries", queries)]
-        return subprocess.CompletedProcess(cmd, 0, json.dumps({"Parameters": params}), "")
-
-    assert lc.main(["--env-file", str(env)], run=run) == 0
-    assert f"NEWS_SEARCH_QUERIES={queries}" in env.read_text()
-
-
-def test_queries_value_with_newline_is_rejected():
+def test_value_with_newline_is_rejected():
+    # 값에 줄바꿈이 있으면 .env 에 다른 설정 줄이 끼어들 수 있어 거부한다.
     with pytest.raises(ValueError):
-        lc.to_env_updates([collector_param("news-search-queries", "a=TEST01\nSMTP_PASSWORD=x")],
+        lc.to_env_updates([collector_param("dart-api-key", "a\nSMTP_PASSWORD=x")],
                           lc.COLLECTOR_PREFIX, lc.COLLECTOR_ENV_NAMES)
+
+
+def test_removed_settings_are_not_mapped_any_more():
+    # 보유 종목과 뉴스 검색어는 테이블이 원본이라 Parameter Store 에서 환경변수로 옮기지 않는다.
+    assert "NEWS_SEARCH_QUERIES" not in lc.MANAGED_ENV_NAMES
+    assert "ETF_US_HOLDINGS" not in lc.MANAGED_ENV_NAMES
+    assert "news-search-queries" not in lc.COLLECTOR_ENV_NAMES
 
 
 def test_main_loads_collector_key_after_notifier(tmp_path, capsys):

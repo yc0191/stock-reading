@@ -519,3 +519,122 @@ def test_db_conninfo_uses_env_example_keys_and_defaults():
     assert defaults == {"host": "localhost", "port": "5432", "dbname": "stock",
                         "user": "briefing_svc", "password": "secret"}
     assert custom["dbname"] == "other" and custom["user"] == "u" and custom["password"] == "p w'x"
+
+
+# ---- 문장 여러 개 동시 재검색: 다시 쓰기 LLM이 느려도 이미 도착한 응답을 잃지 않는다 ----
+
+SLOW_REWRITE = timedelta(seconds=14)
+WEAK_SENTENCES = 5
+
+
+def weak_report():
+    return json.dumps({"causes": [
+        {"title": f"문장 {n}", "detail": f"문장 {n}입니다.", "refs": ["a1"], "meaning": f"문장 {n}입니다.",
+         "meaningRefs": ["a1"], "weak": True, "shortfall": f"문장 {n}에 자료가 더 필요합니다."}
+        for n in range(1, WEAK_SENTENCES + 1)], "insufficientEvidence": False}, ensure_ascii=False)
+
+
+class SlowRewriteLlm:
+    """첫 호출은 약한 문장 5개짜리 보고서, 이후 호출은 다시 쓰기이며 한 번에 SLOW_REWRITE만큼 시간이 걸린다."""
+
+    def __init__(self, clock):
+        self.clock, self.calls = clock, 0
+
+    def complete(self, system, user, output_schema):
+        self.calls += 1
+        if self.calls == 1:
+            return weak_report()
+        self.clock.advance(seconds=SLOW_REWRITE.total_seconds())
+        rewrite = json.loads(user)["rewrite"]
+        no, ref = rewrite["sentenceNo"], rewrite["newRefs"][0]
+        return json.dumps({"causes": [{"title": f"문장 {no}", "detail": f"다시 쓴 문장 {no}입니다.", "refs": [ref],
+                                       "meaning": f"다시 쓴 문장 {no}입니다.", "meaningRefs": [ref],
+                                       "weak": False, "shortfall": ""}], "insufficientEvidence": False},
+                          ensure_ascii=False)
+
+
+def sentence_research_id(no):
+    return research_job_id(JOB_ID, no, 1)
+
+
+def fake_news_answers(producer, consumer, answered):
+    """아직 답하지 않은 재검색 기사 조회마다 즉시 응답을 큐 끝에 넣는다(뉴스 서비스는 요청에 바로 답한다)."""
+    for topic, _, value in producer.sent:
+        payload = value["payload"]
+        if topic != "news.articles.requested" or "researchJobId" not in payload:
+            continue
+        key = (payload["jobId"], payload["seq"])
+        if key in answered:
+            continue
+        answered.add(key)
+        no = next(n for n in range(1, WEAK_SENTENCES + 1) if sentence_research_id(n) == payload["jobId"])
+        consumer.queue.append(FakeMessage("news.articles.responded", envelope("news.articles.responded", {
+            "jobId": payload["jobId"], "seq": payload["seq"], "symbol": "TEST01",
+            "articles": [{"articleId": f"r{no}", "title": f"다시 찾은 기사 {no}", "summary": "",
+                          "publishedAt": "2026-10-20T06:00:00Z", "publisher": "news.example.com",
+                          "url": f"https://news.example.com/articles/r{no}"}],
+            "truncated": False})))
+
+
+def research_completed_for(no):
+    return FakeMessage("collection.completed", envelope("collection.completed", {
+        "jobType": "research-news", "scheduledFor": "2026-10-20T16:15:43+09:00",
+        "startedAt": "2026-10-20T16:15:44+09:00", "finishedAt": "2026-10-20T16:15:50+09:00",
+        "publishedCount": 1, "incompleteSymbols": [], "researchJobId": sentence_research_id(no)}))
+
+
+def test_slow_rewrites_do_not_make_other_sentences_time_out_with_their_answers_already_waiting(setup):
+    make, clock, store, _ = setup
+    query_llm = FakeLlm(*[json.dumps({"queries": [f"가짜검색어 {n}"]}) for n in range(1, WEAK_SENTENCES + 1)])
+    runner, consumer, producer = make(LlmWriter(SlowRewriteLlm(clock)), query_writer=QueryWriter(query_llm))
+
+    feed(runner, consumer, move_message(), completed_message(), history_message(1), context_message(1),
+         articles_message(1))
+    clock.advance(seconds=10)
+    runner.run_once()
+    feed(runner, consumer, articles_message(2))
+    assert len(sent(producer, "news.research.requested")) == WEAK_SENTENCES
+
+    feed(runner, consumer, *[research_completed_for(n) for n in range(1, WEAK_SENTENCES + 1)])
+    answered = set()
+    for _ in range(200):
+        fake_news_answers(producer, consumer, answered)
+        if not consumer.queue:
+            if runner.sentences.next_deadline() is None:
+                break
+            clock.advance(seconds=10)  # 응답이 더 없으면 시간이 흘러 확인 라운드·재요청 시각이 온다
+        runner.run_once()
+
+    (_, briefing), = sent(producer, "briefing.generated")
+    text = briefing["payload"]["text"]
+    assert all(f"다시 쓴 문장 {n}입니다." in text for n in range(1, WEAK_SENTENCES + 1))
+    assert [e for e in store.entries if e.reason == "articles_no_response"] == []
+    assert [e for e in store.entries if e.reason == "articles_resent"] == []
+
+
+def test_reading_queued_messages_stops_at_the_time_cap_and_goes_on_to_the_ticks(setup):
+    make, clock, _, _ = setup
+    runner, consumer, _ = make()
+    handled = []
+
+    def slow_handle(message):
+        handled.append(message)
+        clock.advance(seconds=main.MAX_READ_SECONDS / 2)
+
+    runner.handle_message = slow_handle
+    consumer.queue.extend(FakeMessage("market.move", "{}", offset=n) for n in range(10))
+    runner.run_once()
+
+    assert len(handled) == 2  # 두 번째 처리 뒤 상한에 닿아 멈춘다
+    assert len(consumer.queue) == 8  # 나머지는 다음 run_once에서 읽는다
+
+
+def test_reading_queued_messages_stops_at_the_count_cap(setup):
+    make, _, _, _ = setup
+    runner, consumer, _ = make()
+    handled = []
+    runner.handle_message = handled.append
+    consumer.queue.extend(FakeMessage("market.move", "{}", offset=n) for n in range(main.MAX_MESSAGES_PER_RUN + 5))
+    runner.run_once()
+
+    assert len(handled) == main.MAX_MESSAGES_PER_RUN

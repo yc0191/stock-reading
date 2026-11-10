@@ -345,8 +345,28 @@ def test_late_first_round_articles_response_is_left_to_the_core_and_stale_resear
     assert research.on_articles_responded(articles(2, [A1]), flow.clock.now) is False
     flow.clock.now += S.response_timeout
     research.on_tick(flow.clock.now)  # seq 1 무응답 -> seq 2로 재요청
+    # 보내지 않은 순번(3)의 응답은 낡은 것으로 보고 무시한다. 여전히 seq 2를 기다린다.
+    assert research.on_articles_responded(articles(3, [R1], job_id=RID), flow.clock.now) is True
+    assert research.next_deadline() == flow.clock.now + S.response_timeout
+
+
+def test_response_to_the_first_send_is_accepted_after_the_request_was_resent():
+    # 두 값이 다르면 "응답을 받았다"(다음 기한이 recheck_interval 뒤)와 "무시하고 재전송을 기다린다"(response_timeout 뒤)가 갈린다.
+    settings = CoreSettings(recheck_interval=timedelta(seconds=3))
+    flow = Flow([INSUFFICIENT, WITH_RESEARCH], [queries(*QUERIES)], settings)
+    flow.to_report()
+    flow.complete_research()
+    research = flow.research
+
+    flow.clock.now += settings.response_timeout
+    research.on_tick(flow.clock.now)  # seq 1 무응답 -> seq 2로 재요청
+    # 브리핑이 다른 일로 막혀 늦게 읽었을 뿐 seq 1의 응답도 같은 조회의 응답이므로 받고 안정 확인 라운드로 간다.
     assert research.on_articles_responded(articles(1, [R1], job_id=RID), flow.clock.now) is True
-    assert research.next_deadline() == flow.clock.now + S.response_timeout  # 여전히 seq 2를 기다림
+    assert research.next_deadline() == flow.clock.now + settings.recheck_interval
+    # 이미 받았으니 재전송한 seq 2의 응답은 두 번 세지 않는다.
+    assert research.on_articles_responded(articles(2, [R1], job_id=RID), flow.clock.now) is True
+    assert flow.records.of(ResearchReason.ARTICLES_NO_RESPONSE) == []
+    assert len(flow.records.of(ResearchReason.ARTICLES_RECEIVED)) == 0  # 아직 안정 판정 전
 
 
 # ---- 검색어 LLM ----

@@ -14,14 +14,17 @@ import logging
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import Any
 
 from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
 from briefing.daily_chart import chart_bars, no_data_names, render_day_chart
 from briefing.daily_html import ChartSlot, render_html
+from briefing.daily_morning import outlook_records
 from briefing.daily_inputs import EtfArticles, member_issues, moves_with_market, notable_candidates
+from briefing.daily_relevance import split_related
+from briefing.daily_review import MORNING_READ_FAILED, NO_ACTUAL_RATES, NO_MORNING_CALLS, ReviewInput, parse_calls
 from briefing.daily_report import (
     Section,
     EDITIONS_WITH_ETF_ARTICLES,
@@ -44,6 +47,7 @@ from briefing.daily_report import (
     rule_based_text,
 )
 from briefing.events import (
+    EDITION_MORNING,
     EDITION_POST_CLOSE,
     ARTICLES_REQUESTED_TOPIC,
     FILINGS_REQUESTED_TOPIC,
@@ -113,6 +117,13 @@ REASON_LLM_REJECTED = "llm_attempt_rejected"
 REASON_MISSING_ITEMS = "missing_items"
 REASON_LLM_ACCEPTED = "llm_attempt_accepted"
 REASON_PUBLISHED = "published"
+REASON_OUTLOOK_RECORDED = "morning_outlook_recorded"
+# 마감 후 판이 같은 날 아침 예상을 읽지 못해 대조를 뺀 사유
+REASON_OUTLOOK_MISSING = "morning_outlook_missing"
+# 아침 예상은 있는데 대조할 실제 등락이 하나도 없어 대조를 뺀 사유
+REASON_OUTLOOK_NO_RATES = "morning_outlook_no_actual_rates"
+# 작업 기록의 excluded에 남기는, ETF와 관계없어 뺀 기사 건수의 이름
+EXCLUDED_UNRELATED = "irrelevantArticles"
 
 
 def range_start(scheduled_for: datetime, settings: DailySettings = DEFAULT_DAILY_SETTINGS) -> datetime:
@@ -185,6 +196,7 @@ class _DailyJob:
     news_seq: int = 0
     news_payloads: list[dict] = field(default_factory=list)
     news_cut: int = 0
+    unrelated_titles: list[dict[str, Any]] = field(default_factory=list)
     excluded: dict[str, int] = field(default_factory=dict)
     sent: list[_Sent] = field(default_factory=list)
     first_failure: tuple[FailureReason, str, int] | None = None
@@ -303,9 +315,16 @@ class DailyCore:
         in_range = sorted((a for a in articles if job.range_start <= a.published_at <= job.scheduled_for),
                           key=lambda a: a.published_at, reverse=True)
         self._note_excluded(job, "articles", len(articles) - len(in_range))
-        kept = tuple(in_range[:self.settings.etf_max_articles])
-        job.news_cut += len(in_range) - len(kept)
-        state.received, state.articles, state.truncated = True, kept, truncated or len(kept) < len(in_range)
+        # 그 ETF와 관계없는 기사는 상한에 자리를 차지하기 전에 뺀다. 뺀 건수는 작업 기록의 excluded에 남는다.
+        etf = next((e for e in job.etfs or () if e.symbol == payload.get("symbol")), None)
+        related, unrelated = split_related(etf.etf if etf is not None else None, in_range, self.settings)
+        if unrelated:
+            job.excluded[EXCLUDED_UNRELATED] = job.excluded.get(EXCLUDED_UNRELATED, 0) + len(unrelated)
+            # 실데이터에서 걸러낸 기사가 맞는지 볼 수 있게 제목을 작업 기록에 남긴다(로그 파일에는 쓰지 않는다).
+            job.unrelated_titles.extend({"symbol": payload.get("symbol"), "title": a.title} for a in unrelated)
+        kept = tuple(related[:self.settings.etf_max_articles])
+        job.news_cut += len(related) - len(kept)
+        state.received, state.articles, state.truncated = True, kept, truncated or len(kept) < len(related)
         job.news_payloads.append(payload)
         self._finish(job, now)
 
@@ -480,6 +499,7 @@ class DailyCore:
                               if exchange.seq and not exchange.received),
                             *([ARTICLES_RESPONDED] if any(not n.received for n in job.news.values()) else [])],
             "excluded": dict(job.excluded),
+            **({"irrelevantArticleTitles": list(job.unrelated_titles)} if job.unrelated_titles else {}),
         }
         data.update(extra)
         return data
@@ -526,41 +546,85 @@ class DailyCore:
             background=job.background,
             filings=job.filings_data,
             filings_truncated=job.filings_truncated,
+            settings=self.settings,
         )
         if job.edition in EDITIONS_WITH_ETF_ARTICLES:
             daily_input = self._with_etf_inputs(job, daily_input)
+        if job.edition == EDITION_POST_CLOSE and daily_input.etfs and not daily_input.before_open(self.settings):
+            daily_input = replace(daily_input, review=self._read_review(job, now, daily_input))
         sections = build_sections(daily_input, self.settings)
         draft = self._write(job, now, daily_input, sections)
         # 문장 단위 재검색이 시작되면 그 흐름이 끝난 뒤 발행한다. 시작하지 않으면 바로 발행한다.
         job.researching = self.sentences is not None and draft.generated_by == GENERATED_BY_LLM \
             and self.sentences.begin(job.edition, job.job_id, DailyDraft(job, daily_input, sections, draft), now)
         if not job.researching:
-            self._publish(job, now, daily_input, sections, draft)
+            self._finalize(job, now, daily_input, sections, draft)
+
+    def _finalize(self, job: _DailyJob, now: datetime, daily_input: DailyInput, sections: tuple[Section, ...],
+                  draft: _Draft, research_count: int = 0) -> None:
+        """아침 판의 ETF별 예상을 작업 기록에 남긴 뒤 발행한다. 다시 쓴 뒤의 최종 본문 기준으로 한 번만 남긴다."""
+        outlooks = outlook_records(draft.output)
+        if job.edition == EDITION_MORNING and outlooks:
+            # 마감 후 판이 같은 날의 이 기록을 읽어 예상과 실제 등락을 대조한다(작업 종류 morning, 범위 끝 날짜로 찾음).
+            self.job_log.record(JobLogEntry(
+                job_id=job.job_id, entry_type=EntryType.ETF_OUTLOOK, stage=STAGE_COMPOSE,
+                reason=REASON_OUTLOOK_RECORDED, occurred_at=now,
+                data={"asOf": format_timestamp(job.scheduled_for), "outlooks": outlooks}))
+        self._publish(job, now, daily_input, sections, draft, research_count)
+
+    def _read_review(self, job: _DailyJob, now: datetime, daily_input: DailyInput) -> ReviewInput:
+        """같은 날 아침 판의 ETF별 예상과 그날 급변동을 작업 기록에서 읽는다. 못 읽어도 판은 나가고, 대조를 뺀 이유를 기록에 남긴다."""
+        day = job.scheduled_for.astimezone(KST).date()
+        day_start = datetime.combine(day, time.min, tzinfo=KST)
+        records = self.job_log.morning_outlooks(day)
+        calls = parse_calls(records) if records is not None else ()
+        note = None if calls else MORNING_READ_FAILED if records is None else NO_MORNING_CALLS
+        reason = REASON_OUTLOOK_MISSING
+        if calls and not replace(daily_input, review=ReviewInput(calls, None, ())).reviews():
+            note, reason = NO_ACTUAL_RATES, REASON_OUTLOOK_NO_RATES
+        if note is not None:
+            self._detail(job, STAGE_COMPOSE, EntryType.MISSING_ITEMS, reason,
+                         "ReadFailed" if records is None else None, 0, now, missingItems=[note])
+        moves = self.job_log.moves_between(day_start, job.scheduled_for)
+        # 전날 밤 변동이 자정 직후에 시작된 경우를 빼려고 작업 시작이 아닌 변동 시각으로 거른다
+        moves = tuple(m for m in moves if m.move_at >= day_start) if moves is not None else None
+        return ReviewInput(calls, note, moves)
 
     def _with_etf_inputs(self, job: _DailyJob, daily_input: DailyInput) -> DailyInput:
-        """마감 후 판의 ETF별 기사, 미국 구성 종목 이슈, 눈에 띄는 점 후보를 모아 입력에 더한다."""
+        """ETF별 기사를 모아 입력에 더한다. 마감 후 판은 미국 구성 종목 이슈와 눈에 띄는 점 후보도 더한다."""
         if daily_input.etfs is None:
             return daily_input
         groups = tuple(EtfArticles(symbol, state.articles, state.received, state.truncated)
                        for symbol, state in job.news.items())
+        if job.edition != EDITION_POST_CLOSE:
+            # 아침 판은 기사만 더한다. 구성 종목 이슈와 눈에 띄는 점 후보는 마감 후 판의 것이다.
+            log.info("daily %s collection: job=%s etfs=%d articles=%d articlesExcluded=%d articlesCut=%d "
+                     "articlesNoResponse=%d articlesIrrelevant=%d",
+                     job.edition, job.job_id, len(daily_input.etfs), sum(len(g.articles) for g in groups),
+                     job.excluded.get("articles", 0), job.news_cut, sum(1 for g in groups if not g.received),
+                     job.excluded.get(EXCLUDED_UNRELATED, 0))
+            return replace(daily_input, etf_articles=groups)
         filings = daily_input.filings or ()
         issues, issues_cut = member_issues(daily_input.etfs, daily_input.close_rates or (), filings, self.settings)
         notables = notable_candidates(daily_input.etfs, self.settings)
         # 종목코드와 티커는 로그에 쓰지 않는다. 건수만 남긴다.
         log.info("daily %s collection: job=%s etfs=%d articles=%d articlesExcluded=%d articlesCut=%d "
                  "articlesTruncated=%d articlesNoResponse=%d filings=%d filingsExcluded=%d memberIssues=%d "
-                 "memberIssuesCut=%d notables=%d",
+                 "memberIssuesCut=%d notables=%d articlesIrrelevant=%d",
                  job.edition, job.job_id, len(daily_input.etfs), sum(len(g.articles) for g in groups),
                  job.excluded.get("articles", 0), job.news_cut, sum(1 for g in groups if g.truncated),
                  sum(1 for g in groups if not g.received), len(filings), job.excluded.get("filings", 0),
-                 len(issues), issues_cut, len(notables))
+                 len(issues), issues_cut, len(notables), job.excluded.get(EXCLUDED_UNRELATED, 0))
         return replace(daily_input, etf_articles=groups, member_issues=issues, notables=notables)
 
     def _write(self, job: _DailyJob, now: datetime, daily_input: DailyInput,
                sections: tuple[Section, ...]) -> _Draft:
         """본문을 쓴다. LLM이 없거나 끝내 실패하면 규칙 기반 본문이다. LLM 시도는 줄마다 남긴다."""
         missing = missing_items(sections)
-        if self.writer is not None and has_evidence(sections):
+        # 장 시작 전에는 그날 등락이 없어 Claude에 ETF별 이유를 묻지 않는다. 코드가 쓴 본문과 안내 문구로 나간다.
+        if daily_input.before_open(self.settings):
+            log.info("daily %s before the market opened: job=%s, no LLM call", job.edition, job.job_id)
+        elif self.writer is not None and has_evidence(sections):
             result = self.writer.write(daily_input, sections)
             for attempt in result.rejected:
                 self._detail(job, STAGE_LLM, EntryType.LLM_REJECTED, REASON_LLM_REJECTED, attempt.error_type,
@@ -612,9 +676,9 @@ class DailyCore:
         points = list(draft.draft.output.points)
         points[no - 1] = result.point
         output = replace(draft.draft.output, points=tuple(points))
-        cited = tuple(dict.fromkeys(ref for p in points for ref in p.refs))
-        weak = tuple(p.shortfall for p in points if p.shortfall)
-        new = _Draft(llm_text(rewritten_input, sections, output), GENERATED_BY_LLM, cited, False, weak, output)
+        # 환율·금리 이슈 칸과 아침 판 ETF 예상의 근거도 초안 단계처럼 인용한 번호에 들어간다.
+        new = _Draft(llm_text(rewritten_input, sections, output), GENERATED_BY_LLM, output.cited_refs(), False,
+                     output.weak_shortfalls(), output)
         return DailyDraft(draft.job, rewritten_input, sections, new)
 
     def rewrite_whole(self, draft: DailyDraft, round: int, research_articles: tuple[Article, ...],
@@ -648,7 +712,7 @@ class DailyCore:
     # ---- 발행 ----
 
     def publish_draft(self, draft: DailyDraft, now: datetime, research_count: int) -> None:
-        self._publish(draft.job, now, draft.input, draft.sections, draft.draft, research_count)
+        self._finalize(draft.job, now, draft.input, draft.sections, draft.draft, research_count)
 
     def _chart_image(self, daily_input: DailyInput) -> tuple[bytes | None, bool, str | None]:
         """마감 후 판의 하루 등락 차트. (그림, 크기 초과 여부, 자료 없음 목록에 더할 줄). 그릴 막대가 없으면 그림이 없다."""

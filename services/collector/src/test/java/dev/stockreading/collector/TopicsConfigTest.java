@@ -31,12 +31,15 @@ class TopicsConfigTest {
                 .withUserConfiguration(Topics.class)
                 .run(context -> {
                     Map<String, Integer> partitions = new HashMap<>();
+                    Map<String, String> cleanup = new HashMap<>();
                     // getNewTopics 는 패키지 공개라서 리플렉션으로 읽는다.
                     Method getter = NewTopics.class.getDeclaredMethod("getNewTopics");
                     getter.setAccessible(true);
                     for (Object topic : (Collection<?>) getter.invoke(context.getBean(NewTopics.class))) {
                         NewTopic newTopic = (NewTopic) topic;
                         partitions.put(newTopic.name(), newTopic.numPartitions());
+                        cleanup.put(newTopic.name(), newTopic.configs() == null ? null
+                                : newTopic.configs().get("cleanup.policy"));
                     }
 
                     assertThat(partitions)
@@ -47,13 +50,20 @@ class TopicsConfigTest {
                             .containsEntry(Topics.MARKET_INSIGHT, 3)
                             .containsEntry(Topics.COLLECTION_COMPLETED, 1)
                             .containsEntry(Topics.FILING_COLLECTED, 3)
-                            .containsEntry(Topics.NEWS_RESEARCH_REQUESTED, 3);
+                            .containsEntry(Topics.NEWS_RESEARCH_REQUESTED, 3)
+                            .containsEntry(Topics.MARKET_HOLDINGS, 1)
+                            .containsEntry(Topics.NEWS_SEARCH_QUERY_LIST, 1);
+                    // 목록 토픽은 마지막 값만 남는 압축 토픽이어야 새로 시작한 소비자가 마지막 목록을 받는다.
+                    assertThat(cleanup.get(Topics.MARKET_HOLDINGS)).isEqualTo("compact");
+                    assertThat(cleanup.get(Topics.NEWS_SEARCH_QUERY_LIST)).isEqualTo("compact");
                     assertThat(Topics.MARKET_SNAPSHOT_FAILED).isEqualTo("market.snapshot.failed");
                     assertThat(Topics.NEWS_COLLECTED).isEqualTo("news.collected");
                     assertThat(Topics.MARKET_INSIGHT).isEqualTo("market.insight");
                     assertThat(Topics.COLLECTION_COMPLETED).isEqualTo("collection.completed");
                     assertThat(Topics.FILING_COLLECTED).isEqualTo("filing.collected");
                     assertThat(Topics.NEWS_RESEARCH_REQUESTED).isEqualTo("news.research.requested");
+                    assertThat(Topics.MARKET_HOLDINGS).isEqualTo("market.holdings");
+                    assertThat(Topics.NEWS_SEARCH_QUERY_LIST).isEqualTo("news.search-queries");
                 });
     }
 }

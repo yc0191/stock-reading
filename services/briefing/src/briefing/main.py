@@ -89,6 +89,11 @@ COMMON = {"broker.address.family": "v4"}
 # 제한 시간이 없어도 이 간격으로는 깨어나 멈추기 요청을 확인한다.
 MAX_POLL_SECONDS = 1.0
 FLUSH_SECONDS = 10
+# 한 번에 이어서 읽을 메시지 수 상한. 메시지가 계속 쌓여도 tick과 제한 시각 확인이 밀리지 않게 한다.
+MAX_MESSAGES_PER_RUN = 50
+# 쌓인 메시지를 읽는 데 쓸 시간 상한. 메시지마다 LLM 호출로 10초 넘게 걸려도 tick 소비자 poll(기본 300초 안에 필요)과
+# 멈추기 요청 확인이 이 안에 돌게 하되, 약한 문장 5개의 다시 쓰기(약 70초)는 한 번에 처리할 만큼 넉넉히 둔다.
+MAX_READ_SECONDS = 120
 
 # 작업 기록 DB. 다른 서비스(application.yml)와 같은 로컬 주소를 쓰고, 계정은 .env.example의 키를 따른다.
 DB_HOST = "localhost"
@@ -256,11 +261,19 @@ class BriefingRunner:
     def run_once(self) -> None:
         """다음 제한 시각까지만 메시지를 기다리고, 받은 메시지와 지난 제한 시간을 처리한다."""
         message = self._consumer.poll(self._poll_timeout())
-        if message is not None:
+        started = self.clock()
+        # 메시지 하나를 처리하는 데 LLM 호출로 오래 걸릴 수 있다. 그동안 이미 도착한 다른 응답을 읽지 않고 제한 시간부터
+        # 보면 응답을 받아 두고도 무응답으로 처리하므로, 쌓인 메시지를 먼저 읽은 뒤 제한 시간을 본다.
+        for _ in range(MAX_MESSAGES_PER_RUN):
+            if message is None:
+                break
             if message.error():
                 log.error("consumer error: %s", message.error())
             else:
                 self.handle_message(message)
+            if (self.clock() - started).total_seconds() >= MAX_READ_SECONDS:
+                break
+            message = self._consumer.poll(0)
         for edition, consumer in self.tick_consumers.items():
             tick = consumer.poll(0)
             if tick is not None:

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import time, timedelta
 
 
 @dataclass(frozen=True)
@@ -92,6 +92,18 @@ class DailySettings:
     market_same_direction_gap_percent: float = 1.0
     # 세계지수 대륙구분 중 미국 지수가 든 값(market 설정 world-index-continents의 아메리카).
     us_index_target: str = "C"
+    # 마감 후 판 기준 시각(한국 시간)이 이보다 이르면 그날 장이 아직 열리지 않은 것으로 본다(일봉이 모두 등락 0.00일 때만).
+    market_open: time = time(9, 0)
+    # 기사가 그 ETF와 관계있는지 볼 때 추종 대상·ETF 이름에서 앞의 나라 이름과 끝의 접미어를 뗀 것도 비교어로 쓴다
+    # (예: '미국 나스닥100 지수' → '나스닥100'). 뗀 결과가 숫자·기호뿐이거나 2글자 미만이면 쓰지 않는다.
+    relevance_country_prefixes: tuple[str, ...] = ("미국", "한국", "중국", "일본", "인도", "베트남", "유럽", "글로벌")
+    relevance_suffixes: tuple[str, ...] = ("지수",)
+    # 구성 종목에 미국 종목이 있는 ETF는 이 시장 단어가 제목·요약에 있는 기사도 남긴다.
+    relevance_us_market_terms: tuple[str, ...] = ("뉴욕증시", "미국증시", "월가", "나스닥", "S&P", "다우존스", "다우지수", "wall street")
+    # 마감 후 판의 아침 예상 대조: 보합 예상은 실제 등락 절댓값(%)이 이 값 이하이면 맞음이다.
+    flat_band_percent: float = 0.5
+    # 마감 후 판의 그날 급변동 요약에 보여 주는 최대 건수. 넘으면 '외 N건'으로 줄인다.
+    max_move_lines: int = 20
     llm_max_attempts: int = 3
     # 같은 tick 중복 처리를 막기 위해 기억하는 eventId 수.
     remembered_ticks: int = 1000

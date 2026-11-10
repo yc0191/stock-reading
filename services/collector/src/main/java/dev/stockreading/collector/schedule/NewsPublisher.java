@@ -24,6 +24,7 @@ import dev.stockreading.collector.event.CollectionCompletedPayload;
 import dev.stockreading.collector.event.Envelope;
 import dev.stockreading.collector.event.EventFactory;
 import dev.stockreading.collector.event.NewsPayload;
+import dev.stockreading.collector.holdings.HoldingsPort;
 import dev.stockreading.collector.news.NewsCollection;
 import dev.stockreading.collector.news.NewsCollector;
 import dev.stockreading.collector.news.NewsItem;
@@ -46,12 +47,15 @@ class NewsPublisher {
     private static final int MAX_REMEMBERED_KEYS = 10_000;
     private static final int MAX_TITLE = 500;
     private static final int MAX_SUMMARY = 2_000;
-    private static final Pattern SYMBOL = Pattern.compile("^([0-9A-Z]{6}|\\*)$");
+    // 기사 태그(news.collected)는 국내 코드, 미국 티커, "*"를 받는다. 완료 알림의 못 모은 종목은 국내 코드와 "*"만 받는다.
+    private static final Pattern SYMBOL = Pattern.compile("^(\\*|[A-Z0-9]{1,6}([.-][A-Z0-9]{1,2})?)$");
+    private static final Pattern COMPLETED_SYMBOL = Pattern.compile("^([0-9A-Z]{6}|\\*)$");
 
     private final NewsCollector collector;
     private final KafkaTemplate<String, String> kafka;
     private final ObjectMapper mapper;
     private final Clock clock;
+    private final HoldingsPort holdings;
 
     // 메모리 기반 재발행 억제이므로 재시작하면 초기화된다. url 문자열이 그대로 같을 때만 막으므로
     // www. 이나 utm_ 만 다른 url 은 다시 발행될 수 있다. 중복은 소비 쪽 DB 가 최종으로 막는다.
@@ -59,8 +63,10 @@ class NewsPublisher {
     // 합침)이 새 연결을 받을 기회를 영영 잃는다. 그래서 url 과 종목·검색어 조합을 함께 기억한다.
     private final Set<SentKey> sentKeys = ConcurrentHashMap.newKeySet();
 
-    NewsPublisher(NewsCollector collector, KafkaTemplate<String, String> kafka, ObjectMapper mapper, Clock clock) {
+    NewsPublisher(NewsCollector collector, KafkaTemplate<String, String> kafka, ObjectMapper mapper, Clock clock,
+            HoldingsPort holdings) {
         this.collector = collector;
+        this.holdings = holdings;
         this.kafka = kafka;
         this.mapper = mapper;
         this.clock = clock;
@@ -186,7 +192,7 @@ class NewsPublisher {
                     EventFactory.format(startedAt),
                     EventFactory.format(finishedAt),
                     publishedCount,
-                    new ArrayList<>(new TreeSet<>(incomplete)),
+                    completedSymbols(incomplete),
                     researchJobId);
             Envelope<CollectionCompletedPayload> event = EventFactory.create(
                     clock, COMPLETED_EVENT_TYPE, finishedAt, correlationId, payload);
@@ -196,6 +202,20 @@ class NewsPublisher {
         } catch (RuntimeException e) {
             log.warn("collection.completed publish failed corr={} errorType={}", correlationId, e.getClass().getSimpleName());
         }
+    }
+
+    // 미국 티커로 건 검색이 불완전하면, 그 티커 기사가 함께 나가는 ETF의 수집이 불완전한 것이므로 ETF 코드로 바꿔 알린다.
+    // 완료 알림 스키마가 국내 코드와 "*"만 받기 때문이다.
+    private List<String> completedSymbols(Set<String> incomplete) {
+        Set<String> result = new TreeSet<>();
+        for (String symbol : incomplete) {
+            if (COMPLETED_SYMBOL.matcher(symbol).matches()) {
+                result.add(symbol);
+            } else {
+                result.addAll(holdings.etfsHolding(symbol));
+            }
+        }
+        return new ArrayList<>(result);
     }
 
     // 스키마를 어기는 종목코드는 담지 않는다. 종목이 없는 기사(발행에서 빠지는 기사)는 해당하지 않는다.

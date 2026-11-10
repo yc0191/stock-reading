@@ -320,6 +320,8 @@ class _Research:
     attempt: int = 0
     requests: int = 0
     awaiting: bool = False
+    # 이번 라운드에서 보낸 기사 조회 순번(재전송 포함). 재전송 전에 이미 도착한 응답도 받아들이는 데 쓴다.
+    round_seqs: set[int] = field(default_factory=set)
     recheck_at: datetime | None = None
     previous_ids: frozenset[str] | None = None
     received: list[dict[str, Any]] = field(default_factory=list)
@@ -398,7 +400,9 @@ class NewsResearch:
         job = self._jobs.get(payload["jobId"])
         if job is None or job.phase is not _Phase.FETCHING or payload["seq"] <= job.target.after_seq:
             return False
-        if payload["seq"] != job.seq or not job.awaiting:
+        # 뉴스는 요청에 바로 답하지만, 브리핑이 다른 문장의 LLM 호출로 막혀 있으면 응답을 늦게 읽는다. 그사이 제한 시간이
+        # 지나 같은 조회를 다시 보냈더라도 이번 라운드에서 보낸 순번의 응답이면 같은 조회의 응답이므로 받는다.
+        if payload["seq"] not in job.round_seqs or not job.awaiting:
             log.info("stale research articles response ignored: job=%s seq=%s latest=%s",
                      job.target.job_id, payload["seq"], job.seq)
             return True
@@ -482,6 +486,9 @@ class NewsResearch:
 
     def _send(self, job: _Research, now: datetime, attempt: int) -> None:
         job.seq += 1
+        if attempt == 1:
+            job.round_seqs.clear()
+        job.round_seqs.add(job.seq)
         job.attempt = attempt
         job.requests += 1
         job.sent_at = now

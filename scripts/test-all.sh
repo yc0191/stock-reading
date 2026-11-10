@@ -567,10 +567,10 @@ run_live() {
   svc_dir="$TMP/svc"
   mkdir -p "$svc_dir/market" "$svc_dir/collector"
   echo "market 기동(테스트 전용 데이터베이스)"
-  # MARKET_PREV_CLOSE_FIELD 를 빈 값으로 넘겨, 기본값이 비어 있어도 나중에 생겨도 전일 종가 기준 감지를 끈다. 스냅샷이 1개라 구간 감지도 일어나지 않으므로
+  # MARKET_PREV_CLOSE_FIELDS 를 빈 값으로 넘겨 전일 종가 기준 감지를 끈다. 스냅샷이 1개라 구간 감지도 일어나지 않으므로
   # market 이 스스로 변동을 내지 않고, 브리핑·메일 단계의 변동은 스크립트가 넣은 1건뿐이다.
   (
-    export MARKET_PREV_CLOSE_FIELD=
+    export MARKET_PREV_CLOSE_FIELDS=
     export SPRING_DATASOURCE_URL="$JDBC_URL?currentSchema=market" SPRING_DATASOURCE_USERNAME="$M_USER" SPRING_DATASOURCE_PASSWORD="$M_PW"
     export SPRING_KAFKA_BOOTSTRAP_SERVERS="localhost:$port"
     cd "$svc_dir/market" && exec "$JAVA_HOME_21/bin/java" -jar "$MARKET_JAR"

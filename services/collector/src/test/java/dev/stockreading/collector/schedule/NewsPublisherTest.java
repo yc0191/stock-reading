@@ -58,7 +58,7 @@ class NewsPublisherTest {
         collector = mock(NewsCollector.class);
         kafka = mock(KafkaTemplate.class);
         stubSendSucceeds();
-        publisher = new NewsPublisher(collector, kafka, mapper, CLOCK);
+        publisher = new NewsPublisher(collector, kafka, mapper, CLOCK, mock(dev.stockreading.collector.holdings.HoldingsPort.class));
     }
 
     @Test
@@ -208,6 +208,19 @@ class NewsPublisherTest {
         publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
 
         verify(kafka, times(1)).send(eq(Topics.NEWS_COLLECTED), eq("https://news.example.com/ok"), anyString());
+    }
+
+    @Test
+    void usTickerTagsArePublishedAndStillMatchTheContract() throws IOException {
+        when(collector.collectWithStatus()).thenReturn(collected(List.of(
+                item("https://news.example.com/us", Set.of("FAKE", "FAKE-B", "TEST01")))));
+
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
+
+        ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
+        verify(kafka, times(1)).send(eq(Topics.NEWS_COLLECTED), eq("https://news.example.com/us"), value.capture());
+        assertThat(ContractSchemas.validate(SCHEMA, value.getValue())).isEmpty();
+        assertThat(mapper.readTree(value.getValue()).get("payload").get("symbols")).hasSize(3);
     }
 
     @Test

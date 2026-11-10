@@ -27,7 +27,8 @@ CREATE TABLE job_log (
     job_id      VARCHAR(64) NOT NULL REFERENCES job_run (job_id),
     entry_type  VARCHAR(24) NOT NULL CHECK (entry_type IN (
                     'report-written', 'llm-rejected', 'query-written', 'research-requested', 'articles-received',
-                    'sentence-rewritten', 'check-round', 'resent', 'missing-items', 'step-failed', 'moves-grouped')),
+                    'sentence-rewritten', 'check-round', 'resent', 'missing-items', 'step-failed', 'moves-grouped',
+                    'etf-outlook')),
     stage       VARCHAR(48) NOT NULL,
     sentence_no INTEGER,
     round       INTEGER,

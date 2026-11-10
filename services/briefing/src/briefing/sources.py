@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 from briefing.events import parse_timestamp
 
@@ -82,6 +82,32 @@ class EtfMember:
 
 
 @dataclass(frozen=True)
+class MovedMember:
+    """상위 구성 안에서 순위만 바뀐 종목. 순위는 1이 가장 위다."""
+
+    market: str
+    symbol: str
+    rank_before: int
+    rank_after: int
+    name: str | None = None
+
+
+@dataclass(frozen=True)
+class MemberChanges:
+    """ETF 상위 구성 종목의 변경. 한 종목은 removed·added·moved 중 한 곳에만 있다.
+
+    since는 바뀌기 전 구성을 마지막으로 확인한 날, as_of는 바뀐 구성을 처음 받은 날이다.
+    removed·added의 순위는 각각 빠지기 전, 들어온 뒤의 순위다.
+    """
+
+    since: date
+    as_of: date
+    removed: tuple[EtfMember, ...]
+    added: tuple[EtfMember, ...]
+    moved: tuple[MovedMember, ...]
+
+
+@dataclass(frozen=True)
 class EtfInfo:
     """ETF의 이름·추종 대상·업종과 구성 종목. 응답의 선택 칸이라 모르는 값은 None이다."""
 
@@ -90,6 +116,7 @@ class EtfInfo:
     name: str | None = None
     tracks: str | None = None
     sector: str | None = None
+    member_changes: MemberChanges | None = None
 
     def us_tickers(self) -> frozenset[str]:
         return frozenset(m.symbol for m in self.members if m.market == US_MARKET)
@@ -188,6 +215,20 @@ def parse_etf_info(item: dict | None) -> EtfInfo | None:
                       for m in item["members"]),
         members_truncated=bool(item["membersTruncated"]),
         name=item.get("name"), tracks=item.get("tracks"), sector=item.get("sector"),
+        member_changes=parse_member_changes(item.get("memberChanges")),
+    )
+
+
+def parse_member_changes(item: dict | None) -> MemberChanges | None:
+    """응답의 구성 변경(선택 칸)을 값 객체로 바꾼다. 변경이 없으면 칸이 없어 None이다. 필수 칸이 없으면 KeyError."""
+    if item is None:
+        return None
+    return MemberChanges(
+        since=date.fromisoformat(item["since"]), as_of=date.fromisoformat(item["asOf"]),
+        removed=tuple(EtfMember(m["market"], m["symbol"], m["rank"], m.get("name")) for m in item["removed"]),
+        added=tuple(EtfMember(m["market"], m["symbol"], m["rank"], m.get("name")) for m in item["added"]),
+        moved=tuple(MovedMember(m["market"], m["symbol"], m["rankBefore"], m["rankAfter"], m.get("name"))
+                    for m in item["moved"]),
     )
 
 

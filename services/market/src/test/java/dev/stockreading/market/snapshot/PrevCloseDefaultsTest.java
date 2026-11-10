@@ -16,7 +16,7 @@ import dev.stockreading.market.snapshot.Evaluation.Outcome;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * application.yml 의 전일 종가 칸 기본값이 비어 있어 유형 2가 꺼져 있는지, 환경변수로 칸 경로를 주면 켜지는지 본다.
+ * application.yml 의 전일 종가 후보 칸 기본값으로 유형 2가 켜져 있는지, 환경변수로 칸을 바꾸거나 비워서 끌 수 있는지 본다.
  * 값은 모두 가짜다.
  */
 class PrevCloseDefaultsTest {
@@ -34,8 +34,10 @@ class PrevCloseDefaultsTest {
                 .withUserConfiguration(Wiring.class);
     }
 
-    // 전일 종가가 중첩 칸 아래에 앞 공백이 붙은 문자열로 오는 응답 모양.
-    private static final String RESPONSE = "{\"fake\":{\"now\":\"10400\",\"prevClose\":\"   10000\"}}";
+    // 기본 후보 세 칸 중 한 칸이 앞 공백이 붙은 문자열이고 한 칸은 다른 값으로 깨진 응답 모양.
+    private static final String RESPONSE =
+            "{\"dataBody\":{\"bdy_cls_prc\":\"   10000\",\"sprc\":\"7000\",\"krx_bdy_clpr\":\"10000\"}}";
+    private static final String OTHER_RESPONSE = "{\"fake\":{\"x\":\"10000\",\"y\":\"10000\"}}";
 
     private static Evaluation prevClose(MarketProperties properties, String raw) {
         MoveDetector detector = new MoveDetector(mock(PriceSnapshotRepository.class), properties, JsonMapper.builder().build());
@@ -44,15 +46,8 @@ class PrevCloseDefaultsTest {
     }
 
     @Test
-    void emptyDefaultLeavesPrevCloseOff() {
-        runner().run(context ->
-                assertThat(prevClose(context.getBean(MarketProperties.class), RESPONSE).outcome())
-                        .isEqualTo(Outcome.UNKNOWN));
-    }
-
-    @Test
-    void environmentVariableTurnsPrevCloseOn() {
-        runner().withPropertyValues("MARKET_PREV_CLOSE_FIELD=fake.prevClose").run(context -> {
+    void defaultCandidateFieldsTurnPrevCloseOnWithTheMajorityValue() {
+        runner().run(context -> {
             Evaluation evaluation = prevClose(context.getBean(MarketProperties.class), RESPONSE);
 
             assertThat(evaluation.outcome()).isEqualTo(Outcome.DETECTED);
@@ -61,10 +56,22 @@ class PrevCloseDefaultsTest {
     }
 
     @Test
-    void emptyEnvironmentVariableKeepsPrevCloseOff() {
+    void environmentVariableReplacesTheCandidateFields() {
+        runner().withPropertyValues("MARKET_PREV_CLOSE_FIELDS=fake.x,fake.y").run(context -> {
+            Evaluation evaluation = prevClose(context.getBean(MarketProperties.class), OTHER_RESPONSE);
+
+            assertThat(evaluation.outcome()).isEqualTo(Outcome.DETECTED);
+            assertThat(evaluation.detection().previousPrice()).isEqualTo(10_000);
+        });
+    }
+
+    @Test
+    void emptyEnvironmentVariableTurnsPrevCloseOff() {
         // test-all.sh --live 가 이 방법으로 유형 2를 끈다.
-        runner().withPropertyValues("MARKET_PREV_CLOSE_FIELD=").run(context ->
-                assertThat(prevClose(context.getBean(MarketProperties.class), RESPONSE).outcome())
-                        .isEqualTo(Outcome.UNKNOWN));
+        runner().withPropertyValues("MARKET_PREV_CLOSE_FIELDS=").run(context -> {
+            assertThat(context.getBean(MarketProperties.class).prevCloseFields()).isEmpty();
+            assertThat(prevClose(context.getBean(MarketProperties.class), RESPONSE).outcome())
+                    .isEqualTo(Outcome.UNKNOWN);
+        });
     }
 }
