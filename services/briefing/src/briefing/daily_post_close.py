@@ -11,7 +11,9 @@ from briefing.daily_report import (
     MINUS,
     NO_DATA,
     POINT_ETF,
+    POINT_FX,
     POINT_NOTABLE,
+    POINT_RATE,
     DailyInput,
     DailyOutput,
     Entry,
@@ -24,8 +26,32 @@ from briefing.daily_report import (
     section_title,
 )
 from briefing.llm_output import weak_note_line
-from briefing.move_figures import KOSDAQ_NAME, KOSPI_NAME, index_figure, round_cent
+from briefing.move_figures import (
+    KOSDAQ_NAME,
+    KOSPI_NAME,
+    USD_KRW_NAME,
+    display,
+    exchange_rate_figure,
+    index_figure,
+    round_cent,
+)
 from briefing.sources import MARK_TRUNCATED
+
+
+# 모든 ETF에 영향을 주는 환율과 금리는 ETF별 이유와 따로 칸을 둔다.
+FX_TITLE = "환율 이슈"
+RATE_TITLE = "금리 이슈"
+RATE_NOT_WRITTEN = f"{NO_DATA} (이 판에서는 금리 기사를 정리하지 못했습니다)"
+
+
+@dataclass(frozen=True)
+class IssueRow:
+    """환율 이슈·금리 이슈 칸 하나. numbers가 비어 있으면 근거 번호 없이 쓴 문장(자료 없음, 근거 약한 문장)이다."""
+
+    title: str
+    statement: str
+    numbers: tuple[int, ...]
+    shortfall: str | None
 
 
 @dataclass(frozen=True)
@@ -50,6 +76,7 @@ class PostCloseView:
     market: str
     summary: tuple[str, ...]
     notables: tuple[tuple[str, tuple[int, ...], str | None], ...]
+    issues: tuple[IssueRow, ...]
     etf_title: str
     groups: tuple[tuple[str, tuple[EtfRow, ...]], ...]
     extra: tuple[str, ...]
@@ -72,6 +99,15 @@ def market_line(i: DailyInput, sections: tuple[Section, ...]) -> str:
     return f"{ITEM_KR_TODAY}: {part('코스피', KOSPI_NAME)} · {part('코스닥', KOSDAQ_NAME)}"
 
 
+def _fx_fallback(i: DailyInput) -> str:
+    """Claude가 환율 이슈를 쓰지 않은 판(규칙 기반, 장 시작 전 등)에 코드가 받은 숫자만 옮겨 쓰는 줄."""
+    figure = exchange_rate_figure(tuple(i.background or ()))
+    if figure is None or figure.value is None:
+        return NO_DATA
+    return (f"{USD_KRW_NAME} {display(figure.value)}(전일대비 {display(figure.change, sign=True)}, "
+            f"{display(figure.rate, sign=True)}%)")
+
+
 def post_close_view(i: DailyInput, sections: tuple[Section, ...], output: DailyOutput | None) -> PostCloseView:
     by_ref = {e.ref: e for s in sections for e in s.entries}
     etf_section = next(s for s in sections if s.name == ITEM_ETFS)
@@ -84,6 +120,12 @@ def post_close_view(i: DailyInput, sections: tuple[Section, ...], output: DailyO
         return tuple(numbers.setdefault(ref, len(numbers) + 1) for ref in refs)
 
     notables = tuple((p.statement, number(p.refs), p.shortfall) for p in notable_points)
+    written = {p.kind: p for p in output.issues} if usable else {}
+    issues = []
+    for kind, title, fallback in ((POINT_FX, FX_TITLE, _fx_fallback(i)), (POINT_RATE, RATE_TITLE, RATE_NOT_WRITTEN)):
+        p = written.get(kind)
+        issues.append(IssueRow(title, p.statement, number(p.refs), p.shortfall) if p
+                      else IssueRow(title, fallback, (), None))
     members: dict[str, list[str]] = {}
     for issue in i.member_issues:
         members.setdefault(issue.etf, []).append(member_line(issue))
@@ -102,7 +144,7 @@ def post_close_view(i: DailyInput, sections: tuple[Section, ...], output: DailyO
     extra = (f"({MARK_TRUNCATED}: 상한까지만 받음)",) if i.etfs and i.etfs_truncated else ()
     return PostCloseView(
         output is not None, bool(output is not None and output.insufficient_evidence), market_line(i, sections),
-        output.summary if usable else (), notables, section_title(etf_section), tuple(groups), extra,
+        output.summary if usable else (), notables, tuple(issues), section_title(etf_section), tuple(groups), extra,
         tuple((n, by_ref[ref]) for ref, n in numbers.items()))
 
 
@@ -117,10 +159,10 @@ def _numbers(numbers: tuple[int, ...]) -> str:
 
 def post_close_text(i: DailyInput, sections: tuple[Section, ...], output: DailyOutput | None,
                     status_text: str | None = None) -> str:
-    """마감 후 판 글자판. 순서: 제목 → 결론 → 그날 한국 증시 → 요약 2줄 → 눈에 띄는 점 → ETF 줄(이유, ↳) → 면책 → 서버 상태 → 출처.
+    """마감 후 판 글자판. 순서: 제목 → 결론 → 그날 한국 증시 → 요약 2줄 → 눈에 띄는 점 → 환율 이슈 → 금리 이슈 → ETF 줄(이유, ↳) → 면책 → 서버 상태 → 출처.
     output이 None이면 요약·이유 없이 코드가 쓴 숫자·목록만 있는 규칙 기반 본문이다."""
     v = post_close_view(i, sections, output)
-    lines = [*headline(i), "", conclusion(i), v.market]
+    lines = [*headline(i), "", conclusion(i, output), v.market]
     if v.has_output:
         lines.extend(["", "요약:"])
         if v.insufficient:
@@ -132,6 +174,12 @@ def post_close_text(i: DailyInput, sections: tuple[Section, ...], output: DailyO
             lines.append(f"  - {statement} {_numbers(nums)}")
             if shortfall:
                 lines.append(weak_note_line(shortfall, "    "))
+    for issue in v.issues:
+        lines.extend(["", f"{issue.title}:"])
+        cite = f" {_numbers(issue.numbers)}" if issue.numbers else ""
+        lines.append(f"  - {issue.statement}{cite}")
+        if issue.shortfall:
+            lines.append(weak_note_line(issue.shortfall, "    "))
     lines.extend(["", f"■ {v.etf_title}"])
     for title, rows in v.groups:
         if title:

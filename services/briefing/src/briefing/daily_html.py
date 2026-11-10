@@ -1,7 +1,7 @@
 """데일리 판 HTML 본문(인라인 스타일만). Kafka를 모르며 글자판과 같은 값을 인자로 받는다.
 
 아침 판 순서는 글자판과 같다: 제목 → 항목별 숫자 → 요약 → 면책 → 근거 목록(작게).
-마감 후 판도 글자판과 같은 순서다: 제목 → 결론 → 요약 2줄 → 눈에 띄는 점 → 차트 → 보유/관심별 ETF 줄(이유, ↳ 구성 종목 줄) →
+마감 후 판도 글자판과 같은 순서다: 제목 → 결론 → 요약 2줄 → 눈에 띄는 점 → 환율 이슈 → 금리 이슈 → 차트 → 보유/관심별 ETF 줄(이유, ↳ 구성 종목 줄) →
 면책 → 서버 상태(작게, '주의'가 있을 때만 그 줄이 주황) → 출처(작게, 기사·공시는 원문 링크). 발송기는 html 칸을 받은 그대로 보내므로 이벤트 값
 (ETF 이름, LLM 문장, 근거 설명, 서버 상태 줄)은 모두 여기서 이스케이프한다.
 """
@@ -170,6 +170,16 @@ def _post_close_summary(v: PostCloseView) -> list[str]:
     return parts
 
 
+def _post_close_issues(v: PostCloseView) -> list[str]:
+    parts = []
+    for issue in v.issues:
+        cite = f" {_cite(issue.numbers)}" if issue.numbers else ""
+        parts.append(_p(HEADING_STYLE, escape(issue.title)))
+        parts.append(f'<ul style="{LIST_STYLE}"><li style="{ITEM_STYLE}">'
+                     f'{_rate_spans(escape(issue.statement))}{cite}{_weak(issue.shortfall)}</li></ul>')
+    return parts
+
+
 def _post_close_etfs(v: PostCloseView) -> str:
     parts = [_p(HEADING_STYLE, f"■ {escape(v.etf_title)}")]
     for title, rows in v.groups:
@@ -235,8 +245,8 @@ def _render_post_close(i: DailyInput, sections: tuple[Section, ...], output: Dai
     v = post_close_view(i, sections, output)
     title, scope = headline(i)
     parts = [f'<h1 style="{TITLE_STYLE}">{escape(title)}</h1>', _p(RANGE_STYLE, escape(scope)),
-             _p(CONCLUSION_STYLE, _rate_spans(escape(conclusion(i)))), _p(ITEM_STYLE, _rate_spans(escape(v.market))),
-             *_post_close_summary(v)]
+             _p(CONCLUSION_STYLE, _rate_spans(escape(conclusion(i, output)))), _p(ITEM_STYLE, _rate_spans(escape(v.market))),
+             *_post_close_summary(v), *_post_close_issues(v)]
     if chart is not None:
         parts.append(_chart(chart))
     parts.append(_post_close_etfs(v))

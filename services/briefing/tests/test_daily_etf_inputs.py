@@ -7,11 +7,12 @@ import pytest
 
 from briefing.config import DailySettings
 from briefing.daily_jobs import STAGE_ETF_ARTICLES, DailyCore
+from briefing.daily_prompts import NO_REASON_STATEMENT
 from briefing.daily_report import DailyLlmWriter
 from briefing.job_log import EntryType
 from briefing.ports import FailureReason
 from contracts import validate
-from fake_news import _envelope, answer_news, article
+from fake_news import _envelope, answer_news, article as plain_article
 from test_daily_jobs import (
     MORNING_AT,
     MORNING_JOB,
@@ -37,6 +38,11 @@ FILING = {"accessionNumber": "0000000001-26-000001", "tickers": ["TESTA"], "form
           "acceptedAt": "2026-10-20T05:30:28+09:00", "url": "https://example.test/8k.htm"}
 OUT_OF_RANGE_FILING = {**FILING, "accessionNumber": "0000000001-26-000002",
                        "acceptedAt": "2026-10-19T16:59:00+09:00"}
+
+
+def article(article_id, title, published_at):
+    """세 ETF의 이름이 요약에 든 기사. 관계없는 기사로 걸러지지 않는다."""
+    return {**plain_article(article_id, title, published_at), "summary": "TEST TEST01 TEST TEST02 TEST TEST03 관련 요약"}
 
 
 def etf_with_members(symbol, rate, tickers, members, sector="TEST 업종"):
@@ -237,7 +243,9 @@ def test_a_malformed_articles_response_is_rejected(start):
 # ---- 구성 종목 이슈와 눈에 띄는 점 후보 ----
 
 def test_member_issues_and_candidates_reach_the_claude_input_without_tickers_in_the_body(start, caplog):
-    c, requests, _, llm = start()
+    # 결론 줄의 이유를 찾지 못한 ETF 수는 Claude가 그렇게 쓴 ETF 수다.
+    llm = FakeLlm(post_close_output(reasons={"TEST03": NO_REASON_STATEMENT}, refs={"TEST03": []}, weak=("TEST03",)))
+    c, requests, _, llm = start(llm=llm)
     with caplog.at_level(logging.INFO, logger="briefing.daily_jobs"):
         answer_news(c, requests, POST_CLOSE_AT, filings=[FILING],
                     articles={"TEST02": [article("a-2", "TEST 기사", IN_RANGE)]})

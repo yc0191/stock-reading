@@ -6,8 +6,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from datetime import datetime
 from typing import TYPE_CHECKING, Iterable
 
+from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
 from briefing.move_figures import KOSPI_NAME, index_figure
 from briefing.sources import US_MARKET, Article, Background, CloseRate, Filing
@@ -15,6 +17,7 @@ from briefing.sources import US_MARKET, Article, Background, CloseRate, Filing
 if TYPE_CHECKING:
     from briefing.daily_report import EtfDay
 
+PRE_OPEN_NOTICE = "오늘 장 자료가 아직 없습니다"
 KIND_OPPOSITE = "opposite"
 KIND_CLUSTER = "cluster"
 
@@ -57,6 +60,19 @@ def decimal_rate(text: str | None) -> Decimal | None:
     except InvalidOperation:
         return None
     return value if value.is_finite() else None
+
+
+def is_before_open(etfs: Iterable[EtfDay], as_of: datetime,
+                   settings: DailySettings = DEFAULT_DAILY_SETTINGS) -> bool:
+    """장 시작 전에 만든 판인가. 판 기준 시각이 장 시작 시각(market_open) 전이고, 일봉이 있는 ETF가 하나 이상이며
+    모두 판을 만든 날 일자이면서 등락이 0.00이다. 장 시작 전에는 그날 일자 일봉이 종가=전일 종가, 등락 0.00으로 오지만,
+    장 시작 뒤에는 한 ETF만 0.00%여도 정식 판이므로 시각까지 함께 본다."""
+    local = as_of.astimezone(KST)
+    if local.time() >= settings.market_open:
+        return False
+    today = local.strftime("%Y%m%d")
+    with_day = [e for e in etfs if e.has_day()]
+    return bool(with_day) and all(e.date == today and decimal_rate(e.rate) == 0 for e in with_day)
 
 
 def moves_with_market(etf_rate: str | None, background: Iterable[Background],

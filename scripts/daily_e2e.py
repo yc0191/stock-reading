@@ -49,6 +49,8 @@ FAKE_STATEMENT = "[가짜 LLM] 시험용 요약 문장입니다."
 # 마감 후 판 입력의 판 이름과 ETF별 하루 등락 항목 이름(briefing/daily_report.py)
 POST_CLOSE_NAME = "마감 후 판"
 ETF_DAY_ITEM = "보유 ETF별 하루 등락"
+EXCHANGE_ITEM = "환율"
+FAKE_RATE_ISSUE = "[가짜 LLM] 받은 자료에 금리 관련 기사가 없습니다."
 COMMON = {"broker.address.family": "v4"}
 
 
@@ -206,8 +208,16 @@ def fake_llm_output(user: str) -> str:
             return json.dumps({"summary": [], "etfs": [], "notables": [], "insufficientEvidence": True})
         etfs = [{"symbol": e["symbol"], "reason": FAKE_STATEMENT, "refs": [e["ref"]], "weak": False, "shortfall": ""}
                 for e in days]
-        return json.dumps({"summary": [FAKE_STATEMENT, FAKE_STATEMENT], "etfs": etfs, "notables": [],
-                           "insufficientEvidence": False}, ensure_ascii=False)
+        # 환율 이슈는 환율 항목의 첫 근거를 인용하고, 가짜 자료에는 금리 기사가 없으므로 금리 이슈는 근거 약함으로 쓴다.
+        fx_refs = [e["ref"] for item in items if item.get("name") == EXCHANGE_ITEM for e in item.get("entries", [])
+                   if "ref" in e][:1]
+        output = {"summary": [FAKE_STATEMENT, FAKE_STATEMENT], "etfs": etfs, "notables": [],
+                  "rateIssue": {"statement": FAKE_RATE_ISSUE, "refs": [], "weak": True,
+                                "shortfall": "금리를 다룬 기사가 더 있어야 합니다."},
+                  "insufficientEvidence": False}
+        if fx_refs:
+            output["fxIssue"] = {"statement": FAKE_STATEMENT, "refs": fx_refs, "weak": False, "shortfall": ""}
+        return json.dumps(output, ensure_ascii=False)
     if not refs:
         return json.dumps({"points": [], "insufficientEvidence": True})
     return json.dumps({"points": [{"statement": FAKE_STATEMENT, "refs": [refs[0]]}], "insufficientEvidence": False},

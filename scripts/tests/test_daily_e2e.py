@@ -80,12 +80,36 @@ def test_fake_llm_writes_the_post_close_shape_with_one_reason_per_etf_that_has_a
         {"name": "보유 ETF별 하루 등락", "entries": [{"ref": "E1", "symbol": "TEST01"}, {"ref": "E2", "symbol": "TEST02"}]}]})
     output = json.loads(de.fake_llm_output(user))
     assert output["summary"] == [de.FAKE_STATEMENT, de.FAKE_STATEMENT] and output["notables"] == []
+    # 환율 항목이 없으면 환율 이슈는 내지 않고, 금리 이슈는 근거 번호 없이 근거 약함으로 쓴다.
+    assert "fxIssue" not in output
+    assert output["rateIssue"] == {"statement": de.FAKE_RATE_ISSUE, "refs": [], "weak": True,
+                                   "shortfall": "금리를 다룬 기사가 더 있어야 합니다."}
     assert output["etfs"] == [{"symbol": "TEST01", "reason": de.FAKE_STATEMENT, "refs": ["E1"], "weak": False,
                                "shortfall": ""},
                               {"symbol": "TEST02", "reason": de.FAKE_STATEMENT, "refs": ["E2"], "weak": False,
                                "shortfall": ""}]
     assert json.loads(de.fake_llm_output(json.dumps({"edition": "마감 후 판", "items": []}))) == {
         "summary": [], "etfs": [], "notables": [], "insufficientEvidence": True}
+
+
+def test_fake_llm_cites_the_exchange_entry_for_the_exchange_issue():
+    user = json.dumps({"edition": "마감 후 판", "items": [
+        {"name": "환율", "entries": [{"ref": "B3"}]},
+        {"name": "보유 ETF별 하루 등락", "entries": [{"ref": "E1", "symbol": "TEST01"}]}]})
+    output = json.loads(de.fake_llm_output(user))
+    assert output["fxIssue"] == {"statement": de.FAKE_STATEMENT, "refs": ["B3"], "weak": False, "shortfall": ""}
+
+
+def test_the_post_close_output_of_the_fake_llm_is_accepted_by_the_briefing_parser():
+    import sys
+    sys.path.insert(0, str(de.ROOT / "services" / "briefing" / "src"))
+    from briefing.daily_report import parse_post_close_output
+    user = json.dumps({"edition": "마감 후 판", "items": [
+        {"name": "환율", "entries": [{"ref": "B3"}]},
+        {"name": "보유 ETF별 하루 등락", "entries": [{"ref": "E1", "symbol": "TEST01"}]}]})
+    output = parse_post_close_output(de.fake_llm_output(user), frozenset({"B3", "E1"}), frozenset(),
+                                     frozenset({"TEST01"}), {})
+    assert [p.kind for p in output.issues] == ["fx", "rate"]
 
 
 def test_fake_message_has_the_fields_the_sdk_reads():

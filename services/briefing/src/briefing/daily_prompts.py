@@ -51,7 +51,11 @@ POST_CLOSE_RULES = """규칙:
 - summary는 그날 ETF 흐름을 한국어 문장 정확히 2개로 요약합니다. 개별 ETF 하나하나를 나열하지 않고, 근거 번호는 붙이지 않습니다.
 - etfs는 항목 "보유 ETF별 하루 등락"의 entries에 있는 ETF마다 정확히 하나씩 씁니다. symbol은 그 entry의 symbol 값이고, reason은 그 ETF가 왜 움직였는지 한 문장입니다. 자료 없음 ETF(missing)는 etfs에 넣지 않습니다.
 - 미국 자산에 투자하는 ETF(원화로 거래되며, etfInfo의 추종 대상·구성 종목으로 판단합니다)는 담긴 종목 등락과 달러-원 환율 변화를 함께 봅니다. 미국 종목이 올라도 환율이 내리면 원화 가격은 덜 오를 수 있고, 그 반대도 같습니다.
-- reason의 refs에는 그 문장의 근거가 된 기사·공시·구성 종목 이슈·미국 지수·환율 번호를 넣습니다. 이 자료 어디에서도 이유를 찾지 못하면 reason을 "받은 자료에서 이유를 찾지 못했습니다."로 쓰고 refs는 빈 목록으로 두며 weak를 true로 합니다. 그 ETF의 하루 등락 번호를 이유의 근거로 넣지 않습니다.
+- reason의 refs에는 그 문장의 근거가 된 기사·공시·구성 종목 이슈·미국 지수·환율 번호를 넣습니다. 이 자료 어디에서도 이유를 찾지 못하면 reason을 "받은 자료에서 이유를 찾지 못했습니다."로 한 글자도 바꾸지 않고 쓰고(코드가 이 문장을 세어 결론 줄의 이유를 찾지 못한 ETF 수로 씁니다) refs는 빈 목록으로 두며 weak를 true로 합니다. 그 ETF의 하루 등락 번호를 이유의 근거로 넣지 않습니다.
+- 하루 등락이 0.00%인 ETF도 이유를 씁니다. 등락이 없는 것도 오르내리다 제자리가 된 것이므로, 입력에 있는 환율(usdKrw)·금리(기사에 적힌 값)·미국 지수(indexRates) 같은 숫자를 들어 "금리는 N 올랐고 환율은 n 내려 크게 움직이지 않았을 수 있습니다"처럼 씁니다. 입력에 없는 숫자는 쓰지 않고, 들 숫자가 입력에 하나도 없을 때만 위의 "찾지 못했습니다" 문장을 씁니다.
+- 환율이나 금리가 어떤 ETF 움직임의 단서이면 reason 문장 안에 끼워 넣지 말고 문장 끝에 "(환율 이슈 참고)", "(금리 이슈 참고)"처럼 괄호로 짧게 붙입니다. 예: "담긴 미국 종목의 움직임이 영향을 줬을 수 있습니다(환율 이슈 참고)." 숫자는 되풀이하지 않습니다(위의 0.00% ETF는 숫자를 들어 씁니다).
+- fxIssue는 환율 이슈 칸입니다. 환율은 모든 ETF에 영향을 주므로 ETF와 따로 씁니다. 항목 "환율"의 usdKrw(원/달러 값, 전일대비, 등락률)와 환율을 다룬 기사를 근거로 환율이 ETF들에 영향을 줬을 수 있는 점을 한 문장으로 씁니다. 근거 번호는 refs에 넣고 weak·shortfall을 냅니다.
+- rateIssue는 금리 이슈 칸입니다. 금리는 모든 ETF에 영향을 주므로 ETF와 따로 씁니다. 입력의 기사 중 금리(기준금리, 국채금리, 시장금리 등)를 다룬 기사를 근거로 한 문장을 쓰고, 금리 숫자는 그 기사에 적힌 것만 씁니다. 금리를 다룬 기사가 없으면 "받은 자료에 금리 관련 기사가 없습니다."로 쓰고 refs는 빈 목록, weak는 true로 합니다.
 - ETF·담긴 종목·추종 대상과 관련 없는 기사는 인용하지 않습니다.
 - 구성 종목 이슈는 ETF 줄 아래 '↳' 줄에 이미 보이므로 reason에서 그 종목의 이름과 등락률을 되풀이하지 않습니다. 구성 종목 이슈가 이유의 단서면 "담긴 미국 종목의 움직임이 영향을 줬을 수 있다"처럼 짧게 쓰고 그 이슈 번호를 인용합니다.
 - 항목마다 weak(근거 약함 여부)와 shortfall(부족한 점)을 냅니다. 뒷받침하는 자료가 약하면(범위가 맞지 않거나, 간접 정보뿐이거나, 세부가 자료에 없으면) weak를 true로 하고 shortfall에 어떤 자료가 더 있어야 하는지 한 문장으로 씁니다. 근거가 충분하면 weak를 false로, shortfall을 빈 문자열로 둡니다. shortfall은 찾아야 할 자료를 말할 뿐 원인을 단정하지 않으며 미국 종목의 티커를 쓰지 않습니다.
@@ -60,7 +64,10 @@ POST_CLOSE_RULES = """규칙:
 - 요약할 근거가 부족하면 insufficientEvidence를 true로 하고 summary, etfs, notables는 빈 목록으로 둡니다.
 
 출력은 다음 JSON 하나만 냅니다:
-{"summary":["...","..."],"etfs":[{"symbol":"...","reason":"...","refs":["..."],"weak":false,"shortfall":""}],"notables":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"insufficientEvidence":false}"""
+{"summary":["...","..."],"etfs":[{"symbol":"...","reason":"...","refs":["..."],"weak":false,"shortfall":""}],"notables":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"fxIssue":{"statement":"...","refs":["..."],"weak":false,"shortfall":""},"rateIssue":{"statement":"...","refs":["..."],"weak":false,"shortfall":""},"insufficientEvidence":false}"""
+
+# Claude가 이유를 찾지 못한 ETF에 쓰는 문장. 지시문과 같아야 하며, 코드가 이 문장으로 결론 줄의 ETF 수를 센다.
+NO_REASON_STATEMENT = "받은 자료에서 이유를 찾지 못했습니다."
 
 SYSTEM_PROMPT_POST_CLOSE = READING_GUIDE + POST_CLOSE_GUIDE_EXTRA + "\n\n" + POST_CLOSE_RULES
 
@@ -92,6 +99,12 @@ _REASONED_ITEM: dict[str, Any] = {
     "weak": {"type": "boolean"},
     "shortfall": {"type": "string"},
 }
+_STATEMENT_ITEM: dict[str, Any] = {
+    "type": "object",
+    "properties": {"statement": {"type": "string"}, **_REASONED_ITEM},
+    "required": ["statement", "refs", "weak", "shortfall"],
+    "additionalProperties": False,
+}
 OUTPUT_SCHEMA_POST_CLOSE: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -105,18 +118,12 @@ OUTPUT_SCHEMA_POST_CLOSE: dict[str, Any] = {
                 "additionalProperties": False,
             },
         },
-        "notables": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {"statement": {"type": "string"}, **_REASONED_ITEM},
-                "required": ["statement", "refs", "weak", "shortfall"],
-                "additionalProperties": False,
-            },
-        },
+        "notables": {"type": "array", "items": _STATEMENT_ITEM},
+        "fxIssue": _STATEMENT_ITEM,
+        "rateIssue": _STATEMENT_ITEM,
         "insufficientEvidence": {"type": "boolean"},
     },
-    "required": ["summary", "etfs", "notables", "insufficientEvidence"],
+    "required": ["summary", "etfs", "notables", "fxIssue", "rateIssue", "insufficientEvidence"],
     "additionalProperties": False,
 }
 

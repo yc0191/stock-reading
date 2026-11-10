@@ -227,7 +227,8 @@ def test_the_post_close_prompt_forbids_the_unsafe_things_and_names_the_output_fi
         assert word in SYSTEM_PROMPT_POST_CLOSE
     for key in ('"summary"', '"etfs"', '"notables"', '"reason"'):
         assert key in SYSTEM_PROMPT_POST_CLOSE
-    assert set(OUTPUT_SCHEMA_POST_CLOSE["required"]) == {"summary", "etfs", "notables", "insufficientEvidence"}
+    assert set(OUTPUT_SCHEMA_POST_CLOSE["required"]) == {"summary", "etfs", "notables", "fxIssue", "rateIssue",
+                                                         "insufficientEvidence"}
 
 
 def test_each_edition_asks_with_its_own_prompt_and_schema():
@@ -642,7 +643,9 @@ def test_post_close_gives_claude_the_us_index_and_the_usd_krw_rate_and_keeps_the
     assert fx["ref"] == "B2" and fx["usdKrw"] == {"value": "1111.1100", "change": "-2.2200", "ratePercent": "-0.20"}
     assert "TEST통화" in fx["response"]
     text = daily_text(i, sections, None)
-    assert ITEM_US_INDEX not in text and ITEM_EXCHANGE not in text and "1111" not in text
+    # 두 항목은 절로 나열하지 않는다. 환율은 환율 이슈 칸에서만 코드가 받은 값을 옮겨 보인다.
+    assert f"■ {ITEM_US_INDEX}" not in text and f"■ {ITEM_EXCHANGE}" not in text
+    assert "환율 이슈:\n  - 원/달러 1111.1100(전일대비 -2.2200, -0.20%)" in text
 
 
 def test_a_reason_can_cite_the_exchange_rate_and_its_source_line_shows_the_usd_krw_numbers():
