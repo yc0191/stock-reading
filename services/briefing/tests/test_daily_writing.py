@@ -225,10 +225,10 @@ def test_no_required_etf_still_needs_the_two_summary_lines():
 def test_the_post_close_prompt_forbids_the_unsafe_things_and_names_the_output_fields():
     for word in ("단정", "투자 조언", "티커", "정확히 2개", "되풀이", "weak", "↳"):
         assert word in SYSTEM_PROMPT_POST_CLOSE
-    for key in ('"summary"', '"etfs"', '"notables"', '"reason"'):
+    for key in ('"summary"', '"etfs"', '"notables"', '"reviews"', '"reason"'):
         assert key in SYSTEM_PROMPT_POST_CLOSE
-    assert set(OUTPUT_SCHEMA_POST_CLOSE["required"]) == {"summary", "etfs", "notables", "fxIssue", "rateIssue",
-                                                         "insufficientEvidence"}
+    assert set(OUTPUT_SCHEMA_POST_CLOSE["required"]) == {"summary", "etfs", "notables", "reviews", "fxIssue",
+                                                         "rateIssue", "insufficientEvidence"}
 
 
 def test_each_edition_asks_with_its_own_prompt_and_schema():

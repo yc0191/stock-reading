@@ -14,7 +14,7 @@ import logging
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import Any
 
 from briefing.compose import KST
@@ -24,6 +24,7 @@ from briefing.daily_html import ChartSlot, render_html
 from briefing.daily_morning import outlook_records
 from briefing.daily_inputs import EtfArticles, member_issues, moves_with_market, notable_candidates
 from briefing.daily_relevance import split_related
+from briefing.daily_review import MORNING_READ_FAILED, NO_ACTUAL_RATES, NO_MORNING_CALLS, ReviewInput, parse_calls
 from briefing.daily_report import (
     Section,
     EDITIONS_WITH_ETF_ARTICLES,
@@ -117,6 +118,10 @@ REASON_MISSING_ITEMS = "missing_items"
 REASON_LLM_ACCEPTED = "llm_attempt_accepted"
 REASON_PUBLISHED = "published"
 REASON_OUTLOOK_RECORDED = "morning_outlook_recorded"
+# 마감 후 판이 같은 날 아침 예상을 읽지 못해 대조를 뺀 사유
+REASON_OUTLOOK_MISSING = "morning_outlook_missing"
+# 아침 예상은 있는데 대조할 실제 등락이 하나도 없어 대조를 뺀 사유
+REASON_OUTLOOK_NO_RATES = "morning_outlook_no_actual_rates"
 # 작업 기록의 excluded에 남기는, ETF와 관계없어 뺀 기사 건수의 이름
 EXCLUDED_UNRELATED = "irrelevantArticles"
 
@@ -545,6 +550,8 @@ class DailyCore:
         )
         if job.edition in EDITIONS_WITH_ETF_ARTICLES:
             daily_input = self._with_etf_inputs(job, daily_input)
+        if job.edition == EDITION_POST_CLOSE and daily_input.etfs and not daily_input.before_open(self.settings):
+            daily_input = replace(daily_input, review=self._read_review(job, now, daily_input))
         sections = build_sections(daily_input, self.settings)
         draft = self._write(job, now, daily_input, sections)
         # 문장 단위 재검색이 시작되면 그 흐름이 끝난 뒤 발행한다. 시작하지 않으면 바로 발행한다.
@@ -564,6 +571,24 @@ class DailyCore:
                 reason=REASON_OUTLOOK_RECORDED, occurred_at=now,
                 data={"asOf": format_timestamp(job.scheduled_for), "outlooks": outlooks}))
         self._publish(job, now, daily_input, sections, draft, research_count)
+
+    def _read_review(self, job: _DailyJob, now: datetime, daily_input: DailyInput) -> ReviewInput:
+        """같은 날 아침 판의 ETF별 예상과 그날 급변동을 작업 기록에서 읽는다. 못 읽어도 판은 나가고, 대조를 뺀 이유를 기록에 남긴다."""
+        day = job.scheduled_for.astimezone(KST).date()
+        day_start = datetime.combine(day, time.min, tzinfo=KST)
+        records = self.job_log.morning_outlooks(day)
+        calls = parse_calls(records) if records is not None else ()
+        note = None if calls else MORNING_READ_FAILED if records is None else NO_MORNING_CALLS
+        reason = REASON_OUTLOOK_MISSING
+        if calls and not replace(daily_input, review=ReviewInput(calls, None, ())).reviews():
+            note, reason = NO_ACTUAL_RATES, REASON_OUTLOOK_NO_RATES
+        if note is not None:
+            self._detail(job, STAGE_COMPOSE, EntryType.MISSING_ITEMS, reason,
+                         "ReadFailed" if records is None else None, 0, now, missingItems=[note])
+        moves = self.job_log.moves_between(day_start, job.scheduled_for)
+        # 전날 밤 변동이 자정 직후에 시작된 경우를 빼려고 작업 시작이 아닌 변동 시각으로 거른다
+        moves = tuple(m for m in moves if m.move_at >= day_start) if moves is not None else None
+        return ReviewInput(calls, note, moves)
 
     def _with_etf_inputs(self, job: _DailyJob, daily_input: DailyInput) -> DailyInput:
         """ETF별 기사를 모아 입력에 더한다. 마감 후 판은 미국 구성 종목 이슈와 눈에 띄는 점 후보도 더한다."""

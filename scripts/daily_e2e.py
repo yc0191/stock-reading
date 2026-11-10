@@ -195,7 +195,7 @@ def fake_llm_output(user: str) -> str:
 
     아침 판(입력에 outlookEtfs 가 있음)은 요약 한 줄에 더해 ETF마다 방향 예상과 환율·금리 이슈 칸을 쓴다.
     마감 후 판(입력의 edition 이 "마감 후 판")은 그 판의 출력 형식으로 답한다: 요약 2줄과, 하루 등락이 있는 ETF마다
-    그 ETF의 하루 등락 번호를 인용한 이유 한 줄."""
+    그 ETF의 하루 등락 번호를 인용한 이유 한 줄, 아침 예상을 대조한 ETF(입력의 reviewEtfs)마다 대조 이유 한 줄."""
     try:
         data = json.loads(user)
         items = data.get("items", [])
@@ -218,6 +218,11 @@ def fake_llm_output(user: str) -> str:
                   "insufficientEvidence": False}
         if fx_refs:
             output["fxIssue"] = {"statement": FAKE_STATEMENT, "refs": fx_refs, "weak": False, "shortfall": ""}
+        # 같은 날 아침 예상이 있어 코드가 대조한 ETF(입력의 reviewEtfs)마다 이유 한 줄을 쓴다. 근거는 그 ETF의 하루 등락 번호다.
+        day_ref = {e["symbol"]: e["ref"] for e in days}
+        output["reviews"] = [{"symbol": r["symbol"], "reason": FAKE_STATEMENT, "refs": [day_ref[r["symbol"]]],
+                              "weak": False, "shortfall": ""}
+                             for r in data.get("reviewEtfs", []) if r.get("symbol") in day_ref]
         return json.dumps(output, ensure_ascii=False)
     if not refs:
         return json.dumps({"points": [], "insufficientEvidence": True})

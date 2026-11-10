@@ -8,11 +8,14 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Any, Mapping, Protocol
+
+from briefing.events import parse_timestamp
 
 log = logging.getLogger("briefing.job_log")
 
@@ -126,6 +129,34 @@ class JobLogEntry:
     data: Mapping[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class MoveRun:
+    """급변동 작업 한 건(job_run 한 줄)에서 그날 요약에 필요한 값. change_percent는 변동 이벤트의 변동률(%)이다."""
+
+    job_id: str
+    symbol: str
+    move_at: datetime
+    change_percent: float | None
+    status: str
+    generated_by: str | None
+    failure_reason: str | None
+
+
+def parse_move_run(job_id: str, raw_input: str, target: str, status: str, generated_by: str | None,
+                   failure_reason: str | None) -> MoveRun | None:
+    """job_run 한 줄(입력과 대상은 JSON 글자)을 MoveRun으로 바꾼다. 종목이나 변동 시각을 읽을 수 없으면 None이다."""
+    try:
+        target_data = json.loads(target)
+        symbol, move_at = target_data["symbol"], parse_timestamp(target_data["moveAt"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    try:
+        percent = float(json.loads(raw_input)["payload"]["changePercent"])
+    except (KeyError, TypeError, ValueError):
+        percent = None
+    return MoveRun(job_id, symbol, move_at, percent, status, generated_by, failure_reason)
+
+
 class JobLogPort(Protocol):
     def start(self, run: JobStart) -> bool:
         """작업 한 줄을 running으로 만든다. 같은 작업을 다시 시작해도 한 줄만 남는다. 끝내 저장하지 못했으면 False."""
@@ -138,6 +169,12 @@ class JobLogPort(Protocol):
 
     def has_failed(self, job_id: str) -> bool:
         """이 작업의 줄 중 끝내 저장하지 못한 것이 있는가."""
+
+    def morning_outlooks(self, day: date) -> list[Mapping[str, Any]] | None:
+        """그날(한국 시간) 아침 판이 남긴 etf-outlook 줄의 data를 기록이 늦은 것부터 돌려준다. 읽지 못하면 None."""
+
+    def moves_between(self, since: datetime, until: datetime) -> list[MoveRun] | None:
+        """시작 시각이 범위(양끝 포함) 안인 급변동 작업을 시작이 이른 것부터 돌려준다. 읽지 못하면 None."""
 
 
 class DiscardJobLog:
@@ -154,6 +191,12 @@ class DiscardJobLog:
 
     def has_failed(self, job_id: str) -> bool:
         return False
+
+    def morning_outlooks(self, day: date) -> list[Mapping[str, Any]] | None:
+        return []
+
+    def moves_between(self, since: datetime, until: datetime) -> list[MoveRun] | None:
+        return []
 
 
 def record_result(job_log: JobLogPort, result: JobResult) -> bool:

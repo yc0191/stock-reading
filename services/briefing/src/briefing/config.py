@@ -95,6 +95,10 @@ class DailySettings:
     relevance_suffixes: tuple[str, ...] = ("지수",)
     # 구성 종목에 미국 종목이 있는 ETF는 이 시장 단어가 제목·요약에 있는 기사도 남긴다.
     relevance_us_market_terms: tuple[str, ...] = ("뉴욕증시", "미국증시", "월가", "나스닥", "S&P", "다우존스", "다우지수", "wall street")
+    # 마감 후 판의 아침 예상 대조: 보합 예상은 실제 등락 절댓값(%)이 이 값 이하이면 맞음이다.
+    flat_band_percent: float = 0.5
+    # 마감 후 판의 그날 급변동 요약에 보여 주는 최대 건수. 넘으면 '외 N건'으로 줄인다.
+    max_move_lines: int = 20
     llm_max_attempts: int = 3
     # 같은 tick 중복 처리를 막기 위해 기억하는 eventId 수.
     remembered_ticks: int = 1000

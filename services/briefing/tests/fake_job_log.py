@@ -1,12 +1,16 @@
-"""JobLogPort 가짜. 넘어온 줄을 그대로 모은다. fail=True면 모든 저장이 끝내 실패한 것처럼 행동한다.
+"""JobLogPort 가짜. 넘어온 줄을 그대로 모은다. fail=True면 모든 저장이 끝내 실패한 것처럼, fail_reads=True면 모든 읽기가 실패한 것처럼 행동한다.
 
 entries는 job_log 줄(일마다 한 줄), starts·finishes는 job_run의 시작 줄과 끝 줄이다.
 """
-from briefing.job_log import EntryType
+import json
+
+from briefing.compose import KST
+from briefing.job_log import EntryType, parse_move_run
 
 
 class FakeJobLog:
-    def __init__(self, fail=False):
+    def __init__(self, fail=False, fail_reads=False):
+        self.fail_reads = fail_reads
         self.entries = []
         self.starts = []
         self.finishes = []
@@ -41,6 +45,32 @@ class FakeJobLog:
 
     def has_failed(self, job_id):
         return job_id in self._failed
+
+    def morning_outlooks(self, day):
+        """그날(한국 시간) 아침 판 작업이 남긴 etf-outlook 줄의 data, 기록이 늦은 것부터. fail_reads면 읽지 못함(None)."""
+        if self.fail_reads:
+            return None
+        mornings = {s.job_id for s in self.starts if getattr(s.job_kind, "value", s.job_kind) == "morning"}
+        found = [e for e in self.entries if e.entry_type == EntryType.ETF_OUTLOOK and e.job_id in mornings
+                 and e.occurred_at.astimezone(KST).date() == day]
+        return [dict(e.data) for e in sorted(found, key=lambda e: e.occurred_at, reverse=True)]
+
+    def moves_between(self, since, until):
+        if self.fail_reads:
+            return None
+        finishes = {f.job_id: f for f in self.finishes}
+        runs = []
+        for s in self.starts:
+            if getattr(s.job_kind, "value", s.job_kind) != "move" or not since <= s.started_at <= until:
+                continue
+            f = finishes.get(s.job_id)
+            run = parse_move_run(s.job_id, s.input, json.dumps(dict(s.target)),
+                                 f.status.value if f else "running",
+                                 f.generated_by.value if f and f.generated_by else None,
+                                 f.failure_reason if f else None)
+            if run is not None:
+                runs.append(run)
+        return runs
 
     def of_reason(self, reason):
         return [e for e in self.entries if e.reason == getattr(reason, "value", reason)]

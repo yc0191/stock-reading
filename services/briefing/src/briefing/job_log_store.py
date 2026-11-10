@@ -13,10 +13,22 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Protocol
+from datetime import date, datetime, time as day_time, timedelta
+from typing import Any, Callable, Mapping, Protocol
 
 from briefing.config import DEFAULT_STORE_SETTINGS, StoreSettings
-from briefing.job_log import EntryType, GeneratedBy, JobKind, JobLogEntry, JobResult, JobStart, RunStatus
+from briefing.compose import KST
+from briefing.job_log import (
+    EntryType,
+    GeneratedBy,
+    JobKind,
+    JobLogEntry,
+    JobResult,
+    JobStart,
+    MoveRun,
+    RunStatus,
+    parse_move_run,
+)
 
 log = logging.getLogger("briefing.job_log_store")
 
@@ -117,6 +129,21 @@ INSERT INTO {LOG_TABLE} (job_id, entry_type, stage, sentence_no, round, before, 
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::json, %s)
 """
 
+# 그날 아침 판이 남긴 ETF별 예상(etf-outlook). 기록이 늦은 것부터 읽는다.
+SELECT_OUTLOOKS_SQL = f"""
+SELECT l.data::text
+FROM {LOG_TABLE} l JOIN {RUN_TABLE} r ON r.job_id = l.job_id
+WHERE l.entry_type = %s AND r.job_kind = %s AND l.occurred_at >= %s AND l.occurred_at < %s
+ORDER BY l.occurred_at DESC, l.id DESC
+"""
+
+SELECT_MOVES_SQL = f"""
+SELECT job_id, input::text, target::text, status, generated_by, failure_reason
+FROM {RUN_TABLE}
+WHERE job_kind = %s AND started_at >= %s AND started_at <= %s
+ORDER BY started_at, job_id
+"""
+
 # 저장에 실패한 작업 id를 기억하는 수. 메모리가 무한히 늘지 않게 한다.
 REMEMBERED_FAILED_JOBS = 10000
 
@@ -177,6 +204,33 @@ class PostgresJobLog:
 
     def has_failed(self, job_id: str) -> bool:
         return job_id in self._failed
+
+    def morning_outlooks(self, day: date) -> list[Mapping[str, Any]] | None:
+        start = datetime.combine(day, day_time.min, tzinfo=KST)
+        rows = self._read(SELECT_OUTLOOKS_SQL, (EntryType.ETF_OUTLOOK.value, JobKind.MORNING.value, start,
+                                                start + timedelta(days=1)))
+        return None if rows is None else [json.loads(r[0]) for r in rows]
+
+    def moves_between(self, since: datetime, until: datetime) -> list[MoveRun] | None:
+        rows = self._read(SELECT_MOVES_SQL, (JobKind.MOVE.value, since, until))
+        if rows is None:
+            return None
+        parsed = (parse_move_run(r[0], r[1], r[2], r[3], r[4], r[5]) for r in rows)
+        return [m for m in parsed if m is not None]
+
+    def _read(self, sql: str, params: tuple) -> list[tuple] | None:
+        """조회에 실패하면 None. 예외 메시지에는 접속 정보가 섞일 수 있어 종류 이름만 남긴다."""
+        try:
+            connection = self.connect()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(sql, params)
+                    return list(cursor.fetchall())
+            finally:
+                connection.close()
+        except Exception as error:  # noqa: BLE001 - 읽지 못해도 판은 나가므로 '읽지 못함'으로 알린다
+            log.warning("reading the job log failed: %s", type(error).__name__)
+            return None
 
     def _save(self, sql: str, params: tuple, job_id: str, what: str) -> bool:
         attempts = self.settings.record_attempts

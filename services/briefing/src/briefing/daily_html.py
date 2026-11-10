@@ -2,7 +2,7 @@
 
 아침 판 순서는 글자판과 같다: 제목 → 항목별 숫자 → 요약 → 환율 이슈 → 금리 이슈 → ETF별 예상 → 면책 → 근거 목록(작게).
 마감 후 판도 글자판과 같은 순서다: 제목 → 결론 → 요약 2줄 → 눈에 띄는 점 → 환율 이슈 → 금리 이슈 → 차트 → 보유/관심별 ETF 줄(이유, ↳ 구성 종목 줄) →
-면책 → 서버 상태(작게, '주의'가 있을 때만 그 줄이 주황) → 출처(작게, 기사·공시는 원문 링크). 발송기는 html 칸을 받은 그대로 보내므로 이벤트 값
+아침 예상 대조 → 그날 급변동 → 면책 → 서버 상태(작게, '주의'가 있을 때만 그 줄이 주황) → 출처(작게, 기사·공시는 원문 링크). 발송기는 html 칸을 받은 그대로 보내므로 이벤트 값
 (ETF 이름, LLM 문장, 근거 설명, 서버 상태 줄)은 모두 여기서 이스케이프한다.
 """
 from __future__ import annotations
@@ -26,7 +26,7 @@ from briefing.daily_report import (
     section_title,
 )
 from briefing.daily_morning import OUTLOOK_NOTE, OUTLOOK_TITLE, MorningView, morning_view
-from briefing.daily_post_close import PostCloseView, post_close_view, source_plain
+from briefing.daily_post_close import MOVES_TITLE, REVIEW_TITLE, PostCloseView, post_close_view, source_plain
 from briefing.events import EDITION_POST_CLOSE
 from briefing.llm_output import WEAK_NOTE_PREFIX
 
@@ -179,6 +179,27 @@ def _post_close_etfs(v: PostCloseView) -> str:
     return "".join(parts)
 
 
+def _post_close_review(v: PostCloseView) -> str:
+    """아침 예상 대조와 그날 급변동 칸. 값이 없는 칸은 만들지 않는다."""
+    parts = []
+    if v.reviews or v.review_note:
+        parts.append(_p(HEADING_STYLE, f"■ {escape(REVIEW_TITLE)}"))
+        items = []
+        for row in v.reviews:
+            inner = _rate_spans(escape(row.line))
+            if row.reason is not None:
+                cite = f" {_cite(row.numbers)}" if row.numbers else ""
+                inner += _p(NOTE_STYLE, f"이유: {_rate_spans(escape(row.reason))}{cite}") + _weak(row.shortfall)
+            items.append(f'<li style="{ITEM_STYLE}">{inner}</li>')
+        if v.review_note:
+            items.append(f'<li style="{ITEM_STYLE}">{escape(v.review_note)}</li>')
+        parts.append(f'<ul style="{LIST_STYLE}">{"".join(items)}</ul>')
+    if v.moves is not None:
+        parts.append(_p(HEADING_STYLE, f"■ {escape(MOVES_TITLE)}"))
+        parts.append(_list(v.moves))
+    return "".join(parts)
+
+
 def _post_close_sources(v: PostCloseView) -> str:
     if not v.sources:
         return ""
@@ -263,6 +284,7 @@ def _render_post_close(i: DailyInput, sections: tuple[Section, ...], output: Dai
     if chart is not None:
         parts.append(_chart(chart))
     parts.append(_post_close_etfs(v))
+    parts.append(_post_close_review(v))
     parts.append(_p(DISCLAIMER_STYLE, escape(DAILY_DISCLAIMER)))
     if status_text:
         parts.append(_status(status_text))

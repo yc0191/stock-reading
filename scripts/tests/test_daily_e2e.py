@@ -126,6 +126,24 @@ def test_the_post_close_output_of_the_fake_llm_is_accepted_by_the_briefing_parse
     assert [p.kind for p in output.issues] == ["fx", "rate"]
 
 
+def test_fake_llm_writes_a_review_reason_for_each_etf_the_code_compared_and_the_briefing_parser_accepts_it():
+    import sys
+    sys.path.insert(0, str(de.ROOT / "services" / "briefing" / "src"))
+    from briefing.daily_report import parse_post_close_output
+    user = json.dumps({"edition": "마감 후 판", "items": [
+        {"name": "보유 ETF별 하루 등락", "entries": [{"ref": "E1", "symbol": "TEST01"}, {"ref": "E2", "symbol": "TEST02"}]}],
+        "reviewEtfs": [{"symbol": "TEST02", "verdict": "빗나감"}]})
+    output = json.loads(de.fake_llm_output(user))
+    assert output["reviews"] == [{"symbol": "TEST02", "reason": de.FAKE_STATEMENT, "refs": ["E2"], "weak": False,
+                                  "shortfall": ""}]
+    parsed = parse_post_close_output(de.fake_llm_output(user), frozenset({"E1", "E2"}), frozenset(),
+                                     frozenset({"TEST01", "TEST02"}), {}, True, frozenset({"TEST02"}))
+    assert [(p.symbol, p.refs) for p in parsed.reviews] == [("TEST02", ("E2",))]
+    # 대조한 ETF가 없으면 reviews 는 빈 목록이다.
+    assert json.loads(de.fake_llm_output(json.dumps({"edition": "마감 후 판", "items": [
+        {"name": "보유 ETF별 하루 등락", "entries": [{"ref": "E1", "symbol": "TEST01"}]}]})))["reviews"] == []
+
+
 def test_fake_message_has_the_fields_the_sdk_reads():
     message = de.fake_message({"model": "m", "messages": [{"role": "user", "content": json.dumps({"items": []})}]})
     assert message["type"] == "message" and message["stop_reason"] == "end_turn"
