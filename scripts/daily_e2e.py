@@ -42,7 +42,7 @@ TICK_TOPIC = "schedule.tick"
 DAILY_TOPIC = "briefing.daily.generated"
 JOB_TYPES = {"morning": "daily-briefing-morning", "post-close": "daily-briefing-post-close"}
 
-# 시세처리기 ETF_US_HOLDINGS 와 같은 형식. TEST02 는 미국 종목이 없는 ETF 로 둔다.
+# 시세처리기 보유 종목 테이블을 처음 채울 가짜 대응표. TEST02 는 미국 종목이 없는 ETF 로 둔다.
 HOLDINGS = {"TEST01": ("TESTA", "FAKEB"), "TEST02": ()}
 US_TICKERS = ("TESTA", "FAKEB")
 FAKE_STATEMENT = "[가짜 LLM] 시험용 요약 문장입니다."
@@ -54,13 +54,8 @@ FAKE_RATE_ISSUE = "[가짜 LLM] 받은 자료에 금리 관련 기사가 없습�
 COMMON = {"broker.address.family": "v4"}
 
 
-def holdings_setting() -> str:
-    """ETF_US_HOLDINGS 값. 미국 종목이 없는 ETF 는 대응표에 넣지 않는다(일봉만으로 보유 ETF 가 된다)."""
-    return ";".join(f"{etf}={','.join(tickers)}" for etf, tickers in HOLDINGS.items() if tickers)
-
-
 def holdings_file_json() -> str:
-    """시세처리기 보유 종목 파일(HOLDINGS_FILE) 내용. holdings_setting 과 같은 가짜 대응표를 파일 모양으로 옮긴다."""
+    """시세처리기 보유 종목 파일(HOLDINGS_FILE) 내용. 새 데이터베이스의 빈 종목 테이블을 처음 채우는 가짜 대응표다."""
     items = [{"kind": "ETF", "market": "KR", "symbol": etf, "relation": "HELD",
               "members": [{"market": "US", "symbol": ticker, "rank": rank}
                           for rank, ticker in enumerate(tickers, start=1)]}

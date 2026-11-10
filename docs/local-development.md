@@ -19,7 +19,7 @@ export JAVA_HOME_21=$JAVA_HOME
 cp .env.example .env        # 값 채우기 (.env는 커밋되지 않음)
 docker compose -f infra/compose/docker-compose.yml --env-file .env up -d
 
-# 서비스 실행 (저장소 루트에서). 시작 순서는 상관없음(토픽을 각 서비스가 선언함)
+# 서비스 실행 (저장소 루트에서). 시작 순서는 상관없음(토픽을 각 서비스가 선언함). 다만 새 버전을 배포할 때는 뉴스를 먼저(V6 마이그레이션 적용) 올리고 수집기를 나중에 올림(수집기가 먼저면 미국 티커 태그 기사를 뉴스가 저장하지 못해 유실)
 java -jar services/collector/build/libs/collector-0.0.1-SNAPSHOT.jar
 java -jar services/market/build/libs/market-0.0.1-SNAPSHOT.jar
 java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
@@ -30,7 +30,7 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 
 뉴스 저장(news)은 `news.collected`와 함께 공시 이벤트 `filing.collected`를 별도 consumer group(`news-filings`)으로 구독해 `filing`(접수번호 유니크)과 `filing_ticker`에 저장합니다. 같은 공시가 다른 이벤트로 다시 오면 새로 연결된 티커만 더하고, 재시도 후에도 실패한 이벤트는 뉴스와 같은 `failed_event`에 남깁니다. 종목·기간 조회는 `FilingQuery`(티커, 시작·끝 시각, 기준 시각)이며 기준 시각보다 늦게 접수된 공시는 돌려주지 않습니다(같으면 포함). 해외 종목의 직전 미국 정규장 마감 등락률은 시세처리기의 `OverseasCloseRateQuery`(티커, 기준 시각)가 저장된 해외 일봉 원문에서 읽어 고른 일자와 등락율 원문(`up_dwn_r_p2`)을 돌려줍니다. 고르는 규칙과 이유는 `OverseasCloseRateQuery`의 주석에 있습니다. 공시 조회는 news의 `news.filings.requested` 응답이, 해외 등락률은 시세처리기의 `market.context.requested` 응답이 씁니다(아래 브리핑 서비스).
 
-시세처리기는 스냅샷마다 급변동을 감지해 `market.move`를 발행합니다. 유형 1(`window`)은 최근 N분 이력의 가장 오래된 스냅샷 대비, 유형 2(`prevClose`)는 응답 원문의 전일 종가 필드 대비 변동률이 임계값 이상일 때이며, 한 번 발행한 뒤에는 마지막 발행 가격에서 임계값만큼 더 움직일 때만 다시 발행합니다(상태는 `move_state` 테이블에 둡니다). 설정은 `services/market/src/main/resources/application.yml`의 `market.*`이고 환경변수로 덮어쓸 수 있습니다.
+시세처리기는 스냅샷마다 급변동을 감지해 `market.move`를 발행합니다. 유형 1(`window`)은 최근 N분 이력의 가장 오래된 스냅샷 대비, 유형 2(`prevClose`)는 응답 원문의 전일 종가(후보 세 칸의 다수결) 대비 변동률이 임계값 이상일 때이며, 한 번 발행한 뒤에는 마지막 발행 가격에서 임계값만큼 더 움직일 때만 다시 발행합니다(상태는 `move_state` 테이블에 둡니다). 설정은 `services/market/src/main/resources/application.yml`의 `market.*`이고 환경변수로 덮어쓸 수 있습니다.
 
 기본값은 `application.yml`이 원본입니다.
 
@@ -38,19 +38,24 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 |---|---|
 | `market.window-minutes` | 유형 1이 비교할 최근 이력의 길이(분) |
 | `market.window-threshold-percent` | 유형 1 임계값(%) |
-| `market.prev-close-field` | 유형 2가 원문에서 읽을 전일 종가 필드(점으로 중첩 경로). 제공자 응답의 전일 종가 칸이 하루 안에서 깨져 오는 경우가 있어(2026-11-04 확인) 기본값은 비어 있고 유형 2는 꺼져 있습니다. 비어 있으면 시작할 때 경고를 한 번 남깁니다. 켜려면 `MARKET_PREV_CLOSE_FIELD` 환경변수로 칸 경로를 줍니다. 유형 1과 유형 2는 따로 평가하므로 같은 움직임에서 두 유형의 변동이 각각 발행될 수 있습니다. 원문에 필드가 없거나 숫자가 아니면 유형 2는 그 스냅샷을 판단하지 않습니다 |
+| `market.prev-close-fields` | 유형 2가 원문에서 읽을 전일 종가 후보 필드들(점으로 중첩 경로, 쉼표로 구분). 기본은 `dataBody.bdy_cls_prc`, `dataBody.sprc`, `dataBody.krx_bdy_clpr` 세 칸입니다. 제공자가 한 칸을 하루 안에서도 깨뜨려 보내는 경우가 있어(2026-11-04 확인) 스냅샷마다 세 칸을 읽고, 읽을 수 있는 값 중 설정한 칸 수의 절반을 넘는 칸이 같은 값일 때(기본 세 칸이면 두 칸 이상)만 그 값을 전일 종가로 씁니다. 세 칸이 모두 다르거나 두 칸 이상을 읽을 수 없으면 그 스냅샷은 유형 2를 판단하지 않습니다. 바꾸려면 `MARKET_PREV_CLOSE_FIELDS` 환경변수에 칸 경로를 쉼표로 주고, 빈 값으로 주면 유형 2를 끄며 시작할 때 경고를 한 번 남깁니다. 유형 1과 유형 2는 따로 평가하므로 같은 움직임에서 두 유형의 변동이 각각 발행될 수 있습니다 |
 | `market.prev-close-threshold-percent` | 유형 2 임계값(%) |
 
-시세처리기는 브리핑의 배경 자료 요청(`market.context.requested`)에 답합니다. 종류마다(환율종합, 시장종합, 세계지수 대륙별, 그 종목의 국내 일봉) 받은 시각이 기준 시각 이전인 것 중 최신 원문 1건을 주고, ETF에 담긴 미국 종목 목록과 종목마다 직전 정규장 등락률을 함께 줍니다. 세계지수는 장이 끝난 지수의 응답 등락률이 0.00으로 오므로 쓰지 않고, 같은 지수의 영업일이 더 이른 직전 저장 행 종가와 비교해 계산한 지수별 등락률(`indexRates`)을 함께 줍니다. 아래 값은 안전 상한이며 요청값의 원본은 브리핑 `config.py`입니다. 요청이 더 크면 이 값까지만 줍니다.
+시세처리기는 브리핑의 배경 자료 요청(`market.context.requested`)에 답합니다. 종류마다(환율종합, 시장종합, 세계지수 대륙별, 그 종목의 국내 일봉) 받은 시각이 기준 시각 이전인 것 중 최신 원문 1건을 주고, ETF에 담긴 미국 종목 목록과 종목마다 직전 정규장 등락률을 함께 줍니다. 세계지수는 장이 끝난 지수의 응답 등락률이 0.00으로 오므로 쓰지 않고, 같은 지수의 영업일이 더 이른 직전 저장 행(요청 범위가 아니라 찾는 기간 안에서 고릅니다) 종가와 비교해 계산한 지수별 등락률(`indexRates`)을 함께 줍니다. 아래 값은 안전 상한이며 요청값의 원본은 브리핑 `config.py`입니다. 요청이 더 크면 이 값까지만 줍니다.
 
 | 설정 키 | 설명 |
 |---|---|
-| `market.holdings.file` | 보유 종목 JSON 파일의 경로(환경변수 `HOLDINGS_FILE`). 비어 있으면 보유 종목이 없는 것으로 봅니다. 파일 모양은 아래 "보유 종목 파일"을 봅니다 |
-| `market.holdings.us-by-etf` | 수집기가 읽는 `ETF_US_HOLDINGS`와 같은 값. 여기서는 파일의 미국 구성 종목과 같은지 비교하는 데만 쓰고, 다르면 시작 단계에서 실패합니다 |
+| `market.holdings.file` | 보유 종목 JSON 파일의 경로(환경변수 `HOLDINGS_FILE`). 종목 테이블이 비어 있을 때 시작하면서 한 번만 이 파일로 채웁니다. 행이 있으면 파일을 읽지도 않습니다. 파일 모양은 아래 "보유 종목 파일"을 봅니다 |
+| `market.holdings.check-interval` | 종목 테이블이 바뀌었는지 확인하는 간격(기본 30초). 바뀌었을 때만 `market.holdings` 이벤트로 전체 목록을 냅니다 |
+| `market.members.url-template` | ETF 구성 종목 자동 조회의 요청 주소 틀(환경변수 `MEMBERS_URL_TEMPLATE`). `{fundId}`와 `{date}`(yyyy.MM.dd) 자리가 있습니다. 비어 있으면 자동 조회를 하지 않고 종목 테이블을 직접 고칩니다. 아래 "ETF 구성 종목 자동 조회"를 봅니다 |
+| `market.members.fund-ids` | 자동 조회할 ETF와 출처가 ETF를 부르는 번호(`MEMBERS_FUND_IDS`, `ETF코드:번호`를 쉼표로 이음). 여기에 없는 ETF는 조회하지 않습니다 |
+| `market.members.user-agent` | 요청마다 보내는 식별 문자열(`MEMBERS_USER_AGENT`, ASCII만) |
+| `market.members.top-count`, `fetch-day`, `call-interval`, `timeout` | 담을 상위 개수(기본 10), 평소 조회 요일(기본 월요일), 출처를 연달아 부르는 사이의 쉼(기본 2초), 요청 제한 시간(기본 10초) |
 | `market.context.max-age` | 기준 시각보다 이 기간 넘게 이른 자료는 없음으로 봅니다 |
 | `market.context.max-response-bytes` | 원문 1건의 최대 크기(UTF-8 바이트). 넘으면 원문을 빼고 너무 큼으로 표시합니다 |
 | `market.context.max-tickers` | 응답에 담을 미국 종목의 최대 개수 |
 | `market.context.world-index-continents` | 배경 자료로 줄 세계지수 대륙구분. 수집기의 마감 후 수집 대륙과 맞춥니다 |
+| `market.context.world-index-prev-lookback` | 세계지수 직전 영업일 행을 찾는 기간. 기준 시각보다 이 기간까지 이르게 받은 행에서 찾으며 요청 범위와는 따로입니다 |
 
 시세처리기는 데일리 브리핑의 판 자료 요청(`market.daily.requested`)에도 한 번에 답합니다(응답 `market.daily.responded`, `DailyRequestListener`). 응답은 `schemaVersion` 2입니다. ETF 목록은 종목 테이블의 국내 ETF 중 관계가 HELD 또는 WATCH인 종목이고(NONE과 구성 종목은 제외), ETF마다 관계를 선택 칸 `relation`(`HELD` 보유, `WATCH` 관심)으로 싣고, 받은 시각이 요청 범위 안인 일봉이 있으면 일봉 원문의 일자가 가장 최근인 레코드의 하루 등락(원문 값 그대로)을 줍니다. 일봉이 없거나 읽지 못하면 그 칸들을 null로 두고 `missingReason`(`no-daily-price-in-range`, `daily-price-unreadable`)에 이유를 싣되, 담긴 미국 종목과 ETF 정보는 그대로 줍니다. 그 밖에 직전 정규장 등락률, 시장 배경(환율종합, 시장종합, 세계지수와 계산된 지수 등락률)을 줍니다. 받은 시각 하한, 원문 크기, 미국 종목 수, 세계지수 대륙은 위 `market.context.*`를 함께 쓰고, ETF 수의 안전 상한만 따로 둡니다.
 
@@ -69,7 +74,7 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 1. 그 변동에 쓸 수 있는 뉴스 수집 완료(`collection.completed`)를 기다립니다. 쓸 수 있는 완료는 `jobType`이 `collect-news`이고, `startedAt`이 변동 시각 T + Δ 이후이며, 그 종목과 `*`가 `incompleteSymbols`에 없는 것입니다. 변동보다 먼저 도착한 최근 완료도 메모리에 보관했다가 확인합니다.
 2. 세 요청을 함께 보냅니다: 시세처리기에 시세 이력(`market.history.requested`, T - 5분 ~ T + Δ를 일정 간격으로 솎아서)과 배경 자료(`market.context.requested`)를, news 서비스에 기사(`news.articles.requested`, T - 24시간 ~ T + Δ, 양끝 포함)를 요청합니다. 기사는 그 종목과 시장 전체(`*`) 태그만 돌아오며, 다른 종목 태그 기사를 빼는 것은 news 조회가 보장합니다(브리핑은 다시 검사하지 않음).
 3. 배경 자료 응답에 미국 종목 목록이 있으면 그 종목들의 공시(`news.filings.requested`, 접수 시각 T - 72시간 ~ T)를 요청합니다. 공시는 하루 한 번 받으므로 + Δ를 두지 않습니다. 미국 종목이 없으면 공시를 요청하지 않고 해당 없음으로 둡니다.
-4. 응답이 제한 시간 안에 없으면 새 순번(`seq`)으로 다시 요청하는 규칙은 모든 요청에 같습니다. 기사는 일정 간격으로 다시 요청해, 연속 두 번 같은 기사 목록(순서 무시)이 오면 안정된 것으로 봅니다. 모든 응답을 받아야 다음으로 넘어갑니다.
+4. 응답이 제한 시간 안에 없으면 새 순번(`seq`)으로 다시 요청하는 규칙은 모든 요청에 같습니다. 기사는 일정 간격으로 다시 요청해, 연속 두 번 같은 기사 목록(순서 무시)이 오면 안정된 것으로 봅니다. 모든 응답을 받아야 다음으로 넘어갑니다. 실행부는 제한 시간을 보기 전에 이미 도착해 쌓인 메시지를 먼저 읽고(한 번에 최대 50개, 읽는 데 쓰는 시간이 120초를 넘으면 멈추고 tick과 제한 시각 처리로 넘어감), 같은 조회를 다시 보낸 뒤에 처음 보낸 순번의 응답이 와도 같은 라운드의 응답으로 받습니다. 다른 문장의 LLM 호출로 응답을 늦게 읽어도 `articles_no_response`로 잘못 끝나지 않게 하려는 것입니다.
 5. 받은 자료의 시각을 다시 검사합니다. 발행·접수 시각이 범위 밖인 기사·공시와, 받은 시각이 T 뒤이거나 기준 기간보다 오래된 배경 자료·해외 등락률은 버리고 경고 로그를 남깁니다(테스트로 검증). 변동마다 종목·티커 없이 작업 번호와 자료 종류별 건수·제외·잘림을 한 줄 수집 내역 로그(`collection job=...`)로 남깁니다.
 6. 기사(`articleId`), 공시(접수번호), 해외 등락률(`U1`…), 배경 자료(`B1`…)에 근거 번호를 붙여 LLM에 줍니다. 배경 자료에는 받은 시각과 변동보다 얼마나 전 값인지를 붙이고, 원인으로 단정하지 말라고 지시합니다. 코드가 배경 원문에서 꺼낸 숫자(원/달러 환율, 코스피·코스닥)와 비교 숫자(변동률과 지수 등락률의 차이, 담긴 미국 종목 집계)에도 근거 번호(`F1`…)를 붙입니다. LLM은 원인마다 제목, 구체 문장, 뜻 문장과 각 문장의 근거 번호(`refs`, `meaningRefs`)를 내고, 코드가 형식과 인용 번호를 검증해 빈 문장이나 목록 밖 번호가 있거나 문장(제목·구체 문장·뜻 문장·부족한 점)에 미국 티커(해외 등락률·공시·ETF 구성 종목에 있던 것)가 나오면 거부하고 다시 부릅니다(데일리와 같은 `llm_output.py`의 공통 검사이며, 3번 실패하면 `llm_error`인 것도 같습니다). 응답에 ETF 정보(`etf`)가 있으면 이름·추종 대상·업종과 구성 종목을 비중 순위 순으로 `config.py`의 `max_etf_members`개까지 LLM 입력(`etf`)에 넣고, 지시문에 ETF 정보는 원인으로 단정하지 말고 맥락으로만 쓰라고 적습니다. ETF 정보가 없는 이전 형식 응답도 그대로 처리합니다. 본문은 머리말(종목, 시각, 방향과 변동률, 몇 분 사이 움직였는지) → 원인별 묶음(인용한 자료의 제목·출처·시각·링크 포함) → 확인하지 못한 것(받지 못하거나 잘린 자료) → "투자 조언이 아님" 문구 순이며, 머리말·확인하지 못한 것·면책 문구는 코드가 넣습니다. `generatedBy`는 `llm`입니다. LLM 키가 없으면 원인을 추정하지 않고 비교 사실과 기사·공시를 나열하는 같은 모양의 규칙 기반 리포트를 만듭니다. `generatedBy`는 `rule-based`입니다.
 7. `briefing.generated`의 근거에는 자료 종류(`kind`)와 근거 번호(`ref`)를 담습니다. 출처는 제공자 이름 대신 중립 표현을 쓰고, 공시와 해외 등락률의 근거 제목에는 어느 회사 자료인지 알 수 있게 미국 티커를 넣습니다(로그에는 넣지 않습니다).
@@ -246,18 +251,19 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 | `BROKER_PRICE_CHECK_BASE_FIELDS` / `BROKER_PRICE_CHECK_CHANGE_FIELD` / `BROKER_PRICE_CHECK_CHANGE_SIGN_FIELD` / `BROKER_PRICE_CHECK_SIGN_UP` / `BROKER_PRICE_CHECK_SIGN_FLAT` / `BROKER_PRICE_CHECK_SIGN_DOWN` / `BROKER_PRICE_CHECK_RATE_FIELD` / `BROKER_PRICE_CHECK_HIGH_FIELD` / `BROKER_PRICE_CHECK_LOW_FIELD` | 위 검사가 읽을 응답 칸 이름(전일 종가, 전일대비, 전일대비 부호 구분, 등락률, 고가, 저가)과 부호 구분 칸의 상승·보합·하락 값. 전일 종가 칸과 부호 값은 쉼표로 여러 개를 줄 수 있고, 전일 종가 칸 중 하나라도 맞으면 전일대비·등락률 검사를 통과합니다. 기본값은 2026-11-04 실제 응답에서 확인한 칸 이름과 부호 값이고(`services/collector/src/main/resources/application.yml`, 부호 값 중 상승 `1`·하락 `4`는 실데이터에 나오지 않은 미확인 값), 응답이 바뀌면 환경변수로 덮어씁니다. 비어 있는 검사는 판단하지 않으며, 모두 빈 값으로 덮어쓰면 시작할 때 경고를 한 번 남기고 검사 없이 통과시킵니다 |
 | `NEWS_SEARCH_BASE_URL` / `NEWS_SEARCH_CLIENT_ID` / `NEWS_SEARCH_CLIENT_SECRET` | 뉴스 검색 제공자의 주소와 키 |
 | `NEWS_SEARCH_ID_HEADER` / `NEWS_SEARCH_SECRET_HEADER` | 제공자가 정한 인증 헤더 이름 |
-| `NEWS_SEARCH_QUERIES` | `검색어=종목코드,종목코드;검색어2=*` 형식. 관심 종목이 드러나므로 `.env`에만 둡니다 |
 | `NEWS_SEARCH_CALL_INTERVAL_MS` | 검색어를 연달아 호출할 때 호출 사이의 대기(밀리초). 0이면 기다리지 않으며, 짧으면 제공자가 429로 거절할 수 있습니다([측정 기록](test-history/S01-real-api/call-interval.md)) |
 | `NEWS_RESEARCH_MAX_QUERIES` | 브리핑의 뉴스 재검색 요청(`news.research.requested`) 하나에서 실제로 검색할 검색어 수 상한(기본 3). 넘는 검색어는 버립니다. 검색어마다 하루 검색 호출 상한(`NEWS_SEARCH_DAILY_CALL_LIMIT`)을 한 번씩 쓰고, 상한에 걸리거나 검색이 실패하면 완료 알림의 `incompleteSymbols`에 요청 종목을 담습니다. 0 이하이면 시작 단계에서 실패합니다 |
 | `DART_API_KEY` | 공시 API 키 |
-| `ETF_US_HOLDINGS` | 관심 ETF별 미국 상위 종목 목록. `ETF코드=티커,티커;ETF코드2=티커` 형식이며 ETF 코드는 6자리 숫자·대문자, 티커는 영문 대문자·숫자 1~6자(종류 구분이 있으면 `.` 또는 `-` 뒤 1~2자)입니다. 형식이 틀리면 시작 단계에서 실패하고, 오류 메시지에는 값 대신 몇 번째 항목인지만 적습니다. 종류 구분은 `-`로 맞춰 씁니다(`.`로 적어도 같은 종목). 비어 있으면 보유 종목이 없는 것으로 봅니다. 보유 종목이 드러나므로 `.env`에만 둡니다. 시세처리기는 이 값을 `HOLDINGS_FILE`의 미국 구성 종목과 비교만 합니다(티커 집합이 ETF마다 같아야 하고 순서는 보지 않습니다) |
-| `HOLDINGS_FILE` | 시세처리기가 읽는 보유 종목 JSON 파일의 경로. 파일은 저장소 밖(UTF-8)에 두고 경로만 `.env`에 적습니다. 비어 있으면 보유 종목이 없는 것으로 봅니다. 모양은 아래 "보유 종목 파일"을 봅니다 |
+| `HOLDINGS_FILE` | 시세처리기가 종목 테이블을 처음 채울 때 읽는 보유 종목 JSON 파일의 경로. 파일은 저장소 밖(UTF-8)에 두고 경로만 `.env`에 적습니다. 테이블이 비어 있을 때만 읽으며, 비어 있고 파일도 없으면 보유 종목이 없는 것으로 봅니다. 모양은 아래 "보유 종목 파일"을 봅니다. 수집기는 이 파일이나 설정을 읽지 않고 시세처리기가 알리는 목록(`market.holdings`)만 씁니다 |
+| `NEWS_QUERIES_FILE` | 뉴스 서비스가 검색어 테이블을 처음 채울 때 읽는 파일의 경로. 파일은 저장소 밖(UTF-8)에 두고 경로만 `.env`에 적습니다. 내용은 `검색어=종목코드,종목코드;검색어2=*` 형식이며(항목은 `;`나 줄바꿈으로 나눔) 종목은 국내 종목코드, 미국 티커(종류 구분은 `-`, `.`로 적어도 같은 종목), `*`(시장 전체)입니다. 검색어 테이블이 비어 있을 때만 읽으며, 형식이 틀리면 시작 단계에서 실패하고 메시지에는 몇 번째 항목인지만 적습니다. 그 뒤의 고침은 테이블(`news.search_query`, `news.search_query_symbol`)을 직접 고칩니다 |
 | `EDGAR_USER_AGENT` | SEC EDGAR 요청의 User-Agent. SEC가 요구하는 `회사명 연락이메일` 형식입니다. 연락 이메일은 개인 정보이므로 `.env`에만 둡니다. 비어 있으면 공시를 조회하지 않습니다 |
 | `EDGAR_FORMS` | 수집할 공시 형식. 쉼표로 구분합니다. 비어 있거나 형식이 틀리면 시작 단계에서 실패합니다 |
 | `COLLECTOR_INSIGHT_SCHEDULE_ENABLED` | `true`일 때만 장 마감 후 조회 tick(`collect-post-close`)을 발행합니다. 휴장일은 판정하지 않아 휴장일에도 발행됩니다 |
 | `COLLECTOR_INSIGHT_CRON` | 마감 후 조회 시각. 한국 시간 기준 cron(초 분 시 일 월 요일) |
 | `COLLECTOR_PRE_OPEN_ENABLED` | `true`일 때만 장 시작 전 수집 tick(`collect-pre-open`)을 발행합니다. 휴장일은 판정하지 않아 휴장일에도 발행됩니다. 공시는 이 tick에서만 받으므로 꺼 두면 공시를 수집하지 않습니다 |
 | `COLLECTOR_PRE_OPEN_CRON` | 장 시작 전 수집 시각. 한국 시간 기준 cron |
+| `COLLECTOR_MEMBERS_ENABLED` | `true`일 때만 ETF 구성 종목 조회 tick(`collect-members`)을 평일 하루 한 번 발행합니다. 코드 기본은 꺼짐입니다. 그날 실제로 받을지는 tick을 받은 시세처리기가 정합니다 |
+| `COLLECTOR_MEMBERS_CRON` | 구성 종목 조회 tick 시각. 한국 시간 기준 cron(기본 평일 07:30) |
 | `COLLECTOR_DAILY_BRIEFING_ENABLED` | `true`일 때만 데일리 브리핑 시작 tick(아침 판 `daily-briefing-morning`, 마감 후 판 `daily-briefing-post-close`)을 발행합니다. 수집기는 신호만 보내고 자료를 새로 모으지 않습니다. 휴장일은 판정하지 않아 휴장일에도 발행됩니다 |
 | `COLLECTOR_DAILY_BRIEFING_MORNING_CRON` | 아침 판 시작 시각. 한국 시간 기준 cron이며 장 시작 전 수집 뒤로 둡니다. `-`를 주면 이 판만 발행하지 않습니다 |
 | `COLLECTOR_DAILY_BRIEFING_POST_CLOSE_CRON` | 마감 후 판 시작 시각. 한국 시간 기준 cron이며 장 마감 후 조회 뒤로 둡니다. `-`를 주면 이 판만 발행하지 않습니다 |
@@ -265,6 +271,22 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 | `COLLECTOR_INTRADAY_CRON` | 장중 수집 주기. 한국 시간 기준 cron |
 | `COLLECTOR_INTRADAY_START` / `COLLECTOR_INTRADAY_END` | 장중 수집 시작·끝 시각(`HH:mm`, 양끝 포함). 이 밖의 tick은 조회하지 않습니다 |
 | `COLLECTOR_INTRADAY_STAGGER_MS` | 장중 조회 사이 대기(밀리초). 같은 초에 몰려 시세 조회가 호출 상한에 걸리지 않게 나눠 부릅니다 |
+
+**뉴스 검색어와 기사 태그, 하루 검색 호출 수:**
+
+- 기사 태그는 기사 주제, 곧 검색어에 걸린 종목(국내 코드, 미국 티커, `*`)입니다. ETF가 담은 구성 종목을 태그에 풀어 적지 않고, 뉴스 서비스가 `market.holdings`를 받아 두었다가 기사를 꺼낼 때 넓힙니다. ETF로 꺼내면 그 ETF 태그 기사(`*` 포함)를 최신순으로 먼저, 그다음 구성 종목 태그 기사(앞의 기사와 겹치면 제외)를 최신순으로 놓고 요청 상한까지 자릅니다. 구성 종목 기사가 많아도 ETF 자체 기사가 먼저 남습니다. 목록을 받기 전에는 ETF 자체 기사만 나옵니다.
+- 미국 구성 종목 검색어는 뉴스 서비스가 `market.holdings`를 받을 때 종목 이름으로 검색어 테이블에 만듭니다(관심 ETF, 곧 `HELD`·`WATCH`인 국내 ETF가 담은 미국 종목 중 이름이 있는 것). 같은 이름이 여러 티커면 검색어 하나에 티커를 모읍니다. 만들기만 하고 고치거나 지우지 않습니다. 그 종목에 이미 검색어가 하나라도 있거나 같은 글자의 검색어가 이미 있으면 건드리지 않으므로, 테이블에서 고친 검색어는 덮어쓰이지 않습니다. 검색어를 지우면 다음에 목록을 받을 때(재시작 포함) 다시 만들어지니, 검색을 끄려면 지우지 말고 그 종목에 다른 검색어를 붙여 둡니다.
+- 정기 뉴스 수집은 15분마다 검색어마다 한 번씩 호출하므로 하루(24시간) 96회 × 검색어 수만큼 하루 호출 상한(`NEWS_SEARCH_DAILY_CALL_LIMIT`, 기본 19500)을 씁니다. 재검색은 요청 하나에 검색어 최대 `NEWS_RESEARCH_MAX_QUERIES`(기본 3)개이고 브리핑 작업 하나가 요청을 최대 10번 보내 작업당 최대 30회를 씁니다. 검색어 수별 하루 정기 수집 호출 수(계산: 96 × 검색어 수):
+
+| 검색어 수 | 하루 정기 호출 | 상한 대비 | 재검색에 남는 호출 |
+|---|---|---|---|
+| 20 | 1,920 | 9.8% | 17,580 |
+| 50 | 4,800 | 24.6% | 14,700 |
+| 100 | 9,600 | 49.2% | 9,900 |
+| 150 | 14,400 | 73.8% | 5,100 |
+
+  재검색을 빼고 정기 수집만으로 상한 안에 드는 검색어는 최대 203개이고(19500 ÷ 96), 재검색에 1,000회를 남겨 두면 192개입니다. 상한에 닿으면 남은 검색어를 건너뛰고 그 종목을 `incompleteSymbols`에 담으며 수집기 로그에 `news daily call limit reached`가 남습니다. 미국 티커 검색이 건너뛰어지거나 실패하면 그 티커를 담은 관심 ETF의 코드가 `incompleteSymbols`에 들어갑니다. 카운터는 메모리에만 있어 재시작하면 0으로 돌아갑니다.
+
 
 장중 수집은 환율종합, 시장종합, 세계지수(아시아, 아메리카)를 시차를 두고 조회해 마감 후 조회와 같은 `market.insight`로 보냅니다. 시세 조회와 같은 호출 상한을 거치며, 휴장일은 판정하지 않습니다. 기본값은 `application.yml`의 `collector.intraday.*`입니다.
 
@@ -274,7 +296,7 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 
 | 받는 것 | 조건 | 결과 |
 |---|---|---|
-| 세계지수 아메리카(`C`) 1건, 보유 미국 종목(`ETF_US_HOLDINGS`) 해외 일봉 | `COLLECTOR_MARKET_DATA_SOURCE=broker` | 마감 후 조회와 같은 `market.insight`(`world-index`, `overseas-daily-price`)와 같은 테이블. 시세 조회와 같은 호출 상한을 거칩니다 |
+| 세계지수 아메리카(`C`) 1건, 보유 미국 종목(`market.holdings` 목록) 해외 일봉 | `COLLECTOR_MARKET_DATA_SOURCE=broker` | 마감 후 조회와 같은 `market.insight`(`world-index`, `overseas-daily-price`)와 같은 테이블. 시세 조회와 같은 호출 상한을 거칩니다 |
 | SEC EDGAR 공시 | `EDGAR_USER_AGENT`가 있을 때 | `filing.collected`. 접수 시각이 `collector.edgar.lookback-hours` 안인 공시만 발행합니다. 하루 한 번이라 주말과 연휴를 넘겨도 빠지지 않게 넉넉히 둡니다 |
 
 공시 15분 주기 수집(`collect-filings`)은 없어졌습니다. SEC 공시 이력(submissions)은 조건 조회를 지원하지 않아 매번 최근 이력을 통째로 주므로(회사당 약 167KB, 압축 시 약 22KB, 2026-10-29 실측) 하루 한 번만 받고 gzip 압축을 요청합니다. 서버가 압축하지 않고 주면 그대로 읽습니다. 장 마감 후 수집(16:30)은 국내 일봉·세계지수·환율종합·시장종합만 받습니다. 국내 장 마감 무렵에는 미국 장이 열리지 않아 해외 일봉은 장 시작 전에만 받습니다.
@@ -362,14 +384,27 @@ python3 scripts/load_config.py --only briefing
 
 ### 보유 종목 파일
 
-시세처리기는 시작할 때 `HOLDINGS_FILE`이 가리키는 UTF-8 JSON 파일로 `instrument`(종목)와 `etf_member`(ETF 구성) 테이블을 똑같이 맞춥니다. 파일에 없는 행은 지웁니다. 종목은 한 번만 적고, ETF에 담긴 관계는 ETF의 `members`에만 적습니다. 파일은 보유 종목이 드러나므로 저장소 밖에 두며, 저장소에는 가짜 값 예시([`docs/examples/holdings.example.json`](examples/holdings.example.json))만 있습니다.
+`instrument`(종목)와 `etf_member`(ETF 구성) 테이블이 보유 종목의 원본입니다. 시세처리기는 시작할 때 `instrument`가 비어 있으면 `HOLDINGS_FILE`이 가리키는 UTF-8 JSON 파일로 한 번만 채우고, 행이 있으면 파일을 읽지 않습니다(파일이 없거나 비어 있어도 정상 시작). 그 뒤의 고침은 테이블을 직접 고칩니다. 30초마다 두 테이블을 읽어 내용이 바뀌었을 때만(재시작 뒤 첫 확인은 한 번 무조건) 전체 목록을 `market.holdings` 이벤트로 내고, 수집기가 재시작 없이 새 목록을 씁니다. 종목은 한 번만 적고, ETF에 담긴 관계는 ETF의 `members`에만 적습니다. 파일은 보유 종목이 드러나므로 저장소 밖에 두며, 저장소에는 가짜 값 예시([`docs/examples/holdings.example.json`](examples/holdings.example.json))만 있습니다.
 
 - 맨 위는 종목 배열이고, 항목마다 `kind`(`ETF`/`STOCK`), `market`(`KR`/`US`/`JP` 등 영문 대문자 2~4자), `symbol`, 선택으로 `name`, `tracks`(ETF만), `sector`, `relation`(`HELD`/`WATCH`/`NONE`, 기본 `NONE`)을 가집니다.
 - ETF는 `members` 배열(`market`, `symbol`, 선택 `name`, `weight`(%, 0~100, 소수 4자리까지), `rank`(비중 순위, 없으면 적힌 순서))을 가집니다. ETF 안에만 나오는 종목은 `relation`이 `NONE`인 `STOCK` 종목으로 만들어지고, 같은 종목이 여러 곳에 나와도 종목 행은 하나입니다.
 - 국내 ETF의 `symbol`은 6자리 숫자·대문자입니다. 종류 구분이 있는 티커는 `.`로 적어도 `-`로 맞춰 저장합니다.
-- 파일의 미국(`US`) 구성 종목은 `ETF_US_HOLDINGS`와 ETF마다 같은 티커 집합이어야 합니다. 어긋나면 시작이 실패합니다.
-- 파일이 없거나 형식이 틀려도 시작이 실패합니다. 메시지에는 값 대신 몇 번째 항목(구성 종목)인지와 오류 종류만 적고, 경로와 값은 로그에 남기지 않습니다(종목·관계 개수만 남깁니다).
-- 응답: `market.context.responded`와 `market.daily.responded`의 `etf`(선택)에 ETF 이름, 추종 대상, 업종과 구성 종목(시장, 심볼, 이름, 비중, 순위)이 담깁니다. 변동 종목이 ETF가 아니면 `etf`가 없습니다.
+- 테이블이 비어 있을 때 파일이 없거나 형식이 틀리면 시작이 실패합니다. 메시지에는 값 대신 몇 번째 항목(구성 종목)인지와 오류 종류만 적고, 경로와 값은 로그에 남기지 않습니다(종목·관계 개수만 남깁니다).
+- 응답: `market.context.responded`와 `market.daily.responded`의 `etf`(선택)에 ETF 이름, 추종 대상, 업종과 구성 종목(시장, 심볼, 이름, 비중, 순위)이 담깁니다. 변동 종목이 ETF가 아니면 `etf`가 없습니다. `market.daily.responded`(v2)의 `etf`에는 판 요청의 시간 범위 안에 상위 구성 변경이 반영됐을 때만 `memberChanges`(`since`, `asOf`, `removed`, `added`, `moved`)가 더해지며, 바뀐 것이 없으면 칸이 없습니다.
+
+### ETF 구성 종목 자동 조회
+
+`collect-members` tick(수집기가 평일 하루 한 번 발행)을 시세처리기가 받아, 출처를 설정한 ETF의 상위 구성 종목(주식만, 비중 상위 10개)을 받아 바뀐 것만 반영합니다. 전용 consumer group(`market-members`)으로 받습니다. `schedule.tick`은 파티션이 1개라 다른 리스너와 그룹이 같으면 tick이 누락되기 때문입니다.
+
+- **주기:** 평소에는 한 주에 한 번(`market.members.fetch-day`), 지수 교체일이 든 달에는 매일 받습니다. 교체 일정은 `index_rebalance_schedule` 테이블(`tracks`, `effective_date`, 선택 `note`)에 사람이 1년에 한 번 직접 넣습니다. `tracks`는 `instrument.tracks`와 같은 값이어야 ETF와 이어집니다. 일정이 없는 ETF는 주 1회만 받습니다. 아직 구성을 한 번도 받지 않은 ETF는 요일을 기다리지 않고 다음 조회 때 바로 받습니다.
+- **반영:** 받은 상위 구성의 종목·순위가 이전과 다를 때만 `etf_member_history`에 새 행을 넣고, 같은 때 `etf_member`(현재 구성)도 맞춥니다. 종목이 들어오거나 나가거나, 상위 10개 안의 순위만 바뀌어도 바뀐 것으로 봅니다. 비중과 이름은 비교하지 않습니다. 그대로면 이력 행의 마지막 확인일(`last_seen_on`)만 고치고, `etf_member`의 비중(`weight`)은 새로 받은 값으로 맞춥니다(비중은 `market.holdings` 해시에 없어 다시 내보내지 않습니다). 이미 관리 중인 종목(`HELD`·`WATCH`이거나 이름이 있는 행)의 이름은 출처 이름으로 바꾸지 않고, 이름이 빈 `NONE` 행에만 채웁니다. 새 구성 종목은 구성으로만 아는 종목(`NONE`)으로 넣고, 어느 ETF에도 담기지 않게 된 `NONE` 종목은 지웁니다. 바뀐 `etf_member`는 기존 경로(30초 확인)로 `market.holdings`에 실려 뉴스 검색어에도 반영됩니다.
+- **원문 보관:** 받을 때마다 응답 원문을 그대로 `etf_member_raw`(ETF, 기준일, 상태 코드, 원문, 받은 시각)에 저장합니다. 상태가 200이 아니거나 모양이 달라 실패한 응답도 해석 전에 저장합니다(너무 큰 응답은 제외). `etf_member_history`의 구성은 이 원문에서 주식만 골라 상위 10개로 줄인 계산 결과입니다. 행은 받을 때마다 늘며 지우는 절차는 아직 없습니다.
+- **실패:** 출처가 응답하지 않거나, 상태가 200이 아니거나, 응답 모양이 다르거나, 주식 행이 하나도 없으면 그 ETF는 이전 구성을 그대로 두고 로그에 오류 종류만 남기며(주소·종목코드는 남기지 않음) 다음 ETF로 넘어갑니다. 비중이 숫자가 아니거나 0~100을 벗어난 응답도 모양이 다른 응답으로 봅니다.
+- **수동 ETF:** `MEMBERS_FUND_IDS`에 없는 ETF는 자동으로 받지 않고, 종목 테이블을 직접 고칩니다.
+- **판에 싣기:** 데일리 응답은 판 요청 시간 범위 안에 반영된 변경만 `memberChanges`로 싣습니다. `since`는 바뀌기 전 구성을 마지막으로 확인한 날, `asOf`는 바뀐 구성을 처음 받은 날입니다. 범위 안에 변경이 여러 번이면 첫 변경 직전 구성과 마지막 구성을 비교하고, 되돌아왔으면 싣지 않습니다.
+- **조회 기준:** 출처에는 오늘 직전 평일을 기준일로 요청합니다. 공휴일은 따로 보지 않으며, 그날 자료가 없어 비어 오면 실패로 처리됩니다. 주식만 거르는 기준은 "비중이 있고 종목코드가 주식 코드 모양"이며, 시장은 코드가 숫자로 시작하는 6자리면 `KR`, 미국 티커 모양(영문 대문자 1~5자, 종류 구분 `-`·`.` 1자)이면 `US`이며(출처가 해외 종목코드를 `<티커> US Equity`처럼 거래소 꼬리를 붙여 주면 꼬리를 떼고, 종류 구분 `/`는 `-`로 바꿉니다) 그 밖의 코드(숫자 4자리 등 다른 해외 코드)는 후보에서 빼고 개수만 로그에 남깁니다. 같은 종목코드가 응답에 두 행 이상이면 비중을 합쳐 한 번만 넣습니다. 마지막 확인일이 7일 넘게 지난 ETF는 조회 요일과 상관없이 받을 차례로 봅니다(공휴일 다음 조회가 실패해도 다음 주까지 기다리지 않게). 해외 종목 코드 모양과 채권·파생·다른 ETF가 실제 응답에서 어떻게 보이는지는 아직 실제 응답으로 확인하지 못했습니다(미확인).
+- **결정: 시세처리기의 첫 외부 호출.** 지금까지 시세처리기는 외부를 호출하지 않고 수집기가 받아 준 자료만 읽었습니다. 구성 종목은 호출이 주 1회 수준으로 적고(ETF마다 한 번, 한 번에 약 수십 KB), 받은 결과를 곧바로 이력·종목 테이블에 반영해야 하며, 종목 테이블을 쓰는 서비스가 시세처리기뿐이라 시세처리기가 직접 호출합니다. 수집기가 받으면 응답을 이벤트로 옮기고 다시 시세처리기가 받아 테이블에 쓰는 단계가 더해집니다. 이 호출은 시세 제공자 API(`CallRateLimit` 대상)와 무관한 운용사 공개 페이지이며, 출처 주소와 ETF별 번호는 설정값으로만 받습니다. 출처는 문서화된 API가 아니라 사이트 내부용이어서 응답 모양이 예고 없이 바뀔 수 있고, 그래서 모양이 다르면 일부만 읽지 않고 실패로 둡니다.
+- **자동 수집을 허용한 곳만:** 거래소 정보 시스템은 이용약관이 자동 수집을 금지해 쓰지 않습니다. 운용사 사이트는 robots.txt가 전체 허용인 곳만 자동으로 받고, 약관 본문을 읽지 못했거나 호출 방식을 못 찾은 운용사의 ETF는 수동 입력으로 둡니다(2026-11-10 조사).
 
 ## 테스트
 
@@ -457,12 +492,12 @@ PRICE_CHECK_REPLAY_INPUT=<저장소 밖>/raws.tsv PRICE_CHECK_REPLAY_EXPECTED=<�
   ./gradlew :services:collector:cleanTest :services:collector:test --no-build-cache --tests '*PriceCheckReplayTest'
 ```
 
-급변동 감지 설정(`market.*`)을 바꾸면 같은 원문을 실제 감지·재발행 코드에 받은 순서대로 넣는 `MoveReplayTest`로 `market.move`가 유형별로 몇 건 나오는지 셉니다. 제외 목록을 주면 그 행은 수집기가 버린 것으로 보고 이력과 평가에서 뺍니다. 재발행 상태는 빈 상태에서 시작하고, 결과는 건수만 출력합니다.
+급변동 감지 설정(`market.*`)을 바꾸면 같은 원문을 실제 감지·재발행 코드에 받은 순서대로 넣는 `MoveReplayTest`로 `market.move`가 유형별로 몇 건 나오는지 셉니다. 제외 목록을 주면 그 행은 수집기가 버린 것으로 보고 이력과 평가에서 뺍니다. 재발행 상태는 빈 상태에서 시작하고, 결과는 건수만 출력합니다. 유형 2는 날짜(서울 기준)별 발행 건수와 거짓 건수도 `move replay prevClose by date:` 줄로 냅니다. 거짓은 그 종목·그날 후보 칸 값의 최빈값을 참 전일 종가로 보고 다시 계산하면 임계값 미만인 발행입니다.
 
 ```bash
 # 입력: 한 줄에 eventId<TAB>symbol<TAB>asOf(ISO)<TAB>price<TAB>raw JSON, 시세처리기가 받은 순서
 # 제외(선택): eventId 한 줄씩인 파일, 또는 첫 칸이 snapshot_event_id 인 CSV
-# 유형 2는 기본값으로 꺼져 있다. 켜고 비교하려면 MARKET_PREV_CLOSE_FIELD=<칸 경로> 를 함께 준다
+# 유형 2는 기본값(전일 종가 후보 세 칸의 다수결)으로 평가한다. 칸을 바꾸려면 MARKET_PREV_CLOSE_FIELDS=<칸 경로,칸 경로,...> 를 함께 주고, 빈 값이면 유형 2를 끈다
 MOVE_REPLAY_INPUT=<저장소 밖>/snapshots.tsv MOVE_REPLAY_EXCLUDE=<저장소 밖>/rule-hit.csv \
   ./gradlew :services:market:cleanTest :services:market:test --no-build-cache --tests '*MoveReplayTest' -i
 ```
@@ -481,8 +516,8 @@ MOVE_REPLAY_INPUT=<저장소 밖>/snapshots.tsv MOVE_REPLAY_EXCLUDE=<저장소 �
 
 ## 후속
 
-- **보유 종목과 뉴스 검색어 테이블:** 보유 종목 테이블(시세처리기 `instrument`, `etf_member`)은 만들었고, 배포 전까지는 시작할 때 보유 종목 파일(`HOLDINGS_FILE`)로 맞춥니다. 수집기는 아직 `ETF_US_HOLDINGS`를, 뉴스 검색어는 `NEWS_SEARCH_QUERIES`를 설정으로 읽습니다. 수집기의 종목 읽기와 종목에 연결된 검색어 테이블(news)로 옮깁니다.
-- **검색어와 태그 개선:** 태그는 검색어 설정에서 정해져 저장 때 고정됩니다. 다른 종목 태그지만 관련 있는 기사를 근거에 넣는 방법과 미국 종목 검색어를 정합니다. 당장은 검색어 설정에 관련 종목 태그를 함께 적어 운영합니다.
+- **보유 종목과 뉴스 검색어 테이블:** 만들었고 서비스가 테이블을 씁니다. 시세처리기는 `instrument`·`etf_member`가 바뀔 때만 `market.holdings`로, 뉴스는 `search_query`·`search_query_symbol`이 바뀔 때만 `news.search-queries`로 전체 목록을 내고(둘 다 마지막 값만 남는 압축 토픽), 수집기가 받아 씁니다. 두 테이블이 비어 있을 때만 `HOLDINGS_FILE`·`NEWS_QUERIES_FILE`로 처음 채웁니다. 남은 일: 배포 환경에서 테이블을 채우고 고치는 방법(지금은 SQL로 직접). 기사 태그 칸은 미국 티커도 담도록 넓혔고(`news_article_symbol.symbol` 16자, `news.collected`의 종목 형식), 미국 구성 종목 검색어는 종목 이름으로 저절로 만들어집니다(위 "뉴스 검색어와 기사 태그").
+- **검색어와 태그 개선:** 정했고 구현했습니다. 태그는 기사 주제로 두고 꺼낼 때 구성 관계로 넓히며, 미국 구성 종목 검색어는 이름으로 만듭니다. 남은 일: 이름이 영어라 검색이 잘 맞는지 실제 기사로 확인하고(맞지 않으면 테이블에서 검색어를 고침), 더는 관심 ETF가 담지 않는 종목의 만들어진 검색어를 정리하는 방법(지금은 지우지 않음).
 - **휴장일 발송 관리:** 데일리 브리핑은 휴장일을 판정하지 않아 휴장일에도 평일이면 판이 나갑니다(자료가 없으면 항목마다 `자료 없음`). 휴장일에 보낼지 건너뛸지와 판정 방법을 정합니다.
 - **마감 후 판의 그날 급변동과 근거:** 마감 후 판에는 그날 급변동 건별 리포트를 요약하는 항목이 아직 없습니다. 건별 리포트를 어디서 읽을지와 함께 정합니다.
 - **LLM 2단계:** 1단계 LLM이 모은 자료의 중복을 없애고 거른 뒤, 2단계 LLM이 분석해 리포트를 씁니다.

@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -33,6 +34,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
 
 import dev.stockreading.market.MarketProperties;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 // 저장해 둔 실제 시세를 실제 MoveDetector·MoveTracker 에 차례로 넣어, market.move 가 유형별로 몇 건 나오는지 센다.
@@ -64,7 +66,7 @@ class MoveReplayTest {
                 .run(context -> {
                     MarketProperties properties = context.getBean(MarketProperties.class);
                     Result result = replay(properties, input, excluded);
-                    System.out.println("move replay: prevCloseField=" + (isBlank(properties.prevCloseField()) ? "off" : "on")
+                    System.out.println("move replay: prevCloseField=" + (properties.prevCloseFields().isEmpty() ? "off" : "on")
                             + " rows=" + result.rows() + " excludedRows=" + result.excludedRows()
                             + " excludeList=" + excluded.size()
                             + " window=" + result.published().get(DetectionType.WINDOW)
@@ -72,6 +74,10 @@ class MoveReplayTest {
                             + " prevCloseSymbols=" + result.prevCloseSymbols()
                             + " bothOnSameSnapshot=" + result.bothOnSameSnapshot()
                             + " prevCloseUnknown=" + result.prevCloseUnknown());
+                    // 거짓: 그 종목·그날 후보 칸 값의 최빈값을 참 전일 종가로 보고 다시 계산하면 임계값 미만인 유형 2 발행.
+                    result.prevCloseByDate().forEach((date, counts) ->
+                            System.out.println("move replay prevClose by date: " + date + " published=" + counts[0]
+                                    + " false=" + counts[1]));
                     assertThat(result.rows()).as("입력 행 수").isPositive();
                 });
     }
@@ -83,7 +89,7 @@ class MoveReplayTest {
     }
 
     record Result(int rows, int excludedRows, Map<DetectionType, Integer> published, int prevCloseSymbols,
-                  int bothOnSameSnapshot, int prevCloseUnknown) {
+                  int bothOnSameSnapshot, int prevCloseUnknown, Map<String, int[]> prevCloseByDate) {
     }
 
     // 입력은 한 줄에 eventId<TAB>symbol<TAB>asOf(ISO)<TAB>price<TAB>raw JSON 이고, 시세처리기가 받은 순서다.
@@ -118,6 +124,8 @@ class MoveReplayTest {
             published.put(type, 0);
         }
         Set<String> prevCloseSymbols = new HashSet<>();
+        Map<String, String> trueModes = dailyModes(properties, input, exclude);
+        Map<String, int[]> byDate = new TreeMap<>();
         List<DetectionType> current = new ArrayList<>();
         MovePublisher publisher = mock(MovePublisher.class);
         doAnswer(inv -> {
@@ -126,6 +134,15 @@ class MoveReplayTest {
             current.add(detection.type());
             if (detection.type() == DetectionType.PREV_CLOSE) {
                 prevCloseSymbols.add(inv.getArgument(0));
+                OffsetDateTime observedAt = inv.getArgument(3);
+                String date = observedAt.atZoneSameInstant(SEOUL).toLocalDate().toString();
+                int[] counts = byDate.computeIfAbsent(date, d -> new int[2]);
+                counts[0]++;
+                String mode = trueModes.get(inv.getArgument(0) + "/" + date);
+                if (mode != null && ChangeRate.percent(Long.parseLong(mode), detection.price()).abs()
+                        .compareTo(properties.prevCloseThresholdPercent()) < 0) {
+                    counts[1]++;
+                }
             }
             return null;
         }).when(publisher).publish(anyString(), any(Detection.class), any(OffsetDateTime.class), any(OffsetDateTime.class), any());
@@ -168,15 +185,50 @@ class MoveReplayTest {
                 }
             }
         }
-        return new Result(rows, excludedRows, published, prevCloseSymbols.size(), both, prevCloseUnknown);
+        return new Result(rows, excludedRows, published, prevCloseSymbols.size(), both, prevCloseUnknown, byDate);
+    }
+
+    private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
+
+    // 종목·날짜(서울 기준)마다 후보 칸에서 읽은 값의 최빈값. 거짓 유형 2 건수를 셀 때 참 전일 종가로 쓴다.
+    static Map<String, String> dailyModes(MarketProperties properties, Path input, Set<String> exclude) throws IOException {
+        JsonMapper mapper = JsonMapper.builder().build();
+        Map<String, Map<String, Integer>> votes = new HashMap<>();
+        try (BufferedReader reader = Files.newBufferedReader(input, StandardCharsets.UTF_8)) {
+            for (String line = reader.readLine(); line != null; line = reader.readLine()) {
+                String[] parts = line.split("\t", 5);
+                if (parts.length < 5 || exclude.contains(parts[0].trim())) {
+                    continue;
+                }
+                JsonNode root;
+                try {
+                    root = mapper.readTree(parts[4]);
+                } catch (RuntimeException e) {
+                    continue;
+                }
+                String key = parts[1].trim() + "/" + OffsetDateTime.parse(parts[2].trim()).atZoneSameInstant(SEOUL).toLocalDate();
+                for (String field : properties.prevCloseFields()) {
+                    Long value = MoveDetector.readField(root, field);
+                    if (value != null) {
+                        votes.computeIfAbsent(key, k -> new HashMap<>()).merge(value.toString(), 1, Integer::sum);
+                    }
+                }
+            }
+        }
+        Map<String, String> modes = new HashMap<>();
+        // 최빈값이 동률이면 참값 없음으로 두어 실행마다 결과가 같게 한다.
+        votes.forEach((key, counts) -> {
+            int max = counts.values().stream().max(Integer::compare).orElse(0);
+            List<String> top = counts.entrySet().stream().filter(e -> e.getValue() == max).map(Map.Entry::getKey).toList();
+            if (top.size() == 1) {
+                modes.put(key, top.get(0));
+            }
+        });
+        return modes;
     }
 
     private static String key(String symbol, DetectionType type) {
         return symbol + "/" + type;
-    }
-
-    private static boolean isBlank(String value) {
-        return value == null || value.isBlank();
     }
 
     // 한 줄에 eventId 하나인 파일, 또는 첫 칸이 snapshot_event_id 인 분석 결과 CSV 를 받는다.

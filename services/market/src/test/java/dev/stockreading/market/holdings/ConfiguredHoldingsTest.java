@@ -32,15 +32,15 @@ class ConfiguredHoldingsTest {
     @TempDir
     Path dir;
 
-    private ConfiguredHoldings configured(String json, String usByEtf) throws IOException {
+    private ConfiguredHoldings configured(String json) throws IOException {
         Path file = dir.resolve("holdings.json");
         Files.writeString(file, json, StandardCharsets.UTF_8);
-        return new ConfiguredHoldings(new HoldingsProperties(usByEtf, file.toString()), JsonMapper.builder().build());
+        return new ConfiguredHoldings(new HoldingsProperties(file.toString()), JsonMapper.builder().build());
     }
 
     @Test
     void readsTheUtf8FileIntoAPlan() throws IOException {
-        HoldingsPlan plan = configured(FILE, "TEST01=FAKEA,FAKE-C;TEST02=FAKEB").plan();
+        HoldingsPlan plan = configured(FILE).plan();
 
         assertThat(plan.instruments()).hasSize(6);
         assertThat(plan.instruments().get(0).name()).isEqualTo("한글 이름");
@@ -48,43 +48,31 @@ class ConfiguredHoldingsTest {
 
     @Test
     void blankPathMeansNoHoldingsAndUnreadableFileFailsWithoutThePath() {
-        assertThat(new ConfiguredHoldings(new HoldingsProperties("", ""), JsonMapper.builder().build())
+        assertThat(new ConfiguredHoldings(new HoldingsProperties(""), JsonMapper.builder().build())
                 .plan().instruments()).isEmpty();
-        assertThat(new ConfiguredHoldings(new HoldingsProperties(null, null), JsonMapper.builder().build())
+        assertThat(new ConfiguredHoldings(new HoldingsProperties(null), JsonMapper.builder().build())
                 .plan().instruments()).isEmpty();
 
         String missing = dir.resolve("no-such-file.json").toString();
-        assertThatThrownBy(() -> new ConfiguredHoldings(new HoldingsProperties("", missing),
-                JsonMapper.builder().build()))
+        ConfiguredHoldings unreadable = new ConfiguredHoldings(new HoldingsProperties(missing),
+                JsonMapper.builder().build());
+        assertThatThrownBy(unreadable::plan)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageNotContaining("no-such-file");
     }
 
     @Test
-    void usMembersMustMatchTheCollectorSettingAsSetsIgnoringOrder() throws IOException {
-        configured(FILE, "TEST02=FAKEB;TEST01=FAKE.C,FAKEA");
+    void theFileIsNotReadUntilAPlanIsAsked() {
+        // 테이블에 행이 있으면 파일을 읽지 않으므로 없는 파일이어도 만들 때는 실패하지 않아야 한다.
+        String missing = dir.resolve("no-such-file.json").toString();
 
-        // 파일에는 있는데 설정에 없음, 설정에는 있는데 파일에 없음, 티커가 다름 모두 시작 실패다.
-        for (String usByEtf : new String[] {"", "TEST01=FAKEA,FAKE-C", "TEST01=FAKEA,FAKE-C;TEST02=FAKEB;TEST03=FAKED",
-                "TEST01=FAKEA,FAKE-C;TEST02=FAKEX"}) {
-            assertThatThrownBy(() -> configured(FILE, usByEtf))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("어긋납니다")
-                    .hasMessageNotContaining("TEST0").hasMessageNotContaining("FAKE");
-        }
+        assertThat(new ConfiguredHoldings(new HoldingsProperties(missing), JsonMapper.builder().build()))
+                .isNotNull();
     }
 
     @Test
-    void emptyFileWithACollectorSettingIsAMismatch() {
-        assertThatThrownBy(() -> new ConfiguredHoldings(new HoldingsProperties("TEST01=FAKEA", ""),
-                JsonMapper.builder().build())).hasMessageContaining("어긋난 ETF 1개");
-    }
-
-    @Test
-    void malformedCollectorSettingAndMalformedFileBothFailStartup() {
-        assertThatThrownBy(() -> configured(FILE, "TEST01=FAKEA;TEST02=fakeb"))
-                .hasMessageContaining("2번째").hasMessageNotContaining("fakeb");
-        assertThatThrownBy(() -> configured("[{\"kind\":\"ETF\"}]", ""))
+    void malformedFileFailsWithThePositionOnly() {
+        assertThatThrownBy(() -> configured("[{\"kind\":\"ETF\"}]").plan())
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("1번째 항목");
     }
 
@@ -95,7 +83,7 @@ class ConfiguredHoldingsTest {
         appender.start();
         logger.addAppender(appender);
         try {
-            configured(FILE, "TEST01=FAKEA,FAKE-C;TEST02=FAKEB");
+            configured(FILE).plan();
         } finally {
             logger.detachAppender(appender);
         }
@@ -108,7 +96,7 @@ class ConfiguredHoldingsTest {
 
     @Test
     void propertiesToStringHidesTheValues() {
-        assertThat(new HoldingsProperties("TEST01=FAKEA", "/some/where/holdings.json").toString())
-                .doesNotContain("TEST01").doesNotContain("FAKEA").doesNotContain("where");
+        assertThat(new HoldingsProperties("/some/where/holdings.json").toString())
+                .doesNotContain("where");
     }
 }

@@ -42,7 +42,36 @@
               "rank": 2
             }
           ],
-          "membersTruncated": false
+          "membersTruncated": false,
+          "memberChanges": {
+            "since": "2026-10-12",
+            "asOf": "2026-10-19",
+            "removed": [
+              {
+                "market": "US",
+                "symbol": "OLDC",
+                "name": "OLD CORP C",
+                "rank": 3
+              }
+            ],
+            "added": [
+              {
+                "market": "US",
+                "symbol": "NEWD",
+                "name": "NEW CORP D",
+                "rank": 2
+              }
+            ],
+            "moved": [
+              {
+                "market": "US",
+                "symbol": "TESTA",
+                "name": "TEST CORP A",
+                "rankBefore": 2,
+                "rankAfter": 1
+              }
+            ]
+          }
         }
       },
       {

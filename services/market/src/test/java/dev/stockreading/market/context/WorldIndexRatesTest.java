@@ -92,6 +92,23 @@ class WorldIndexRatesTest {
     }
 
     @Test
+    void lookbackOfSevenDaysIncludesARowFetchedExactlyThatEarlyAndExcludesOneSecondEarlier() {
+        // 마감 후 판처럼 요청 범위가 짧아도 직전 영업일 행은 기준 시각 7일 전까지 찾는다(하한 포함).
+        OffsetDateTime lowerBound = AS_OF.minusDays(7);
+        String current = response("TESTIX:20261030:  102.00");
+
+        List<BackgroundRepository.StoredResponse> atBound = List.of(
+                row(current, "2026-11-02T08:30:00+09:00"),
+                row(response("TESTIX:20261023:  100.00"), "2026-10-26T09:00:00+09:00"));
+        List<BackgroundRepository.StoredResponse> oneSecondBefore = List.of(
+                row(current, "2026-11-02T08:30:00+09:00"),
+                row(response("TESTIX:20261023:  100.00"), "2026-10-26T08:59:59+09:00"));
+
+        assertThat(rates.compute(current, atBound, lowerBound, AS_OF).get(0).rate()).isEqualTo("2.00");
+        assertThat(rates.compute(current, oneSecondBefore, lowerBound, AS_OF).get(0).rate()).isNull();
+    }
+
+    @Test
     void roundsToTwoDecimalsAndGivesNoRateWhenThePreviousCloseIsZero() {
         String current = response("TESTIX:20261030:  100.00", "FAKEIX:20261030:    1.00");
         List<BackgroundRepository.StoredResponse> rows = List.of(

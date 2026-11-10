@@ -52,7 +52,7 @@ class NewsTickListenerTest {
         kafka = mock(KafkaTemplate.class);
         when(kafka.send(anyString(), anyString(), anyString())).thenReturn(CompletableFuture.completedFuture(null));
         ObjectMapper mapper = JsonMapper.builder().build();
-        listener = new NewsTickListener(new NewsPublisher(collector, kafka, mapper, CLOCK), mapper);
+        listener = new NewsTickListener(new NewsPublisher(collector, kafka, mapper, CLOCK, mock(dev.stockreading.collector.holdings.HoldingsPort.class)), mapper);
     }
 
     @Test

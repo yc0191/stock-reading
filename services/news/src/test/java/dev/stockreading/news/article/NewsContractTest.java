@@ -49,6 +49,16 @@ class NewsContractTest {
     }
 
     @Test
+    void usTickerTagsMatchTheSchemaAndAreReadByTheConsumer() throws IOException {
+        String withUs = ContractSchemas.sample(SAMPLE).replace("\"symbols\": [\"TEST01\"]", "\"symbols\": [\"TEST01\", \"FAKE\", \"FAKE-B\"]");
+
+        assertThat(ContractSchemas.validate(SCHEMA, withUs)).isEmpty();
+        assertThat(mapper.readValue(withUs, NewsEnvelope.class).payload().symbols())
+                .containsExactly("TEST01", "FAKE", "FAKE-B");
+        assertThat(ContractSchemas.validate(SCHEMA, withUs.replace("FAKE-B", "fake-b"))).isNotEmpty();
+    }
+
+    @Test
     void researchJobIdIsReadWhenPresentAndStaysOptional() throws IOException {
         String withResearch = ContractSchemas.sample(SAMPLE).replace(
                 "\"symbols\": [\"TEST01\"]",

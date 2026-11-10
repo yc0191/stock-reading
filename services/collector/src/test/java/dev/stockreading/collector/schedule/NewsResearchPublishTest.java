@@ -63,7 +63,7 @@ class NewsResearchPublishTest {
         collector = mock(NewsCollector.class);
         kafka = mock(KafkaTemplate.class);
         when(kafka.send(anyString(), anyString(), anyString())).thenReturn(CompletableFuture.completedFuture(null));
-        publisher = new NewsPublisher(collector, kafka, mapper, CLOCK);
+        publisher = new NewsPublisher(collector, kafka, mapper, CLOCK, mock(dev.stockreading.collector.holdings.HoldingsPort.class));
         logs = new ListAppender<>();
         logs.start();
         ((Logger) LoggerFactory.getLogger(NewsPublisher.class)).addAppender(logs);

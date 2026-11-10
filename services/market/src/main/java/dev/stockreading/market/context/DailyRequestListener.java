@@ -19,6 +19,8 @@ import dev.stockreading.market.event.ContextPayload;
 import dev.stockreading.market.event.DailyPayload;
 import dev.stockreading.market.event.EventFactory;
 import dev.stockreading.market.holdings.HoldingsPort;
+import dev.stockreading.market.members.MemberChanges;
+import dev.stockreading.market.members.MemberChangesPort;
 import dev.stockreading.market.insight.OverseasCloseRateQuery;
 import tools.jackson.databind.ObjectMapper;
 
@@ -40,6 +42,7 @@ class DailyRequestListener {
     private final DailyPriceReader dailyPriceReader;
     private final OverseasCloseRateQuery closeRateQuery;
     private final HoldingsPort holdings;
+    private final MemberChangesPort memberChanges;
     private final ContextProperties contextProperties;
     private final DailyProperties dailyProperties;
     private final OperationsReader operationsReader;
@@ -47,14 +50,17 @@ class DailyRequestListener {
     private final ObjectMapper mapper;
 
     DailyRequestListener(BackgroundRepository repository, WorldIndexRates worldIndexRates,
-            OverseasCloseRateQuery closeRateQuery, HoldingsPort holdings, ContextProperties contextProperties,
+            OverseasCloseRateQuery closeRateQuery, HoldingsPort holdings, MemberChangesPort memberChanges,
+            ContextProperties contextProperties,
             DailyProperties dailyProperties, OperationsReader operationsReader, DailyPublisher publisher,
             ObjectMapper mapper) {
         this.repository = repository;
-        this.marketBackground = new MarketBackground(repository, worldIndexRates);
+        this.marketBackground = new MarketBackground(repository, worldIndexRates,
+                contextProperties.worldIndexPrevLookback());
         this.dailyPriceReader = new DailyPriceReader(mapper);
         this.closeRateQuery = closeRateQuery;
         this.holdings = holdings;
+        this.memberChanges = memberChanges;
         this.contextProperties = contextProperties;
         this.dailyProperties = dailyProperties;
         this.operationsReader = operationsReader;
@@ -109,7 +115,8 @@ class DailyRequestListener {
                 unreadable++;
             }
             etfs.add(etf(symbol, record.orElse(null), stored, stored == null
-                    ? DailyPayload.NO_DAILY_PRICE_IN_RANGE : DailyPayload.DAILY_PRICE_UNREADABLE, maxTickers)
+                    ? DailyPayload.NO_DAILY_PRICE_IN_RANGE : DailyPayload.DAILY_PRICE_UNREADABLE, maxTickers, since,
+                    asOf)
                     .withRelation(trackedEtf.relation()));
         }
         if (noDaily > 0 || unreadable > 0) {
@@ -145,14 +152,39 @@ class DailyRequestListener {
         }
     }
 
+    private ContextPayload.EtfInfo withMemberChanges(ContextPayload.EtfInfo info, String symbol, OffsetDateTime since,
+            OffsetDateTime asOf) {
+        try {
+            return memberChanges.changes(symbol, since, asOf).map(c -> info.withMemberChanges(wire(c))).orElse(info);
+        } catch (RuntimeException e) {
+            log.warn("member changes unavailable error={}", e.getClass().getSimpleName());
+            return info;
+        }
+    }
+
+    private static ContextPayload.MemberChanges wire(MemberChanges changes) {
+        return new ContextPayload.MemberChanges(changes.since().toString(), changes.asOf().toString(),
+                changes.removed().stream()
+                        .map(m -> new ContextPayload.ChangedMember(m.market(), m.symbol(), m.name(), m.rank())).toList(),
+                changes.added().stream()
+                        .map(m -> new ContextPayload.ChangedMember(m.market(), m.symbol(), m.name(), m.rank())).toList(),
+                changes.moved().stream().map(m -> new ContextPayload.MovedMember(m.market(), m.symbol(), m.name(),
+                        m.rankBefore(), m.rankAfter())).toList());
+    }
+
     /** record가 null이면 일봉 값을 비우고 missingReason을 싣는다. 미국 종목과 ETF 정보는 일봉과 관계없이 싣는다. */
     private DailyPayload.Etf etf(String symbol, DailyPriceReader.Record record,
-            BackgroundRepository.StoredResponse stored, String missingReason, int maxTickers) {
+            BackgroundRepository.StoredResponse stored, String missingReason, int maxTickers, OffsetDateTime since,
+            OffsetDateTime asOf) {
         List<String> allTickers = holdings.topTickers(symbol);
         List<String> tickers = allTickers.stream().limit(maxTickers).toList();
         boolean tickersTruncated = allTickers.size() > tickers.size();
         ContextPayload.EtfInfo info =
                 holdings.etfInfo(symbol).map(i -> MarketBackground.etfInfo(i, maxTickers)).orElse(null);
+        if (info != null) {
+            // 판 범위 안에 반영된 상위 구성 변경이 있을 때만 싣는다. 변경 조회가 실패해도 나머지 응답은 보낸다.
+            info = withMemberChanges(info, symbol, since, asOf);
+        }
         if (record == null) {
             return DailyPayload.Etf.withoutDaily(symbol, missingReason, tickers, tickersTruncated, info);
         }

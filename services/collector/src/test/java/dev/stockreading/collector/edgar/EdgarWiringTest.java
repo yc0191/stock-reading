@@ -13,7 +13,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 
-import dev.stockreading.collector.holdings.HoldingsProperties;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -24,7 +23,7 @@ import tools.jackson.databind.json.JsonMapper;
 class EdgarWiringTest {
 
     @Configuration
-    @EnableConfigurationProperties({EdgarProperties.class, HoldingsProperties.class})
+    @EnableConfigurationProperties(EdgarProperties.class)
     @ComponentScan(basePackages = {"dev.stockreading.collector.edgar", "dev.stockreading.collector.holdings"})
     static class Wiring {
 
@@ -41,11 +40,11 @@ class EdgarWiringTest {
 
     @Test
     void edgarBeansAreAssembledFromApplicationYml() {
-        // 셸에 실제 연락처나 보유 종목이 설정돼 있어도 읽지 않게 비운다.
+        // 셸에 실제 연락처가 설정돼 있어도 읽지 않게 비운다.
         new ApplicationContextRunner()
                 .withInitializer(new ConfigDataApplicationContextInitializer())
                 .withUserConfiguration(Wiring.class)
-                .withPropertyValues("EDGAR_USER_AGENT=", "ETF_US_HOLDINGS=")
+                .withPropertyValues("EDGAR_USER_AGENT=")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context).hasSingleBean(EdgarPort.class);

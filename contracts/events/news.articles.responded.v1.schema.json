@@ -21,7 +21,7 @@
         "symbol": { "type": "string", "pattern": "^[0-9A-Z]{6}$" },
         "articles": {
           "type": "array",
-          "description": "발행 시각 최신순 기사.",
+          "description": "요청 종목(ETF)에 태그된 기사를 발행 시각 최신순으로 먼저 놓고, 그다음 그 ETF가 담은 구성 종목에 태그된 기사(ETF 자체 기사와 겹치는 기사 제외)를 발행 시각 최신순으로 놓은 뒤 maxArticles까지 자른다. 시장 전체(\"*\") 기사는 ETF 자체 기사에 속한다. 구성 종목 기사가 많아도 ETF 자체 기사가 먼저 남는다.",
           "items": {
             "type": "object",
             "required": ["articleId", "title", "summary", "publishedAt", "publisher", "url"],

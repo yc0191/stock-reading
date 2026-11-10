@@ -34,9 +34,14 @@ class NewsCollectorTest {
     // 아래 기사 시각(2026-10-22 10:00~16:08 KST)이 모두 24시간 창 안에 들어오도록 맞춘 수집 시각.
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-10-22T07:10:00Z"), ZoneId.of("Asia/Seoul"));
 
+    // 검색어를 직접 넘기는 테스트용이라 목록을 받지 않은 상태를 흉내 낸다.
+    private static final SearchQueriesPort NO_QUERIES = () -> {
+        throw new IllegalStateException("검색어 목록을 아직 받지 못했습니다");
+    };
+
     private final NewsSearchPort search = mock(NewsSearchPort.class);
     private final NewsCollector collector =
-            new NewsCollector(search, new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 100, 0), CLOCK, ms -> { });
+            new NewsCollector(search, new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 100, 0), CLOCK, ms -> { }, NO_QUERIES);
 
     private ListAppender<ILoggingEvent> logs;
 
@@ -151,7 +156,7 @@ class NewsCollectorTest {
     @Test
     void queriesBeyondTheDailyCallLimitAreSkippedWithoutCallingTheApi() {
         NewsCollector limited = new NewsCollector(search,
-                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 2, 0), CLOCK, ms -> { });
+                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 2, 0), CLOCK, ms -> { }, NO_QUERIES);
         when(search.search(anyString(), anyInt())).thenReturn(List.of());
 
         limited.collect(List.of(query("가", "A"), query("나", "A"), query("다", "A")));
@@ -165,7 +170,7 @@ class NewsCollectorTest {
     @Test
     void failedCallsStillCountTowardTheDailyLimit() {
         NewsCollector limited = new NewsCollector(search,
-                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 1, 0), CLOCK, ms -> { });
+                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 1, 0), CLOCK, ms -> { }, NO_QUERIES);
         when(search.search(eq("가"), anyInt())).thenThrow(new NewsSearchApiException("boom"));
 
         limited.collect(List.of(query("가", "A"), query("나", "A")));
@@ -196,7 +201,7 @@ class NewsCollectorTest {
     @Test
     void symbolsOfQueriesSkippedByTheDailyLimitAreReportedAsIncomplete() {
         NewsCollector limited = new NewsCollector(search,
-                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 1, 0), CLOCK, ms -> { });
+                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 1, 0), CLOCK, ms -> { }, NO_QUERIES);
         when(search.search(anyString(), anyInt())).thenReturn(List.of());
 
         NewsCollection result = limited.collectWithStatus(
@@ -240,7 +245,7 @@ class NewsCollectorTest {
             return List.of();
         });
         NewsCollector timed = new NewsCollector(search,
-                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 100, 0), moving, ms -> { });
+                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 100, 0), moving, ms -> { }, NO_QUERIES);
 
         NewsCollection result = timed.collectWithStatus(List.of(query("가", "A"), query("나", "A")));
 
@@ -250,7 +255,7 @@ class NewsCollectorTest {
 
     private NewsCollector collectorWithInterval(long intervalMs, int dailyLimit, List<Long> pauses) {
         return new NewsCollector(search,
-                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", dailyLimit, intervalMs), CLOCK, pauses::add);
+                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, dailyLimit, intervalMs), CLOCK, pauses::add, NO_QUERIES);
     }
 
     @Test
@@ -296,7 +301,7 @@ class NewsCollectorTest {
 
     @Test
     void negativeIntervalIsRejectedAtStartup() {
-        assertThatThrownBy(() -> new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, "", 1, -1))
+        assertThatThrownBy(() -> new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 1, -1))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -312,25 +317,39 @@ class NewsCollectorTest {
         assertThat(result).hasSize(1);
     }
 
+    // "검색어=종목코드,종목코드;검색어2=*" 모양의 글을 받은 목록으로 바꿔 건넨다(테스트 입력을 짧게 쓰려는 도우미).
+    private static SearchQueriesPort received(String spec) {
+        List<NewsQuery> list = new java.util.ArrayList<>();
+        for (String entry : spec.split(";")) {
+            if (entry.isBlank()) {
+                continue;
+            }
+            String[] parts = entry.split("=");
+            list.add(new NewsQuery(parts[0].trim(), new LinkedHashSet<>(List.of(parts[1].trim().split(",")))));
+        }
+        return () -> list;
+    }
+
     private NewsCollector collectorWithQueries(String queries) {
-        return new NewsCollector(search, new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, queries, 100, 0), CLOCK, ms -> { });
+        return new NewsCollector(search, new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 100, 0),
+                CLOCK, ms -> { }, received(queries));
     }
 
     @Test
-    void malformedSymbolInTheQueryConfigurationFailsAtConstruction() {
-        assertThatThrownBy(() -> collectorWithQueries("테스트검색어=TEST1"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageNotContaining("테스트검색어");
+    void collectingBeforeAnyQueryListIsReceivedFailsInsteadOfPretendingToBeComplete() {
+        assertThatThrownBy(collector::collect).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(collector::collectWithStatus).isInstanceOf(IllegalStateException.class);
+        verify(search, never()).search(anyString(), anyInt());
     }
 
     @Test
-    void emptyQueryConfigurationIsNotAnErrorAndCollectsNothing() {
+    void anEmptyReceivedListIsNotAnErrorAndCollectsNothing() {
         assertThat(collectorWithQueries("").collect()).isEmpty();
         verify(search, never()).search(anyString(), anyInt());
     }
 
     @Test
-    void collectWithoutArgumentsUsesTheConfiguredQueriesIncludingMarketWide() {
+    void collectWithoutArgumentsUsesTheReceivedQueriesIncludingMarketWide() {
         when(search.search(eq("테스트검색어"), anyInt()))
                 .thenReturn(List.of(item("테스트검색어", "기사", "https://a.example.com/1", "2026-10-22T15:00:00+09:00")));
 
@@ -404,6 +423,7 @@ class NewsCollectorTest {
     }
 
     private NewsCollector collectorWithLimit(String queries, int dailyLimit) {
-        return new NewsCollector(search, new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, queries, dailyLimit, 0), CLOCK, ms -> { });
+        return new NewsCollector(search, new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, dailyLimit, 0),
+                CLOCK, ms -> { }, received(queries));
     }
 }
