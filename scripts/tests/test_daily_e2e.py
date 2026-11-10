@@ -69,6 +69,20 @@ def test_fake_llm_cites_the_first_ref_given():
     assert output == {"points": [{"statement": de.FAKE_STATEMENT, "refs": ["B1"]}], "insufficientEvidence": False}
 
 
+def test_fake_llm_writes_the_morning_shape_with_one_outlook_per_etf_and_the_briefing_parser_accepts_it():
+    import sys
+    sys.path.insert(0, str(de.ROOT / "services" / "briefing" / "src"))
+    from briefing.daily_report import parse_morning_output
+    user = json.dumps({"edition": "아침 판", "items": [{"name": "환율", "entries": [{"ref": "B1"}]}],
+                       "outlookEtfs": [{"symbol": "TEST01"}, {"symbol": "TEST02"}]})
+    output = json.loads(de.fake_llm_output(user))
+    assert [(e["symbol"], e["direction"], e["refs"]) for e in output["etfs"]] == [
+        ("TEST01", "상승", ["B1"]), ("TEST02", "상승", ["B1"])]
+    parsed = parse_morning_output(de.fake_llm_output(user), frozenset({"B1"}), frozenset(),
+                                  frozenset({"TEST01", "TEST02"}))
+    assert [p.kind for p in parsed.issues] == ["fx", "rate"]
+
+
 def test_fake_llm_says_evidence_is_insufficient_without_refs():
     assert json.loads(de.fake_llm_output(json.dumps({"items": []}))) == {"points": [], "insufficientEvidence": True}
     assert json.loads(de.fake_llm_output("not json"))["insufficientEvidence"] is True

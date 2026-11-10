@@ -46,18 +46,15 @@ def etfs(relation=True):
 def run(edition="post-close", settings=None, llm=True, answer_etfs=None, ref=None, whole_event=False, output=None):
     requests, details = Requests(), Details()
     settings = settings or DailySettings()
-    output = output or (post_close_output() if edition == "post-close" else good_output(ref or "B1"))
+    output = output or (post_close_output() if edition == "post-close" else good_output(ref or "B1", symbols=(
+        "TEST04",)))  # 아침 판 범위 밖에 받은 ETF 셋은 버려지고 일봉이 빈 TEST04만 남는다
     writer = DailyLlmWriter(FakeLlm(output), settings.llm_max_attempts) if llm else None
     core = DailyCore(requests, writer, details, settings)
     job, at = (POST_CLOSE_JOB, POST_CLOSE_AT) if edition == "post-close" else (MORNING_JOB, MORNING_AT)
     core.on_schedule_tick(tick(job, at), at, edition)
     background = POST_CLOSE_BACKGROUND if edition == "post-close" else None
     core.on_daily_data_responded(daily_response(etfs=answer_etfs or etfs(), background=background), at)
-    if edition == "post-close":
-        answer_news(core, requests, at)
-    if edition == "morning":
-        from test_daily_jobs import filings_response
-        core.on_filings_responded(filings_response(), at)
+    answer_news(core, requests, at)
     [event] = requests.topic("briefing.daily.generated")
     assert validate("briefing.daily.generated.v1.schema.json", event.value) == []
     return (event.value if whole_event else event.value["payload"]), details

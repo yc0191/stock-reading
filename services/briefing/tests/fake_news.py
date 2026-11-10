@@ -9,8 +9,8 @@ def _envelope(event_type, payload, at):
     })
 
 
-def answer_news(core, requests, now, articles=None, filings=None, silent=()):
-    """받은 기사 요청마다 articles[종목코드](기사 dict 목록, 없으면 0건)로, 공시 요청마다 filings(없으면 0건)로 답한다. silent의 ETF 기사 요청은 답하지 않는다."""
+def answer_news(core, requests, now, articles=None, filings=None, silent=(), filings_silent=False):
+    """받은 기사 요청마다 articles[종목코드](기사 dict 목록, 없으면 0건)로, 공시 요청마다 filings(없으면 0건)로 답한다. silent의 ETF 기사 요청은, filings_silent면 공시 요청은 답하지 않는다."""
     articles = articles or {}
     for event in list(requests.sent):
         payload = event.value["payload"]
@@ -18,7 +18,7 @@ def answer_news(core, requests, now, articles=None, filings=None, silent=()):
             core.on_articles_responded(_envelope("news.articles.responded", {
                 "jobId": payload["jobId"], "seq": payload["seq"], "symbol": payload["symbol"],
                 "articles": articles.get(payload["symbol"], []), "truncated": False}, now), now)
-        elif event.topic == "news.filings.requested":
+        elif event.topic == "news.filings.requested" and not filings_silent:
             core.on_filings_responded(_envelope("news.filings.responded", {
                 "jobId": payload["jobId"], "seq": payload["seq"], "symbol": payload["symbol"],
                 "filings": filings or [], "truncated": False}, now), now)

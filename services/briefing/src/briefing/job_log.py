@@ -51,6 +51,7 @@ class EntryType(str, Enum):
     RESENT = "resent"                          # 무응답이라 같은 요청을 다시 보냄
     MISSING_ITEMS = "missing-items"            # 판은 나갔지만 빠진 항목이 있음
     STEP_FAILED = "step-failed"                # 단계가 끝내 실패하거나 포기됨
+    ETF_OUTLOOK = "etf-outlook"                # 아침 판이 쓴 ETF별 방향 예상(data.outlooks). 마감 후 판이 다시 읽는다
 
 
 # 급변동 단계: 근거 조회의 어느 요청인지, 또는 LLM 작성

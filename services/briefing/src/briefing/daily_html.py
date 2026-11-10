@@ -1,6 +1,6 @@
 """데일리 판 HTML 본문(인라인 스타일만). Kafka를 모르며 글자판과 같은 값을 인자로 받는다.
 
-아침 판 순서는 글자판과 같다: 제목 → 항목별 숫자 → 요약 → 면책 → 근거 목록(작게).
+아침 판 순서는 글자판과 같다: 제목 → 항목별 숫자 → 요약 → 환율 이슈 → 금리 이슈 → ETF별 예상 → 면책 → 근거 목록(작게).
 마감 후 판도 글자판과 같은 순서다: 제목 → 결론 → 요약 2줄 → 눈에 띄는 점 → 환율 이슈 → 금리 이슈 → 차트 → 보유/관심별 ETF 줄(이유, ↳ 구성 종목 줄) →
 면책 → 서버 상태(작게, '주의'가 있을 때만 그 줄이 주황) → 출처(작게, 기사·공시는 원문 링크). 발송기는 html 칸을 받은 그대로 보내므로 이벤트 값
 (ETF 이름, LLM 문장, 근거 설명, 서버 상태 줄)은 모두 여기서 이스케이프한다.
@@ -24,8 +24,8 @@ from briefing.daily_report import (
     conclusion,
     headline,
     section_title,
-    summary_view,
 )
+from briefing.daily_morning import OUTLOOK_NOTE, OUTLOOK_TITLE, MorningView, morning_view
 from briefing.daily_post_close import PostCloseView, post_close_view, source_plain
 from briefing.events import EDITION_POST_CLOSE
 from briefing.llm_output import WEAK_NOTE_PREFIX
@@ -118,28 +118,8 @@ def _chart(slot: ChartSlot) -> str:
     return "".join(parts)
 
 
-def _summary(sections: tuple[Section, ...], output: DailyOutput) -> tuple[str, str]:
-    """(요약 HTML, 근거 목록 HTML)"""
-    view = summary_view(sections, output)
-    parts = [_p(HEADING_STYLE, "요약")]
-    if view.insufficient:
-        parts.append(_p(ITEM_STYLE, escape(DAILY_INSUFFICIENT)))
-        return "".join(parts), ""
-    items = []
-    for statement, numbers, shortfall in view.points:
-        cite = escape(f"[근거 {', '.join(str(n) for n in numbers)}]")
-        note = _p(NOTE_STYLE, escape(f"{WEAK_NOTE_PREFIX}{shortfall}")) if shortfall else ""
-        items.append(f'<li style="{ITEM_STYLE}">{escape(statement)} {cite}{note}</li>')
-    parts.append(f'<ul style="{LIST_STYLE}">{"".join(items)}</ul>')
-    evidence = ""
-    if view.evidence:
-        rows = "".join(f'<li style="{SMALL_STYLE}">{escape(describe)}</li>' for _, describe in view.evidence)
-        evidence = _p(SMALL_STYLE, "근거:") + f'<ol style="{LIST_STYLE};font-size:12px;color:{MUTED_COLOR}">{rows}</ol>'
-    return "".join(parts), evidence
-
-
-def _cite(numbers: tuple[int, ...]) -> str:
-    return escape(f"[출처 {', '.join(str(n) for n in numbers)}]")
+def _cite(numbers: tuple[int, ...], label: str = "출처") -> str:
+    return escape(f"[{label} {', '.join(str(n) for n in numbers)}]")
 
 
 def _weak(shortfall: str | None) -> str:
@@ -170,10 +150,10 @@ def _post_close_summary(v: PostCloseView) -> list[str]:
     return parts
 
 
-def _post_close_issues(v: PostCloseView) -> list[str]:
+def _post_close_issues(v: PostCloseView, label: str = "출처") -> list[str]:
     parts = []
     for issue in v.issues:
-        cite = f" {_cite(issue.numbers)}" if issue.numbers else ""
+        cite = f" {_cite(issue.numbers, label)}" if issue.numbers else ""
         parts.append(_p(HEADING_STYLE, escape(issue.title)))
         parts.append(f'<ul style="{LIST_STYLE}"><li style="{ITEM_STYLE}">'
                      f'{_rate_spans(escape(issue.statement))}{cite}{_weak(issue.shortfall)}</li></ul>')
@@ -221,6 +201,38 @@ def _status(status_text: str) -> str:
     return f'<div style="{STATUS_BOX_STYLE}">{"".join(lines)}</div>'
 
 
+def _outlook_item(row) -> str:
+    cite = f" {_cite(row.numbers, '근거')}" if row.numbers else ""
+    reason = _p(NOTE_STYLE, f"이유: {escape(row.reason)}{cite}")
+    return f'<li style="{ITEM_STYLE}">{escape(row.line)}{reason}{_weak(row.shortfall)}</li>'
+
+
+def _morning_body(v: MorningView) -> tuple[list[str], str]:
+    """(요약·이슈 칸·ETF 예상 HTML, 근거 목록 HTML)"""
+    parts = []
+    if v.has_output:
+        parts.append(_p(HEADING_STYLE, "요약"))
+        if v.insufficient:
+            parts.append(_p(ITEM_STYLE, escape(DAILY_INSUFFICIENT)))
+        items = "".join(f'<li style="{ITEM_STYLE}">{escape(statement)} {_cite(nums, "근거")}{_weak(shortfall)}</li>'
+                        for statement, nums, shortfall in v.points)
+        if items:
+            parts.append(f'<ul style="{LIST_STYLE}">{items}</ul>')
+    parts.extend(_post_close_issues(v, "근거"))
+    if v.groups:
+        parts.append(_p(HEADING_STYLE, f"■ {escape(OUTLOOK_TITLE)}"))
+        for title, rows in v.groups:
+            if title:
+                parts.append(_p(GROUP_STYLE, escape(title)))
+            items = "".join(_outlook_item(row) for row in rows)
+            parts.append(f'<ul style="{LIST_STYLE}">{items}</ul>')
+    evidence = ""
+    if v.evidence:
+        rows = "".join(f'<li style="{SMALL_STYLE}">{escape(describe)}</li>' for _, describe in v.evidence)
+        evidence = _p(SMALL_STYLE, "근거:") + f'<ol style="{LIST_STYLE};font-size:12px;color:{MUTED_COLOR}">{rows}</ol>'
+    return parts, evidence
+
+
 def render_html(i: DailyInput, sections: tuple[Section, ...], output: DailyOutput | None,
                 status_text: str | None = None, chart: ChartSlot | None = None) -> str:
     title, scope = headline(i)
@@ -228,11 +240,12 @@ def render_html(i: DailyInput, sections: tuple[Section, ...], output: DailyOutpu
         return _render_post_close(i, sections, output, status_text, chart)
     parts = [f'<h1 style="{TITLE_STYLE}">{escape(title)}</h1>', _p(RANGE_STYLE, escape(scope))]
     parts.extend(_section(s) for s in sections if s.name != ITEM_RESEARCH and not s.hidden)
-    evidence = ""
-    if output is not None:
-        summary, evidence = _summary(sections, output)
-        parts.append(summary)
+    v = morning_view(i, sections, output)
+    body, evidence = _morning_body(v)
+    parts.extend(body)
     parts.append(_p(DISCLAIMER_STYLE, escape(DAILY_DISCLAIMER)))
+    if v.groups:
+        parts.append(_p(SMALL_STYLE, escape(OUTLOOK_NOTE)))
     if status_text:
         parts.append(_status(status_text))
     parts.append(evidence)

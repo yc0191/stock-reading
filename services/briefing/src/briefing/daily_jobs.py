@@ -21,6 +21,7 @@ from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
 from briefing.daily_chart import chart_bars, no_data_names, render_day_chart
 from briefing.daily_html import ChartSlot, render_html
+from briefing.daily_morning import outlook_records
 from briefing.daily_inputs import EtfArticles, member_issues, moves_with_market, notable_candidates
 from briefing.daily_relevance import split_related
 from briefing.daily_report import (
@@ -45,6 +46,7 @@ from briefing.daily_report import (
     rule_based_text,
 )
 from briefing.events import (
+    EDITION_MORNING,
     EDITION_POST_CLOSE,
     ARTICLES_REQUESTED_TOPIC,
     FILINGS_REQUESTED_TOPIC,
@@ -114,6 +116,7 @@ REASON_LLM_REJECTED = "llm_attempt_rejected"
 REASON_MISSING_ITEMS = "missing_items"
 REASON_LLM_ACCEPTED = "llm_attempt_accepted"
 REASON_PUBLISHED = "published"
+REASON_OUTLOOK_RECORDED = "morning_outlook_recorded"
 # 작업 기록의 excluded에 남기는, ETF와 관계없어 뺀 기사 건수의 이름
 EXCLUDED_UNRELATED = "irrelevantArticles"
 
@@ -548,14 +551,34 @@ class DailyCore:
         job.researching = self.sentences is not None and draft.generated_by == GENERATED_BY_LLM \
             and self.sentences.begin(job.edition, job.job_id, DailyDraft(job, daily_input, sections, draft), now)
         if not job.researching:
-            self._publish(job, now, daily_input, sections, draft)
+            self._finalize(job, now, daily_input, sections, draft)
+
+    def _finalize(self, job: _DailyJob, now: datetime, daily_input: DailyInput, sections: tuple[Section, ...],
+                  draft: _Draft, research_count: int = 0) -> None:
+        """아침 판의 ETF별 예상을 작업 기록에 남긴 뒤 발행한다. 다시 쓴 뒤의 최종 본문 기준으로 한 번만 남긴다."""
+        outlooks = outlook_records(draft.output)
+        if job.edition == EDITION_MORNING and outlooks:
+            # 마감 후 판이 같은 날의 이 기록을 읽어 예상과 실제 등락을 대조한다(작업 종류 morning, 범위 끝 날짜로 찾음).
+            self.job_log.record(JobLogEntry(
+                job_id=job.job_id, entry_type=EntryType.ETF_OUTLOOK, stage=STAGE_COMPOSE,
+                reason=REASON_OUTLOOK_RECORDED, occurred_at=now,
+                data={"asOf": format_timestamp(job.scheduled_for), "outlooks": outlooks}))
+        self._publish(job, now, daily_input, sections, draft, research_count)
 
     def _with_etf_inputs(self, job: _DailyJob, daily_input: DailyInput) -> DailyInput:
-        """마감 후 판의 ETF별 기사, 미국 구성 종목 이슈, 눈에 띄는 점 후보를 모아 입력에 더한다."""
+        """ETF별 기사를 모아 입력에 더한다. 마감 후 판은 미국 구성 종목 이슈와 눈에 띄는 점 후보도 더한다."""
         if daily_input.etfs is None:
             return daily_input
         groups = tuple(EtfArticles(symbol, state.articles, state.received, state.truncated)
                        for symbol, state in job.news.items())
+        if job.edition != EDITION_POST_CLOSE:
+            # 아침 판은 기사만 더한다. 구성 종목 이슈와 눈에 띄는 점 후보는 마감 후 판의 것이다.
+            log.info("daily %s collection: job=%s etfs=%d articles=%d articlesExcluded=%d articlesCut=%d "
+                     "articlesNoResponse=%d articlesIrrelevant=%d",
+                     job.edition, job.job_id, len(daily_input.etfs), sum(len(g.articles) for g in groups),
+                     job.excluded.get("articles", 0), job.news_cut, sum(1 for g in groups if not g.received),
+                     job.excluded.get(EXCLUDED_UNRELATED, 0))
+            return replace(daily_input, etf_articles=groups)
         filings = daily_input.filings or ()
         issues, issues_cut = member_issues(daily_input.etfs, daily_input.close_rates or (), filings, self.settings)
         notables = notable_candidates(daily_input.etfs, self.settings)
@@ -628,10 +651,9 @@ class DailyCore:
         points = list(draft.draft.output.points)
         points[no - 1] = result.point
         output = replace(draft.draft.output, points=tuple(points))
-        # 환율·금리 이슈 칸의 근거도 초안 단계처럼 인용한 번호에 들어간다.
-        cited = tuple(dict.fromkeys(ref for p in (*points, *output.issues) for ref in p.refs))
-        weak = tuple(p.shortfall for p in points if p.shortfall)
-        new = _Draft(llm_text(rewritten_input, sections, output), GENERATED_BY_LLM, cited, False, weak, output)
+        # 환율·금리 이슈 칸과 아침 판 ETF 예상의 근거도 초안 단계처럼 인용한 번호에 들어간다.
+        new = _Draft(llm_text(rewritten_input, sections, output), GENERATED_BY_LLM, output.cited_refs(), False,
+                     output.weak_shortfalls(), output)
         return DailyDraft(draft.job, rewritten_input, sections, new)
 
     def rewrite_whole(self, draft: DailyDraft, round: int, research_articles: tuple[Article, ...],
@@ -664,7 +686,7 @@ class DailyCore:
     # ---- 발행 ----
 
     def publish_draft(self, draft: DailyDraft, now: datetime, research_count: int) -> None:
-        self._publish(draft.job, now, draft.input, draft.sections, draft.draft, research_count)
+        self._finalize(draft.job, now, draft.input, draft.sections, draft.draft, research_count)
 
     def _chart_image(self, daily_input: DailyInput) -> tuple[bytes | None, bool, str | None]:
         """마감 후 판의 하루 등락 차트. (그림, 크기 초과 여부, 자료 없음 목록에 더할 줄). 그릴 막대가 없으면 그림이 없다."""

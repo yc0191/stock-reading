@@ -1,6 +1,7 @@
 """데일리 판 Claude 지시문과 출력 형식. 아침 판(points)과 마감 후 판(summary, etfs, notables)이 각자 쓴다.
 
-입력 읽는 법(READING_GUIDE)은 두 판이 같고, 마감 후 판에는 ETF별 기사·구성 종목 이슈·눈에 띄는 점 후보 설명과 출력 규칙이 더해진다.
+입력 읽는 법(READING_GUIDE)은 두 판이 같고, 판마다 항목 설명(ETF별 기사 등)과 출력 규칙이 더해진다.
+아침 판은 ETF별 방향 예상(etfs)을, 마감 후 판은 ETF별 이유와 눈에 띄는 점을 쓴다.
 """
 from __future__ import annotations
 
@@ -19,21 +20,42 @@ READING_GUIDE = """당신은 ETF 투자자에게 하루 시장 흐름을 짧게 
 - etfInfo(있을 때만 담깁니다)는 보유 ETF의 이름(name)·추종 대상(tracks)·업종(sector)과 비중 순위(rank, 1이 가장 큼) 순의 구성 종목(members)입니다. ETF가 무엇을 따라가고 무엇이 담겨 있는지 이해하는 맥락으로만 쓰고, 이것을 등락의 원인으로 단정하지 않습니다. ref가 없어 인용할 수 없으며, 문장의 근거는 ref가 있는 자료에서 찾습니다.
 - 상태 표시: "있음"은 자료가 있다는 뜻, "없음"은 범위 안에 자료가 없다는 뜻, "잘림"은 상한 때문에 일부만 받았다는 뜻, "너무 큼"은 원문이 커서 빠졌다는 뜻, "해당 없음"은 보유 ETF에 미국 종목이 없어 조회하지 않았다는 뜻입니다."""
 
+# ETF 방향 예상의 값. 출력 형식의 enum이자 본문에 보이는 말이다(daily_morning이 본문 문구로 바꾼다).
+DIRECTION_UP = "상승"
+DIRECTION_DOWN = "하락"
+DIRECTION_FLAT = "보합"
+DIRECTION_UNSURE = "예상 어려움"
+DIRECTIONS = (DIRECTION_UP, DIRECTION_DOWN, DIRECTION_FLAT, DIRECTION_UNSURE)
+
+# 아침 판에 더해지는 항목 설명. 아침 판은 지난 일봉이 아니라 받은 기사·환율·지수·미국 종목 등락으로 오늘을 예상한다.
+MORNING_GUIDE_EXTRA = """
+- 항목 "ETF별 기사"는 ETF마다 모아 둔 기사이며 etf 칸은 그 기사가 붙은 ETF 종목코드입니다. 항목의 missing에 있는 ETF는 기사 응답을 받지 못한 것이라 기사가 없는 것이 아니라 모르는 것입니다.
+- outlookEtfs는 오늘 방향을 예상할 ETF 목록입니다. relation은 보유 또는 관심입니다.
+- 항목 "환율"의 usdKrw(있을 때만 담깁니다)는 코드가 원문의 원/달러 행에서 꺼낸 값이며 value는 원/달러 환율, change는 전일대비, ratePercent는 등락률(%)입니다. 환율 숫자는 usdKrw의 값을 씁니다."""
+
 MORNING_RULES = """규칙:
-- 원인을 단정하지 않습니다. "~때문에 올랐다"가 아니라 "~가 영향을 줬을 수 있다"처럼 씁니다.
+- 아침 판의 목적은 오늘 장에서 어떤 변화가 예상되는지 알리는 것입니다. etfs에 outlookEtfs의 ETF마다 오늘의 방향 예상을 씁니다.
+- 예상과 원인은 단정하지 않습니다. "~가 영향을 줄 수 있어 오를 수 있다"처럼 씁니다.
 - 각 문장은 근거가 된 자료의 ref를 refs에 하나 이상 넣습니다. 입력에 없는 ref는 쓰지 않습니다.
 - 상태가 "없음"인 항목을 추측으로 채우지 않습니다.
+- etfs는 outlookEtfs에 있는 ETF마다 정확히 하나씩 씁니다(보유와 관심 모두). symbol은 그 ETF의 종목코드입니다. direction은 "상승", "하락", "보합", "예상 어려움" 중 하나이고, reason은 그 방향을 예상한 이유 한 문장입니다.
+- 방향의 근거는 그 ETF의 이름·추종 대상·담긴 종목과 관련된 기사(ETF별 기사), 담긴 미국 종목의 직전 장 등락, 미국 지수, 환율, 공시입니다. etfInfo는 맥락일 뿐 ref가 없어 인용하지 않습니다.
+- 방향이 "상승", "하락", "보합"이면 reason의 refs에 근거 번호를 하나 이상 넣습니다. 근거가 약해 방향을 정하기 어려우면 direction을 "예상 어려움"으로 쓰고, reason에 근거가 부족한 점을 쓰고, refs는 빈 목록으로 두고 weak를 true로 합니다.
+- 환율이나 금리가 어떤 ETF 예상의 단서이면 reason 문장 안에 끼워 넣지 말고 문장 끝에 "(환율 이슈 참고)", "(금리 이슈 참고)"처럼 괄호로 짧게 붙입니다. 숫자는 되풀이하지 않습니다.
+- fxIssue는 환율 이슈 칸입니다. 환율은 모든 ETF에 영향을 주므로 ETF와 따로 씁니다. 항목 "환율"의 usdKrw(원/달러 값, 전일대비, 등락률)와 환율을 다룬 기사를 근거로 환율이 오늘 ETF들에 영향을 줄 수 있는 점을 한 문장으로 씁니다. 근거 번호는 refs에 넣고 weak·shortfall을 냅니다.
+- rateIssue는 금리 이슈 칸입니다. 금리는 모든 ETF에 영향을 주므로 ETF와 따로 씁니다. 입력의 기사 중 금리(기준금리, 국채금리, 시장금리 등)를 다룬 기사를 근거로 한 문장을 쓰고, 금리 숫자는 그 기사에 적힌 것만 씁니다. 금리를 다룬 기사가 없으면 "받은 자료에 금리 관련 기사가 없습니다."로 쓰고 refs는 빈 목록, weak는 true로 합니다.
+- ETF·담긴 종목·추종 대상과 관련 없는 기사는 인용하지 않습니다.
 - 문장마다 weak(근거 약함 여부)와 shortfall(부족한 점)을 냅니다. 그 문장을 뒷받침하는 자료가 약하면(범위가 맞지 않거나, 간접 정보뿐이거나, 세부가 자료에 없으면) weak를 true로 하고 shortfall에 어떤 자료가 더 있어야 하는지 한 문장으로 씁니다. 근거가 충분하면 weak를 false로, shortfall을 빈 문자열로 둡니다. shortfall은 찾아야 할 자료를 말할 뿐 원인을 단정하지 않으며 미국 종목의 티커를 쓰지 않습니다.
-- 요약할 근거가 부족하면 insufficientEvidence를 true로 하고 points는 빈 목록으로 둡니다.
-- 투자 조언(매수·매도·보유 권유, 가격 전망)을 하지 않습니다.
+- 요약할 근거가 부족하면 insufficientEvidence를 true로 하고 points와 etfs는 빈 목록으로 둡니다.
+- 투자 조언(매수·매도·보유 권유)을 하지 않습니다. 가격 전망은 etfs의 방향 예상에 한해 허용하며, 목표 가격이나 등락률 숫자를 예측하지 않습니다. points와 fxIssue·rateIssue에는 방향 예상을 쓰지 않습니다.
 - 숫자를 새로 계산하지 않습니다. 입력에 있는 값만 씁니다.
 - 문장에 미국 종목의 티커(ticker, tickers 칸의 값)를 쓰지 않습니다. 개별 종목을 말해야 하면 "미국 종목"이라고 씁니다.
-- 문장은 한국어로 3~6개 정도로 씁니다.
+- points는 오늘 시장 흐름을 한국어 문장 3~6개 정도로 씁니다.
 
 출력은 다음 JSON 하나만 냅니다:
-{"points":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"insufficientEvidence":false}"""
+{"points":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"etfs":[{"symbol":"...","direction":"상승","reason":"...","refs":["..."],"weak":false,"shortfall":""}],"fxIssue":{"statement":"...","refs":["..."],"weak":false,"shortfall":""},"rateIssue":{"statement":"...","refs":["..."],"weak":false,"shortfall":""},"insufficientEvidence":false}"""
 
-SYSTEM_PROMPT = READING_GUIDE + "\n\n" + MORNING_RULES
+SYSTEM_PROMPT = READING_GUIDE + MORNING_GUIDE_EXTRA + "\n\n" + MORNING_RULES
 
 # 마감 후 판 지시문: 입력 읽는 법은 아침 판과 같고, 마감 후 판에 더해지는 항목 설명과 출력 규칙이 다르다.
 POST_CLOSE_GUIDE_EXTRA = """
@@ -71,6 +93,7 @@ NO_REASON_STATEMENT = "받은 자료에서 이유를 찾지 못했습니다."
 
 SYSTEM_PROMPT_POST_CLOSE = READING_GUIDE + POST_CLOSE_GUIDE_EXTRA + "\n\n" + POST_CLOSE_RULES
 
+# 문장 하나를 다시 쓸 때 두 판이 함께 쓰는 출력 형식(points 한 개). 아침 판의 첫 작성은 OUTPUT_SCHEMA_MORNING이다.
 OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -128,6 +151,29 @@ OUTPUT_SCHEMA_POST_CLOSE: dict[str, Any] = {
 }
 
 
+OUTPUT_SCHEMA_MORNING: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "points": OUTPUT_SCHEMA["properties"]["points"],
+        "etfs": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"symbol": {"type": "string"}, "direction": {"type": "string", "enum": list(DIRECTIONS)},
+                               "reason": {"type": "string"}, **_REASONED_ITEM},
+                "required": ["symbol", "direction", "reason", "refs", "weak", "shortfall"],
+                "additionalProperties": False,
+            },
+        },
+        "fxIssue": _STATEMENT_ITEM,
+        "rateIssue": _STATEMENT_ITEM,
+        "insufficientEvidence": {"type": "boolean"},
+    },
+    "required": ["points", "etfs", "fxIssue", "rateIssue", "insufficientEvidence"],
+    "additionalProperties": False,
+}
+
+
 REWRITE_ADDENDUM_POST_CLOSE = """
 
 다시 쓰기 요청:
@@ -142,6 +188,7 @@ REWRITE_ADDENDUM = """
 
 다시 쓰기 요청:
 - 입력의 rewrite 칸은 근거가 약하다고 한 문장 하나(sentence)와 그 부족한 점(shortfall)입니다. newRefs는 그 부족한 점을 채우려고 새로 찾아 항목 "재검색 기사"에 담은 기사의 ref입니다.
-- 그 문장 하나만 다시 씁니다. points에는 다시 쓴 문장 하나만 담고 다른 문장은 쓰지 않으며, insufficientEvidence는 false로 둡니다.
+- 위의 출력 형식 대신 다음 JSON 하나만 냅니다. points에는 다시 쓴 문장 하나만 담고 다른 문장은 쓰지 않으며, insufficientEvidence는 false로 둡니다. etfs·fxIssue·rateIssue는 쓰지 않습니다.
+{"points":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"insufficientEvidence":false}
 - 새 기사로 부족한 점이 채워지면 weak를 false로, 그래도 약하면 weak를 true로 하고 shortfall에 아직 부족한 점을 씁니다. 새 기사에 없는 내용은 지어내지 않습니다.
 - 근거 번호·단정 금지·티커 금지 같은 위의 규칙은 그대로 지킵니다."""

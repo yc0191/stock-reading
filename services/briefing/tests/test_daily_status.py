@@ -107,8 +107,8 @@ def make():
         edition = "post-close" if edition_job == POST_CLOSE_JOB else "morning"
         core.on_schedule_tick(tick(edition_job, at), at, edition)
         core.on_daily_data_responded(with_operations() if answer == "default" else answer, at)
-        if edition == "post-close":
-            answer_news(core, requests, at)
+        # 아침 판은 공시 응답을 시험이 따로 보낸다.
+        answer_news(core, requests, at, filings_silent=edition == "morning")
         return core, requests, details
     return build
 

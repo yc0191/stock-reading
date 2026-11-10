@@ -22,6 +22,7 @@ from test_daily_jobs import (
     FakeLlm,
     Requests,
     daily_response,
+    etf,
     etf_v2,
     filings_response,
     post_close_output,
@@ -122,13 +123,15 @@ def test_the_edition_waits_for_every_answer_then_goes_out_once(start):
     assert len(published(requests)) == 1
 
 
-def test_the_morning_edition_requests_no_etf_articles():
+def test_the_morning_edition_also_requests_articles_per_etf_and_waits_for_them():
     requests = Requests()
     c = DailyCore(requests, None, Details())
     c.on_schedule_tick(tick(MORNING_JOB, MORNING_AT), MORNING_AT, "morning")
-    c.on_daily_data_responded(daily_response(), MORNING_AT)
+    c.on_daily_data_responded(daily_response(etfs=[etf("TEST01"), etf("TEST02")]), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
-    assert requests.topic("news.articles.requested") == []
+    assert [p["symbol"] for p in articles_requested(requests)] == ["TEST01", "TEST02"]
+    assert published(requests) == []
+    answer_news(c, requests, MORNING_AT)
     assert len(published(requests)) == 1
 
 

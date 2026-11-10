@@ -496,9 +496,21 @@ class DailyLlm(FakeLlm):
 
     def complete(self, system, user, output_schema):
         output = super().complete(system, user, output_schema)
-        if self.edition != "post-close" or "다시 쓰기 요청" in system or isinstance(output, Exception):
+        if "다시 쓰기 요청" in system or isinstance(output, Exception):
             return output
+        if self.edition == "morning":
+            return self._morning(json.loads(output), json.loads(user))
         return self._post_close(json.loads(output), json.loads(user))
+
+    @staticmethod
+    def _morning(data, user):
+        """문장 목록은 그대로 요약(points)에 두고, 모든 ETF에는 튼튼한 방향 예상과 환율·금리 이슈 칸을 채운다."""
+        if data["insufficientEvidence"]:
+            return json.dumps({"points": [], "etfs": [], "insufficientEvidence": True})
+        issue = {"statement": "환율이 영향을 줄 수 있습니다.", "refs": ["B1"], "weak": False, "shortfall": ""}
+        etfs = [{"symbol": e["symbol"], "direction": "상승", "reason": "미국 지수가 영향을 줄 수 있습니다.",
+                 "refs": ["B1"], "weak": False, "shortfall": ""} for e in user["outlookEtfs"]]
+        return json.dumps({**data, "etfs": etfs, "fxIssue": issue, "rateIssue": issue}, ensure_ascii=False)
 
     @staticmethod
     def _post_close(data, user):
@@ -556,10 +568,9 @@ class DailyFlow:
             close_rates = []
         self.core.on_daily_data_responded(
             daily_response(etfs=etfs, background=background, close_rates=close_rates), self.now)
-        if self.edition == "post-close":
-            answer_news(self.core, self.requests, self.now)
-        if self.edition == "morning" and self.etfs != []:
-            self.core.on_filings_responded(filings_response(), self.now)
+        # 두 판 모두 ETF별 기사를 받아야 나가고, 아침 판은 미국 종목이 있으면 공시도 받는다.
+        filings = json.loads(filings_response())["payload"]["filings"] if self.edition == "morning" else None
+        answer_news(self.core, self.requests, self.now, filings=filings)
 
     def news(self, seq, items, research_id):
         return envelope("news.articles.responded", {
@@ -686,6 +697,29 @@ def test_daily_with_one_weak_sentence_researches_only_that_sentence_and_rewrites
     assert entry.before == "업종 소식이 영향을 줬을 수 있습니다." and entry.after == "다시 찾은 기사가 영향을 줬을 수 있습니다."
     (result,) = flow.records.results()
     assert (result.status, result.research_count, result.weak_count) == (RunStatus.SUCCEEDED, 1, 0)
+
+
+def test_morning_rewrite_leaves_exactly_one_outlook_record_that_matches_the_final_body():
+    flow = DailyFlow("morning", [], [])
+    flow.report_llm.outputs = [
+        daily_output(point("지수가 오른 가운데 자료가 있습니다.", flow.ref),
+                     point("업종 소식이 영향을 줬을 수 있습니다.", flow.ref, SHORTFALL)),
+        daily_output(point("다시 찾은 기사가 영향을 줬을 수 있습니다.", "r1")),
+    ]
+    flow.query_llm.outputs = [queries(*QUERIES)]
+    flow.to_first_report()
+    # 다시 쓰기가 끝나기 전에는 예상을 남기지 않는다.
+    assert flow.records.of_type(EntryType.ETF_OUTLOOK) == []
+    flow.complete(flow.rid(2))
+    flow.stable([in_range(flow)], flow.rid(2))
+
+    (event,) = flow.published()
+    text = event.value["payload"]["text"]
+    (entry,) = flow.records.of_type(EntryType.ETF_OUTLOOK)
+    assert entry.data["outlooks"]
+    for outlook in entry.data["outlooks"]:
+        assert f"{outlook['direction']} 예상" in text and outlook["reason"] in text
+    assert "다시 찾은 기사가 영향을 줬을 수 있습니다." in text
 
 
 def test_daily_with_several_weak_sentences_sends_one_separate_research_job_per_sentence(edition):

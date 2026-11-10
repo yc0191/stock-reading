@@ -26,8 +26,11 @@ from briefing.daily_inputs import (
     decimal_rate,
 )
 from briefing.daily_prompts import (
+    DIRECTION_UNSURE,
+    DIRECTIONS,
     NO_REASON_STATEMENT,
     OUTPUT_SCHEMA,
+    OUTPUT_SCHEMA_MORNING,
     OUTPUT_SCHEMA_POST_CLOSE,
     REWRITE_ADDENDUM,
     REWRITE_ADDENDUM_POST_CLOSE,
@@ -46,7 +49,6 @@ from briefing.llm_output import (
     check_no_ticker,
     parse_output_object,
     ticker_pattern,
-    weak_note_line,
 )
 from briefing.llm import API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCallError, LlmClient, llm_config
 from briefing.move_figures import USD_KRW_NAME, display, exchange_rate_figure
@@ -107,7 +109,7 @@ ITEM_MEMBER_ISSUES = "미국 구성 종목 이슈"
 ITEM_RESEARCH = "재검색 기사"
 
 EDITION_ITEMS = {
-    EDITION_MORNING: (ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_KR_REVIEW),
+    EDITION_MORNING: (ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_KR_REVIEW, ITEM_ETF_ARTICLES),
     EDITION_POST_CLOSE: (ITEM_KR_TODAY, ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_ETFS, ITEM_ETF_ARTICLES, ITEM_FILINGS,
                          ITEM_MEMBER_ISSUES),
 }
@@ -128,6 +130,8 @@ KIND_BACKGROUND = "시장 자료"
 # 마감 후 판 출력의 문장 종류. 재검색은 아침 판과 같은 번호 체계로 문장을 가리키므로 두 종류를 한 목록에 담는다.
 POINT_ETF = "etf"
 POINT_NOTABLE = "notable"
+# 아침 판 출력의 ETF별 방향 예상 문장 종류. 이유 문장(POINT_ETF)과 달리 방향(direction)을 함께 든다.
+POINT_OUTLOOK = "outlook"
 # 환율 이슈·금리 이슈 칸의 문장 종류와 Claude 출력 칸 이름. 이 문장은 points가 아니라 issues에 담는다(다시 쓰기 대상이 아님).
 POINT_FX = "fx"
 POINT_RATE = "rate"
@@ -557,7 +561,7 @@ def build_sections(i: DailyInput, settings: DailySettings = DEFAULT_DAILY_SETTIN
     builders = {
         ITEM_US_INDEX: lambda: _us_index_section(i, settings, background_ref),
         ITEM_EXCHANGE: lambda: _raw_background_section(ITEM_EXCHANGE, i, "exchange-rate-summary", background_ref,
-                                                       with_usd_krw=i.edition == EDITION_POST_CLOSE),
+                                                       with_usd_krw=True),
         ITEM_US_STOCKS: lambda: _us_stocks_section(i, next_ref(CLOSE_RATE_REF_PREFIX)),
         ITEM_FILINGS: lambda: _filings_section(i),
         ITEM_KR_REVIEW: lambda: _raw_background_section(ITEM_KR_REVIEW, i, "market-summary", background_ref),
@@ -567,7 +571,7 @@ def build_sections(i: DailyInput, settings: DailySettings = DEFAULT_DAILY_SETTIN
         ITEM_MEMBER_ISSUES: lambda: _member_issues_section(i, next_ref(MEMBER_ISSUE_REF_PREFIX)),
     }
     sections = [builders[name]() for name in EDITION_ITEMS[i.edition]]
-    if i.edition in EDITIONS_WITH_ETF_ARTICLES:
+    if i.edition == EDITION_POST_CLOSE:
         # 마감 후 판 공시·미국 지수·환율은 Claude 입력에만 담고, 인용되면 출처 목록에 나온다.
         sections = [replace(s, hidden=True) if s.name in POST_CLOSE_HIDDEN_ITEMS else s for s in sections]
     if i.research_articles:
@@ -611,9 +615,18 @@ def build_llm_input(i: DailyInput, sections: tuple[Section, ...],
                 for e in i.etfs or () if e.etf is not None]
     if etf_info:
         data["etfInfo"] = etf_info
-    if i.edition in EDITIONS_WITH_ETF_ARTICLES:
+    if i.edition == EDITION_POST_CLOSE:
         data["notableCandidates"] = _candidates_input(i, sections)
+    else:
+        data["outlookEtfs"] = _outlook_etfs_input(i)
     return data
+
+
+def _outlook_etfs_input(i: DailyInput) -> list[dict[str, Any]]:
+    """아침 판이 방향을 예상할 ETF. 보유·관심 모두이고, 일봉이 비어 있어도 기사로 예상하므로 빼지 않는다."""
+    titles = dict(RELATION_TITLES)
+    return [{"symbol": e.symbol, "name": e.label(), "relation": titles.get(e.relation, RELATION_UNKNOWN_TITLE)}
+            for e in i.etfs or ()]
 
 
 def _candidates_input(i: DailyInput, sections: tuple[Section, ...]) -> list[dict[str, Any]]:
@@ -638,6 +651,8 @@ class Point:
     # 마감 후 판의 문장 종류(POINT_ETF, POINT_NOTABLE)와 ETF 이유의 종목코드. 아침 판은 둘 다 비어 있다.
     kind: str = ""
     symbol: str | None = None
+    # 아침 판 ETF별 예상의 방향(DIRECTIONS 중 하나). 그 밖의 문장은 None.
+    direction: str | None = None
 
 
 @dataclass(frozen=True)
@@ -646,8 +661,22 @@ class DailyOutput:
     insufficient_evidence: bool
     # 마감 후 판의 요약 2줄. 아침 판은 비어 있다.
     summary: tuple[str, ...] = ()
-    # 마감 후 판의 환율 이슈·금리 이슈 문장(kind가 POINT_FX, POINT_RATE). Claude가 내지 않았으면 없다.
+    # 환율 이슈·금리 이슈 문장(kind가 POINT_FX, POINT_RATE). Claude가 내지 않았으면 없다.
     issues: tuple[Point, ...] = ()
+    # 아침 판의 ETF별 방향 예상(kind가 POINT_OUTLOOK). 문장 단위 재검색의 대상이 아니라 points와 따로 둔다.
+    outlooks: tuple[Point, ...] = ()
+
+    def cited_refs(self) -> tuple[str, ...]:
+        """본문이 인용한 근거 번호. 근거 부족 출력은 문장을 쓰지 않으므로 없다."""
+        if self.insufficient_evidence:
+            return ()
+        return tuple(dict.fromkeys(ref for p in (*self.points, *self.issues, *self.outlooks) for ref in p.refs))
+
+    def weak_shortfalls(self) -> tuple[str, ...]:
+        """근거가 약하다고 한 문장들의 부족한 점. 환율·금리 이슈 칸은 따로 보이므로 세지 않는다."""
+        if self.insufficient_evidence:
+            return ()
+        return tuple(p.shortfall for p in (*self.points, *self.outlooks) if p.shortfall)
 
 
 def parse_output(text: str, allowed_refs: frozenset[str],
@@ -658,6 +687,13 @@ def parse_output(text: str, allowed_refs: frozenset[str],
     weak_without_refs이면 근거 약함인 문장만 근거 번호 없이 둘 수 있다(마감 후 판 ETF 이유 다시 쓰기)."""
     tickers = ticker_pattern(forbidden_tickers)
     data = parse_output_object(text, "points", InvalidDailyOutput)
+    points = _parse_points(data, allowed_refs, tickers, weak_without_refs)
+    insufficient = check_items_present(data, "points", "point", InvalidDailyOutput)
+    return DailyOutput(points, insufficient)
+
+
+def _parse_points(data: dict[str, Any], allowed_refs: frozenset[str], tickers: re.Pattern[str] | None,
+                  weak_without_refs: bool) -> tuple[Point, ...]:
     points = []
     for raw in data["points"]:
         item = output_item(raw, "point", InvalidDailyOutput)
@@ -671,8 +707,54 @@ def parse_output(text: str, allowed_refs: frozenset[str],
         elif no_refs:
             raise InvalidDailyOutput("point cites no refs but is not marked weak")
         points.append(Point(statement, refs, shortfall))
+    return tuple(points)
+
+
+def parse_morning_output(text: str, allowed_refs: frozenset[str], forbidden_tickers: frozenset[str],
+                         required_etfs: frozenset[str]) -> DailyOutput:
+    """아침 판 LLM 응답을 검증한다. 요약 문장(points)은 parse_output과 같은 검사이고, 더해 ETF별 예상(etfs)이 빠지거나
+    겹치거나 모르는 ETF이거나, 방향이 목록 밖이거나, 방향을 정하고도 근거 번호가 없거나(근거 약한 '예상 어려움'만 번호 없이 둘 수 있다),
+    근거 번호 없는 예상이 근거 약함이 아니면 InvalidDailyOutput. 근거 부족이면 문장을 쓰지 않으므로 이슈 칸과 etfs는 보지 않는다."""
+    tickers = ticker_pattern(forbidden_tickers)
+    data = parse_output_object(text, "points", InvalidDailyOutput)
+    points = _parse_points(data, allowed_refs, tickers, False)
     insufficient = check_items_present(data, "points", "point", InvalidDailyOutput)
-    return DailyOutput(tuple(points), insufficient)
+    if insufficient:
+        return DailyOutput((), True)
+    if not isinstance(data.get("etfs"), list):
+        raise InvalidDailyOutput("output does not have etfs")
+    outlooks, seen = [], set()
+    for raw in data["etfs"]:
+        item = output_item(raw, "etf", InvalidDailyOutput)
+        symbol = item.get("symbol")
+        if not isinstance(symbol, str) or symbol not in required_etfs:
+            raise InvalidDailyOutput("etf is not one that was given for an outlook")
+        if symbol in seen:
+            raise InvalidDailyOutput("etf appears more than once")
+        seen.add(symbol)
+        direction = item.get("direction")
+        if direction not in DIRECTIONS:
+            raise InvalidDailyOutput("etf direction is not one of the allowed values")
+        reason = output_sentence(item, "reason", "etf", InvalidDailyOutput)
+        no_refs = item.get("refs") == []
+        refs = () if no_refs else output_cited_refs(item, "refs", "etf", allowed_refs, InvalidDailyOutput)
+        check_no_ticker(reason, tickers, "etf", InvalidDailyOutput)
+        shortfall = output_weak_shortfall(item, "etf", InvalidDailyOutput)
+        if shortfall is not None:
+            check_no_ticker(shortfall, tickers, "etf shortfall", InvalidDailyOutput)
+        elif no_refs:
+            raise InvalidDailyOutput("etf cites no refs but is not marked weak")
+        elif direction == DIRECTION_UNSURE:
+            # 방향을 못 정했다는 것은 근거가 모자라다는 뜻이라 근거 약함 표시가 함께 있어야 한다.
+            raise InvalidDailyOutput("etf direction is unsure but is not marked weak")
+        if no_refs and direction != DIRECTION_UNSURE:
+            raise InvalidDailyOutput("etf has a direction but cites no refs")
+        outlooks.append(Point(reason, refs, shortfall, POINT_OUTLOOK, symbol, direction))
+    if required_etfs - seen:
+        raise InvalidDailyOutput(f"{len(required_etfs - seen)} etf(s) have no outlook")
+    issues = [_parse_issue(data[key], key, kind, allowed_refs, tickers)
+              for key, kind in ISSUE_KEYS if data.get(key) is not None]
+    return DailyOutput(points, False, (), tuple(issues), tuple(outlooks))
 
 
 MEMBER_REPEAT_MIN_NAME = 2
@@ -819,7 +901,8 @@ def section_title(s: Section) -> str:
     return ITEM_ETFS_SPLIT_TITLE if s.name == ITEM_ETFS and s.groups else s.name
 
 
-def _facts(sections: tuple[Section, ...]) -> list[str]:
+def section_lines(sections: tuple[Section, ...]) -> list[str]:
+    """항목마다 제목과 숫자·목록 줄. 재검색 기사와 숨김 항목은 싣지 않는다."""
     lines: list[str] = []
     for s in sections:
         if s.name == ITEM_RESEARCH or s.hidden:
@@ -884,54 +967,16 @@ def conclusion(i: DailyInput, output: DailyOutput | None = None) -> str:
     return CONCLUSION_PREFIX + " · ".join(parts)
 
 
-@dataclass(frozen=True)
-class SummaryView:
-    """본문에 쓸 요약. 문장마다 근거 번호(본문에서 인용한 순서)와 약한 점, 근거 목록을 번호 순으로 든다."""
-
-    insufficient: bool
-    points: tuple[tuple[str, tuple[int, ...], str | None], ...]
-    evidence: tuple[tuple[int, str], ...]
-
-
-def summary_view(sections: tuple[Section, ...], output: DailyOutput) -> SummaryView:
-    if output.insufficient_evidence:
-        # 근거 부족이면 LLM이 함께 낸 문장도 쓰지 않는다.
-        return SummaryView(True, (), ())
-    by_ref = {e.ref: e for s in sections for e in s.entries}
-    cited = list(dict.fromkeys(ref for p in output.points for ref in p.refs))
-    number = {ref: n for n, ref in enumerate(cited, start=1)}
-    points = tuple((p.statement, tuple(number[x] for x in p.refs), p.shortfall) for p in output.points)
-    return SummaryView(False, points, tuple((number[ref], by_ref[ref].describe) for ref in cited))
-
-
 def daily_text(i: DailyInput, sections: tuple[Section, ...], output: DailyOutput | None,
                status_text: str | None = None) -> str:
-    """글자판 본문. 순서: 제목 → 결론(마감 후 판) → 항목별 숫자 → 요약 → 면책 → 서버 상태(마감 후 판) → 근거 목록.
-    output이 None이면 숫자·목록만으로 된 규칙 기반 본문이다. 마감 후 판은 post_close_text의 배치를 따른다."""
+    """글자판 본문. output이 None이면 숫자·목록만으로 된 규칙 기반 본문이다. 판마다 배치가 달라
+    아침 판은 daily_morning, 마감 후 판은 daily_post_close가 쓴다."""
+    # 두 모듈은 이 모듈의 자료 모양을 쓰므로 순환을 피하려고 여기서 가져온다.
     if i.edition == EDITION_POST_CLOSE:
-        # 마감 후 판 배치는 이 모듈의 자료 모양을 쓰는 daily_post_close에 있어 순환을 피하려고 여기서 가져온다.
         from briefing.daily_post_close import post_close_text
         return post_close_text(i, sections, output, status_text)
-    lines = headline(i)
-    if i.edition == EDITION_POST_CLOSE:
-        lines.extend(["", conclusion(i)])
-    lines.extend(_facts(sections))
-    view = summary_view(sections, output) if output is not None else None
-    if view is not None:
-        lines.extend(["", "요약:"])
-        if view.insufficient:
-            lines.append(f"  {DAILY_INSUFFICIENT}")
-        for statement, numbers, shortfall in view.points:
-            lines.append(f"  - {statement} [근거 {', '.join(str(n) for n in numbers)}]")
-            if shortfall:
-                lines.append(weak_note_line(shortfall, "    "))
-    lines.extend(["", DAILY_DISCLAIMER])
-    if status_text:
-        lines.extend(["", status_text])
-    if view is not None and view.evidence:
-        lines.extend(["", "근거:"])
-        lines.extend(f"  {n}. {describe}" for n, describe in view.evidence)
-    return "\n".join(lines)
+    from briefing.daily_morning import morning_text
+    return morning_text(i, sections, output, status_text)
 
 
 def rule_based_text(i: DailyInput, sections: tuple[Section, ...]) -> str:
@@ -991,6 +1036,11 @@ def _etfs_with_day(i: DailyInput) -> frozenset[str]:
     return frozenset(e.symbol for e in i.etfs or () if e.has_day())
 
 
+def _etfs_to_forecast(i: DailyInput) -> frozenset[str]:
+    """아침 판이 방향을 예상해야 하는 ETF. 보유·관심 모두이고 일봉이 비어 있어도 뺀다고 정하지 않는다."""
+    return frozenset(e.symbol for e in i.etfs or ())
+
+
 def _issues_by_etf(i: DailyInput) -> dict[str, tuple[MemberIssue, ...]]:
     grouped: dict[str, list[MemberIssue]] = {}
     for issue in i.member_issues:
@@ -1015,7 +1065,7 @@ class DailyLlmWriter:
         tickers = self._forbidden_tickers(i)
         post_close = i.edition == EDITION_POST_CLOSE
         prompt, schema = (SYSTEM_PROMPT_POST_CLOSE, OUTPUT_SCHEMA_POST_CLOSE) if post_close \
-            else (SYSTEM_PROMPT, OUTPUT_SCHEMA)
+            else (SYSTEM_PROMPT, OUTPUT_SCHEMA_MORNING)
         rejected: list[LlmAttempt] = []
         for attempt in range(1, self.max_attempts + 1):
             raw: str | None = None
@@ -1023,17 +1073,15 @@ class DailyLlmWriter:
                 raw = self.client.complete(prompt, user, schema)
                 output = parse_post_close_output(raw, allowed, tickers, _etfs_with_day(i), _issues_by_etf(i),
                                                  bool(i.notables)) \
-                    if post_close else parse_output(raw, allowed, tickers)
+                    if post_close else parse_morning_output(raw, allowed, tickers, _etfs_to_forecast(i))
             except (LlmCallError, InvalidDailyOutput) as error:
                 rejected.append(LlmAttempt(attempt, type(error).__name__, str(error), user, raw))
                 log.warning("daily LLM attempt %d/%d failed for job %s: %s",
                             attempt, self.max_attempts, i.job_id, error)
                 continue
-            cited = () if output.insufficient_evidence else tuple(
-                dict.fromkeys(ref for p in (*output.points, *output.issues) for ref in p.refs))
-            weak = () if output.insufficient_evidence else tuple(p.shortfall for p in output.points if p.shortfall)
             return DailyWriteResult(DailyBody(llm_text(i, sections, output), GENERATED_BY_LLM,
-                                              output.insufficient_evidence, cited, weak, output), tuple(rejected),
+                                              output.insufficient_evidence, output.cited_refs(),
+                                              output.weak_shortfalls(), output), tuple(rejected),
                                     AcceptedAttempt(attempt, user, raw))
         return DailyWriteResult(None, tuple(rejected))
 

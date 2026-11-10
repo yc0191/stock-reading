@@ -14,7 +14,7 @@ from briefing.daily_post_close import post_close_view
 from briefing.daily_report import (
     DAILY_DISCLAIMER,
     DAILY_INSUFFICIENT,
-    OUTPUT_SCHEMA,
+    OUTPUT_SCHEMA_MORNING,
     OUTPUT_SCHEMA_POST_CLOSE,
     POINT_ETF,
     POINT_NOTABLE,
@@ -248,7 +248,7 @@ def test_each_edition_asks_with_its_own_prompt_and_schema():
     m = DailyInput("job", "morning", AT - timedelta(days=1), AT, (etf_row("TEST01", "1.00"),), False, (), (), (),
                    False)
     DailyLlmWriter(morning).write(m, build_sections(m))
-    assert morning.calls == [(SYSTEM_PROMPT, OUTPUT_SCHEMA)]
+    assert morning.calls == [(SYSTEM_PROMPT, OUTPUT_SCHEMA_MORNING)]
 
 
 # ---- 거부하고 다시 쓰게 함 ----
@@ -661,11 +661,11 @@ def test_a_reason_can_cite_the_exchange_rate_and_its_source_line_shows_the_usd_k
     assert tail[1].startswith("  2. 시장 자료 · 환율종합 원/달러 1111.1100(전일대비 -2.2200, -0.20%)")
 
 
-def test_the_morning_exchange_input_is_unchanged_and_an_unreadable_rate_keeps_the_plain_source_line():
+def test_the_morning_exchange_input_also_carries_the_usd_krw_value_and_an_unreadable_rate_keeps_the_plain_source_line():
     world, fx = fx_and_index_background()
     morning = replace(day_input([etf_row("TEST01", "1.00")], background=(world, fx)), edition="morning")
     [entry] = next(s for s in build_sections(morning) if s.name == ITEM_EXCHANGE).entries
-    assert "usdKrw" not in entry.llm and entry.describe.startswith("환율종합 — ")
+    assert entry.llm["usdKrw"]["value"] == "1111.1100" and entry.describe.startswith("환율종합 원/달러 1111.1100")
     plain = Background("exchange-rate-summary", None, "ok", "{\"fx\": \"TEST\"}", FETCHED)
     post = day_input([etf_row("TEST01", "1.00")], background=(world, plain))
     [entry] = next(s for s in build_sections(post) if s.name == ITEM_EXCHANGE).entries
