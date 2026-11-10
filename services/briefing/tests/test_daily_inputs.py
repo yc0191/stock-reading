@@ -261,7 +261,7 @@ def test_a_member_issue_from_a_filing_names_the_filing_even_when_it_also_has_a_r
     issues, _ = member_issues([etf], [close("TESTA", "0.50"), close("TESTB", "-4.00")], [f])
     i = post_close_input([etf], filings=(f,), member_issues=issues)
     why = [e.describe for e in next(s for s in build_sections(i) if s.name == ITEM_MEMBER_ISSUES).entries]
-    assert "직전 장 등락률 0.50%" in why[0] and "범위 안 공시" in why[0]
+    assert "직전 장 등락률 +0.50%" in why[0] and "범위 안 공시" in why[0]
     assert "직전 장 등락률 -4.00%" in why[1] and "범위 안 공시" not in why[1]
 
 

@@ -179,7 +179,8 @@ def _post_close_etfs(v: PostCloseView) -> str:
         for row in rows:
             inner = _rate_spans(escape(row.line))
             if row.reason is not None:
-                inner += _p(NOTE_STYLE, f"이유: {_rate_spans(escape(row.reason))} {_cite(row.numbers)}") + _weak(row.shortfall)
+                cite = f" {_cite(row.numbers)}" if row.numbers else ""
+                inner += _p(NOTE_STYLE, f"이유: {_rate_spans(escape(row.reason))}{cite}") + _weak(row.shortfall)
             inner += "".join(_p(SMALL_STYLE, _rate_spans(escape(m))) for m in row.members)
             items.append(f'<li style="{ITEM_STYLE}">{inner}</li>')
         parts.append(f'<ul style="{LIST_STYLE}">{"".join(items)}</ul>')

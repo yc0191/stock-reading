@@ -26,7 +26,7 @@ from test_daily_jobs import (
     post_close_output,
     published,
     tick,
-    POST_CLOSE_MARKET,
+    POST_CLOSE_BACKGROUND,
 )
 
 FETCHED = "2026-10-20T16:30:02+09:00"
@@ -67,7 +67,7 @@ def start():
         core = DailyCore(requests, DailyLlmWriter(llm, settings.llm_max_attempts, settings), details, settings)
         core.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
         core.on_daily_data_responded(daily_response(etfs=three_etfs() if etfs is None else etfs,
-                                                    close_rates=close_rates(), background=POST_CLOSE_MARKET),
+                                                    close_rates=close_rates(), background=POST_CLOSE_BACKGROUND),
                                      POST_CLOSE_AT)
         return core, requests, details, llm
     return build

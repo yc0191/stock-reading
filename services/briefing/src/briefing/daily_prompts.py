@@ -39,6 +39,7 @@ SYSTEM_PROMPT = READING_GUIDE + "\n\n" + MORNING_RULES
 POST_CLOSE_GUIDE_EXTRA = """
 - 항목 "ETF별 기사"는 ETF마다 모아 둔 기사이며 etf 칸은 그 기사가 붙은 ETF 종목코드입니다. 항목의 missing에 있는 ETF는 기사 응답을 받지 못한 것이라 기사가 없는 것이 아니라 모르는 것입니다.
 - 항목 "미국 구성 종목 이슈"는 ETF에 담긴 미국 종목 중 직전 장 등락이 크거나 범위 안 공시가 있는 종목입니다(rank는 비중 순위, filingRefs는 그 종목의 공시 번호). 이 이슈는 코드가 ETF 줄 아래 '↳' 줄로 따로 보여 줍니다.
+- 항목 "미국 지수"는 직전 미국 장의 지수 등락(indexRates), 항목 "환율"은 환율종합 원문입니다. 환율의 usdKrw(있을 때만 담깁니다)는 코드가 원문의 원/달러 행에서 꺼낸 값이며 value는 원/달러 환율, change는 전일대비, ratePercent는 등락률(%)입니다. 환율 숫자는 usdKrw의 값을 씁니다.
 - notableCandidates는 코드가 고른 눈에 띄는 점 후보입니다. kind가 opposite면 업종이 같은데 반대로 움직인 ETF 둘, cluster면 같은 방향으로 크게 움직인 ETF 묶음입니다. ETF 하나에 관한 이야기는 후보가 아니며 ETF 줄의 reason과 '↳' 줄이 맡습니다. symbols는 관련 ETF 종목코드, refs는 관련 근거 번호입니다."""
 
 POST_CLOSE_RULES = """규칙:
@@ -49,10 +50,13 @@ POST_CLOSE_RULES = """규칙:
 - 문장에 미국 종목의 티커(ticker, tickers 칸의 값)를 쓰지 않습니다. 개별 종목을 말해야 하면 "미국 종목"이라고 씁니다.
 - summary는 그날 ETF 흐름을 한국어 문장 정확히 2개로 요약합니다. 개별 ETF 하나하나를 나열하지 않고, 근거 번호는 붙이지 않습니다.
 - etfs는 항목 "보유 ETF별 하루 등락"의 entries에 있는 ETF마다 정확히 하나씩 씁니다. symbol은 그 entry의 symbol 값이고, reason은 그 ETF가 왜 움직였는지 한 문장입니다. 자료 없음 ETF(missing)는 etfs에 넣지 않습니다.
-- reason의 refs에는 그 문장의 근거가 된 기사·공시·구성 종목 이슈 번호를 넣습니다. 기사·공시·구성 종목 이슈가 모두 없으면 "받은 자료에서 이유를 찾지 못했다"는 뜻으로 쓰고 그 ETF의 하루 등락 번호를 refs에 넣고 weak를 true로 합니다.
+- 미국 자산에 투자하는 ETF(원화로 거래되며, etfInfo의 추종 대상·구성 종목으로 판단합니다)는 담긴 종목 등락과 달러-원 환율 변화를 함께 봅니다. 미국 종목이 올라도 환율이 내리면 원화 가격은 덜 오를 수 있고, 그 반대도 같습니다.
+- reason의 refs에는 그 문장의 근거가 된 기사·공시·구성 종목 이슈·미국 지수·환율 번호를 넣습니다. 이 자료 어디에서도 이유를 찾지 못하면 reason을 "받은 자료에서 이유를 찾지 못했습니다."로 쓰고 refs는 빈 목록으로 두며 weak를 true로 합니다. 그 ETF의 하루 등락 번호를 이유의 근거로 넣지 않습니다.
+- ETF·담긴 종목·추종 대상과 관련 없는 기사는 인용하지 않습니다.
 - 구성 종목 이슈는 ETF 줄 아래 '↳' 줄에 이미 보이므로 reason에서 그 종목의 이름과 등락률을 되풀이하지 않습니다. 구성 종목 이슈가 이유의 단서면 "담긴 미국 종목의 움직임이 영향을 줬을 수 있다"처럼 짧게 쓰고 그 이슈 번호를 인용합니다.
 - 항목마다 weak(근거 약함 여부)와 shortfall(부족한 점)을 냅니다. 뒷받침하는 자료가 약하면(범위가 맞지 않거나, 간접 정보뿐이거나, 세부가 자료에 없으면) weak를 true로 하고 shortfall에 어떤 자료가 더 있어야 하는지 한 문장으로 씁니다. 근거가 충분하면 weak를 false로, shortfall을 빈 문자열로 둡니다. shortfall은 찾아야 할 자료를 말할 뿐 원인을 단정하지 않으며 미국 종목의 티커를 쓰지 않습니다.
 - notables는 notableCandidates 중 알릴 만한 것을 0~3개 골라 한 문장씩 씁니다. refs는 후보의 refs 안에서 고르고 weak·shortfall을 냅니다. 알릴 것이 없거나 notableCandidates가 비어 있으면 빈 목록이며, 후보가 없는데 notables를 쓰면 출력이 거부됩니다. notables는 reason과 같은 내용을 되풀이하지 않고 ETF들을 묶어 말합니다.
+- summary, reason, notables, shortfall의 모든 문장은 "~습니다"로 끝맺습니다("~했다"처럼 쓰지 않습니다).
 - 요약할 근거가 부족하면 insufficientEvidence를 true로 하고 summary, etfs, notables는 빈 목록으로 둡니다.
 
 출력은 다음 JSON 하나만 냅니다:
@@ -124,6 +128,7 @@ REWRITE_ADDENDUM_POST_CLOSE = """
 - 이번에는 위의 출력 형식 대신 다음 JSON 하나만 냅니다. points에는 다시 쓴 이유 문장 하나만 담고 다른 문장은 쓰지 않으며, insufficientEvidence는 false로 둡니다.
 {"points":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"insufficientEvidence":false}
 - 새 기사로 부족한 점이 채워지면 weak를 false로, 그래도 약하면 weak를 true로 하고 shortfall에 아직 부족한 점을 씁니다. 새 기사에 없는 내용은 지어내지 않습니다.
+- 새 기사로도 이유를 찾지 못하면 위의 규칙대로 refs를 빈 목록으로 두고 weak를 true로 합니다.
 - 근거 번호·단정 금지·티커 금지·구성 종목 이슈 되풀이 금지 같은 위의 규칙은 그대로 지킵니다."""
 
 REWRITE_ADDENDUM = """

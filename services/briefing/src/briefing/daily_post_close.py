@@ -139,7 +139,9 @@ def post_close_text(i: DailyInput, sections: tuple[Section, ...], output: DailyO
         for row in rows:
             lines.append(f"  - {row.line}")
             if row.reason is not None:
-                lines.append(f"    이유: {row.reason} {_numbers(row.numbers)}")
+                # 이유를 찾지 못한 ETF는 근거 번호 없이 쓴다.
+                cite = f" {_numbers(row.numbers)}" if row.numbers else ""
+                lines.append(f"    이유: {row.reason}{cite}")
                 if row.shortfall:
                     lines.append(weak_note_line(row.shortfall, "      "))
             lines.extend(f"    {m}" for m in row.members)

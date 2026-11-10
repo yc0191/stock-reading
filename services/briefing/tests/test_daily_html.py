@@ -89,9 +89,10 @@ def test_conclusion_leaves_out_a_rise_or_fall_that_did_not_happen():
     assert flat == "결론: 보유 1개 중 0개 상승"
 
 
-def test_a_rate_that_rounds_to_zero_is_neither_a_rise_nor_a_fall():
-    text = conclusion(post_close((etf("TEST01", "TEST 하나", "0.004"), etf("TEST02", "TEST 둘", "-0.004"))))
-    assert text == "결론: 보유 2개 중 0개 상승"
+def test_a_rise_is_counted_by_the_listed_rate_but_one_that_rounds_to_zero_is_not_the_biggest_rise():
+    # ETF 줄에는 +0.04%처럼 보이므로 개수는 원래 등락률의 부호로 센다. 반올림하면 0.0이라 가장 크게 오름에는 쓰지 않는다.
+    text = conclusion(post_close((etf("TEST01", "TEST 하나", "0.04"), etf("TEST02", "TEST 둘", "-0.004"))))
+    assert text == "결론: 보유 2개 중 1개 상승"
     # 반올림하면 0.1이 되는 값은 오름이다.
     assert "1개 상승" in conclusion(post_close((etf("TEST01", "TEST 하나", "0.06"),)))
     assert "가장 크게 오름 TEST 하나 +0.1%" in conclusion(post_close((etf("TEST01", "TEST 하나", "0.06"),)))

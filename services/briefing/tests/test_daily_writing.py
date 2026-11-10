@@ -24,8 +24,12 @@ from briefing.daily_report import (
     DailyLlmWriter,
     DailyOutput,
     EtfDay,
+    ITEM_EXCHANGE,
+    ITEM_MEMBER_ISSUES,
+    ITEM_US_INDEX,
     InvalidDailyOutput,
     Point,
+    build_llm_input,
     build_sections,
     conclusion,
     daily_text,
@@ -33,7 +37,7 @@ from briefing.daily_report import (
     parse_post_close_output,
     repeats_member_line,
 )
-from briefing.sources import Article, Background, EtfInfo, EtfMember, Filing
+from briefing.sources import Article, Background, EtfInfo, EtfMember, Filing, IndexRate
 
 KST = timezone(timedelta(hours=9))
 AT = datetime(2026, 10, 20, 17, 0, tzinfo=KST)
@@ -119,10 +123,29 @@ def test_a_ref_outside_the_given_list_is_rejected_for_reasons_and_notables_and_t
         parse(llm_output(notables=[{"statement": "점입니다.", "refs": ["E9"], "weak": False, "shortfall": ""}]))
 
 
-def test_a_reason_without_refs_is_rejected():
+def test_a_reason_without_refs_is_rejected_unless_it_is_marked_weak():
     none = [{"symbol": s, "reason": "이유입니다.", "refs": [], "weak": False, "shortfall": ""} for s in REQUIRED]
-    with pytest.raises(InvalidDailyOutput, match="cites no refs"):
+    with pytest.raises(InvalidDailyOutput, match="cites no refs but is not marked weak"):
         parse(llm_output(none))
+    with pytest.raises(InvalidDailyOutput, match="notable cites no refs"):
+        parse(llm_output(notables=[{"statement": "점입니다.", "refs": [], "weak": True, "shortfall": "기사 필요"}]))
+
+
+def test_a_reason_that_found_nothing_has_no_source_number_in_the_body():
+    # 이유를 못 찾은 ETF가 자기 일봉을 인용하면 근거가 있는 것처럼 보이므로 근거 번호 없이 둔다.
+    i = day_input([etf_row("TEST01", "1.00"), etf_row("TEST02", "0.20")])
+    found_nothing = {"symbol": "TEST01", "reason": "받은 자료에서 이유를 찾지 못했습니다.", "refs": [], "weak": True,
+                     "shortfall": "이 ETF를 다룬 기사가 더 있어야 합니다."}
+    other = {"symbol": "TEST02", "reason": "시장과 함께 움직였을 수 있습니다.", "refs": ["E2"], "weak": False,
+             "shortfall": ""}
+    result = DailyLlmWriter(Sequence(llm_output([found_nothing, other]))).write(i, build_sections(i))
+    assert result.rejected == () and result.body.cited == ("E2",)
+    text = result.body.text
+    assert "    이유: 받은 자료에서 이유를 찾지 못했습니다.\n" in text + "\n"
+    assert "이유: 시장과 함께 움직였을 수 있습니다. [출처 1]" in text
+    assert "1. 일봉 · TEST02" in text and "TEST01 하루 등락" not in text
+    html = render_html(i, build_sections(i), result.body.output)
+    assert "이유: 받은 자료에서 이유를 찾지 못했습니다.</p>" in html
 
 
 @pytest.mark.parametrize("where", ["summary", "reason", "shortfall", "notable"])
@@ -257,14 +280,32 @@ def test_a_rejected_output_is_asked_again_up_to_the_attempt_limit_and_then_the_b
     assert failed.body is None and len(failed.rejected) == 3 and len(bad.calls) == 3
 
 
-def test_the_member_stock_name_and_ticker_reach_claude_only_in_the_input_and_never_in_the_body():
+def test_the_member_name_is_shown_in_the_body_but_the_ticker_reaches_claude_only_in_the_input():
     i = issue_input()
     sections = build_sections(i)
     result = DailyLlmWriter(Sequence(llm_output())).write(i, sections)
     text, html = result.body.text, render_html(i, sections, result.body.output)
     for shown in (text, html):
-        assert "TESTA" not in shown and "테스트전자" not in shown
-    assert "↳ 비중 2위 미국 종목 직전 장 +3.50%" in text and "↳ 비중 2위 미국 종목 직전 장 <span" in html
+        assert "TESTA" not in shown
+    assert "↳ 비중 2위 테스트전자 직전 장 +3.50%" in text and "↳ 비중 2위 테스트전자 직전 장 <span" in html
+
+
+def test_a_member_without_a_usable_name_is_shown_as_a_us_stock():
+    # 이름이 없거나 이름에 티커가 들어 있으면 티커가 본문에 나오지 않게 '미국 종목'으로 쓴다.
+    assert member_line(MemberIssue("TEST01", 1, "TESTA", "  ", "4.00", ())) == "↳ 비중 1위 미국 종목 직전 장 +4.00%"
+    assert member_line(MemberIssue("TEST01", 1, "TESTA", "TESTA", "4.00", ())) == "↳ 비중 1위 미국 종목 직전 장 +4.00%"
+    assert member_line(MemberIssue("TEST01", 1, "TESTA", "테스트 TESTA 홀딩스", "4.00", ())) == \
+        "↳ 비중 1위 미국 종목 직전 장 +4.00%"
+    # 티커가 다른 낱말의 일부일 뿐이면 이름을 그대로 쓴다.
+    assert member_line(MemberIssue("TEST01", 1, "TESTA", "TESTAB 테스트", "4.00", ())) == \
+        "↳ 비중 1위 TESTAB 테스트 직전 장 +4.00%"
+
+
+def test_the_member_source_line_names_the_stock_once_without_the_ticker():
+    i = issue_input()
+    [entry] = next(s for s in build_sections(i) if s.name == ITEM_MEMBER_ISSUES).entries
+    assert entry.describe == "비중 2위 테스트전자 직전 장 등락률 +3.50% — 해외 시세 자료"
+    assert entry.llm["ticker"] == "TESTA" and entry.llm["name"] == "테스트전자"
 
 
 def test_a_rewritten_reason_keeps_its_kind_and_etf_and_is_checked_for_repeats_too():
@@ -282,6 +323,25 @@ def test_a_rewritten_reason_keeps_its_kind_and_etf_and_is_checked_for_repeats_to
     # 눈에 띄는 점은 이름·숫자를 그대로 말해도 되므로 되풀이 검사를 하지 않는다.
     notable = Point("점입니다.", ("E1",), "부족", POINT_NOTABLE)
     assert DailyLlmWriter(Sequence(repeat)).rewrite_point(i, sections, notable, 2, ()).point.kind == POINT_NOTABLE
+
+
+
+def test_a_rewritten_etf_reason_may_still_find_nothing_but_only_when_it_stays_weak():
+    i = issue_input()
+    sections = build_sections(i)
+    current = Point("받은 자료에서 이유를 찾지 못했습니다.", (), "이유를 찾지 못함", POINT_ETF, "TEST01")
+    nothing = json.dumps({"points": [{"statement": "받은 자료에서 이유를 찾지 못했습니다.", "refs": [], "weak": True,
+                                      "shortfall": "새 기사에도 이유가 없음"}], "insufficientEvidence": False})
+    result = DailyLlmWriter(Sequence(nothing)).rewrite_point(i, sections, current, 1, ())
+    assert result.point is not None and result.point.refs == () and result.rejected == ()
+    not_weak = json.dumps({"points": [{"statement": "이유입니다.", "refs": [], "weak": False, "shortfall": ""}],
+                           "insufficientEvidence": False})
+    failed = DailyLlmWriter(Sequence(not_weak, not_weak, not_weak)).rewrite_point(i, sections, current, 1, ())
+    assert failed.point is None and "not marked weak" in failed.rejected[0].reason
+    # 눈에 띄는 점은 다시 쓸 때도 근거 번호가 있어야 한다.
+    notable = Point("점입니다.", ("E1",), "부족", POINT_NOTABLE)
+    rejected = DailyLlmWriter(Sequence(nothing, nothing, nothing)).rewrite_point(i, sections, notable, 2, ())
+    assert rejected.point is None and "cites no refs" in rejected.rejected[0].reason
 
 
 # ---- 재검색 대상 ----
@@ -382,12 +442,12 @@ def test_the_text_follows_the_plan_order_and_ties_each_reason_to_its_member_line
     # 줄, 이유, 근거 약함, ↳ 줄 순서
     assert lines[first + 1].startswith("    이유: 기사가 영향을 줬을 수 있습니다.")
     assert lines[first + 2] == "      근거 약함: 업종 기사 필요"
-    assert lines[first + 3] == "    ↳ 비중 2위 미국 종목 직전 장 +3.50%"
+    assert lines[first + 3] == "    ↳ 비중 2위 테스트전자 직전 장 +3.50%"
     assert lines[first + 4] == "    ↳ 비중 5위 미국 종목 범위 안 공시"
     # 이유를 쓰지 않는 자료 없음 ETF는 숫자 없이 이유와 함께 한 줄만 나온다.
     gap = next(n for n, line in enumerate(lines) if line.startswith("  - 자료 없음: TEST TEST03"))
     assert "범위 안에 받은 일봉이 없음" in lines[gap] and not lines[gap + 1].startswith("    ")
-    assert "TESTA" not in text and "TESTB" not in text and "테스트전자" not in text
+    assert "TESTA" not in text and "TESTB" not in text
 
 
 def test_sources_are_numbered_in_the_order_they_appear_with_kind_and_links_for_articles_and_filings():
@@ -411,7 +471,7 @@ def test_the_html_has_the_same_order_and_links_only_http_sources_and_paints_the_
     assert positions == sorted(positions)
     assert 'href="https://news.example.com/a-1"' in html and 'href="https://filings.example.com/8k.htm"' in html
     assert '<span style="color:#d32f2f;font-weight:700">+3.50%</span>' in html
-    assert "TESTA" not in html and "테스트전자" not in html and "<script" not in html
+    assert "TESTA" not in html and "<script" not in html
 
 
 def test_a_source_link_that_is_not_http_is_shown_as_text_only_and_values_are_escaped():
@@ -428,7 +488,7 @@ def test_the_insufficient_notice_replaces_the_summary_and_the_etf_lines_have_no_
     out = DailyOutput((), True)
     text = daily_text(i, build_sections(i), out)
     assert DAILY_INSUFFICIENT in text and "이유:" not in text and "출처:" not in text and "눈에 띄는 점" not in text
-    assert "↳ 비중 2위 미국 종목 직전 장 +3.50%" in text
+    assert "↳ 비중 2위 테스트전자 직전 장 +3.50%" in text
     assert DAILY_INSUFFICIENT in render_html(i, build_sections(i), out)
 
 
@@ -437,7 +497,7 @@ def test_the_rule_based_post_close_body_has_no_summary_or_reasons_but_keeps_the_
     text = daily_text(i, build_sections(i), None)
     assert "요약:" not in text and "이유:" not in text and "출처:" not in text
     assert text.index("결론:") < text.index("■ 보유·관심 ETF별 하루 등락") < text.index(DAILY_DISCLAIMER)
-    assert "↳ 비중 2위 미국 종목 직전 장 +3.50%" in text
+    assert "↳ 비중 2위 테스트전자 직전 장 +3.50%" in text
     view = post_close_view(i, build_sections(i), None)
     assert not view.has_output and view.summary == () and view.sources == ()
 
@@ -556,3 +616,62 @@ def test_the_conclusion_ends_with_the_count_of_etfs_without_a_reason_and_leaves_
     unknown = day_input([etf_row("TEST01", "1.00")], articles=(EtfArticles("TEST01", (), False),))
     assert "이유를 찾지 못한" not in conclusion(unknown)
     assert "이유를 찾지 못한" not in conclusion(day_input([etf_row("TEST01", "1.00")]))
+
+
+# ---- 환율·미국 지수 ----
+
+def fx_and_index_background():
+    fx_rows = [{"crncy_cd_nm": "TEST통화", "cls_prc_p4": " 9.0000", "bdy_cmpr_p4": " 0.1000", "bdy_cmpr_r_p2": " 1.00"},
+               {"crncy_cd_nm": "원/달러", "cls_prc_p4": "  1111.1100", "bdy_cmpr_p4": "  -2.2200",
+                "bdy_cmpr_r_p2": "  -0.20", "fnl_rcp_tm": "153000"}]
+    world = Background("world-index", "C", "ok", "{\"raw\": \"TEST\"}", AT - timedelta(hours=9), index_rates=(
+        IndexRate("TESTIX", "TEST INDEX", "20261019", "100.00", "20261016", "98.00", "2.04"),))
+    fx = Background("exchange-rate-summary", None, "ok", json.dumps({"dataBody": {"out2": fx_rows}}, ensure_ascii=False),
+                    FETCHED)
+    return world, fx
+
+
+def test_post_close_gives_claude_the_us_index_and_the_usd_krw_rate_and_keeps_them_out_of_the_body():
+    i = day_input([etf_row("TEST01", "1.00")], background=fx_and_index_background())
+    sections = build_sections(i)
+    llm = {item["name"]: item for item in build_llm_input(i, sections)["items"]}
+    [index] = llm[ITEM_US_INDEX]["entries"]
+    assert index["ref"] == "B1" and index["indexRates"][0]["rate"] == "2.04"
+    [fx] = llm[ITEM_EXCHANGE]["entries"]
+    # 원문은 그대로 두고 꺼낸 원/달러 값을 덧붙인다.
+    assert fx["ref"] == "B2" and fx["usdKrw"] == {"value": "1111.1100", "change": "-2.2200", "ratePercent": "-0.20"}
+    assert "TEST통화" in fx["response"]
+    text = daily_text(i, sections, None)
+    assert ITEM_US_INDEX not in text and ITEM_EXCHANGE not in text and "1111" not in text
+
+
+def test_a_reason_can_cite_the_exchange_rate_and_its_source_line_shows_the_usd_krw_numbers():
+    i = day_input([etf_row("TEST01", "1.00")], background=fx_and_index_background())
+    sections = build_sections(i)
+    out = json.dumps({"summary": ["가입니다.", "나입니다."], "notables": [], "insufficientEvidence": False,
+                      "etfs": [{"symbol": "TEST01", "reason": "미국 지수가 오르고 환율이 내린 흐름이 영향을 줬을 수 있습니다.",
+                                "refs": ["B1", "B2"], "weak": False, "shortfall": ""}]}, ensure_ascii=False)
+    result = DailyLlmWriter(Sequence(out)).write(i, sections)
+    assert result.rejected == ()
+    tail = result.body.text.split("출처:\n")[1].splitlines()
+    assert tail[0].startswith("  1. 시장 자료 · 세계지수")
+    assert tail[1].startswith("  2. 시장 자료 · 환율종합 원/달러 1111.1100(전일대비 -2.2200, -0.20%)")
+
+
+def test_the_morning_exchange_input_is_unchanged_and_an_unreadable_rate_keeps_the_plain_source_line():
+    world, fx = fx_and_index_background()
+    morning = replace(day_input([etf_row("TEST01", "1.00")], background=(world, fx)), edition="morning")
+    [entry] = next(s for s in build_sections(morning) if s.name == ITEM_EXCHANGE).entries
+    assert "usdKrw" not in entry.llm and entry.describe.startswith("환율종합 — ")
+    plain = Background("exchange-rate-summary", None, "ok", "{\"fx\": \"TEST\"}", FETCHED)
+    post = day_input([etf_row("TEST01", "1.00")], background=(world, plain))
+    [entry] = next(s for s in build_sections(post) if s.name == ITEM_EXCHANGE).entries
+    assert "usdKrw" not in entry.llm and entry.describe.startswith("환율종합 — ")
+
+
+def test_the_post_close_prompt_reads_us_assets_with_the_exchange_rate_and_ends_sentences_politely():
+    assert "달러-원 환율 변화를 함께 봅니다" in SYSTEM_PROMPT_POST_CLOSE
+    assert "기사·공시·구성 종목 이슈·미국 지수·환율 번호" in SYSTEM_PROMPT_POST_CLOSE
+    assert "관련 없는 기사는 인용하지 않습니다" in SYSTEM_PROMPT_POST_CLOSE
+    assert '"~습니다"로 끝맺습니다' in SYSTEM_PROMPT_POST_CLOSE
+    assert "refs는 빈 목록" in SYSTEM_PROMPT_POST_CLOSE and "찾지 못했다" not in SYSTEM_PROMPT_POST_CLOSE

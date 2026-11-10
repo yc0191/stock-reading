@@ -75,7 +75,7 @@ def test_morning_and_post_close_choose_their_own_items():
     assert [s.name for s in build_sections(daily_input())] == \
         [ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_KR_REVIEW]
     assert [s.name for s in build_sections(daily_input("post-close"))] == \
-        ["그날 한국 증시", ITEM_ETFS, ITEM_ETF_ARTICLES, ITEM_FILINGS, ITEM_MEMBER_ISSUES]
+        ["그날 한국 증시", ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_ETFS, ITEM_ETF_ARTICLES, ITEM_FILINGS, ITEM_MEMBER_ISSUES]
 
 
 def test_each_missing_item_is_marked_no_data():
@@ -131,7 +131,8 @@ def test_filings_and_etf_lists_mark_truncation():
     assert sections[3].status == "잘림"
     assert sections[3].entries[0].ref == "0000000001-26-000001"
     post = build_sections(daily_input("post-close", etfs=(etf(), etf("TEST02")), etfs_truncated=True))
-    assert post[1].status == "잘림" and [e.ref for e in post[1].entries] == ["E1", "E2"]
+    etfs = next(s for s in post if s.name == ITEM_ETFS)
+    assert etfs.status == "잘림" and [e.ref for e in etfs.entries] == ["E1", "E2"]
 
 
 def test_llm_input_shows_status_and_time_gaps_and_raw_background():
