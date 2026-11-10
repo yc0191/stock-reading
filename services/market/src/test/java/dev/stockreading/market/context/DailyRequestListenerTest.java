@@ -68,7 +68,7 @@ class DailyRequestListenerTest {
 
     private DailyRequestListener listener(int maxTickers, int maxEtfs) {
         return new DailyRequestListener(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
-                new ContextProperties(Duration.ofDays(4), 32_768, maxTickers, List.of("C", "S")),
+                new ContextProperties(Duration.ofDays(4), 32_768, maxTickers, List.of("C", "S"), Duration.ofDays(7)),
                 new DailyProperties(maxEtfs), operationsReader, publisher, mapper);
     }
 

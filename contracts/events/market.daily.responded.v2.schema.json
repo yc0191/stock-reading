@@ -365,7 +365,7 @@
               },
               "indexRates": {
                 "type": "array",
-                "description": "선택. world-index이고 status가 ok 또는 too-large일 때만. 고른 원문의 지수마다 market이 계산한 등락률이다. 원문의 전일대비·등락률은 장이 끝난 지수에서 0으로 오므로 쓰지 않고, 같은 대륙의 저장 원문 중 받은 시각이 since~asOf 안이고 영업일이 더 이른 가장 최근 행의 종가를 직전 종가로 삼아 (종가 - 직전 종가) / 직전 종가 * 100으로 구한다.",
+                "description": "선택. world-index이고 status가 ok 또는 too-large일 때만. 고른 원문의 지수마다 market이 계산한 등락률이다. 원문의 전일대비·등락률은 장이 끝난 지수에서 0으로 오므로 쓰지 않고, 같은 대륙의 저장 원문 중 받은 시각이 asOf 이전이고 asOf에서 market 설정의 찾는 기간(기본 7일)을 뺀 시각과 요청 since 중 더 이른 시각 이후인, 영업일이 더 이른 가장 최근 행의 종가를 직전 종가로 삼아 (종가 - 직전 종가) / 직전 종가 * 100으로 구한다.",
                 "items": {
                   "type": "object",
                   "required": [

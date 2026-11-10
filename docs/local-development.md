@@ -40,7 +40,7 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 | `market.prev-close-fields` | 유형 2가 원문에서 읽을 전일 종가 후보 필드들(점으로 중첩 경로, 쉼표로 구분). 기본은 `dataBody.bdy_cls_prc`, `dataBody.sprc`, `dataBody.krx_bdy_clpr` 세 칸입니다. 제공자가 한 칸을 하루 안에서도 깨뜨려 보내는 경우가 있어(2026-11-04 확인) 스냅샷마다 세 칸을 읽고, 읽을 수 있는 값 중 설정한 칸 수의 절반을 넘는 칸이 같은 값일 때(기본 세 칸이면 두 칸 이상)만 그 값을 전일 종가로 씁니다. 세 칸이 모두 다르거나 두 칸 이상을 읽을 수 없으면 그 스냅샷은 유형 2를 판단하지 않습니다. 바꾸려면 `MARKET_PREV_CLOSE_FIELDS` 환경변수에 칸 경로를 쉼표로 주고, 빈 값으로 주면 유형 2를 끄며 시작할 때 경고를 한 번 남깁니다. 유형 1과 유형 2는 따로 평가하므로 같은 움직임에서 두 유형의 변동이 각각 발행될 수 있습니다 |
 | `market.prev-close-threshold-percent` | 유형 2 임계값(%) |
 
-시세처리기는 브리핑의 배경 자료 요청(`market.context.requested`)에 답합니다. 종류마다(환율종합, 시장종합, 세계지수 대륙별, 그 종목의 국내 일봉) 받은 시각이 기준 시각 이전인 것 중 최신 원문 1건을 주고, ETF에 담긴 미국 종목 목록과 종목마다 직전 정규장 등락률을 함께 줍니다. 세계지수는 장이 끝난 지수의 응답 등락률이 0.00으로 오므로 쓰지 않고, 같은 지수의 영업일이 더 이른 직전 저장 행 종가와 비교해 계산한 지수별 등락률(`indexRates`)을 함께 줍니다. 아래 값은 안전 상한이며 요청값의 원본은 브리핑 `config.py`입니다. 요청이 더 크면 이 값까지만 줍니다.
+시세처리기는 브리핑의 배경 자료 요청(`market.context.requested`)에 답합니다. 종류마다(환율종합, 시장종합, 세계지수 대륙별, 그 종목의 국내 일봉) 받은 시각이 기준 시각 이전인 것 중 최신 원문 1건을 주고, ETF에 담긴 미국 종목 목록과 종목마다 직전 정규장 등락률을 함께 줍니다. 세계지수는 장이 끝난 지수의 응답 등락률이 0.00으로 오므로 쓰지 않고, 같은 지수의 영업일이 더 이른 직전 저장 행(요청 범위가 아니라 찾는 기간 안에서 고릅니다) 종가와 비교해 계산한 지수별 등락률(`indexRates`)을 함께 줍니다. 아래 값은 안전 상한이며 요청값의 원본은 브리핑 `config.py`입니다. 요청이 더 크면 이 값까지만 줍니다.
 
 | 설정 키 | 설명 |
 |---|---|
@@ -50,6 +50,7 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 | `market.context.max-response-bytes` | 원문 1건의 최대 크기(UTF-8 바이트). 넘으면 원문을 빼고 너무 큼으로 표시합니다 |
 | `market.context.max-tickers` | 응답에 담을 미국 종목의 최대 개수 |
 | `market.context.world-index-continents` | 배경 자료로 줄 세계지수 대륙구분. 수집기의 마감 후 수집 대륙과 맞춥니다 |
+| `market.context.world-index-prev-lookback` | 세계지수 직전 영업일 행을 찾는 기간. 기준 시각보다 이 기간까지 이르게 받은 행에서 찾으며 요청 범위와는 따로입니다 |
 
 시세처리기는 데일리 브리핑의 판 자료 요청(`market.daily.requested`)에도 한 번에 답합니다(응답 `market.daily.responded`, `DailyRequestListener`). 응답은 `schemaVersion` 2입니다. ETF 목록은 종목 테이블의 국내 ETF 중 관계가 HELD 또는 WATCH인 종목이고(NONE과 구성 종목은 제외), ETF마다 관계를 선택 칸 `relation`(`HELD` 보유, `WATCH` 관심)으로 싣고, 받은 시각이 요청 범위 안인 일봉이 있으면 일봉 원문의 일자가 가장 최근인 레코드의 하루 등락(원문 값 그대로)을 줍니다. 일봉이 없거나 읽지 못하면 그 칸들을 null로 두고 `missingReason`(`no-daily-price-in-range`, `daily-price-unreadable`)에 이유를 싣되, 담긴 미국 종목과 ETF 정보는 그대로 줍니다. 그 밖에 직전 정규장 등락률, 시장 배경(환율종합, 시장종합, 세계지수와 계산된 지수 등락률)을 줍니다. 받은 시각 하한, 원문 크기, 미국 종목 수, 세계지수 대륙은 위 `market.context.*`를 함께 쓰고, ETF 수의 안전 상한만 따로 둡니다.
 

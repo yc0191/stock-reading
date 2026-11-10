@@ -51,7 +51,8 @@ class DailyRequestListener {
             DailyProperties dailyProperties, OperationsReader operationsReader, DailyPublisher publisher,
             ObjectMapper mapper) {
         this.repository = repository;
-        this.marketBackground = new MarketBackground(repository, worldIndexRates);
+        this.marketBackground = new MarketBackground(repository, worldIndexRates,
+                contextProperties.worldIndexPrevLookback());
         this.dailyPriceReader = new DailyPriceReader(mapper);
         this.closeRateQuery = closeRateQuery;
         this.holdings = holdings;
