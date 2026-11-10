@@ -46,6 +46,10 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 |---|---|
 | `market.holdings.file` | 보유 종목 JSON 파일의 경로(환경변수 `HOLDINGS_FILE`). 종목 테이블이 비어 있을 때 시작하면서 한 번만 이 파일로 채웁니다. 행이 있으면 파일을 읽지도 않습니다. 파일 모양은 아래 "보유 종목 파일"을 봅니다 |
 | `market.holdings.check-interval` | 종목 테이블이 바뀌었는지 확인하는 간격(기본 30초). 바뀌었을 때만 `market.holdings` 이벤트로 전체 목록을 냅니다 |
+| `market.members.url-template` | ETF 구성 종목 자동 조회의 요청 주소 틀(환경변수 `MEMBERS_URL_TEMPLATE`). `{fundId}`와 `{date}`(yyyy.MM.dd) 자리가 있습니다. 비어 있으면 자동 조회를 하지 않고 종목 테이블을 직접 고칩니다. 아래 "ETF 구성 종목 자동 조회"를 봅니다 |
+| `market.members.fund-ids` | 자동 조회할 ETF와 출처가 ETF를 부르는 번호(`MEMBERS_FUND_IDS`, `ETF코드:번호`를 쉼표로 이음). 여기에 없는 ETF는 조회하지 않습니다 |
+| `market.members.user-agent` | 요청마다 보내는 식별 문자열(`MEMBERS_USER_AGENT`, ASCII만) |
+| `market.members.top-count`, `fetch-day`, `call-interval`, `timeout` | 담을 상위 개수(기본 10), 평소 조회 요일(기본 월요일), 출처를 연달아 부르는 사이의 쉼(기본 2초), 요청 제한 시간(기본 10초) |
 | `market.context.max-age` | 기준 시각보다 이 기간 넘게 이른 자료는 없음으로 봅니다 |
 | `market.context.max-response-bytes` | 원문 1건의 최대 크기(UTF-8 바이트). 넘으면 원문을 빼고 너무 큼으로 표시합니다 |
 | `market.context.max-tickers` | 응답에 담을 미국 종목의 최대 개수 |
@@ -255,6 +259,8 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 | `COLLECTOR_INSIGHT_CRON` | 마감 후 조회 시각. 한국 시간 기준 cron(초 분 시 일 월 요일) |
 | `COLLECTOR_PRE_OPEN_ENABLED` | `true`일 때만 장 시작 전 수집 tick(`collect-pre-open`)을 발행합니다. 휴장일은 판정하지 않아 휴장일에도 발행됩니다. 공시는 이 tick에서만 받으므로 꺼 두면 공시를 수집하지 않습니다 |
 | `COLLECTOR_PRE_OPEN_CRON` | 장 시작 전 수집 시각. 한국 시간 기준 cron |
+| `COLLECTOR_MEMBERS_ENABLED` | `true`일 때만 ETF 구성 종목 조회 tick(`collect-members`)을 평일 하루 한 번 발행합니다. 코드 기본은 꺼짐입니다. 그날 실제로 받을지는 tick을 받은 시세처리기가 정합니다 |
+| `COLLECTOR_MEMBERS_CRON` | 구성 종목 조회 tick 시각. 한국 시간 기준 cron(기본 평일 07:30) |
 | `COLLECTOR_DAILY_BRIEFING_ENABLED` | `true`일 때만 데일리 브리핑 시작 tick(아침 판 `daily-briefing-morning`, 마감 후 판 `daily-briefing-post-close`)을 발행합니다. 수집기는 신호만 보내고 자료를 새로 모으지 않습니다. 휴장일은 판정하지 않아 휴장일에도 발행됩니다 |
 | `COLLECTOR_DAILY_BRIEFING_MORNING_CRON` | 아침 판 시작 시각. 한국 시간 기준 cron이며 장 시작 전 수집 뒤로 둡니다. `-`를 주면 이 판만 발행하지 않습니다 |
 | `COLLECTOR_DAILY_BRIEFING_POST_CLOSE_CRON` | 마감 후 판 시작 시각. 한국 시간 기준 cron이며 장 마감 후 조회 뒤로 둡니다. `-`를 주면 이 판만 발행하지 않습니다 |
@@ -381,7 +387,21 @@ python3 scripts/load_config.py --only briefing
 - ETF는 `members` 배열(`market`, `symbol`, 선택 `name`, `weight`(%, 0~100, 소수 4자리까지), `rank`(비중 순위, 없으면 적힌 순서))을 가집니다. ETF 안에만 나오는 종목은 `relation`이 `NONE`인 `STOCK` 종목으로 만들어지고, 같은 종목이 여러 곳에 나와도 종목 행은 하나입니다.
 - 국내 ETF의 `symbol`은 6자리 숫자·대문자입니다. 종류 구분이 있는 티커는 `.`로 적어도 `-`로 맞춰 저장합니다.
 - 테이블이 비어 있을 때 파일이 없거나 형식이 틀리면 시작이 실패합니다. 메시지에는 값 대신 몇 번째 항목(구성 종목)인지와 오류 종류만 적고, 경로와 값은 로그에 남기지 않습니다(종목·관계 개수만 남깁니다).
-- 응답: `market.context.responded`와 `market.daily.responded`의 `etf`(선택)에 ETF 이름, 추종 대상, 업종과 구성 종목(시장, 심볼, 이름, 비중, 순위)이 담깁니다. 변동 종목이 ETF가 아니면 `etf`가 없습니다.
+- 응답: `market.context.responded`와 `market.daily.responded`의 `etf`(선택)에 ETF 이름, 추종 대상, 업종과 구성 종목(시장, 심볼, 이름, 비중, 순위)이 담깁니다. 변동 종목이 ETF가 아니면 `etf`가 없습니다. `market.daily.responded`(v2)의 `etf`에는 판 요청의 시간 범위 안에 상위 구성 변경이 반영됐을 때만 `memberChanges`(`since`, `asOf`, `removed`, `added`, `moved`)가 더해지며, 바뀐 것이 없으면 칸이 없습니다.
+
+### ETF 구성 종목 자동 조회
+
+`collect-members` tick(수집기가 평일 하루 한 번 발행)을 시세처리기가 받아, 출처를 설정한 ETF의 상위 구성 종목(주식만, 비중 상위 10개)을 받아 바뀐 것만 반영합니다. 전용 consumer group(`market-members`)으로 받습니다. `schedule.tick`은 파티션이 1개라 다른 리스너와 그룹이 같으면 tick이 누락되기 때문입니다.
+
+- **주기:** 평소에는 한 주에 한 번(`market.members.fetch-day`), 지수 교체일이 든 달에는 매일 받습니다. 교체 일정은 `index_rebalance_schedule` 테이블(`tracks`, `effective_date`, 선택 `note`)에 사람이 1년에 한 번 직접 넣습니다. `tracks`는 `instrument.tracks`와 같은 값이어야 ETF와 이어집니다. 일정이 없는 ETF는 주 1회만 받습니다. 아직 구성을 한 번도 받지 않은 ETF는 요일을 기다리지 않고 다음 조회 때 바로 받습니다.
+- **반영:** 받은 상위 구성의 종목·순위가 이전과 다를 때만 `etf_member_history`에 새 행을 넣고, 같은 때 `etf_member`(현재 구성)도 맞춥니다. 종목이 들어오거나 나가거나, 상위 10개 안의 순위만 바뀌어도 바뀐 것으로 봅니다. 비중과 이름은 비교하지 않습니다. 그대로면 이력 행의 마지막 확인일(`last_seen_on`)만 고치고, `etf_member`의 비중(`weight`)은 새로 받은 값으로 맞춥니다(비중은 `market.holdings` 해시에 없어 다시 내보내지 않습니다). 이미 관리 중인 종목(`HELD`·`WATCH`이거나 이름이 있는 행)의 이름은 출처 이름으로 바꾸지 않고, 이름이 빈 `NONE` 행에만 채웁니다. 새 구성 종목은 구성으로만 아는 종목(`NONE`)으로 넣고, 어느 ETF에도 담기지 않게 된 `NONE` 종목은 지웁니다. 바뀐 `etf_member`는 기존 경로(30초 확인)로 `market.holdings`에 실려 뉴스 검색어에도 반영됩니다.
+- **원문 보관:** 받을 때마다 응답 원문을 그대로 `etf_member_raw`(ETF, 기준일, 상태 코드, 원문, 받은 시각)에 저장합니다. 상태가 200이 아니거나 모양이 달라 실패한 응답도 해석 전에 저장합니다(너무 큰 응답은 제외). `etf_member_history`의 구성은 이 원문에서 주식만 골라 상위 10개로 줄인 계산 결과입니다. 행은 받을 때마다 늘며 지우는 절차는 아직 없습니다.
+- **실패:** 출처가 응답하지 않거나, 상태가 200이 아니거나, 응답 모양이 다르거나, 주식 행이 하나도 없으면 그 ETF는 이전 구성을 그대로 두고 로그에 오류 종류만 남기며(주소·종목코드는 남기지 않음) 다음 ETF로 넘어갑니다. 비중이 숫자가 아니거나 0~100을 벗어난 응답도 모양이 다른 응답으로 봅니다.
+- **수동 ETF:** `MEMBERS_FUND_IDS`에 없는 ETF는 자동으로 받지 않고, 종목 테이블을 직접 고칩니다.
+- **판에 싣기:** 데일리 응답은 판 요청 시간 범위 안에 반영된 변경만 `memberChanges`로 싣습니다. `since`는 바뀌기 전 구성을 마지막으로 확인한 날, `asOf`는 바뀐 구성을 처음 받은 날입니다. 범위 안에 변경이 여러 번이면 첫 변경 직전 구성과 마지막 구성을 비교하고, 되돌아왔으면 싣지 않습니다.
+- **조회 기준:** 출처에는 오늘 직전 평일을 기준일로 요청합니다. 공휴일은 따로 보지 않으며, 그날 자료가 없어 비어 오면 실패로 처리됩니다. 주식만 거르는 기준은 "비중이 있고 종목코드가 주식 코드 모양"이며, 시장은 코드가 숫자로 시작하는 6자리면 `KR`, 미국 티커 모양(영문 대문자 1~5자, 종류 구분 `-`·`.` 1자)이면 `US`이며(출처가 해외 종목코드를 `<티커> US Equity`처럼 거래소 꼬리를 붙여 주면 꼬리를 떼고, 종류 구분 `/`는 `-`로 바꿉니다) 그 밖의 코드(숫자 4자리 등 다른 해외 코드)는 후보에서 빼고 개수만 로그에 남깁니다. 같은 종목코드가 응답에 두 행 이상이면 비중을 합쳐 한 번만 넣습니다. 마지막 확인일이 7일 넘게 지난 ETF는 조회 요일과 상관없이 받을 차례로 봅니다(공휴일 다음 조회가 실패해도 다음 주까지 기다리지 않게). 해외 종목 코드 모양과 채권·파생·다른 ETF가 실제 응답에서 어떻게 보이는지는 아직 실제 응답으로 확인하지 못했습니다(미확인).
+- **결정: 시세처리기의 첫 외부 호출.** 지금까지 시세처리기는 외부를 호출하지 않고 수집기가 받아 준 자료만 읽었습니다. 구성 종목은 호출이 주 1회 수준으로 적고(ETF마다 한 번, 한 번에 약 수십 KB), 받은 결과를 곧바로 이력·종목 테이블에 반영해야 하며, 종목 테이블을 쓰는 서비스가 시세처리기뿐이라 시세처리기가 직접 호출합니다. 수집기가 받으면 응답을 이벤트로 옮기고 다시 시세처리기가 받아 테이블에 쓰는 단계가 더해집니다. 이 호출은 시세 제공자 API(`CallRateLimit` 대상)와 무관한 운용사 공개 페이지이며, 출처 주소와 ETF별 번호는 설정값으로만 받습니다. 출처는 문서화된 API가 아니라 사이트 내부용이어서 응답 모양이 예고 없이 바뀔 수 있고, 그래서 모양이 다르면 일부만 읽지 않고 실패로 둡니다.
+- **자동 수집을 허용한 곳만:** 거래소 정보 시스템은 이용약관이 자동 수집을 금지해 쓰지 않습니다. 운용사 사이트는 robots.txt가 전체 허용인 곳만 자동으로 받고, 약관 본문을 읽지 못했거나 호출 방식을 못 찾은 운용사의 ETF는 수동 입력으로 둡니다(2026-11-10 조사).
 
 ## 테스트
 

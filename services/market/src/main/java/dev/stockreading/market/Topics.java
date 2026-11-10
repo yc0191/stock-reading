@@ -24,9 +24,12 @@ public class Topics {
     public static final String MARKET_DAILY_REQUESTED = "market.daily.requested";
     public static final String MARKET_DAILY_RESPONDED = "market.daily.responded";
     public static final String MARKET_HOLDINGS = "market.holdings";
+    public static final String SCHEDULE_TICK = "schedule.tick";
     public static final int PARTITIONS = 3;
     // 보유 종목 목록은 키가 하나인 압축 토픽이라 파티션 하나로 충분하고, 소비자(수집기, 뉴스)의 선언과 같아야 한다.
     public static final int HOLDINGS_PARTITIONS = 1;
+    // 수집기의 선언과 같아야 한다. 파티션이 1개라서 이 토픽을 받는 리스너는 서로 다른 consumer group을 쓴다.
+    public static final int SCHEDULE_TICK_PARTITIONS = 1;
 
     @Bean
     NewTopic marketSnapshotTopic() {
@@ -83,5 +86,10 @@ public class Topics {
     NewTopic marketHoldingsTopic() {
         return TopicBuilder.name(MARKET_HOLDINGS).partitions(HOLDINGS_PARTITIONS).replicas(1)
                 .config(TopicConfig.CLEANUP_POLICY_CONFIG, TopicConfig.CLEANUP_POLICY_COMPACT).build();
+    }
+
+    @Bean
+    NewTopic scheduleTickTopic() {
+        return TopicBuilder.name(SCHEDULE_TICK).partitions(SCHEDULE_TICK_PARTITIONS).replicas(1).build();
     }
 }

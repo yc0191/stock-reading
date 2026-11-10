@@ -44,6 +44,13 @@ class HoldingsSnapshotTest {
     }
 
     @Test
+    void theMembershipCarriesNoWeightSoRefreshingWeightsNeverChangesTheHash() {
+        // 구성 종목 자동 조회가 같은 구성의 비중만 고쳐도 market.holdings가 다시 나가지 않는다는 전제.
+        assertThat(Membership.class.getRecordComponents()).extracting(c -> c.getName())
+                .containsExactly("etfMarket", "etfSymbol", "memberMarket", "memberSymbol", "rank");
+    }
+
+    @Test
     void aMissingNameAndAnEmptyNameLookTheSameButANullRankDiffersFromRankOne() {
         // 이름이 없는 칸은 payload에서 빠지므로 소비자 입장에서 빈 이름과 구별되지 않는다.
         assertThat(new HoldingsSnapshot(List.of(FAKE_A), List.of()).contentHash())

@@ -170,6 +170,45 @@ class DailyContractTest {
     }
 
     @Test
+    void producerMemberChangesMatchSchemaAndAreLeftOutWhenThereIsNoChange() throws IOException {
+        ContextPayload.EtfInfo changed = new ContextPayload.EtfInfo("TEST ETF", null, null, List.of(), false)
+                .withMemberChanges(new ContextPayload.MemberChanges("2026-10-12", "2026-10-19",
+                        List.of(new ContextPayload.ChangedMember("US", "OLDC", null, 3)),
+                        List.of(new ContextPayload.ChangedMember("US", "NEWD", "NEW CORP D", 2)),
+                        List.of(new ContextPayload.MovedMember("KR", "TEST09", null, 2, 1))));
+        ContextPayload.EtfInfo unchanged = new ContextPayload.EtfInfo("TEST ETF TWO", null, null, List.of(), false);
+        String json = serialize(new DailyPayload(JOB_ID, 1, List.of(
+                new DailyPayload.Etf("TEST01", "20261020", "9850", "10000", "-1.50", "2026-10-20T16:30:02+09:00",
+                        List.of(), false, changed),
+                new DailyPayload.Etf("TEST02", "20261020", "20100", "20000", "0.50", "2026-10-20T16:30:03+09:00",
+                        List.of(), false, unchanged)),
+                List.of(), List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false));
+
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", json)).isEmpty();
+        var etfs = mapper.readTree(json).get("payload").get("etfs");
+        var memberChanges = etfs.get(0).get("etf").get("memberChanges");
+        assertThat(memberChanges.get("since").asString()).isEqualTo("2026-10-12");
+        assertThat(memberChanges.get("removed").get(0).has("name")).isFalse();
+        assertThat(memberChanges.get("moved").get(0).get("rankAfter").asInt()).isEqualTo(1);
+        assertThat(etfs.get(1).get("etf").has("memberChanges")).isFalse();
+    }
+
+    @Test
+    void sampleMemberChangesMatchTheSchemaAndABrokenOneIsRejected() throws IOException {
+        String sample = ContractSchemas.sample("v2", "market.daily.responded.sample.json");
+        assertThat(sample).contains("\"memberChanges\"");
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", sample)).isEmpty();
+
+        // 순위 0, 날짜 모양 틀림, 필수 칸(moved) 없음은 계약 위반이다.
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json",
+                sample.replace("\"rankBefore\": 2", "\"rankBefore\": 0"))).isNotEmpty();
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json",
+                sample.replace("\"2026-10-12\"", "\"10/12\""))).isNotEmpty();
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json",
+                sample.replaceFirst("\"moved\": \\[", "\"moved_\": ["))).isNotEmpty();
+    }
+
+    @Test
     void producerEtfRelationMatchesSchemaAndIsLeftOutWhenUnknown() throws IOException {
         String json = serialize(new DailyPayload(JOB_ID, 1, List.of(
                 DailyPayload.Etf.withoutDaily("TEST01", DailyPayload.NO_DAILY_PRICE_IN_RANGE, List.of(), false, null)

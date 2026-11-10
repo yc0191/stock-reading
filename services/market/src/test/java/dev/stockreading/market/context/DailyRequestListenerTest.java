@@ -16,6 +16,7 @@ import static org.mockito.Mockito.when;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
 import java.util.List;
@@ -29,6 +30,9 @@ import dev.stockreading.market.event.ContextPayload;
 import dev.stockreading.market.event.DailyPayload;
 import dev.stockreading.market.holdings.EtfInfo;
 import dev.stockreading.market.holdings.HoldingsPort;
+import dev.stockreading.market.members.Member;
+import dev.stockreading.market.members.MemberChanges;
+import dev.stockreading.market.members.MemberChangesPort;
 import dev.stockreading.market.insight.OverseasCloseRate;
 import dev.stockreading.market.insight.OverseasCloseRateQuery;
 import tools.jackson.databind.ObjectMapper;
@@ -48,6 +52,7 @@ class DailyRequestListenerTest {
     private BackgroundRepository repository;
     private OverseasCloseRateQuery closeRateQuery;
     private HoldingsPort holdings;
+    private MemberChangesPort memberChanges;
     private OperationsReader operationsReader;
     private DailyPublisher publisher;
 
@@ -56,6 +61,7 @@ class DailyRequestListenerTest {
         repository = mock(BackgroundRepository.class);
         closeRateQuery = mock(OverseasCloseRateQuery.class);
         holdings = mock(HoldingsPort.class);
+        memberChanges = mock(MemberChangesPort.class);
         operationsReader = mock(OperationsReader.class);
         publisher = mock(DailyPublisher.class);
         when(repository.latest(any(), any(), any(), any())).thenReturn(Optional.empty());
@@ -64,11 +70,12 @@ class DailyRequestListenerTest {
         when(closeRateQuery.find(anyString(), any(), any())).thenReturn(Optional.empty());
         when(holdings.topTickers(anyString())).thenReturn(List.of());
         when(holdings.trackedEtfs()).thenReturn(List.of());
+        when(memberChanges.changes(anyString(), any(), any())).thenReturn(Optional.empty());
     }
 
     private DailyRequestListener listener(int maxTickers, int maxEtfs) {
         return new DailyRequestListener(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
-                new ContextProperties(Duration.ofDays(4), 32_768, maxTickers, List.of("C", "S"), Duration.ofDays(7)),
+                memberChanges, new ContextProperties(Duration.ofDays(4), 32_768, maxTickers, List.of("C", "S"), Duration.ofDays(7)),
                 new DailyProperties(maxEtfs), operationsReader, publisher, mapper);
     }
 
@@ -250,6 +257,43 @@ class DailyRequestListenerTest {
         assertThat(payload.etfs().get(0).etf()).isEqualTo(new ContextPayload.EtfInfo("TEST ETF", null, "TEST SECTOR",
                 List.of(new ContextPayload.EtfMember("US", "FAKEA", null, "5.25", 1)), false));
         assertThat(payload.etfs().get(1).etf()).isNull();
+    }
+
+    @Test
+    void memberChangesInTheRequestRangeAreCarriedOnTheEtfInfoAndOtherEtfsStayWithoutThem() throws IOException {
+        tracked("TEST01", "TEST02");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                daily("TEST01", "-1.50", AS_OF), daily("TEST02", "0.50", AS_OF)));
+        when(holdings.etfInfo("TEST01")).thenReturn(Optional.of(new EtfInfo("TEST ETF", null, null, List.of(
+                new EtfInfo.Member("US", "FAKEA", null, null, 1)))));
+        when(holdings.etfInfo("TEST02")).thenReturn(Optional.of(new EtfInfo("TEST ETF TWO", null, null, List.of())));
+        when(memberChanges.changes("TEST01", SINCE, AS_OF)).thenReturn(Optional.of(new MemberChanges(
+                LocalDate.parse("2026-10-12"), LocalDate.parse("2026-10-19"),
+                List.of(new Member("US", "OLDC", "OLD CORP C", "3.1", 3)),
+                List.of(new Member("US", "NEWD", null, "4.0", 2)),
+                List.of(new MemberChanges.Moved("US", "FAKEA", null, 2, 1)))));
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs().get(0).etf().memberChanges()).isEqualTo(new ContextPayload.MemberChanges(
+                "2026-10-12", "2026-10-19",
+                List.of(new ContextPayload.ChangedMember("US", "OLDC", "OLD CORP C", 3)),
+                List.of(new ContextPayload.ChangedMember("US", "NEWD", null, 2)),
+                List.of(new ContextPayload.MovedMember("US", "FAKEA", null, 2, 1))));
+        assertThat(payload.etfs().get(1).etf().memberChanges()).isNull();
+    }
+
+    @Test
+    void failureReadingMemberChangesDoesNotDropTheEtfInfo() throws IOException {
+        tracked("TEST01");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(daily("TEST01", "-1.50", AS_OF)));
+        when(holdings.etfInfo("TEST01")).thenReturn(Optional.of(new EtfInfo("TEST ETF", null, null, List.of())));
+        when(memberChanges.changes(anyString(), any(), any())).thenThrow(new IllegalStateException("boom"));
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs().get(0).etf().name()).isEqualTo("TEST ETF");
+        assertThat(payload.etfs().get(0).etf().memberChanges()).isNull();
     }
 
     @Test

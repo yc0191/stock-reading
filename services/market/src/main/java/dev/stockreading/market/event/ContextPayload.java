@@ -26,7 +26,34 @@ public record ContextPayload(
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record EtfInfo(String name, String tracks, String sector, List<EtfMember> members,
-            boolean membersTruncated) {
+            boolean membersTruncated, MemberChanges memberChanges) {
+
+        public EtfInfo(String name, String tracks, String sector, List<EtfMember> members, boolean membersTruncated) {
+            this(name, tracks, sector, members, membersTruncated, null);
+        }
+
+        /** 상위 구성 변경을 더한 사본. 데일리 응답(market.daily.responded v2)에만 쓴다. */
+        public EtfInfo withMemberChanges(MemberChanges changes) {
+            return new EtfInfo(name, tracks, sector, members, membersTruncated, changes);
+        }
+    }
+
+    /**
+     * ETF 상위 구성 종목의 변경(선택). since·asOf는 yyyy-MM-dd이고, 종목은 removed·added·moved 중 한 곳에만 나온다.
+     * 비중은 담지 않는다.
+     */
+    public record MemberChanges(String since, String asOf, List<ChangedMember> removed, List<ChangedMember> added,
+            List<MovedMember> moved) {
+    }
+
+    /** 상위 구성에서 빠졌거나 들어온 종목. rank는 빠지기 전 또는 들어온 뒤의 비중 순위다. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record ChangedMember(String market, String symbol, String name, int rank) {
+    }
+
+    /** 상위 구성 안에서 순위만 바뀐 종목. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record MovedMember(String market, String symbol, String name, int rankBefore, int rankAfter) {
     }
 
     /** ETF 구성 종목 한 개. rank는 비중 순위(1이 가장 큼)다. */

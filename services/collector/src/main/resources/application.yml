@@ -38,6 +38,12 @@ collector:
     enabled: ${COLLECTOR_PRE_OPEN_ENABLED:false}
     # 한국 시간 기준 cron(초 분 시 일 월 요일)
     cron: ${COLLECTOR_PRE_OPEN_CRON:0 30 8 * * MON-FRI}
+  members:
+    # 꺼 두면 ETF 구성 종목 조회 tick(collect-members)을 발행하지 않는다. 휴장일은 판정하지 않는다.
+    # 이 tick을 받은 시세처리기가 그날 받을 차례인 ETF(평소 주 1회, 지수 교체 달 매일)만 구성을 받는다.
+    enabled: ${COLLECTOR_MEMBERS_ENABLED:false}
+    # 한국 시간 기준 cron(초 분 시 일 월 요일)
+    cron: ${COLLECTOR_MEMBERS_CRON:0 30 7 * * MON-FRI}
   intraday:
     # 꺼 두면 장중 tick 을 발행하지 않는다. 휴장일은 판정하지 않는다.
     # 이 tick 하나로 환율종합, 시장종합, 세계지수 아시아(S)·아메리카(C)를 시차를 두고 차례로 받는다.

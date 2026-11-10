@@ -55,6 +55,8 @@ Avro + 스키마 레지스트리, Protobuf
 
 2026-11-10 변경: `news.collected`의 `payload.symbols` 항목 형식을 국내 6자리 코드·`*`에서 market.holdings의 symbol과 같은 형식(국내 코드, 미국 티커, 종류 구분은 `-`, `*`)으로 넓혔다. 미국 구성 종목 이름으로 검색해 찾은 기사에 그 티커를 태그로 붙이려는 것이며, 기존 값은 모두 새 형식에도 맞아 기존 발행 메시지와 샘플이 그대로 통과하고 필드 이름·타입·필수 여부는 그대로라 v1을 유지한다. 뉴스 서비스는 기사 태그 칸(`news_article_symbol.symbol`)을 16자로 넓힌다. 태그는 기사 주제(검색어에 걸린 종목) 그대로 두고 ETF가 담은 구성 종목 관계는 태그에 풀어 적지 않는다. 대신 뉴스 서비스가 `market.holdings`를 받아 기사를 꺼낼 때(`news.articles.requested`) 넓힌다. ETF로 꺼내면 그 ETF 태그 기사(시장 전체 `*` 포함)를 최신순으로 먼저, 그다음 구성 종목 태그 기사(앞의 기사와 겹치는 기사 제외)를 최신순으로 놓고 요청 상한까지 자른다. 이 순서는 `news.articles.responded`의 `articles` 설명에 적었고 칸과 형식은 그대로다. 완료 알림(`collection.completed`)의 `incompleteSymbols`는 국내 코드와 `*`만 받으므로, 미국 티커 검색이 불완전하면 그 티커를 담은 관심 ETF의 코드로 바꿔 알린다. 필드의 원본은 `contracts/events`의 스키마다.
 
+2026-11-10 변경: `market.daily.responded` v2의 `etfs[].etf`에 선택 칸 `memberChanges`(상위 구성 종목의 들어옴·나감·순위 바뀜과 `since`·`asOf`)를 더했다. 판 요청 범위 안에 반영된 변경이 있을 때만 싣고 없으면 칸을 빼므로 기존 소비자와 샘플은 그대로 통과해 v2를 유지한다. `schedule.tick`에는 알려진 `jobType` 값 `collect-members`를 더했다(구조 변경 없음). 칸의 원본은 `contracts/events`의 스키마다.
+
 ## 실제로 겪은 함정
 - **시각 형식:** `OffsetDateTime.toString()`은 초가 0이면 초를 생략해 RFC 3339 `date-time`에 어긋난다. 표준 포매터를 쓰고, 해당 케이스 테스트를 둔다.
 - **형식 검증이 기본으로 꺼져 있다:** JSON 스키마 검증 라이브러리는 `date-time` 등 형식을 기본으로 검사하지 않는다(Java는 옵션을 켜야 하고, Python `jsonschema`는 선택 패키지가 없으면 조용히 통과). 형식 검사를 켜고, **잘못된 입력이 실제로 거부되는지** 음성 테스트로 확인한다.

@@ -202,6 +202,126 @@
                   "membersTruncated": {
                     "type": "boolean",
                     "description": "maxTickers 때문에 members가 잘렸으면 true."
+                  },
+                  "memberChanges": {
+                    "type": "object",
+                    "description": "선택. 판 요청의 시간 범위 안에 이 ETF의 상위 구성 종목 변경이 반영됐을 때만 담기고, 바뀐 것이 없으면 칸 자체가 없다. 상위 구성(주식만 비중 상위 일정 개수)에서 종목이 빠졌거나(removed) 들어왔거나(added) 순위만 바뀐(moved) 것이다. 한 종목은 세 칸 중 한 칸에만 나오고, 상위 구성 밖으로 나간 종목은 removed에만 나온다. 비중 값은 싣지 않는다. 범위 안에 변경이 여러 번이면 범위 안 첫 변경 직전 구성과 마지막 구성을 비교한다.",
+                    "required": [
+                      "since",
+                      "asOf",
+                      "removed",
+                      "added",
+                      "moved"
+                    ],
+                    "properties": {
+                      "since": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "바뀌기 전 구성을 마지막으로 확인한 날(한국 시간)."
+                      },
+                      "asOf": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "바뀐 구성을 처음 받은 날(한국 시간)."
+                      },
+                      "removed": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "market",
+                            "symbol",
+                            "rank"
+                          ],
+                          "properties": {
+                            "market": {
+                              "type": "string",
+                              "pattern": "^[A-Z]{2,4}$"
+                            },
+                            "symbol": {
+                              "type": "string",
+                              "pattern": "^[0-9A-Z]{1,12}([.-][0-9A-Z]{1,2})?$"
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "모르면 빠진다."
+                            },
+                            "rank": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "description": "비중 순위(1이 가장 큼)."
+                            }
+                          }
+                        }
+                      },
+                      "added": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "market",
+                            "symbol",
+                            "rank"
+                          ],
+                          "properties": {
+                            "market": {
+                              "type": "string",
+                              "pattern": "^[A-Z]{2,4}$"
+                            },
+                            "symbol": {
+                              "type": "string",
+                              "pattern": "^[0-9A-Z]{1,12}([.-][0-9A-Z]{1,2})?$"
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "모르면 빠진다."
+                            },
+                            "rank": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "description": "비중 순위(1이 가장 큼)."
+                            }
+                          }
+                        }
+                      },
+                      "moved": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "market",
+                            "symbol",
+                            "rankBefore",
+                            "rankAfter"
+                          ],
+                          "properties": {
+                            "market": {
+                              "type": "string",
+                              "pattern": "^[A-Z]{2,4}$"
+                            },
+                            "symbol": {
+                              "type": "string",
+                              "pattern": "^[0-9A-Z]{1,12}([.-][0-9A-Z]{1,2})?$"
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "모르면 빠진다."
+                            },
+                            "rankBefore": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "rankAfter": {
+                              "type": "integer",
+                              "minimum": 1
+                            }
+                          }
+                        }
+                      }
+                    }
                   }
                 }
               },

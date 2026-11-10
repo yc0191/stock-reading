@@ -790,6 +790,28 @@ def test_daily_responded_v2_sample_matches_its_schema_and_has_a_missing_etf():
     assert empty and all(e["rate"] is None and e["fetchedAt"] is None for e in empty)
 
 
+def test_daily_responded_v2_member_changes_match_the_schema_and_a_broken_one_is_rejected():
+    event = daily_v2()
+    changes = event["payload"]["etfs"][0]["etf"]["memberChanges"]
+    assert validate(DAILY_V2, event) == []
+    assert changes["moved"][0]["rankBefore"] != changes["moved"][0]["rankAfter"]
+
+    for broken in ({"rankBefore": 0}, {"rankAfter": "1"}):
+        bad = daily_v2()
+        bad["payload"]["etfs"][0]["etf"]["memberChanges"]["moved"][0].update(broken)
+        assert validate(DAILY_V2, bad) != []
+    no_moved = daily_v2()
+    del no_moved["payload"]["etfs"][0]["etf"]["memberChanges"]["moved"]
+    assert validate(DAILY_V2, no_moved) != []
+    bad_date = daily_v2()
+    bad_date["payload"]["etfs"][0]["etf"]["memberChanges"]["since"] = "10/12"
+    assert validate(DAILY_V2, bad_date) != []
+    # 변경이 없으면 칸 자체가 없어도 된다(v2 유지).
+    without = daily_v2()
+    del without["payload"]["etfs"][0]["etf"]["memberChanges"]
+    assert validate(DAILY_V2, without) == []
+
+
 def test_daily_responded_v2_tolerates_unknown_fields():
     future = daily_v2()
     future["payload"]["venue"] = "future"
