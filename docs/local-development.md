@@ -64,7 +64,7 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 
 ## 브리핑 서비스 (Python)
 
-`market.move` 한 건마다 근거를 모아 리포트를 만들고 `briefing.generated`로 발행합니다.
+같은 종목의 `market.move`를 모아(아래 "같은 종목의 변동 묶음") 묶음마다 근거를 모아 리포트를 만들고 `briefing.generated`로 발행합니다. 아래 1~8번은 묶음 하나가 만든 작업 하나의 흐름이며, 변동 시각 T는 묶음에서 가장 늦은 변동의 `asOf`입니다.
 
 1. 그 변동에 쓸 수 있는 뉴스 수집 완료(`collection.completed`)를 기다립니다. 쓸 수 있는 완료는 `jobType`이 `collect-news`이고, `startedAt`이 변동 시각 T + Δ 이후이며, 그 종목과 `*`가 `incompleteSymbols`에 없는 것입니다. 변동보다 먼저 도착한 최근 완료도 메모리에 보관했다가 확인합니다.
 2. 세 요청을 함께 보냅니다: 시세처리기에 시세 이력(`market.history.requested`, T - 5분 ~ T + Δ를 일정 간격으로 솎아서)과 배경 자료(`market.context.requested`)를, news 서비스에 기사(`news.articles.requested`, T - 24시간 ~ T + Δ, 양끝 포함)를 요청합니다. 기사는 그 종목과 시장 전체(`*`) 태그만 돌아오며, 다른 종목 태그 기사를 빼는 것은 news 조회가 보장합니다(브리핑은 다시 검사하지 않음).
@@ -76,7 +76,16 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 
 8. LLM은 원인마다 근거가 약한지(`weak`)와 부족한 점(`shortfall`, 한 문장)도 냅니다. 원인 하나가 문장 하나이며, 약하다고 한 문장마다 따로 재검색합니다(`sentence_research.py`). 문장마다 검색어만 내는 LLM을 따로 불러(입력: 그 문장, 부족한 점, ETF 정보, 이미 찾은 기사 제목, 배경 숫자) 검색어(최대 3개, 짧은 낱말 2~3개)를 받고, 미국 종목은 구성 종목의 한글 이름으로, 이름이 없을 때만 티커로 검색하게 지시합니다. 재검색 요청(`news.research.requested`, 작업 종류 `move`, 태그는 그 종목)은 문장마다 따로 보내며 재검색 작업 id는 (작업, 문장 번호, 회차)로 정한 uuid라 문장마다 다릅니다. 여러 문장이 약하면 모두 동시에 진행합니다. 같은 재검색 작업 id(`researchJobId`)의 완료 알림을 대기 상한 안에서 기다린 뒤 그 id로 기사를 조회하고(`news.articles.requested`의 `researchJobId`, 순번은 1부터, 다시 요청·안정 판정 규칙은 4번과 같음), 받은 기사는 5번과 같은 시간 범위로 다시 거르고 기존 기사와 다른 문장이 이미 쓴 기사(같은 `articleId`)는 뺍니다. 남은 기사로 그 문장 하나만 다시 쓰며(약하지 않은 문장은 그대로), 근거 번호 검증·목록 밖 번호 거부·미국 티커 거부는 다시 쓰기에도 그대로 적용합니다. 다시 써도 약하면 그 문장만 한 번 더 찾습니다. 상한(`config.py`의 `CoreSettings`): 문장당 찾기 `research_rounds_per_sentence`(2), 작업 하나의 재검색 요청 합계 `max_research_requests`(10, 넘는 문장은 찾지 않고 근거 약함으로 남김), 작업 하나의 재검색 전체 시간 `research_total_limit`(15분, 지나면 그때의 본문으로 냄). 끝내 약한 문장에는 본문에 `근거 약함: <부족한 점>` 줄을 붙입니다(데일리와 같은 모양으로 `llm_output.py`의 `weak_note_line`이 만듭니다). 보고서 전체가 근거 부족(`insufficientEvidence` true)이면 문장이 없으므로 보고서 전체를 대상으로 한 번 찾아 다시 쓰고, 다시 써도 부족하면 근거 부족 리포트를 냅니다. 검색어 LLM 실패, 검색어 없음, 수집기의 하루 상한·검색 실패(`incompleteSymbols`), 완료 알림 시간 초과, 기사 조회 무응답, 거른 뒤 남은 기사 없음, 다시 쓰기 실패이면 그 문장은 그대로 둡니다. 새 실패 사유는 없고 로그와 한 줄 재검색 내역 로그(`research job=... researched=... articles=... result=...`), 작업 기록 테이블에만 남깁니다. 검색어와 종목은 화면 로그에 쓰지 않습니다. LLM 키가 없으면 재검색하지 않습니다.
 
-같은 종목의 변동이 여러 번 와도 이벤트마다 리포트를 만듭니다. 같은 `eventId`는 한 번만 처리합니다.
+### 같은 종목의 변동 묶음
+
+같은 종목의 변동이 잇따라 와도 리포트가 여러 통 나가지 않도록, `market.move`는 바로 작업으로 만들지 않고 종목마다 모읍니다(`move_group.py`).
+
+- **조용한 시간(기본 10분):** 마지막 변동을 받은 뒤 같은 종목의 변동이 10분 동안 더 오지 않으면 모인 변동으로 급변동 작업 1건을 만듭니다. 변동이 올 때마다 10분을 다시 잽니다.
+- **최대 대기(기본 30분):** 변동이 계속 와도 첫 변동을 받은 지 30분이 지나면 그때까지 모인 변동으로 작업 1건을 만들고, 그 뒤에 오는 변동은 새 묶음이 됩니다. 리포트가 끝없이 밀리지 않게 하는 상한입니다.
+- 두 값은 `config.py`의 `CoreSettings`(`move_quiet_period`, `move_max_wait`)이며 환경변수로 바꿀 수 없습니다. 조용한 시간을 0으로 하면 변동마다 바로 작업을 만듭니다. 시각은 변동을 받은 시각이고, 기준은 변동 시각(`asOf`)이 아닙니다.
+- 작업은 묶음에서 **가장 늦은 변동**으로 만듭니다. 작업 id(`job_run.job_id`), 변동 시각 T, 가격, 변동률이 그 변동의 것이고 `job_run.input`도 그 이벤트 원문입니다. 모인 변동 전부는 그 작업의 `job_log`에 `moves-grouped` 줄 하나로 남습니다(`data.moves`에 각 변동의 `eventId`, `asOf`, 가격, 변동률, 받은 시각, `attempts`에 모인 개수).
+- 종목마다 따로 묶고, 같은 `eventId`는 한 번만 셉니다(이미 내보낸 묶음의 변동이 다시 와도 새 작업을 만들지 않습니다).
+- 모으는 중인 변동은 메모리에만 있습니다. 정상 종료(종료 신호)를 받으면 모으는 중이던 묶음마다 작업 한 줄을 만들어 `interrupted_by_restart` 실패로 끝내고 `moves-grouped` 줄에 모인 변동을 남깁니다(리포트·LLM 호출·이벤트 발행 없음, 기록이 실패해도 종료는 막지 않음). 강제 종료(`kill -9`, 전원 꺼짐)만 흔적 없이 사라집니다. 읽은 위치를 처리 전에 확정하는 기존 정책 때문입니다. 작업이 만들어진 뒤에 재시작되면 아래 "재시작으로 끊긴 작업"을 따릅니다.
 
 ### 데일리 브리핑 (아침 판, 마감 후 판)
 
@@ -123,12 +132,12 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 
 ### 작업 기록 테이블
 
-급변동, 데일리 판(아침·마감 후), 뉴스 재검색이 같은 형식으로 `briefing` 스키마의 테이블 둘에 남깁니다. 서비스가 시작할 때 만듭니다(마이그레이션 도구 없음, `CREATE TABLE IF NOT EXISTS`). 옛 단일 `briefing.job_log`(작업 종류·대상이 줄마다 있던 모양)가 있으면 지우지 않고 `briefing.job_log_legacy`로 이름만 바꿔 두며, 옛 `briefing.failed_jobs`는 더 쓰지 않습니다(이미 있는 로컬 DB에서는 직접 지웁니다).
+급변동, 데일리 판(아침·마감 후), 뉴스 재검색이 같은 형식으로 `briefing` 스키마의 테이블 둘에 남깁니다. 테이블은 Flyway 번호 파일(`services/briefing/db/migration/V1__create_briefing_tables.sql`)이 만들며, 브리핑은 테이블을 만들지 않고 Flyway가 먼저 끝나 있기를 요구합니다(아래 "DB 준비와 Flyway"). 옛 단일 `briefing.job_log`와 `briefing.failed_jobs`는 더 쓰지 않으며 이미 있는 로컬 DB에서는 직접 지웁니다.
 
 - **`briefing.job_run`(작업마다 한 줄, 시작 때 만들고 끝날 때 고침):** `job_id`(기본키, 급변동은 `market.move`의 `eventId`, 데일리 판은 tick의 `eventId`), `job_kind`(`move`, `morning`, `post-close`), `input`(작업을 시작시킨 이벤트 원문 JSON), `status`(`running`, `succeeded`, `failed`), `failure_reason`, `generated_by`(`llm`, `rule-based`), `target`(급변동은 종목·변동 시각, 데일리는 판 범위), `started_at`, `finished_at`, `final_text`(발행한 최종 본문), `weak_count`(본문에 근거 약함이 남은 문장 수), `research_count`(보낸 재검색 요청 수), `result_event_id`(발행한 결과 이벤트의 `eventId`, 곧 메일의 "브리핑 ID").
 - **`briefing.job_log`(일마다 한 줄, `job_id`가 `job_run`을 가리킴):** `id`, `job_id`, `entry_type`, `stage`, `sentence_no`, `round`(문장 단위 줄의 문장 번호와 그 문장의 찾기 회차), `before`·`after`(문장을 다시 쓴 줄의 고치기 전·후 문장), `reason`, `error_type`, `attempts`, `data`(JSON 원문), `occurred_at`.
-- **기록 종류(`entry_type`):** `report-written`(받아들인 보고서·다시 쓰기 LLM 시도), `llm-rejected`(거부되거나 실패한 LLM 시도), `query-written`(받아들인 검색어 LLM 시도), `research-requested`(문장 하나의 재검색 요청), `articles-received`(재검색 기사를 받음: 받은·쓸·버린 기사와 이유, 수집기 완료 알림 원문), `sentence-rewritten`(문장을 다시 씀), `check-round`(기사 확인 라운드), `resent`(무응답 재요청), `missing-items`(판은 나갔지만 빠진 항목), `step-failed`(단계가 끝내 실패하거나 포기됨).
-- 작업 종류·상태·작성 방식·기록 종류의 값은 `job_log.py`의 enum(`JobKind`, `RunStatus`, `GeneratedBy`, `EntryType`)이 원본이고 DB 칸은 글자입니다. 시작할 때 그 enum으로 CHECK 제약을 지우고 다시 겁니다.
+- **기록 종류(`entry_type`):** `report-written`(받아들인 보고서·다시 쓰기 LLM 시도), `llm-rejected`(거부되거나 실패한 LLM 시도), `query-written`(받아들인 검색어 LLM 시도), `research-requested`(문장 하나의 재검색 요청), `articles-received`(재검색 기사를 받음: 받은·쓸·버린 기사와 이유, 수집기 완료 알림 원문), `sentence-rewritten`(문장을 다시 씀), `check-round`(기사 확인 라운드), `resent`(무응답 재요청), `missing-items`(판은 나갔지만 빠진 항목), `step-failed`(단계가 끝내 실패하거나 포기됨), `moves-grouped`(같은 종목의 변동 여럿을 모아 작업 하나로 만듦, 모인 변동 전부).
+- 작업 종류·상태·작성 방식·기록 종류의 값은 `job_log.py`의 enum(`JobKind`, `RunStatus`, `GeneratedBy`, `EntryType`)이 원본이고 DB 칸은 글자이고 CHECK 제약은 Flyway V1 파일에 같은 값으로 적혀 있습니다. 새 값을 더하면 enum과 새 번호 파일(V2 …)을 함께 고칩니다. 둘이 어긋나면 `test_job_log_schema.py`가 실패합니다.
 - `data`는 받은 응답과 LLM 입력·원래 응답, 검색어를 가공하거나 줄이지 않고 담습니다. 수집기가 거른 건수는 이벤트에 없어 수집기 로그에서 보고, 이벤트로는 완료 알림 원문(`collectorCompletion`)을 남깁니다. 키, 수신 주소, 보유 수량, 금액은 저장하지 않으며 화면 로그에는 종목코드·티커·검색어를 쓰지 않습니다.
 - 저장은 짧게(3번) 다시 시도하고, 작업 끝 줄(`job_run` 고침)이 끝내 실패하면 ERROR 로그를 남기고 그 작업의 결과 이벤트(`briefing.generated`, `briefing.daily.generated`)를 발행하지 않습니다. 기록이 없는 브리핑은 내보내지 않는다는 결정이며, 데일리 판이 반드시 나간다는 원칙의 유일한 예외입니다. 기록은 지우지 않고 쌓으며 보관 기간은 아래 "배포 전에 정할 것"에 있습니다.
 
@@ -152,16 +161,23 @@ JOB_HISTORY_DB_URL=postgresql://localhost:5432/stock JOB_HISTORY_DB_USER=<읽기
 | `context_no_response` | 배경 자료 응답을 총 시도 횟수 안에 받지 못함 |
 | `filings_no_response` | 공시 응답을 총 시도 횟수 안에 받지 못함 |
 | `llm_error` | LLM 출력이 3번 모두 형식·인용 검증을 통과하지 못하거나 호출이 실패함 |
+| `interrupted_by_restart` | 브리핑이 재시작되면서 끝나지 않은 채 남은 작업(아래 "재시작으로 끊긴 작업"). 모든 작업 종류에 쓰며, 이 사유는 코드의 단계 실패가 아니라 시작할 때 한 번에 붙입니다 |
 
 기록 자체가 실패하면 짧은 간격으로 3번까지 시도하고, 그래도 안 되면 `job_id`, 종목, 사유만 ERROR 로그에 남기고 넘어갑니다.
 
-### DB 준비와 다시 만들기
+### 재시작으로 끊긴 작업
 
-브리핑 전용 계정과 `briefing` 스키마는 `infra/compose/postgres/init/03-roles-briefing.sql`이 만듭니다. 테이블은 마이그레이션 도구 없이 브리핑이 시작할 때 `CREATE TABLE IF NOT EXISTS`로 만듭니다. DB에 연결할 수 없으면 브리핑은 시작하지 않습니다.
+브리핑은 작업 상태를 메모리에만 두므로 재시작되면 진행 중이던 작업은 이어지지 않습니다. 시작할 때(토픽을 선언한 뒤, 메시지를 받기 전에) `job_run`에서 아직 `running`인 이전 실행의 작업을 모두 찾아 `failed`, 실패 사유 `interrupted_by_restart`, 끝난 시각 = 이번 브리핑이 시작한 시각으로 끝내고, 작업마다 `step-failed` 줄(단계 `restart`)을 남깁니다. 리포트는 다시 만들지 않으며 이벤트 발행과 LLM 호출도 없습니다. 이번 브리핑이 시작한 뒤에 만든 작업은 건드리지 않습니다. DB에 닿지 못하면 브리핑은 시작하지 않습니다. 서버 상태 절의 급변동 실패 사유에는 `재시작으로 중단`으로 보입니다.
 
+### DB 준비와 Flyway
+
+브리핑 전용 계정과 `briefing` 스키마는 `infra/compose/postgres/init/03-roles-briefing.sql`이 만들고, 테이블은 Flyway가 `services/briefing/db/migration/`의 번호 파일(`V1__…sql`, 이어서 `V2__…`)로 만듭니다. 브리핑은 `CREATE TABLE`을 하지 않으므로 **브리핑을 띄우기 전에 Flyway를 먼저 실행해야 합니다**(Java 서비스 market·news는 기동할 때 Spring이 같은 방식으로 적용합니다). DB에 연결할 수 없거나 테이블이 없으면 브리핑은 시작하지 않습니다.
+
+- 로컬 실행: `docker compose -f infra/compose/docker-compose.yml --env-file .env up -d`가 Postgres가 준비된 뒤 `briefing-migrate`(공식 `flyway/flyway` 이미지, 브리핑 계정으로 `briefing` 스키마에 적용)를 한 번 실행하고 끝납니다. 번호 파일을 더한 뒤에는 `docker compose -f infra/compose/docker-compose.yml --env-file .env run --rm briefing-migrate`로 다시 적용합니다. 이 서비스가 끝난 뒤에 브리핑을 실행합니다.
+- 실제 DB 테스트: `scripts/test-all.sh`가 테스트 전용 데이터베이스를 만든 직후 같은 이미지로 Flyway를 먼저 적용하고 나서 브리핑 테스트와 `--live`의 브리핑 기동을 합니다(`FLYWAY_IMAGE`, 처음 한 번 이미지를 받습니다). 켜는 환경변수로 직접 돌릴 때도 대상 DB에 Flyway를 먼저 적용해 둡니다.
 - 초기화 스크립트는 DB 볼륨을 처음 만들 때만 실행됩니다. `.env`에 `BRIEFING_DB_USER`, `BRIEFING_DB_PASSWORD`를 넣고, 이미 볼륨이 있으면 볼륨을 지우고 다시 띄워야 브리핑 계정이 생깁니다. 비어 있으면 초기화 스크립트가 실패합니다.
-- 사유 목록 제약은 시작할 때마다 다시 걸어, 이전에 만든 테이블도 새 사유를 받습니다.
-- 테이블 모양이 바뀌면 `CREATE TABLE IF NOT EXISTS`는 기존 테이블을 고치지 않습니다. 배포 전까지는 DB를 지워도 되는 전제이므로 로컬 DB를 지우고 다시 만듭니다.
+- 번호 파일은 한 번 적용하면 고치지 않고 새 번호로 더합니다(이미 적용한 파일을 바꾸면 Flyway가 검사에서 멈춥니다).
+- 코드가 시작할 때 테이블을 만들던 옛 방식으로 이미 테이블이 만들어진 로컬 DB에서는 V1이 "이미 있음"으로 실패합니다. 배포 전이라 지워도 되는 데이터이므로 `briefing` 스키마의 테이블(`job_log`, `job_run`, `collection_completed`, 옛 `job_log_legacy`, `failed_jobs`)을 지우고 Flyway를 다시 적용하거나, 위 "로컬 DB를 지우고 다시 만든다" 명령으로 DB를 새로 만듭니다.
 
 ```bash
 # 로컬 DB를 지우고 다시 만든다 (모든 서비스의 DB 데이터가 사라진다)
@@ -190,7 +206,7 @@ PYTHONPATH=services/briefing/src services/briefing/.venv/bin/python -m briefing.
 
 브리핑은 시작할 때 자기가 쓰는 토픽을 선언합니다(목록과 파티션 수는 `main.py`의 `TOPIC_PARTITIONS`). 데일리 브리핑 결과 토픽 `briefing.daily.generated`(아침 판·마감 후 판 한 통씩, 형식은 `contracts/events/briefing.daily.generated.v1.schema.json`)도 선언합니다. `Ctrl+C`(또는 종료 신호)를 받으면 처리 중인 루프를 멈추고 끝납니다.
 
-변동 알림(`market.move`)은 읽는 즉시 읽은 위치(오프셋)를 확정합니다. 진행 중인 작업은 메모리에만 있으므로 **브리핑이 재시작되면 처리 중이던 변동은 리포트도 실패 기록도 남지 않고 사라집니다.**
+변동 알림(`market.move`)은 읽는 즉시 읽은 위치(오프셋)를 확정합니다. 진행 중인 작업은 메모리에만 있으므로 **브리핑이 정상 종료되면 모으는 중이던 변동은 `interrupted_by_restart` 실패 작업으로 남고, 강제 종료(`kill -9`, 전원 꺼짐)되면 리포트도 실패 기록도 남지 않고 사라집니다.**
 
 흐름을 사람이 직접 확인할 때는 `scripts/manual-briefing-move.sh [종목]`을 씁니다. 로컬 Kafka에 가짜 `market.move`와 그 변동에 쓸 수 있는 `collection.completed`를 한 건씩 넣고, 브리핑이 낸 요청과 `briefing.generated`를 보여 줍니다. 미리 인프라, 브리핑, 시세처리기, news 서비스를 띄워 둡니다.
 
@@ -383,7 +399,7 @@ scripts/test-all.sh          # 단위·가상 테스트 + 실제 DB 테스트, �
 scripts/test-all.sh --plan   # 아무것도 띄우지 않고 실행 순서만 보기
 ```
 
-- 실제 DB 테스트는 개발용 Postgres 컨테이너(`stock-postgres`) 안에 이 실행만의 테스트 전용 데이터베이스(`stock_test_run_<시각>_<pid>`)를 만들고, 서비스 스키마를 `.env`의 서비스 계정 소유로 만든 뒤 돌리고 지웁니다. 개발용 데이터베이스의 데이터는 건드리지 않습니다.
+- 실제 DB 테스트는 개발용 Postgres 컨테이너(`stock-postgres`) 안에 이 실행만의 테스트 전용 데이터베이스(`stock_test_run_<시각>_<pid>`)를 만들고, 서비스 스키마를 `.env`의 서비스 계정 소유로 만들고 브리핑 테이블은 Flyway로 만든 뒤 돌리고 지웁니다. 개발용 데이터베이스의 데이터는 건드리지 않습니다.
 - 컨테이너가 꺼져 있으면 켜고, 끝나도 끄지 않습니다. 서비스 계정은 만들거나 바꾸지 않습니다.
 - `.env`에 `MARKET_DB_USER`, `MARKET_DB_PASSWORD`, `NEWS_DB_USER`, `NEWS_DB_PASSWORD`, `BRIEFING_DB_USER`, `BRIEFING_DB_PASSWORD`가 있어야 합니다.
 - 결과 표는 지도의 기능마다 돌았음, 건너뜀(이유), 실패를 보여 주고, 하나라도 실패하면 종료 코드 1입니다. 이전 실행이 남긴 테스트 데이터베이스나 컨테이너가 보이면 지우지 않고 지우는 명령을 안내합니다.
@@ -409,7 +425,7 @@ docker rm -f market-it-pg
 |---|---|---|
 | 시세처리기 (`:services:market`) | `MARKET_IT_DB_URL`, `MARKET_IT_DB_USER`, `MARKET_IT_DB_PASSWORD` | `jdbc:postgresql://...` |
 | 뉴스 저장 (`:services:news`) | `NEWS_IT_DB_URL`, `NEWS_IT_DB_USER`, `NEWS_IT_DB_PASSWORD` | `jdbc:postgresql://...` |
-| 브리핑 (`pytest services/briefing`) | `BRIEFING_IT_DB_URL`, `BRIEFING_IT_DB_USER`, `BRIEFING_IT_DB_PASSWORD` | `postgresql://...`. `briefing` 스키마가 비어 있는 DB를 가정합니다 |
+| 브리핑 (`pytest services/briefing`) | `BRIEFING_IT_DB_URL`, `BRIEFING_IT_DB_USER`, `BRIEFING_IT_DB_PASSWORD` | `postgresql://...`. `briefing` 스키마에 Flyway(`services/briefing/db/migration`)를 먼저 적용한 DB를 가정합니다 |
 
 ### 실제 외부 호출 (`--live`)
 
@@ -470,13 +486,11 @@ MOVE_REPLAY_INPUT=<저장소 밖>/snapshots.tsv MOVE_REPLAY_EXCLUDE=<저장소 �
 
 지금은 로컬 실행을 전제로 미뤄 둔 결정입니다. 배포 전에 정합니다.
 
-- **브리핑 DB 마이그레이션 방식:** 작업 기록 테이블(`job_run`, `job_log`)은 마이그레이션 도구 없이 시작할 때 `CREATE TABLE IF NOT EXISTS`로 만들고, 모양이 바뀌면 옛 테이블을 이름만 바꿔 두거나 로컬 DB를 지우고 다시 만듭니다. 데이터를 지울 수 없게 되기 전에 Java 서비스처럼 버전 관리되는 마이그레이션을 쓸지, Python 쪽 도구를 쓸지 정합니다.
-- **변동 알림의 읽은 위치를 언제 확정할지:** 지금은 `market.move`를 읽는 즉시 확정해, 브리핑이 재시작되면 처리 중이던 변동이 기록 없이 사라집니다. 처리를 끝낸 뒤 확정하도록 바꿀지(재시작 후 다시 처리하므로 중복 리포트를 막는 방법도 함께 필요) 정합니다.
-- **작업 기록 보관 기간:** `briefing.job_run`과 `briefing.job_log`는 줄을 지우지 않고 쌓고, `job_log_legacy`(옛 모양 기록)도 남아 있습니다. LLM 입력·원래 응답을 그대로 담아 커지므로 보관 기간과 정리 방법(오래된 `job_log` 줄만 지울지, `job_run`까지 지울지)을 정합니다.
+- **변동 알림의 읽은 위치를 언제 확정할지:** 지금은 `market.move`를 읽는 즉시 확정해, 브리핑이 정상 종료되면 모으는 중이던 변동은 실패 작업으로 남고(강제 종료만 기록 없이 사라짐) 이미 만든 작업은 `interrupted_by_restart`로 끝납니다(다시 처리하지 않음으로 정했습니다). 처리를 끝낸 뒤 확정하도록 바꿀지(재시작 후 다시 처리하므로 중복 리포트를 막는 방법도 함께 필요) 정합니다.
+- **작업 기록 보관 기간:** `briefing.job_run`과 `briefing.job_log`는 줄을 지우지 않고 쌓습니다. LLM 입력·원래 응답을 그대로 담아 커지므로 보관 기간과 정리 방법(오래된 `job_log` 줄만 지울지, `job_run`까지 지울지)을 정합니다.
 - **뉴스 수집 완료 테이블:** `briefing.collection_completed`는 배포 뒤부터 쌓이므로 배포 당일 마감 후 판의 뉴스 줄 숫자가 적을 수 있습니다. 이 테이블의 보관 기간과 정리 방법은 아직 정하지 않았습니다.
 - **장중 수집을 켤지:** 정했습니다. 11-04·11-05 장중 실수집에서 환율종합, 시장종합, 세계지수의 응답을 받아 모양을 확인했고, 운영에서는 `COLLECTOR_INTRADAY_ENABLED=true`로 켭니다. 코드 기본값은 꺼짐을 유지합니다.
 - **휴장일 판정:** 1초 시세·마감 후·장 시작 전·장중 수집 모두 휴장일을 판정하지 않아 휴장일에도 tick을 발행합니다. 판정할지와 휴장일 목록을 어디서 받을지 정합니다.
-- **같은 종목의 중복 변동 리포트를 줄이는 방식:** 지금은 같은 종목의 변동이 짧은 간격으로 여러 번 와도 이벤트마다 리포트를 만듭니다. 묶어서 한 번만 보낼지, 일정 시간 안의 변동은 건너뛸지 정합니다.
 
 ## 후속
 

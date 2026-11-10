@@ -6,8 +6,6 @@ from datetime import datetime, timedelta, timezone
 from briefing.config import StoreSettings
 from briefing.status import CollectionRecord
 from briefing.status_store import (
-    CREATE_COLLECTION_INDEX_SQL,
-    CREATE_COLLECTION_TABLE_SQL,
     INSERT_COLLECTION_SQL,
     SELECT_COLLECTIONS_SQL,
     SELECT_RUNS_SQL,
@@ -75,15 +73,6 @@ def record(**changes):
 
 def make(db):
     return PostgresStatusStore(db.connect, StoreSettings(record_attempts=3), sleep=lambda _s: None)
-
-
-def test_startup_creates_the_collection_table_and_index_and_can_run_twice():
-    db = FakeDb()
-    make(db).create_table()
-    make(db).create_table()
-    assert [s for s, _ in db.statements] == [CREATE_COLLECTION_TABLE_SQL, CREATE_COLLECTION_INDEX_SQL] * 2
-    assert "ON CONFLICT" not in CREATE_COLLECTION_TABLE_SQL and "event_id           VARCHAR(64) PRIMARY KEY" \
-        in CREATE_COLLECTION_TABLE_SQL
 
 
 def test_a_collection_is_saved_with_its_raw_text_and_the_insert_is_idempotent_by_event_id():

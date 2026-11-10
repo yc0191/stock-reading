@@ -48,7 +48,8 @@ if [ "$PLAN" = 1 ]; then
   echo "1. Java 전체: ./gradlew cleanTest test --no-build-cache"
   echo "2. 브리핑: pytest services/briefing"
   echo "3. 설정 로더·지도 검사: pytest -c scripts/pytest.ini scripts/tests"
-  echo "4. 실제 DB 준비: stock-postgres 확인(꺼져 있으면 켬), stock_test_run_<시각>_<pid> 데이터베이스와 market·news·briefing 스키마 생성"
+  echo "4. 실제 DB 준비: stock-postgres 확인(꺼져 있으면 켬), stock_test_run_<시각>_<pid> 데이터베이스와 market·news·briefing 스키마 생성,"
+  echo "   브리핑 테이블은 Flyway(flyway/flyway 이미지, services/briefing/db/migration)로 만듦. 브리핑보다 먼저 적용되며, 이미지가 없으면 처음 한 번 받음"
   echo "5. 실제 DB 테스트: 지도에서 고른 market·news·브리핑 실제 DB 테스트"
   if [ "$LIVE" = 1 ]; then
     echo "6. 시세 흐름 실제: 일회용 Kafka, market(테스트 전용 데이터베이스), collector(실제 시세, 종목 1개), tick 1건, 저장 확인"
@@ -73,6 +74,8 @@ KAFKA_IMAGE="apache/kafka:4.2.2"
 KAFKA_NAME="stock-test-kafka-${RUN_ID//_/-}"
 KAFKA_LABEL="stock-reading.test-all"
 PG_CONTAINER="stock-postgres"
+# 브리핑 테이블을 만드는 Flyway. 버전은 market·news가 쓰는 Flyway와 맞춘다. infra/compose/docker-compose.yml의 briefing-migrate와 같다.
+FLYWAY_IMAGE="flyway/flyway:12.4.0"
 ENV_FILE="${TEST_ALL_ENV_FILE:-$ROOT/.env}"
 PY="${TEST_ALL_PYTHON:-$ROOT/services/briefing/.venv/bin/python}"
 LOCK_DIR="$ROOT/build/test-all.lock"
@@ -327,6 +330,21 @@ warn_leftovers() {
   fi
 }
 
+migrate_briefing() {
+  # 브리핑은 테이블을 만들지 않으므로 브리핑 테스트와 기동보다 먼저 Flyway 로 만든다.
+  # 서비스 계정으로 붙고, 비밀번호는 명령줄이 아니라 환경변수로만 넘긴다. 컨테이너는 stock-postgres 의 네트워크를 같이 쓴다.
+  local out
+  if ! out=$(FLYWAY_PASSWORD="$B_PW" docker run --rm --network "container:$PG_CONTAINER" \
+      -v "$ROOT/services/briefing/db/migration:/flyway/sql:ro" \
+      -e FLYWAY_PASSWORD -e FLYWAY_USER="$B_USER" -e FLYWAY_URL="jdbc:postgresql://localhost:5432/$DB_NAME" \
+      -e FLYWAY_SCHEMAS=briefing -e FLYWAY_DEFAULT_SCHEMA=briefing -e FLYWAY_CREATE_SCHEMAS=false \
+      -e FLYWAY_LOCATIONS=filesystem:/flyway/sql "$FLYWAY_IMAGE" migrate 2>&1); then
+    printf '%s\n' "$out" | tail -15
+    return 1
+  fi
+  printf '%s\n' "$out" | grep -E 'Successfully applied|up to date' | head -2
+}
+
 prepare_db() {
   local running waited key role found
   if ! docker info >/dev/null 2>&1; then DB_FAIL_REASON="Docker 에 연결할 수 없음"; return 1; fi
@@ -368,6 +386,7 @@ SQL
   then
     DB_FAIL_REASON="서비스 스키마를 만들지 못함"; return 1
   fi
+  if ! migrate_briefing; then DB_FAIL_REASON="브리핑 테이블 Flyway 적용 실패(docker 이미지 $FLYWAY_IMAGE)"; return 1; fi
 }
 
 log "4. 실제 DB 준비"

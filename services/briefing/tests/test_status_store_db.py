@@ -1,7 +1,7 @@
 """서버 상태 저장소를 실제 Postgres에 저장한 뒤 다시 읽어 확인한다.
 
 BRIEFING_IT_DB_URL·BRIEFING_IT_DB_USER·BRIEFING_IT_DB_PASSWORD가 모두 있을 때만 실행하고, 없으면 건너뛴다.
-대상은 briefing 스키마가 비어 있는 테스트 전용 DB라고 가정한다.
+대상은 Flyway가 briefing 스키마에 services/briefing/db/migration을 적용해 둔 테스트 전용 DB라고 가정한다(scripts/test-all.sh가 준비한다).
 """
 import json
 import os
@@ -39,13 +39,8 @@ def connect():
 
 @pytest.fixture(scope="module")
 def stores(connect):
-    # 서비스가 시작할 때와 같이 테이블을 만든다. 두 번 불러도 오류가 나지 않아야 한다.
-    log_store = PostgresJobLog(connect=connect, sleep=lambda _s: None)
-    log_store.create_table()
-    status = PostgresStatusStore(connect=connect, sleep=lambda _s: None)
-    status.create_table()
-    status.create_table()
-    return log_store, status
+    return (PostgresJobLog(connect=connect, sleep=lambda _s: None),
+            PostgresStatusStore(connect=connect, sleep=lambda _s: None))
 
 
 def collection(finished, job_type="collect-news", research=None, incomplete=("TEST02",)):

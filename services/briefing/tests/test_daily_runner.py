@@ -159,11 +159,7 @@ def test_close_closes_the_tick_consumers(setup):
 
 class FakeStatusStore:
     def __init__(self):
-        self.created = 0
         self.saved = []
-
-    def create_table(self):
-        self.created += 1
 
     def save_collection(self, record):
         self.saved.append(record)
@@ -187,10 +183,9 @@ def status_runner(setup):
     return runner, status
 
 
-def test_startup_creates_the_status_table_and_every_collection_completed_is_saved_as_received(setup):
+def test_every_collection_completed_is_saved_as_received(setup):
     from test_runner import completed_message
     runner, status = status_runner(setup)
-    assert status.created == 1
     message = completed_message(incomplete=["TEST02"])
     runner._consumer.commit = lambda **_: None
     runner.handle_message(message)

@@ -31,6 +31,11 @@ class CoreSettings:
     max_tickers: int = 100
     # LLM 입력에 넣는 ETF 구성 종목 수. 비중 순위가 높은 종목부터 이 수까지 넣는다.
     max_etf_members: int = 10
+    # 같은 종목의 market.move는 바로 처리하지 않고 모은다. 마지막 변동 뒤 이 시간 동안 같은 종목 변동이 더 없으면 모인 변동으로
+    # 작업 하나를 만든다. 변동이 계속 와도 첫 변동부터 최대 이 시간이 지나면 그때까지 모인 것으로 만든다(영영 밀리지 않게).
+    # 0이면 변동마다 바로 작업을 만든다.
+    move_quiet_period: timedelta = timedelta(minutes=10)
+    move_max_wait: timedelta = timedelta(minutes=30)
     # 같은 eventId 중복 처리를 위해 기억하는 작업 키 수. 메모리가 무한히 늘지 않게 한다.
     remembered_jobs: int = 10000
     # 근거 부족 시 재검색: 검색어 LLM이 낼 수 있는 검색어 수, 검색어 LLM 시도 횟수, 재검색 완료 알림을 기다리는 상한.

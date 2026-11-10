@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from briefing import main
+from briefing.config import CoreSettings
 from briefing.ports import FailureReason
 from fake_job_log import FakeJobLog
 from briefing.report import GENERATED_BY_LLM, LlmWriter, Report, ReportError, RuleBasedWriter
@@ -79,12 +80,6 @@ class FakeProducer:
 
 
 class FakeStore(FakeJobLog):
-    def __init__(self):
-        super().__init__()
-        self.created = 0
-
-    def create_table(self):
-        self.created += 1
 
     @property
     def failures(self):
@@ -175,6 +170,8 @@ def setup():
             created["producer"] = FakeProducer(config)
             return created["producer"]
 
+        # 이 파일의 시험은 변동 하나가 바로 작업이 되는 흐름을 본다. 묶는 흐름은 test_move_group.py에서 본다.
+        runner_options.setdefault("settings", CoreSettings(move_quiet_period=timedelta(0)))
         runner = main.BriefingRunner("localhost:9092", writer or RuleBasedWriter(), store, clock=clock,
                                      consumer_factory=consumer_factory, producer_factory=producer_factory,
                                      declare_topics=declared.append, **runner_options)
@@ -194,12 +191,13 @@ def sent(producer, topic):
     return [(key, value) for t, key, value in producer.sent if t == topic]
 
 
-def test_open_declares_topics_creates_the_table_and_subscribes_to_the_six_input_topics(setup):
-    make, _, store, declared = setup
+def test_open_declares_topics_cleans_up_unfinished_jobs_and_subscribes_to_the_input_topics(setup):
+    make, clock, store, declared = setup
     _, consumer, producer = make()
 
     assert declared == ["localhost:9092"]
-    assert store.created == 1
+    # 테이블은 Flyway가 만든다. 브리핑은 시작할 때 이전 실행의 남은 작업을 정리하러 한 번만 저장소를 부른다.
+    assert store.unfinished_calls == [clock.now]
     assert consumer.subscribed == ["market.move", "collection.completed",
                                    "market.history.responded", "news.articles.responded",
                                    "market.context.responded", "news.filings.responded",
@@ -406,6 +404,17 @@ def test_close_closes_the_consumer(setup):
     assert consumer.closed
 
 
+def test_jobs_left_unfinished_by_the_previous_run_are_only_marked_and_nothing_is_published_or_redone(setup):
+    make, _, store, _ = setup
+    store.unfinished_ids = ["old-job-1", "old-job-2"]
+
+    _, consumer, producer = make()
+
+    # 표시만 하고 리포트를 다시 만들지 않는다: 이벤트도, 새 작업도, 요청도 없다.
+    assert len(store.unfinished_calls) == 1
+    assert producer.sent == [] and store.starts == [] and store.entries == []
+
+
 def test_start_and_stop_run_the_loop_in_the_background():
     created = {}
 
@@ -431,7 +440,7 @@ def test_start_and_stop_run_the_loop_in_the_background():
     assert not runner.is_running()
     assert created["consumer"].closed
     assert runner.error is None
-    assert store.created == 1
+    assert len(store.unfinished_calls) == 1
 
 
 def research_completed_message(incomplete=()):

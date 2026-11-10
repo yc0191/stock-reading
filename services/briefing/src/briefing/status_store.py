@@ -1,6 +1,6 @@
 """서버 상태 절에 쓰는 저장소(StatusPort의 DB 구현). 수집 완료 알림을 한 줄씩 저장하고 작업 기록을 읽는다.
 
-DB 연결은 connect 함수로 주입받는다. 테이블은 시작할 때 create_table로 만든다.
+DB 연결은 connect 함수로 주입받는다. 테이블은 Flyway(services/briefing/db/migration)가 먼저 만들어 둔다.
 받은 원문(raw)은 키 순서와 표기를 바꾸지 않도록 JSON(JSONB 아님)으로 그대로 둔다.
 """
 from __future__ import annotations
@@ -19,24 +19,6 @@ from briefing.status import CollectionRecord, JobRunRow
 log = logging.getLogger("briefing.status_store")
 
 COLLECTION_TABLE = "briefing.collection_completed"
-
-CREATE_COLLECTION_TABLE_SQL = f"""
-CREATE TABLE IF NOT EXISTS {COLLECTION_TABLE} (
-    event_id           VARCHAR(64) PRIMARY KEY,
-    job_type           VARCHAR(48) NOT NULL,
-    scheduled_for      TIMESTAMPTZ NOT NULL,
-    started_at         TIMESTAMPTZ NOT NULL,
-    finished_at        TIMESTAMPTZ NOT NULL,
-    published_count    INTEGER NOT NULL CHECK (published_count >= 0),
-    incomplete_symbols JSON NOT NULL,
-    research_job_id    VARCHAR(64),
-    raw                JSON NOT NULL,
-    received_at        TIMESTAMPTZ NOT NULL DEFAULT now()
-)
-"""
-CREATE_COLLECTION_INDEX_SQL = (
-    f"CREATE INDEX IF NOT EXISTS collection_completed_finished_at_idx ON {COLLECTION_TABLE} (finished_at)"
-)
 
 INSERT_COLLECTION_SQL = f"""
 INSERT INTO {COLLECTION_TABLE} (event_id, job_type, scheduled_for, started_at, finished_at, published_count,
@@ -66,10 +48,6 @@ class PostgresStatusStore:
     connect: Callable[[], Connection]
     settings: StoreSettings = DEFAULT_STORE_SETTINGS
     sleep: Callable[[float], None] = field(default=time.sleep)
-
-    def create_table(self) -> None:
-        self._execute(CREATE_COLLECTION_TABLE_SQL, None)
-        self._execute(CREATE_COLLECTION_INDEX_SQL, None)
 
     def save_collection(self, record: CollectionRecord) -> bool:
         params = (record.event_id, record.job_type, record.scheduled_for, record.started_at, record.finished_at,

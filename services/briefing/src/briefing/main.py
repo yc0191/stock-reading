@@ -13,7 +13,7 @@ import signal
 import threading
 import time
 from datetime import datetime
-from typing import Callable, Mapping, Protocol
+from typing import Callable, Mapping
 
 from confluent_kafka import Consumer, KafkaError, Producer
 from confluent_kafka.admin import AdminClient, NewTopic
@@ -38,6 +38,7 @@ from briefing.job_log import JobLogPort
 from briefing.job_log_store import PostgresJobLog, psycopg_connector
 from briefing.jobs import BriefingCore
 from briefing.llm import AnthropicClient
+from briefing.move_group import MoveGrouper
 from briefing.report import ReportStage, ReportWriter, build_report_writer
 from briefing.research import QueryWriter, build_query_writer
 from briefing.sentence_research import ResearchReportStage, SentenceResearch
@@ -111,12 +112,8 @@ def ensure_topics(bootstrap: str) -> None:
                 raise
 
 
-class JobLogStore(JobLogPort, Protocol):
-    def create_table(self) -> None: ...
-
-
-class StatusStore(StatusPort, Protocol):
-    def create_table(self) -> None: ...
+JobLogStore = JobLogPort
+StatusStore = StatusPort
 
 
 class KafkaPublisher:
@@ -177,6 +174,7 @@ class BriefingRunner:
         self._consumer: Consumer | None = None
         self._producer: Producer | None = None
         self.core: BriefingCore | None = None
+        self.grouper: MoveGrouper | None = None
         self.research: ResearchReportStage | None = None
         self.sentences: SentenceResearch | None = None
         self._running = threading.Event()
@@ -186,7 +184,7 @@ class BriefingRunner:
     # ---- 시작·멈추기 ----
 
     def start(self) -> None:
-        """토픽과 테이블을 준비하고 수신 루프를 백그라운드 스레드로 시작한다. 준비가 실패하면 예외로 알린다."""
+        """토픽을 선언하고, 이전 실행이 남긴 작업을 정리하고, 수신 루프를 백그라운드 스레드로 시작한다. 준비가 실패하면 예외로 알린다."""
         if self._thread is not None:
             raise RuntimeError("runner already started")
         self.open()
@@ -222,9 +220,8 @@ class BriefingRunner:
 
     def open(self) -> None:
         self._declare_topics(self.bootstrap)
-        self.job_log.create_table()
-        if self.status_store is not None:
-            self.status_store.create_table()
+        # 테이블은 Flyway가 브리핑보다 먼저 만들어 둔다. 이전 실행에서 끝나지 않은 작업은 다시 실행하지 않고 실패로만 표시한다.
+        self.job_log.fail_unfinished(self.clock())
         self._producer = self._producer_factory({"bootstrap.servers": self.bootstrap, "acks": "all", **COMMON})
         publisher = KafkaPublisher(self._producer)
         stage = ReportStage(self.writer, publisher, self.job_log, clock=self.clock)
@@ -232,6 +229,8 @@ class BriefingRunner:
         self.sentences = SentenceResearch(self.query_writer, publisher, self.job_log, self.settings)
         self.research = ResearchReportStage(stage, self.sentences)
         self.core = BriefingCore(publisher, self.research, self.settings, self.job_log)
+        # 같은 종목의 급변동은 모아서 작업 하나로 넘긴다.
+        self.grouper = MoveGrouper(self.core.on_move, self.job_log, self.settings)
         self.daily = DailyCore(publisher, self.daily_writer, self.job_log, self.daily_settings,
                                sentences=self.sentences, status=self.status_store)
         for edition, group in TICK_CONSUMER_GROUPS.items():
@@ -272,13 +271,14 @@ class BriefingRunner:
         self._tick()
 
     def handle_message(self, message) -> None:
-        # 작업 상태는 메모리에만 두므로, 읽은 위치를 처리 전에 바로 확정한다. 브리핑이 재시작되면
-        # 처리 중이던 변동은 다시 읽지 않고 사라지는데, 이를 감수하기로 결정했다. 처리 뒤에 확정하면
+        # 작업 상태와 모으는 중인 변동은 메모리에만 두므로, 읽은 위치를 처리 전에 바로 확정한다. 브리핑이 재시작되면
+        # 처리 중이던 변동은 다시 읽지 않는다. 정상 종료 때는 모으는 중이던 변동과 진행 중이던 작업을 실패로 남기고(시작할 때
+        # 진행 중이던 작업도 실패로 표시한다), 강제 종료만 흔적 없이 사라지는데 이를 감수하기로 결정했다. 처리 뒤에 확정하면
         # 재시작 때 같은 변동을 다시 받아 같은 eventId 작업을 또 만들고, 이미 지난 응답을 기다리게 된다.
         # 응답·완료 알림도 메모리 상태에만 쓰이므로 같은 이유로 바로 확정한다.
         self._consumer.commit(message=message, asynchronous=False)
         handler = {
-            MOVE_TOPIC: self.core.on_move,
+            MOVE_TOPIC: self.grouper.on_move,
             # 재검색 완료 알림과 재검색 기사 응답은 재검색 쪽이 먼저 가져가고, 아니면 근거 조회 작업으로 넘긴다.
             COLLECTION_COMPLETED_TOPIC: self._on_collection_completed,
             HISTORY_RESPONDED_TOPIC: self.core.on_history_responded,
@@ -343,8 +343,8 @@ class BriefingRunner:
     # ---- 내부 ----
 
     def _next_deadline(self) -> datetime | None:
-        deadlines = [d for d in (self.core.next_deadline(), self.sentences.next_deadline(),
-                                 self.daily.next_deadline()) if d is not None]
+        deadlines = [d for d in (self.grouper.next_deadline(), self.core.next_deadline(),
+                                 self.sentences.next_deadline(), self.daily.next_deadline()) if d is not None]
         return min(deadlines) if deadlines else None
 
     def _poll_timeout(self) -> float:
@@ -356,6 +356,10 @@ class BriefingRunner:
 
     def _tick(self) -> None:
         now = self.clock()
+        # 모은 변동을 먼저 내보낸다. 그래야 방금 만든 작업의 제한 시간을 같은 순서에서 볼 수 있다.
+        deadline = self.grouper.next_deadline()
+        if deadline is not None and now >= deadline:
+            self.grouper.on_tick(now)
         deadline = self.core.next_deadline()
         if deadline is not None and now >= deadline:
             self.core.on_tick(now)
@@ -366,6 +370,20 @@ class BriefingRunner:
         if deadline is not None and now >= deadline:
             self.daily.on_tick(now)
 
+    def _abandon_pending_moves(self) -> None:
+        # 읽은 위치는 이미 확정했으므로 모으는 중이던 변동은 다시 오지 않는다. 사라지지 않고 실패 기록으로 남긴다.
+        # 기록이 실패해도 종료는 막지 않는다(저장 재시도와 실패 로그는 저장소가 한다).
+        if self.grouper is None:
+            return
+        try:
+            abandoned = self.grouper.abandon_pending(self.clock())
+        except Exception:  # noqa: BLE001 - 종료를 막지 않는다
+            log.exception("could not record pending market.move groups at shutdown")
+            return
+        if abandoned:
+            log.warning("shutdown marked %d pending market.move group(s) as interrupted: %s",
+                        len(abandoned), ", ".join(abandoned))
+
     def _loop(self) -> None:
         try:
             while self._running.is_set():
@@ -375,6 +393,7 @@ class BriefingRunner:
             log.exception("briefing loop stopped by an error")
         finally:
             self._running.clear()
+            self._abandon_pending_moves()
             self.close()
             log.info("briefing stopped")
 

@@ -12,6 +12,9 @@ class FakeJobLog:
         self.finishes = []
         self.fail = fail
         self._failed = set()
+        # fail_unfinished를 부른 시각들과, 그때 돌려줄 이전 실행의 작업 id
+        self.unfinished_calls = []
+        self.unfinished_ids = []
 
     def start(self, run):
         if self.fail:
@@ -33,6 +36,10 @@ class FakeJobLog:
             return False
         self.finishes.append(result)
         return True
+
+    def fail_unfinished(self, now):
+        self.unfinished_calls.append(now)
+        return list(self.unfinished_ids)
 
     @property
     def failed(self):

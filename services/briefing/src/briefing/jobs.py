@@ -177,6 +177,30 @@ class _Job:
     responses: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
+def parse_move(message: str | bytes, now: datetime) -> _Job:
+    """market.move 원문을 작업으로 바꾼다. 형식이 잘못되면 ValueError."""
+    try:
+        move = json.loads(message)
+        if move["eventType"] != "market.move":
+            raise ValueError(f"unexpected eventType: {move['eventType']}")
+        payload = move["payload"]
+        return _Job(
+            job_id=move["eventId"],
+            symbol=payload["symbol"],
+            correlation_id=move["correlationId"],
+            # 변동 시각 T는 payload.asOf 하나로만 읽는다(detectionType·moveStartedAt 유무와 무관).
+            as_of=parse_timestamp(payload["asOf"]),
+            previous_price=int(payload["previousPrice"]),
+            price=int(payload["price"]),
+            change_percent=float(payload["changePercent"]),
+            created_at=now,
+            detected_at=parse_timestamp(move["occurredAt"]) if move.get("occurredAt") else None,
+            detection_type=payload.get("detectionType"),
+        )
+    except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ValueError(f"malformed market.move event: {error!r}") from error
+
+
 @dataclass
 class BriefingCore:
     requests: RequestPort
@@ -193,26 +217,7 @@ class BriefingCore:
 
     def on_move(self, message: str | bytes, now: datetime) -> None:
         """market.move 수신. 같은 eventId는 한 번만 처리한다. 형식이 잘못되면 ValueError."""
-        try:
-            move = json.loads(message)
-            if move["eventType"] != "market.move":
-                raise ValueError(f"unexpected eventType: {move['eventType']}")
-            payload = move["payload"]
-            job = _Job(
-                job_id=move["eventId"],
-                symbol=payload["symbol"],
-                correlation_id=move["correlationId"],
-                # 변동 시각 T는 payload.asOf 하나로만 읽는다(detectionType·moveStartedAt 유무와 무관).
-                as_of=parse_timestamp(payload["asOf"]),
-                previous_price=int(payload["previousPrice"]),
-                price=int(payload["price"]),
-                change_percent=float(payload["changePercent"]),
-                created_at=now,
-                detected_at=parse_timestamp(move["occurredAt"]) if move.get("occurredAt") else None,
-                detection_type=payload.get("detectionType"),
-            )
-        except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
-            raise ValueError(f"malformed market.move event: {error!r}") from error
+        job = parse_move(message, now)
 
         if job.job_id in self._jobs:
             log.info("duplicate market.move %s ignored", job.job_id)

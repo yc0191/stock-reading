@@ -45,7 +45,7 @@ QUOTE_FAILURE_NAMES = (
 ATTENTION_QUOTE_FAILURES = ("RESULT_CODE_FAILED", "PRICE_PARSE_FAILED", "TICK_SKIPPED_RATE_LIMITED",
                             "TOKEN_ISSUE_FAILED")
 
-# 브리핑 실패 사유(ports.FailureReason 값)의 표시 이름
+# 브리핑 실패 사유(ports.FailureReason 값과 재시작 중단 사유)의 표시 이름
 FAILURE_REASON_NAMES = {
     "collection_not_covered": "기사 수집 미포함",
     "market_no_response": "시세 무응답",
@@ -54,6 +54,7 @@ FAILURE_REASON_NAMES = {
     "context_no_response": "배경 자료 무응답",
     "filings_no_response": "공시 무응답",
     "llm_error": "LLM 오류",
+    "interrupted_by_restart": "재시작으로 중단",
 }
 
 JOB_KIND_MOVE = "move"
