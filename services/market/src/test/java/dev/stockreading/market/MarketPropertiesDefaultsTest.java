@@ -29,15 +29,16 @@ class MarketPropertiesDefaultsTest {
             MarketProperties properties = context.getBean(MarketProperties.class);
             assertThat(properties.windowMinutes()).isEqualTo(5);
             assertThat(properties.windowThresholdPercent()).isEqualByComparingTo("1.00");
-            // 전일 종가 칸이 하루 안에서 깨져 오는 경우가 있어(2026-11-04 확인) 기본값을 비워 유형 2를 꺼 둔다.
-            assertThat(properties.prevCloseField()).isEmpty();
+            // 전일 종가 칸 하나가 하루 안에서 깨져 오는 경우가 있어(2026-11-04 확인) 후보 세 칸의 다수결로 쓴다.
+            assertThat(properties.prevCloseFields())
+                    .containsExactly("dataBody.bdy_cls_prc", "dataBody.sprc", "dataBody.krx_bdy_clpr");
             assertThat(properties.prevCloseThresholdPercent()).isEqualByComparingTo("3.00");
         });
     }
 
     @Test
-    void prevCloseFieldIsReadFromTheEnvironmentVariableName() {
-        runner().withPropertyValues("MARKET_PREV_CLOSE_FIELD=other.field").run(context ->
-                assertThat(context.getBean(MarketProperties.class).prevCloseField()).isEqualTo("other.field"));
+    void prevCloseFieldsAreReadFromTheEnvironmentVariableName() {
+        runner().withPropertyValues("MARKET_PREV_CLOSE_FIELDS=other.a,other.b").run(context ->
+                assertThat(context.getBean(MarketProperties.class).prevCloseFields()).containsExactly("other.a", "other.b"));
     }
 }

@@ -29,7 +29,7 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 
 뉴스 저장(news)은 `news.collected`와 함께 공시 이벤트 `filing.collected`를 별도 consumer group(`news-filings`)으로 구독해 `filing`(접수번호 유니크)과 `filing_ticker`에 저장합니다. 같은 공시가 다른 이벤트로 다시 오면 새로 연결된 티커만 더하고, 재시도 후에도 실패한 이벤트는 뉴스와 같은 `failed_event`에 남깁니다. 종목·기간 조회는 `FilingQuery`(티커, 시작·끝 시각, 기준 시각)이며 기준 시각보다 늦게 접수된 공시는 돌려주지 않습니다(같으면 포함). 해외 종목의 직전 미국 정규장 마감 등락률은 시세처리기의 `OverseasCloseRateQuery`(티커, 기준 시각)가 저장된 해외 일봉 원문에서 읽어 고른 일자와 등락율 원문(`up_dwn_r_p2`)을 돌려줍니다. 고르는 규칙과 이유는 `OverseasCloseRateQuery`의 주석에 있습니다. 공시 조회는 news의 `news.filings.requested` 응답이, 해외 등락률은 시세처리기의 `market.context.requested` 응답이 씁니다(아래 브리핑 서비스).
 
-시세처리기는 스냅샷마다 급변동을 감지해 `market.move`를 발행합니다. 유형 1(`window`)은 최근 N분 이력의 가장 오래된 스냅샷 대비, 유형 2(`prevClose`)는 응답 원문의 전일 종가 필드 대비 변동률이 임계값 이상일 때이며, 한 번 발행한 뒤에는 마지막 발행 가격에서 임계값만큼 더 움직일 때만 다시 발행합니다(상태는 `move_state` 테이블에 둡니다). 설정은 `services/market/src/main/resources/application.yml`의 `market.*`이고 환경변수로 덮어쓸 수 있습니다.
+시세처리기는 스냅샷마다 급변동을 감지해 `market.move`를 발행합니다. 유형 1(`window`)은 최근 N분 이력의 가장 오래된 스냅샷 대비, 유형 2(`prevClose`)는 응답 원문의 전일 종가(후보 세 칸의 다수결) 대비 변동률이 임계값 이상일 때이며, 한 번 발행한 뒤에는 마지막 발행 가격에서 임계값만큼 더 움직일 때만 다시 발행합니다(상태는 `move_state` 테이블에 둡니다). 설정은 `services/market/src/main/resources/application.yml`의 `market.*`이고 환경변수로 덮어쓸 수 있습니다.
 
 기본값은 `application.yml`이 원본입니다.
 
@@ -37,7 +37,7 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 |---|---|
 | `market.window-minutes` | 유형 1이 비교할 최근 이력의 길이(분) |
 | `market.window-threshold-percent` | 유형 1 임계값(%) |
-| `market.prev-close-field` | 유형 2가 원문에서 읽을 전일 종가 필드(점으로 중첩 경로). 제공자 응답의 전일 종가 칸이 하루 안에서 깨져 오는 경우가 있어(2026-11-04 확인) 기본값은 비어 있고 유형 2는 꺼져 있습니다. 비어 있으면 시작할 때 경고를 한 번 남깁니다. 켜려면 `MARKET_PREV_CLOSE_FIELD` 환경변수로 칸 경로를 줍니다. 유형 1과 유형 2는 따로 평가하므로 같은 움직임에서 두 유형의 변동이 각각 발행될 수 있습니다. 원문에 필드가 없거나 숫자가 아니면 유형 2는 그 스냅샷을 판단하지 않습니다 |
+| `market.prev-close-fields` | 유형 2가 원문에서 읽을 전일 종가 후보 필드들(점으로 중첩 경로, 쉼표로 구분). 기본은 `dataBody.bdy_cls_prc`, `dataBody.sprc`, `dataBody.krx_bdy_clpr` 세 칸입니다. 제공자가 한 칸을 하루 안에서도 깨뜨려 보내는 경우가 있어(2026-11-04 확인) 스냅샷마다 세 칸을 읽고, 읽을 수 있는 값 중 설정한 칸 수의 절반을 넘는 칸이 같은 값일 때(기본 세 칸이면 두 칸 이상)만 그 값을 전일 종가로 씁니다. 세 칸이 모두 다르거나 두 칸 이상을 읽을 수 없으면 그 스냅샷은 유형 2를 판단하지 않습니다. 바꾸려면 `MARKET_PREV_CLOSE_FIELDS` 환경변수에 칸 경로를 쉼표로 주고, 빈 값으로 주면 유형 2를 끄며 시작할 때 경고를 한 번 남깁니다. 유형 1과 유형 2는 따로 평가하므로 같은 움직임에서 두 유형의 변동이 각각 발행될 수 있습니다 |
 | `market.prev-close-threshold-percent` | 유형 2 임계값(%) |
 
 시세처리기는 브리핑의 배경 자료 요청(`market.context.requested`)에 답합니다. 종류마다(환율종합, 시장종합, 세계지수 대륙별, 그 종목의 국내 일봉) 받은 시각이 기준 시각 이전인 것 중 최신 원문 1건을 주고, ETF에 담긴 미국 종목 목록과 종목마다 직전 정규장 등락률을 함께 줍니다. 세계지수는 장이 끝난 지수의 응답 등락률이 0.00으로 오므로 쓰지 않고, 같은 지수의 영업일이 더 이른 직전 저장 행 종가와 비교해 계산한 지수별 등락률(`indexRates`)을 함께 줍니다. 아래 값은 안전 상한이며 요청값의 원본은 브리핑 `config.py`입니다. 요청이 더 크면 이 값까지만 줍니다.
@@ -454,12 +454,12 @@ PRICE_CHECK_REPLAY_INPUT=<저장소 밖>/raws.tsv PRICE_CHECK_REPLAY_EXPECTED=<�
   ./gradlew :services:collector:cleanTest :services:collector:test --no-build-cache --tests '*PriceCheckReplayTest'
 ```
 
-급변동 감지 설정(`market.*`)을 바꾸면 같은 원문을 실제 감지·재발행 코드에 받은 순서대로 넣는 `MoveReplayTest`로 `market.move`가 유형별로 몇 건 나오는지 셉니다. 제외 목록을 주면 그 행은 수집기가 버린 것으로 보고 이력과 평가에서 뺍니다. 재발행 상태는 빈 상태에서 시작하고, 결과는 건수만 출력합니다.
+급변동 감지 설정(`market.*`)을 바꾸면 같은 원문을 실제 감지·재발행 코드에 받은 순서대로 넣는 `MoveReplayTest`로 `market.move`가 유형별로 몇 건 나오는지 셉니다. 제외 목록을 주면 그 행은 수집기가 버린 것으로 보고 이력과 평가에서 뺍니다. 재발행 상태는 빈 상태에서 시작하고, 결과는 건수만 출력합니다. 유형 2는 날짜(서울 기준)별 발행 건수와 거짓 건수도 `move replay prevClose by date:` 줄로 냅니다. 거짓은 그 종목·그날 후보 칸 값의 최빈값을 참 전일 종가로 보고 다시 계산하면 임계값 미만인 발행입니다.
 
 ```bash
 # 입력: 한 줄에 eventId<TAB>symbol<TAB>asOf(ISO)<TAB>price<TAB>raw JSON, 시세처리기가 받은 순서
 # 제외(선택): eventId 한 줄씩인 파일, 또는 첫 칸이 snapshot_event_id 인 CSV
-# 유형 2는 기본값으로 꺼져 있다. 켜고 비교하려면 MARKET_PREV_CLOSE_FIELD=<칸 경로> 를 함께 준다
+# 유형 2는 기본값(전일 종가 후보 세 칸의 다수결)으로 평가한다. 칸을 바꾸려면 MARKET_PREV_CLOSE_FIELDS=<칸 경로,칸 경로,...> 를 함께 주고, 빈 값이면 유형 2를 끈다
 MOVE_REPLAY_INPUT=<저장소 밖>/snapshots.tsv MOVE_REPLAY_EXCLUDE=<저장소 밖>/rule-hit.csv \
   ./gradlew :services:market:cleanTest :services:market:test --no-build-cache --tests '*MoveReplayTest' -i
 ```

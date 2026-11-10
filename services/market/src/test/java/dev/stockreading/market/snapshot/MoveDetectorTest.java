@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,7 +33,7 @@ class MoveDetectorTest {
         repository = mock(PriceSnapshotRepository.class);
         // 가짜 필드 이름이다. 실제 응답 필드는 사용자가 원문을 보고 정한다.
         MarketProperties properties = new MarketProperties(
-                5, new BigDecimal("1.00"), "fake.prevClose", new BigDecimal("3.00"));
+                5, new BigDecimal("1.00"), List.of("fake.a", "fake.b", "fake.c"), new BigDecimal("3.00"));
         detector = new MoveDetector(repository, properties, JsonMapper.builder().build());
     }
 
@@ -48,8 +49,13 @@ class MoveDetectorTest {
         return detector.evaluate("TEST01", NOW, price, raw).get(1);
     }
 
+    // 세 후보 칸이 모두 같은 값인 응답.
     private static String raw(String prevClose) {
-        return "{\"fake\":{\"prevClose\":" + prevClose + "},\"price\":\"1\"}";
+        return raw(prevClose, prevClose, prevClose);
+    }
+
+    private static String raw(String a, String b, String c) {
+        return "{\"fake\":{\"a\":" + a + ",\"b\":" + b + ",\"c\":" + c + "},\"price\":\"1\"}";
     }
 
     @Test
@@ -167,11 +173,11 @@ class MoveDetectorTest {
     @ValueSource(strings = {
             "{\"fake\":{}}",
             "{\"other\":1}",
-            "{\"fake\":{\"prevClose\":null}}",
-            "{\"fake\":{\"prevClose\":\"abc\"}}",
-            "{\"fake\":{\"prevClose\":0}}",
-            "{\"fake\":{\"prevClose\":-5}}",
-            "{\"fake\":{\"prevClose\":10000.5}}",
+            "{\"fake\":{\"a\":null,\"b\":null,\"c\":null}}",
+            "{\"fake\":{\"a\":\"abc\",\"b\":\"abc\",\"c\":\"abc\"}}",
+            "{\"fake\":{\"a\":0,\"b\":0,\"c\":0}}",
+            "{\"fake\":{\"a\":-5,\"b\":-5,\"c\":-5}}",
+            "{\"fake\":{\"a\":10000.5,\"b\":10000.5,\"c\":10000.5}}",
             "<html>error</html>",
             "",
             "  "
@@ -185,12 +191,48 @@ class MoveDetectorTest {
         assertThat(prevClose(10_400, null).outcome()).isEqualTo(Outcome.UNKNOWN);
     }
 
+    // 세 칸의 다수결: 같은 값이 두 칸 이상이면 그 값을 쓰고, 아니면 판단하지 않는다.
+    static Stream<Object[]> votes() {
+        return Stream.of(
+                new Object[] {"세 칸이 같음", raw("10000", "10000", "10000"), 10_000L},
+                new Object[] {"첫 칸만 다름", raw("12345", "10000", "10000"), 10_000L},
+                new Object[] {"가운데 칸만 다름", raw("10000", "12345", "10000"), 10_000L},
+                new Object[] {"끝 칸만 다름", raw("10000", "10000", "12345"), 10_000L},
+                new Object[] {"한 칸이 비고 나머지 둘이 같음", raw("null", "10000", "10000"), 10_000L},
+                new Object[] {"한 칸이 숫자가 아니고 나머지 둘이 같음", raw("10000", "\"abc\"", "10000"), 10_000L},
+                new Object[] {"공백 붙은 문자열과 숫자가 같은 값", raw("\"  10000\"", "10000", "9999"), 10_000L},
+                new Object[] {"표기가 다른 같은 값", raw("\"10000.0\"", "10000", "9999"), 10_000L},
+                new Object[] {"세 칸이 모두 다름", raw("10000", "10100", "10200"), null},
+                new Object[] {"한 칸이 비고 나머지 둘이 다름", raw("null", "10000", "10100"), null},
+                new Object[] {"두 칸이 비고 한 칸만 있음", raw("null", "null", "10000"), null},
+                new Object[] {"두 칸이 숫자가 아니고 한 칸만 있음", raw("\"x\"", "10000", "\"y\""), null});
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @org.junit.jupiter.params.provider.MethodSource("votes")
+    void prevCloseTakesTheMajorityOfTheThreeFields(String name, String raw, Long expected) {
+        Evaluation evaluation = prevClose(10_400, raw);
+
+        if (expected == null) {
+            assertThat(evaluation.outcome()).isEqualTo(Outcome.UNKNOWN);
+        } else {
+            assertThat(evaluation.outcome()).isEqualTo(Outcome.DETECTED);
+            assertThat(evaluation.detection().previousPrice()).isEqualTo(expected);
+        }
+    }
+
+    @Test
+    void prevCloseOfAWronglyReadFieldDoesNotRaiseAFalseMove() {
+        // 한 칸이 깨져 현재가와 크게 다른 값이 와도 나머지 두 칸이 같으면 그 값으로 판단하므로 변동이 아니다.
+        assertThat(prevClose(10_100, raw("7000", "10000", "10000")).outcome()).isEqualTo(Outcome.CLEAR);
+    }
+
     @ParameterizedTest
     @org.junit.jupiter.params.provider.NullSource
-    @ValueSource(strings = {"", "  "})
-    void prevCloseIsOffWhenTheFieldIsNotSet(String field) {
+    @org.junit.jupiter.params.provider.EmptySource
+    void prevCloseIsOffWhenNoFieldIsSet(List<String> fields) {
         MarketProperties properties = new MarketProperties(
-                5, new BigDecimal("1.00"), field, new BigDecimal("3.00"));
+                5, new BigDecimal("1.00"), fields, new BigDecimal("3.00"));
         MoveDetector off = new MoveDetector(repository, properties, JsonMapper.builder().build());
         when(repository.findBetween(anyString(), any(), any())).thenReturn(List.of(point("16:00:00", 10_000)));
 

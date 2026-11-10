@@ -205,7 +205,7 @@ echo "market 기동"
   # 같은 값을 보유 종목 파일로도 준다. 파일의 미국 구성 종목이 ETF_US_HOLDINGS 와 어긋나면 시세처리기가 시작하지 않는다.
   "$PY" -c 'import sys; sys.path.insert(0, "scripts"); import daily_e2e; print(daily_e2e.holdings_file_json())' > "$TMP/holdings.json"
   export HOLDINGS_FILE="$TMP/holdings.json"
-  export MARKET_PREV_CLOSE_FIELD=
+  export MARKET_PREV_CLOSE_FIELDS=
   cd "$TMP/market" && exec "$JAVA_HOME_21/bin/java" -jar "$MARKET_JAR"
 ) > "$TMP/market.log" 2>&1 &
 MARKET_PID=$!

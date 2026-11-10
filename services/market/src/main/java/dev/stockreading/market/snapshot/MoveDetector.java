@@ -2,7 +2,10 @@ package dev.stockreading.market.snapshot;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,14 +31,14 @@ class MoveDetector {
         this.properties = properties;
         this.mapper = mapper;
         if (!prevCloseEnabled()) {
-            log.warn("prevClose disabled: MARKET_PREV_CLOSE_FIELD is not set");
+            log.warn("prevClose disabled: MARKET_PREV_CLOSE_FIELDS is empty");
         }
     }
 
-    /** 전일 종가 필드가 하루 안에서 깨져 오는 경우가 있어 기본값이 비어 있다. 비어 있으면 스냅샷마다 로그를 남기지 않고 유형 2를 끈다. */
+    /** 칸 목록을 비우면 스냅샷마다 로그를 남기지 않고 유형 2를 끈다. 테스트용 발송기처럼 유형 2가 방해되는 곳에서 쓴다. */
     private boolean prevCloseEnabled() {
-        String field = properties.prevCloseField();
-        return field != null && !field.isBlank();
+        List<String> fields = properties.prevCloseFields();
+        return fields != null && !fields.isEmpty();
     }
 
     List<Evaluation> evaluate(String symbol, OffsetDateTime asOf, long price, String raw) {
@@ -74,7 +77,7 @@ class MoveDetector {
         return Evaluation.detected(new Detection(DetectionType.WINDOW, base.price(), price, change, threshold, startedAt));
     }
 
-    /** 전일 종가는 원문에서 읽는다. 필드가 없거나 양의 정수가 아니면 판단하지 않는다. */
+    /** 전일 종가는 원문의 여러 칸을 다수결로 정한다. 다수가 없으면 이 스냅샷은 판단하지 않는다. */
     private Evaluation evaluatePrevClose(String symbol, OffsetDateTime asOf, long price, String raw) {
         if (!prevCloseEnabled()) {
             return Evaluation.unknown(DetectionType.PREV_CLOSE);
@@ -92,37 +95,64 @@ class MoveDetector {
         return Evaluation.detected(new Detection(DetectionType.PREV_CLOSE, prevClose, price, change, threshold, asOf));
     }
 
+    /**
+     * 제공자가 전일 종가 칸을 하루 안에서도 깨뜨려 보내서(2026-11-04 확인) 한 칸만 믿을 수 없다.
+     * 읽을 수 있는 값 중 설정한 칸의 절반을 넘는 칸이 같은 값일 때만 그 값을 쓴다.
+     */
     private Long readPrevClose(String symbol, String raw) {
-        String field = properties.prevCloseField();
         if (raw == null || raw.isBlank()) {
             log.info("{} prevClose skipped: snapshot has no raw response", symbol);
             return null;
         }
-        JsonNode node;
+        JsonNode root;
         try {
-            node = mapper.readTree(raw);
+            root = mapper.readTree(raw);
         } catch (JacksonException e) {
             log.info("{} prevClose skipped: raw response is not JSON", symbol);
             return null;
         }
+        List<String> fields = properties.prevCloseFields();
+        Map<Long, Integer> votes = new HashMap<>();
+        for (String field : fields) {
+            Long value = readField(root, field);
+            if (value != null) {
+                votes.merge(value, 1, Integer::sum);
+            }
+        }
+        List<Long> majority = new ArrayList<>();
+        votes.forEach((value, count) -> {
+            if (count * 2 > fields.size()) {
+                majority.add(value);
+            }
+        });
+        if (majority.size() != 1) {
+            log.info("{} prevClose skipped: no majority among {} fields", symbol, fields.size());
+            return null;
+        }
+        return majority.get(0);
+    }
+
+    static Long readField(JsonNode root, String field) {
+        JsonNode node = root;
         for (String name : field.split("\\.")) {
             node = node.path(name);
         }
         if (node.isMissingNode() || node.isNull()) {
-            log.info("{} prevClose skipped: field '{}' not found in raw response", symbol, field);
             return null;
         }
         BigDecimal value;
         try {
             value = new BigDecimal(node.asString().trim());
         } catch (NumberFormatException e) {
-            log.info("{} prevClose skipped: field '{}' is not a number", symbol, field);
             return null;
         }
         if (value.signum() <= 0 || value.stripTrailingZeros().scale() > 0) {
-            log.info("{} prevClose skipped: field '{}' is not a positive integer", symbol, field);
             return null;
         }
-        return value.longValueExact();
+        try {
+            return value.longValueExact();
+        } catch (ArithmeticException e) {
+            return null;
+        }
     }
 }
