@@ -21,6 +21,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+          # Gradle 배포판과 의존성을 캐시에 두어 배포 서버가 잠시 응답하지 않아도 작업이 실패하지 않게 한다.
+          cache: gradle
       # gradle.properties 가 JDK 21 을 JAVA_HOME_21 에서 찾는다.
       - run: echo "JAVA_HOME_21=$JAVA_HOME" >> "$GITHUB_ENV"
       - run: ./gradlew cleanTest test --no-build-cache

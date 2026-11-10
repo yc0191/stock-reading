@@ -71,8 +71,19 @@ def test_a_morning_tick_flows_to_a_daily_briefing(setup):
     runner.run_once()
     [(_, filings_request)] = sent(producer, "news.filings.requested")
     assert validate("news.filings.requested.v1.schema.json", filings_request) == []
+    # 아침 판도 ETF마다 기사를 받아야 나간다.
+    [(key, articles_request)] = sent(producer, "news.articles.requested")
+    assert key == "TEST01" and validate("news.articles.requested.v1.schema.json", articles_request) == []
 
     consumer.queue.append(FakeMessage("news.filings.responded", filings_response()))
+    runner.run_once()
+    assert sent(producer, "briefing.daily.generated") == []
+    payload = articles_request["payload"]
+    consumer.queue.append(FakeMessage("news.articles.responded", json.dumps({
+        "eventId": "00000000-0000-4000-8000-000000000007", "eventType": "news.articles.responded",
+        "schemaVersion": 1, "occurredAt": "2026-10-20T08:45:01+09:00", "producedAt": "2026-10-20T08:45:01+09:00",
+        "correlationId": "c", "payload": {"jobId": payload["jobId"], "seq": payload["seq"], "symbol": "TEST01",
+                                          "articles": [], "truncated": False}})))
     runner.run_once()
     [(key, briefing)] = sent(producer, "briefing.daily.generated")
     assert key == "morning"

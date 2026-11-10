@@ -20,10 +20,11 @@ from briefing.report import (
     parse_output as parse_move,
 )
 from briefing.sources import EtfInfo, EtfMember, MemberChanges, MovedMember, etf_info_input, parse_etf_info
+from fake_news import answer_news
 from test_daily_jobs import FakeLlm as DailyFakeLlm
 from test_daily_jobs import MORNING_AT, core as daily_core, daily_response, etf as etf_response, filings_response, \
     good_output, published, tick
-from test_daily_report import daily_input, etf as etf_day
+from test_daily_report import daily_input, etf as etf_day, morning_reply
 from test_scenarios import FakeLlm, context, core, rec, run_us, report_stage  # noqa: F401 - 픽스처
 
 MEMBERS = [
@@ -187,6 +188,7 @@ def test_daily_data_response_carries_the_etf_info_into_the_llm_input(daily_core)
     c.on_schedule_tick(tick(), MORNING_AT, "morning")
     c.on_daily_data_responded(daily_response(etfs=[with_info]), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
+    answer_news(c, requests, MORNING_AT)
 
     published(requests)
     _, user, _ = llm.calls[0]
@@ -200,6 +202,7 @@ def test_daily_data_response_from_an_older_format_without_etf_info_still_works(d
     c.on_schedule_tick(tick(), MORNING_AT, "morning")
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
+    answer_news(c, requests, MORNING_AT)
 
     assert len(published(requests)) == 1
     assert "etfInfo" not in json.loads(llm.calls[0][1])
@@ -208,10 +211,8 @@ def test_daily_data_response_from_an_older_format_without_etf_info_still_works(d
 def test_daily_summary_naming_a_member_ticker_from_the_etf_info_is_rejected():
     i = daily_input(etfs=(with_etf(etf_day(tickers=())),), close_rates=())
     sections = build_sections(i)
-    bad = json.dumps({"points": [{"statement": "FAKEB가 내렸을 수 있습니다.", "refs": ["B1"]}],
-                      "insufficientEvidence": False}, ensure_ascii=False)
-    good = json.dumps({"points": [{"statement": "미국 종목이 내렸을 수 있습니다.", "refs": ["B1"]}],
-                       "insufficientEvidence": False}, ensure_ascii=False)
+    bad = morning_reply([{"statement": "FAKEB가 내렸을 수 있습니다.", "refs": ["B1"]}])
+    good = morning_reply([{"statement": "미국 종목이 내렸을 수 있습니다.", "refs": ["B1"]}])
     llm = DailyFakeLlm(bad, good)
 
     result = DailyLlmWriter(llm).write(i, sections)
@@ -323,8 +324,8 @@ def test_move_and_daily_bodies_show_the_weak_note_in_the_same_shape(core, rec):
     move_lines = sent.sent[0].value["payload"]["text"].splitlines()
 
     i = daily_input()
-    daily_out = json.dumps({"points": [{"statement": "미국 종목이 내렸을 수 있습니다.", "refs": ["U1"], "weak": True,
-                                        "shortfall": shortfall}], "insufficientEvidence": False}, ensure_ascii=False)
+    daily_out = morning_reply([{"statement": "미국 종목이 내렸을 수 있습니다.", "refs": ["U1"], "weak": True,
+                                "shortfall": shortfall}])
     daily_lines = DailyLlmWriter(DailyFakeLlm(daily_out)).write(i, build_sections(i)).body.text.splitlines()
 
     def note(lines):

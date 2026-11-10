@@ -71,9 +71,20 @@ class FakeLlm:
         return self.outputs.pop(0)
 
 
+def morning_reply(points, symbols=("TEST01",)):
+    """아침 판 Claude 출력: 요약 문장들, ETF마다 방향 예상, 환율·금리 이슈 칸."""
+    etfs = [{"symbol": s, "direction": "상승", "reason": "미국 지수가 영향을 줄 수 있습니다.", "refs": ["B1"],
+             "weak": False, "shortfall": ""} for s in symbols]
+    issue = {"statement": "환율이 영향을 줄 수 있습니다.", "refs": ["B2"], "weak": False, "shortfall": ""}
+    return json.dumps({"points": points, "etfs": etfs, "fxIssue": issue,
+                       "rateIssue": {**issue, "statement": "금리 기사가 없습니다.", "refs": [], "weak": True,
+                                     "shortfall": "금리 기사가 필요합니다."},
+                       "insufficientEvidence": False}, ensure_ascii=False)
+
+
 def test_morning_and_post_close_choose_their_own_items():
     assert [s.name for s in build_sections(daily_input())] == \
-        [ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_KR_REVIEW]
+        [ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_KR_REVIEW, ITEM_ETF_ARTICLES]
     assert [s.name for s in build_sections(daily_input("post-close"))] == \
         ["그날 한국 증시", ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_ETFS, ITEM_ETF_ARTICLES, ITEM_FILINGS, ITEM_MEMBER_ISSUES]
 
@@ -82,9 +93,11 @@ def test_each_missing_item_is_marked_no_data():
     i = daily_input(etfs=None, close_rates=None, background=None, filings=None)
     i = DailyInput(**{**i.__dict__, "close_rates": None, "background": None})
     sections = build_sections(i)
-    assert missing_items(sections) == [ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_KR_REVIEW]
+    assert missing_items(sections) == [ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_KR_REVIEW,
+                                       ITEM_ETF_ARTICLES]
     text = rule_based_text(i, sections)
-    assert text.count(f"- {NO_DATA}") == 5
+    # 항목 5개와, 규칙 기반 본문이 환율 이슈·금리 이슈 칸에 쓰는 대체 줄 2개
+    assert text.count(f"- {NO_DATA}") == 7
     assert text.endswith(DAILY_DISCLAIMER)
 
 
@@ -122,7 +135,8 @@ def test_us_stocks_and_filings_are_not_applicable_without_us_holdings():
     i = daily_input(etfs=(etf(tickers=()),), close_rates=(), filings=None)
     sections = build_sections(i)
     assert sections[2].status == "해당 없음" and sections[3].status == "해당 없음"
-    assert missing_items(sections) == []
+    # 기사 응답이 없는 입력이라 ETF별 기사만 빠진 항목이다.
+    assert missing_items(sections) == [ITEM_ETF_ARTICLES]
 
 
 def test_filings_and_etf_lists_mark_truncation():
@@ -174,8 +188,7 @@ def test_valid_output_with_insufficient_evidence_is_accepted():
 def test_llm_body_numbers_the_cited_refs_and_keeps_the_code_written_facts():
     i = daily_input()
     sections = build_sections(i)
-    llm = FakeLlm(json.dumps({"points": [{"statement": "미국 지수가 올랐을 수 있습니다.", "refs": ["B1", "U1"]}],
-                              "insufficientEvidence": False}))
+    llm = FakeLlm(morning_reply([{"statement": "미국 지수가 올랐을 수 있습니다.", "refs": ["B1", "U1"]}]))
     result = DailyLlmWriter(llm).write(i, sections)
     assert result.rejected == ()
     text = result.body.text
@@ -237,10 +250,8 @@ def test_ticker_inside_a_longer_word_or_without_a_ban_list_is_not_rejected():
 def test_writer_rejects_a_ticker_answer_and_asks_again():
     i = daily_input()
     sections = build_sections(i)
-    bad = json.dumps({"points": [{"statement": "TESTA가 내렸을 수 있습니다.", "refs": ["U1"]}],
-                      "insufficientEvidence": False}, ensure_ascii=False)
-    good = json.dumps({"points": [{"statement": "미국 종목이 내렸을 수 있습니다.", "refs": ["U1"]}],
-                       "insufficientEvidence": False}, ensure_ascii=False)
+    bad = morning_reply([{"statement": "TESTA가 내렸을 수 있습니다.", "refs": ["U1"]}])
+    good = morning_reply([{"statement": "미국 종목이 내렸을 수 있습니다.", "refs": ["U1"]}])
     llm = FakeLlm(bad, good)
     result = DailyLlmWriter(llm).write(i, sections)
     assert llm.calls == 2

@@ -107,8 +107,8 @@ def make():
         edition = "post-close" if edition_job == POST_CLOSE_JOB else "morning"
         core.on_schedule_tick(tick(edition_job, at), at, edition)
         core.on_daily_data_responded(with_operations() if answer == "default" else answer, at)
-        if edition == "post-close":
-            answer_news(core, requests, at)
+        # 아침 판은 공시 응답을 시험이 따로 보낸다.
+        answer_news(core, requests, at, filings_silent=edition == "morning")
         return core, requests, details
     return build
 
@@ -200,7 +200,8 @@ def test_without_operations_the_first_two_lines_say_no_data_and_the_part_is_reco
     assert lines[0] == "- 수집: 자료 없음" and lines[1] == "- 시세: 자료 없음"
     assert lines[2].startswith("- 뉴스: 정기 수집 0회")  # 나머지 줄은 그대로 나간다
     assert "서버 상태: 수집·시세(시세처리기 운영 상태 없음)" in payload["missingItems"]
-    [missing] = details.of_type(EntryType.MISSING_ITEMS)
+    # 아침 예상 기록이 없어 대조를 뺀 줄이 같은 종류로 하나 더 남으므로, 판을 발행하며 남긴 줄(사유 missing_items)만 본다.
+    [missing] = [e for e in details.of_type(EntryType.MISSING_ITEMS) if e.reason == "missing_items"]
     assert "서버 상태: 수집·시세(시세처리기 운영 상태 없음)" in missing.data["missingItems"]
 
 
