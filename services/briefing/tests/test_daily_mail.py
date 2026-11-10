@@ -25,7 +25,7 @@ from test_daily_jobs import (
     good_output,
     post_close_output,
     tick,
-    POST_CLOSE_MARKET,
+    POST_CLOSE_BACKGROUND,
 )
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -51,7 +51,7 @@ def run(edition="post-close", settings=None, llm=True, answer_etfs=None, ref=Non
     core = DailyCore(requests, writer, details, settings)
     job, at = (POST_CLOSE_JOB, POST_CLOSE_AT) if edition == "post-close" else (MORNING_JOB, MORNING_AT)
     core.on_schedule_tick(tick(job, at), at, edition)
-    background = POST_CLOSE_MARKET if edition == "post-close" else None
+    background = POST_CLOSE_BACKGROUND if edition == "post-close" else None
     core.on_daily_data_responded(daily_response(etfs=answer_etfs or etfs(), background=background), at)
     if edition == "post-close":
         answer_news(core, requests, at)

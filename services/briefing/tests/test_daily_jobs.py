@@ -21,6 +21,7 @@ from briefing.daily_report import (
     GENERATED_BY_LLM,
     GENERATED_BY_RULE,
     ITEM_ETFS,
+    ITEM_EXCHANGE,
     ITEM_FILINGS,
     ITEM_KR_REVIEW,
     ITEM_KR_TODAY,
@@ -278,7 +279,7 @@ def test_post_close_edition_requests_the_filings_of_the_us_stocks_in_its_range(c
     c, requests, _, _ = core()
     c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
     c.on_daily_data_responded(daily_response(etfs=[etf(fetched="2026-10-20T16:30:02+09:00", rate="0.50")],
-                                             background=[{**MARKET, "fetchedAt": "2026-10-20T16:30:05+09:00"}]),
+                                             background=[WORLD_C, EXCHANGE, {**MARKET, "fetchedAt": "2026-10-20T16:30:05+09:00"}]),
                               POST_CLOSE_AT)
     [filings] = requests.topic("news.filings.requested")
     assert filings.value["payload"]["tickers"] == ["TESTA", "FAKEB"]
@@ -319,7 +320,7 @@ def test_data_received_after_the_scheduled_time_or_before_the_range_is_dropped_w
     with caplog.at_level(logging.WARNING, logger="briefing.daily_jobs"):
         c.on_daily_data_responded(daily_response(
             etfs=[etf(fetched="2026-10-20T17:00:01+09:00"), etf("TEST02", fetched="2026-10-19T16:59:59+09:00")],
-            background=[{**MARKET, "fetchedAt": "2026-10-20T17:00:01+09:00"}]), POST_CLOSE_AT)
+            background=[WORLD_C, EXCHANGE, {**MARKET, "fetchedAt": "2026-10-20T17:00:01+09:00"}]), POST_CLOSE_AT)
         answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
     assert event.value["payload"]["missingItems"] == [ITEM_KR_TODAY, ITEM_ETFS]
@@ -332,7 +333,7 @@ def test_data_received_exactly_at_both_ends_of_the_range_is_kept(core):
     c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
     c.on_daily_data_responded(daily_response(
         etfs=[etf(fetched="2026-10-20T17:00:00+09:00"), etf("TEST02", fetched="2026-10-19T17:00:00+09:00")],
-        background=[{**MARKET, "fetchedAt": "2026-10-20T17:00:00+09:00"}]), POST_CLOSE_AT)
+        background=[WORLD_C, EXCHANGE, {**MARKET, "fetchedAt": "2026-10-20T17:00:00+09:00"}]), POST_CLOSE_AT)
     answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
     assert event.value["payload"]["missingItems"] == []
@@ -521,7 +522,7 @@ def test_missing_items_are_recorded_with_every_field_filled(core):
     assert run.job_kind == JobKind.POST_CLOSE
     assert run.target == {"rangeStart": datetime(2026, 10, 19, 17, 0, tzinfo=KST).isoformat(),
                           "rangeEnd": POST_CLOSE_AT.isoformat()}
-    assert record.data["missingItems"] == [ITEM_KR_TODAY, ITEM_ETFS]
+    assert record.data["missingItems"] == [ITEM_KR_TODAY, ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_ETFS]
     assert record.data["received"]["market.daily.responded"]["etfs"] == []
     assert record.occurred_at == POST_CLOSE_AT
 
@@ -636,7 +637,8 @@ def post_close_core(core, llm=None):
     return c, requests, failures, details
 
 
-POST_CLOSE_MARKET = [{**MARKET, "fetchedAt": "2026-10-20T16:30:05+09:00"}]
+# 마감 후 판 범위(전날 17:00 ~ 그날 17:00) 안에 받은 배경 자료. 세계지수·환율은 그날 아침에 받은 값이다.
+POST_CLOSE_BACKGROUND = [WORLD_C, EXCHANGE, {**MARKET, "fetchedAt": "2026-10-20T16:30:05+09:00"}]
 
 
 def test_an_etf_with_no_daily_price_is_written_as_no_data_with_its_name_and_reason(core):
@@ -644,7 +646,7 @@ def test_an_etf_with_no_daily_price_is_written_as_no_data_with_its_name_and_reas
     c.on_daily_data_responded(daily_response(etfs=[
         etf_v2(fetched="2026-10-20T16:30:02+09:00", rate="0.50", name="TEST ETF ONE"),
         etf_v2_missing(name="TEST ETF TWO"),
-        etf_v2_missing("TEST03", "daily-price-unreadable")], background=POST_CLOSE_MARKET), POST_CLOSE_AT)
+        etf_v2_missing("TEST03", "daily-price-unreadable")], background=POST_CLOSE_BACKGROUND), POST_CLOSE_AT)
     answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
     payload = event.value["payload"]
@@ -664,7 +666,7 @@ def test_an_etf_with_no_daily_price_is_written_as_no_data_with_its_name_and_reas
 def test_when_every_etf_is_empty_the_whole_item_is_no_data_and_each_etf_is_still_listed(core):
     c, requests, _, _ = post_close_core(core)
     c.on_daily_data_responded(daily_response(etfs=[etf_v2_missing("TEST01"), etf_v2_missing("TEST02")],
-                                             background=POST_CLOSE_MARKET), POST_CLOSE_AT)
+                                             background=POST_CLOSE_BACKGROUND), POST_CLOSE_AT)
     answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
     payload = event.value["payload"]
@@ -678,7 +680,7 @@ def test_an_etf_with_one_null_value_and_no_reason_is_no_data_with_an_unknown_rea
     item = etf_v2("TEST03", fetched="2026-10-20T16:30:02+09:00", rate="0.50")
     item["close"] = None
     del item["missingReason"]
-    c.on_daily_data_responded(daily_response(etfs=[item], background=POST_CLOSE_MARKET), POST_CLOSE_AT)
+    c.on_daily_data_responded(daily_response(etfs=[item], background=POST_CLOSE_BACKGROUND), POST_CLOSE_AT)
     answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
     text = event.value["payload"]["text"]
@@ -689,7 +691,7 @@ def test_an_etf_with_one_null_value_and_no_reason_is_no_data_with_an_unknown_rea
 def test_an_empty_etf_is_kept_even_though_it_has_no_received_time(core, caplog):
     c, requests, _, _ = post_close_core(core)
     with caplog.at_level(logging.WARNING, logger="briefing.daily_jobs"):
-        c.on_daily_data_responded(daily_response(etfs=[etf_v2_missing()], background=POST_CLOSE_MARKET),
+        c.on_daily_data_responded(daily_response(etfs=[etf_v2_missing()], background=POST_CLOSE_BACKGROUND),
                                   POST_CLOSE_AT)
         answer_news(c, requests, POST_CLOSE_AT)
     assert "dropped" not in caplog.text
@@ -702,7 +704,7 @@ def test_the_llm_is_told_which_etf_is_empty_and_not_to_invent_its_numbers(core):
     c, requests, _, _ = post_close_core(core, llm)
     c.on_daily_data_responded(daily_response(etfs=[
         etf_v2(fetched="2026-10-20T16:30:02+09:00", rate="0.50"), etf_v2_missing(name="TEST ETF TWO")],
-        background=POST_CLOSE_MARKET), POST_CLOSE_AT)
+        background=POST_CLOSE_BACKGROUND), POST_CLOSE_AT)
     answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
     assert event.value["payload"]["generatedBy"] == GENERATED_BY_LLM
@@ -742,7 +744,7 @@ def test_an_etf_without_a_daily_price_still_gets_us_stocks_filings_and_research(
 def test_a_v1_response_without_the_missing_reason_is_still_read(core):
     c, requests, _, _ = post_close_core(core)
     c.on_daily_data_responded(daily_response(etfs=[etf(fetched="2026-10-20T16:30:02+09:00", rate="0.50")],
-                                             background=POST_CLOSE_MARKET), POST_CLOSE_AT)
+                                             background=POST_CLOSE_BACKGROUND), POST_CLOSE_AT)
     answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
     assert "TEST01 +0.50%" in event.value["payload"]["text"]

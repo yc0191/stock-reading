@@ -46,6 +46,7 @@ from briefing.llm_output import (
     weak_note_line,
 )
 from briefing.llm import API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCallError, LlmClient, llm_config
+from briefing.move_figures import USD_KRW_NAME, display, exchange_rate_figure
 from briefing.sources import (
     BACKGROUND_LABEL,
     BACKGROUND_MISSING,
@@ -104,8 +105,11 @@ ITEM_RESEARCH = "재검색 기사"
 
 EDITION_ITEMS = {
     EDITION_MORNING: (ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_KR_REVIEW),
-    EDITION_POST_CLOSE: (ITEM_KR_TODAY, ITEM_ETFS, ITEM_ETF_ARTICLES, ITEM_FILINGS, ITEM_MEMBER_ISSUES),
+    EDITION_POST_CLOSE: (ITEM_KR_TODAY, ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_ETFS, ITEM_ETF_ARTICLES, ITEM_FILINGS,
+                         ITEM_MEMBER_ISSUES),
 }
+# 마감 후 판이 Claude 입력과 출처로만 쓰고 글자판·HTML 절로는 보여 주지 않는 항목
+POST_CLOSE_HIDDEN_ITEMS = frozenset({ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_FILINGS})
 EDITIONS_WITH_FILINGS = frozenset(e for e, items in EDITION_ITEMS.items() if ITEM_FILINGS in items)
 EDITIONS_WITH_ETF_ARTICLES = frozenset(e for e, items in EDITION_ITEMS.items() if ITEM_ETF_ARTICLES in items)
 
@@ -253,7 +257,7 @@ def _rate(text: str | None) -> float | None:
 
 
 def _shown(rate: float) -> float:
-    """결론에 표시하는 자리(소수 한 자리)로 반올림한 값. 오름·내림 판정은 보이는 값을 기준으로 한다."""
+    """결론에 표시하는 자리(소수 한 자리)로 반올림한 값. 가장 크게 오름·내림 판정은 보이는 값을 기준으로 한다."""
     # 이진 float 의 .1f 는 0.25 를 0.2 로 내리므로 십진 반올림(0.25→0.3, -0.15→-0.2)으로 한다.
     return float(Decimal(str(rate)).quantize(Decimal("0.1"), ROUND_HALF_UP))
 
@@ -293,8 +297,10 @@ def _background_entry(ref: str, item: Background, as_of: datetime, with_rates: b
     return Entry(ref, data, f"{name} — {BACKGROUND_SOURCE}, {_short(item.fetched_at)} 받음", KIND_BACKGROUND)
 
 
-def _raw_background_section(name: str, i: DailyInput, api_type: str, refs: Callable[[], str]) -> Section:
-    """환율종합·시장종합. 원문은 해석하지 않으므로 본문에는 받았는지만 쓰고 숫자는 LLM 요약에 맡긴다."""
+def _raw_background_section(name: str, i: DailyInput, api_type: str, refs: Callable[[], str],
+                            with_usd_krw: bool = False) -> Section:
+    """환율종합·시장종합. 원문은 해석하지 않으므로 본문에는 받았는지만 쓰고 숫자는 LLM 요약에 맡긴다.
+    with_usd_krw면 환율종합 원문에서 꺼낸 원/달러 값을 근거에 덧붙인다(원문은 그대로 둔다)."""
     if i.background is None:
         return _missing(name)
     item = _find_background(i, api_type, None)
@@ -304,7 +310,21 @@ def _raw_background_section(name: str, i: DailyInput, api_type: str, refs: Calla
     if item.status == BACKGROUND_TOO_LARGE:
         return Section(name, MARK_TOO_LARGE, (f"{NO_DATA} ({label} 원문이 너무 커서 빠짐)",))
     entry = _background_entry(refs(), item, i.as_of, with_rates=False)
+    if with_usd_krw:
+        entry = _with_usd_krw(entry, item)
     return Section(name, MARK_PRESENT, (f"{label} {_short(item.fetched_at)} 받은 값 있음",), (entry,))
+
+
+def _with_usd_krw(entry: Entry, item: Background) -> Entry:
+    """원문 칸 이름이 약어라 Claude가 읽기 쉽게 원/달러 값을 따로 주고, 출처 줄에도 숫자를 보인다. 행이 없으면 그대로다."""
+    fx = exchange_rate_figure((item,))
+    if fx is None:
+        return entry
+    values = {"value": display(fx.value), "change": display(fx.change, sign=True),
+              "ratePercent": display(fx.rate, sign=True)}
+    describe = (f"{BACKGROUND_NAMES.get(item.api_type, item.api_type)} {USD_KRW_NAME} {values['value']}"
+                f"(전일대비 {values['change']}, {values['ratePercent']}%) — {BACKGROUND_SOURCE}, {_short(item.fetched_at)} 받음")
+    return replace(entry, llm={**entry.llm, "usdKrw": values}, describe=describe)
 
 
 def _us_index_section(i: DailyInput, settings: DailySettings, refs: Callable[[], str]) -> Section:
@@ -474,7 +494,7 @@ def _etf_articles_section(i: DailyInput) -> Section:
 
 
 def _member_issues_section(i: DailyInput, refs: Callable[[], str]) -> Section:
-    """미국 구성 종목 이슈. 티커와 종목 이름은 Claude 입력에만 담고 글자판·근거 설명에는 쓰지 않는다."""
+    """미국 구성 종목 이슈. 티커는 Claude 입력에만 담고, 근거 설명에는 종목 이름(모르면 '미국 종목')을 쓴다."""
     if i.etfs is None:
         return Section(ITEM_MEMBER_ISSUES, MARK_MISSING, (NO_DATA,), hidden=True)
     if not i.member_issues:
@@ -487,11 +507,11 @@ def _member_issues_section(i: DailyInput, refs: Callable[[], str]) -> Section:
                                 "filingRefs": list(issue.filing_refs)}
         if issue.name:
             data["name"] = issue.name
-        reasons = ([f"직전 장 등락률 {issue.rate}%"] if issue.rate is not None else []) \
+        reasons = ([f"직전 장 등락률 {_signed_rate(issue.rate)}%"] if issue.rate is not None else []) \
             + (["범위 안 공시"] if issue.filing_refs else [])
-        why = ", ".join(reasons)
-        entries.append(Entry(ref, data, f"{US_STOCK_LABEL} 구성 종목 이슈 ({why}) — {CLOSE_RATE_SOURCE}", KIND_MEMBER))
-        lines.append(f"{US_STOCK_LABEL} 구성 종목 이슈 ({why})")
+        what = f"비중 {issue.rank}위 {member_label(issue)} {', '.join(reasons)}"
+        entries.append(Entry(ref, data, f"{what} — {CLOSE_RATE_SOURCE}", KIND_MEMBER))
+        lines.append(what)
     return Section(ITEM_MEMBER_ISSUES, MARK_PRESENT, tuple(lines), tuple(entries), hidden=True)
 
 
@@ -523,7 +543,8 @@ def build_sections(i: DailyInput, settings: DailySettings = DEFAULT_DAILY_SETTIN
     background_ref = next_ref(BACKGROUND_REF_PREFIX)
     builders = {
         ITEM_US_INDEX: lambda: _us_index_section(i, settings, background_ref),
-        ITEM_EXCHANGE: lambda: _raw_background_section(ITEM_EXCHANGE, i, "exchange-rate-summary", background_ref),
+        ITEM_EXCHANGE: lambda: _raw_background_section(ITEM_EXCHANGE, i, "exchange-rate-summary", background_ref,
+                                                       with_usd_krw=i.edition == EDITION_POST_CLOSE),
         ITEM_US_STOCKS: lambda: _us_stocks_section(i, next_ref(CLOSE_RATE_REF_PREFIX)),
         ITEM_FILINGS: lambda: _filings_section(i),
         ITEM_KR_REVIEW: lambda: _raw_background_section(ITEM_KR_REVIEW, i, "market-summary", background_ref),
@@ -534,8 +555,8 @@ def build_sections(i: DailyInput, settings: DailySettings = DEFAULT_DAILY_SETTIN
     }
     sections = [builders[name]() for name in EDITION_ITEMS[i.edition]]
     if i.edition in EDITIONS_WITH_ETF_ARTICLES:
-        # 마감 후 판 공시는 Claude 입력에만 담는다. 본문에 어떻게 보일지는 본문 배치에서 정한다.
-        sections = [replace(s, hidden=True) if s.name == ITEM_FILINGS else s for s in sections]
+        # 마감 후 판 공시·미국 지수·환율은 Claude 입력에만 담고, 인용되면 출처 목록에 나온다.
+        sections = [replace(s, hidden=True) if s.name in POST_CLOSE_HIDDEN_ITEMS else s for s in sections]
     if i.research_articles:
         sections.append(_research_section(i))
     return tuple(sections)
@@ -615,20 +636,25 @@ class DailyOutput:
 
 
 def parse_output(text: str, allowed_refs: frozenset[str],
-                 forbidden_tickers: frozenset[str] = frozenset()) -> DailyOutput:
+                 forbidden_tickers: frozenset[str] = frozenset(),
+                 weak_without_refs: bool = False) -> DailyOutput:
     """LLM 응답을 검증한다. 형식이 틀리거나 준 적 없는 근거 번호를 인용하거나
-    LLM 입력에 있던 미국 티커를 문장에 쓰면 InvalidDailyOutput."""
+    LLM 입력에 있던 미국 티커를 문장에 쓰면 InvalidDailyOutput.
+    weak_without_refs이면 근거 약함인 문장만 근거 번호 없이 둘 수 있다(마감 후 판 ETF 이유 다시 쓰기)."""
     tickers = ticker_pattern(forbidden_tickers)
     data = parse_output_object(text, "points", InvalidDailyOutput)
     points = []
     for raw in data["points"]:
         item = output_item(raw, "point", InvalidDailyOutput)
         statement = output_sentence(item, "statement", "point", InvalidDailyOutput)
-        refs = output_cited_refs(item, "refs", "point", allowed_refs, InvalidDailyOutput)
+        no_refs = weak_without_refs and item.get("refs") == []
+        refs = () if no_refs else output_cited_refs(item, "refs", "point", allowed_refs, InvalidDailyOutput)
         check_no_ticker(statement, tickers, "point", InvalidDailyOutput)
         shortfall = output_weak_shortfall(item, "point", InvalidDailyOutput)
         if shortfall is not None:
             check_no_ticker(shortfall, tickers, "point shortfall", InvalidDailyOutput)
+        elif no_refs:
+            raise InvalidDailyOutput("point cites no refs but is not marked weak")
         points.append(Point(statement, refs, shortfall))
     insufficient = check_items_present(data, "points", "point", InvalidDailyOutput)
     return DailyOutput(tuple(points), insufficient)
@@ -637,16 +663,26 @@ def parse_output(text: str, allowed_refs: frozenset[str],
 MEMBER_REPEAT_MIN_NAME = 2
 
 
+def _signed_rate(rate: str) -> str:
+    value = decimal_rate(rate)
+    return f"+{rate}" if value is not None and value > 0 and not rate.startswith("+") else rate
+
+
+def member_label(issue: MemberIssue) -> str:
+    """본문에 쓰는 구성 종목 표기. 종목 이름을 모르거나 이름에 티커가 들어 있으면 '미국 종목'이다(티커는 본문에 쓰지 않는다)."""
+    name = (issue.name or "").strip()
+    pattern = ticker_pattern(frozenset({issue.ticker}))
+    return name if name and not (pattern is not None and pattern.search(name)) else US_STOCK_LABEL
+
+
 def member_line(issue: MemberIssue) -> str:
-    """ETF 줄 아래 '↳' 줄. 티커와 종목 이름 없이 비중 순위, 직전 장 등락률, 공시 여부만 쓴다."""
+    """ETF 줄 아래 '↳' 줄. 비중 순위, 종목 이름, 직전 장 등락률, 공시 여부를 쓰고 티커는 쓰지 않는다."""
     parts = []
     if issue.rate is not None:
-        value = decimal_rate(issue.rate)
-        shown = f"+{issue.rate}" if value is not None and value > 0 and not issue.rate.startswith("+") else issue.rate
-        parts.append(f"직전 장 {shown}%")
+        parts.append(f"직전 장 {_signed_rate(issue.rate)}%")
     if issue.filing_refs:
         parts.append("범위 안 공시")
-    return f"↳ 비중 {issue.rank}위 {US_STOCK_LABEL} " + " · ".join(parts)
+    return f"↳ 비중 {issue.rank}위 {member_label(issue)} " + " · ".join(parts)
 
 
 def member_repeat_reason(text: str, issues: tuple[MemberIssue, ...]) -> str | None:
@@ -704,7 +740,9 @@ def parse_post_close_output(text: str, allowed_refs: frozenset[str], forbidden_t
             raise InvalidDailyOutput("etf appears more than once")
         seen.add(symbol)
         reason = output_sentence(item, "reason", "etf", InvalidDailyOutput)
-        refs = output_cited_refs(item, "refs", "etf", allowed_refs, InvalidDailyOutput)
+        # 이유를 찾지 못한 ETF는 근거 없이 둔다. 자기 일봉을 붙이면 근거가 있는 것처럼 보인다. 대신 근거 약함이어야 한다.
+        no_refs = item.get("refs") == []
+        refs = () if no_refs else output_cited_refs(item, "refs", "etf", allowed_refs, InvalidDailyOutput)
         check_no_ticker(reason, tickers, "etf", InvalidDailyOutput)
         repeated = member_repeat_reason(reason, member_issues.get(symbol, ()))
         if repeated is not None:
@@ -712,6 +750,8 @@ def parse_post_close_output(text: str, allowed_refs: frozenset[str], forbidden_t
         shortfall = output_weak_shortfall(item, "etf", InvalidDailyOutput)
         if shortfall is not None:
             check_no_ticker(shortfall, tickers, "etf shortfall", InvalidDailyOutput)
+        elif no_refs:
+            raise InvalidDailyOutput("etf cites no refs but is not marked weak")
         etf_points.append(Point(reason, refs, shortfall, POINT_ETF, symbol))
     notable_points = []
     for raw in notables_raw:
@@ -773,7 +813,8 @@ def _signed(rate: float) -> str:
 
 
 def _count_text(label: str, group: tuple[EtfDay, ...]) -> str:
-    up = sum(1 for e in group if e.has_day() and _shown(_rate(e.rate) or 0.0) > 0)
+    # 개수는 ETF 줄에 보이는 원래 등락률의 부호로 센다. 반올림하면 +0.04%가 보합이 되어 목록과 어긋난다.
+    up = sum(1 for e in group if e.has_day() and (_rate(e.rate) or 0.0) > 0)
     nodata = sum(1 for e in group if not e.has_day() or _rate(e.rate) is None)
     text = f"{label} {len(group)}개 중 {up}개 상승"
     return f"{text}(자료 없음 {nodata})" if nodata else text
@@ -969,7 +1010,7 @@ class DailyLlmWriter:
             raw: str | None = None
             try:
                 raw = self.client.complete(prompt, user, OUTPUT_SCHEMA)
-                output = parse_output(raw, allowed, tickers)
+                output = parse_output(raw, allowed, tickers, weak_without_refs=current.kind == POINT_ETF)
                 if output.insufficient_evidence or len(output.points) != 1:
                     raise InvalidDailyOutput("rewrite must return exactly one point")
                 repeated = member_repeat_reason(
