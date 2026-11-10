@@ -52,13 +52,13 @@ def run(n, kind="move", status="succeeded", reason=None, by="llm", started=None)
     return JobRunRow(f"job-{n}", kind, status, reason, by, started or at(10, n % 60))
 
 
-def report(operations="default", collections="default", runs="default", rule_based=False):
+def report(operations="default", collections="default", runs="default", rule_based=False, current_research=0):
     return build_status_report(
         range_start=SINCE, as_of=AS_OF, current_job_id=CURRENT, current_rule_based=rule_based,
         operations=ops() if operations == "default" else operations,
         collections=[completed(1)] if collections == "default" else collections,
         runs=[run(0, "morning")] if runs == "default" else runs,
-        stuck_after=timedelta(minutes=30))
+        stuck_after=timedelta(minutes=30), current_research_count=current_research)
 
 
 def lines(r):
@@ -140,6 +140,11 @@ def test_all_four_lines_and_a_clean_attention_line():
         "- 브리핑: 급변동 4건(성공 2 · 실패 1[기사 무응답 1] · 진행 중 1 · 규칙 기반 0) · 아침 판 성공",
         "- 주의: 급변동 리포트 실패 1[기사 무응답 1]",
     ]
+
+
+def test_the_research_this_edition_sent_is_added_to_the_research_finished_in_the_range():
+    r = report(collections=[completed(1), completed(2, "research-news")], current_research=2)
+    assert lines(r)[3] == "- 뉴스: 정기 수집 1회 · 일부 종목 빠짐 0회 · 기사 3건 · 재검색 3회"
 
 
 def test_a_collection_that_did_not_come_is_written_as_none():
