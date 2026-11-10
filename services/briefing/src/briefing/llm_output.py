@@ -32,7 +32,22 @@ def output_sentence(item: dict, name: str, noun: str, error: type[InvalidLlmOutp
     value = item.get(name)
     if not isinstance(value, str) or not value.strip():
         raise error(f"{noun} has no {name}")
-    return value.strip()
+    text = value.strip()
+    check_no_json_residue(text, f"{noun} {name}", error)
+    return text
+
+
+# 모델이 JSON 조각을 문장 칸에 흘린 흔적(예: '...더 있어야 합니다.}],')을 가리는 기호.
+_JSON_SYMBOLS = "}{["
+_JSON_FRAGMENT = re.compile(r"\}\s*[,}\])]")
+
+
+def check_no_json_residue(text: str, what: str, error: type[InvalidLlmOutput]) -> None:
+    """문장이 JSON 기호로 끝나거나 '}],' 같은 조각을 담으면 거부한다. 사유에는 문장 내용을 넣지 않는다."""
+    # ']'로 끝나는 문장은 '[속보]' 같은 제목 인용일 수 있어, 여는 '['가 없을 때만 조각으로 본다.
+    unpaired_close = text[-1] == "]" and text.count("]") > text.count("[")
+    if text[-1] in _JSON_SYMBOLS or unpaired_close or _JSON_FRAGMENT.search(text):
+        raise error(f"{what} contains JSON residue")
 
 
 def output_cited_refs(item: dict, name: str, noun: str, allowed: frozenset[str],

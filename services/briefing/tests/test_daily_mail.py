@@ -46,18 +46,15 @@ def etfs(relation=True):
 def run(edition="post-close", settings=None, llm=True, answer_etfs=None, ref=None, whole_event=False, output=None):
     requests, details = Requests(), Details()
     settings = settings or DailySettings()
-    output = output or (post_close_output() if edition == "post-close" else good_output(ref or "B1"))
+    output = output or (post_close_output() if edition == "post-close" else good_output(ref or "B1", symbols=(
+        "TEST04",)))  # 아침 판 범위 밖에 받은 ETF 셋은 버려지고 일봉이 빈 TEST04만 남는다
     writer = DailyLlmWriter(FakeLlm(output), settings.llm_max_attempts) if llm else None
     core = DailyCore(requests, writer, details, settings)
     job, at = (POST_CLOSE_JOB, POST_CLOSE_AT) if edition == "post-close" else (MORNING_JOB, MORNING_AT)
     core.on_schedule_tick(tick(job, at), at, edition)
     background = POST_CLOSE_BACKGROUND if edition == "post-close" else None
     core.on_daily_data_responded(daily_response(etfs=answer_etfs or etfs(), background=background), at)
-    if edition == "post-close":
-        answer_news(core, requests, at)
-    if edition == "morning":
-        from test_daily_jobs import filings_response
-        core.on_filings_responded(filings_response(), at)
+    answer_news(core, requests, at)
     [event] = requests.topic("briefing.daily.generated")
     assert validate("briefing.daily.generated.v1.schema.json", event.value) == []
     return (event.value if whole_event else event.value["payload"]), details
@@ -152,7 +149,8 @@ def test_an_event_over_the_event_limit_loses_only_the_chart():
     payload, _ = run(settings=DailySettings(max_event_bytes=8000))
     assert "images" not in payload and "차트 없음(크기 초과)" in payload["html"]
     assert CHART_OVERSIZED_ITEM in payload["missingItems"]
-    assert len(json.dumps(payload).encode("utf-8")) < 8000
+    # 발행과 같은 방식(ensure_ascii=False)으로 잰 크기다.
+    assert len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) < 8000
 
 
 def test_a_chart_failure_still_sends_the_mail_and_logs_no_detail(monkeypatch, caplog):

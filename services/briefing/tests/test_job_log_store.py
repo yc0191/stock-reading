@@ -26,6 +26,8 @@ from briefing.job_log_store import (
     LOG_TABLE,
     RENAME_LEGACY_SQLS,
     RUN_TABLE,
+    SELECT_MOVES_SQL,
+    SELECT_OUTLOOKS_SQL,
     START_RUN_SQL,
     PostgresJobLog,
     check_constraint_sqls,
@@ -43,7 +45,9 @@ class FakeDb:
     legacy는 job_log 테이블이 이미 있는지와 새 모양인지를 알려 주는 질문의 답이다.
     """
 
-    def __init__(self, fail_times=0, legacy=(False, False)):
+    def __init__(self, fail_times=0, legacy=(False, False), answer=None):
+        # answer는 읽기 질문(SELECT)에 돌려줄 줄들이다. 없으면 옛 모양 질문의 답을 돌려준다.
+        self.answer = answer
         self.rows = []
         self.statements = []
         self.fail_times = fail_times
@@ -89,7 +93,7 @@ class FakeCursor:
             self.db.rows.append(params)
 
     def fetchall(self):
-        return [self.db.legacy]
+        return list(self.db.answer) if self.db.answer is not None else [self.db.legacy]
 
 
 def entry(job_id=JOB_ID, data=None, **changes):
@@ -296,3 +300,38 @@ def test_run_and_log_columns_follow_the_plan_and_keep_json_as_json():
     assert "JSONB" not in CREATE_RUN_TABLE_SQL.upper() + CREATE_LOG_TABLE_SQL.upper()
     assert "input           JSON NOT NULL" in CREATE_RUN_TABLE_SQL
     assert "data        JSON NOT NULL" in CREATE_LOG_TABLE_SQL
+
+
+# ---- 읽기: 그날 아침 예상과 급변동 ----
+
+def test_morning_outlooks_ask_for_the_korean_day_newest_first_and_return_each_data(sleeps):
+    newer, older = {"outlooks": [{"symbol": "TEST01"}], "n": 2}, {"outlooks": [], "n": 1}
+    db = FakeDb(answer=[(json.dumps(newer),), (json.dumps(older),)])
+    assert store_for(db, sleeps).morning_outlooks(AT.date()) == [newer, older]
+    [(sql, params)] = db.statements
+    assert sql is SELECT_OUTLOOKS_SQL and "ORDER BY l.occurred_at DESC" in sql
+    assert params == ("etf-outlook", "morning", datetime(2026, 10, 20, 0, 0, tzinfo=AT.tzinfo),
+                      datetime(2026, 10, 21, 0, 0, tzinfo=AT.tzinfo))
+    assert db.closed == 1
+
+
+def test_moves_between_returns_parsed_rows_and_skips_a_row_that_cannot_be_read(sleeps):
+    good = ("m1", json.dumps({"payload": {"changePercent": 2.1}}),
+            json.dumps({"symbol": "TEST01", "moveAt": "2026-10-20T10:15:00+09:00"}), "succeeded", "llm", None)
+    broken = ("m2", "{}", "not json", "running", None, None)
+    db = FakeDb(answer=[good, broken])
+    since, until = AT.replace(hour=0, minute=0), AT
+    [run] = store_for(db, sleeps).moves_between(since, until)
+    assert (run.job_id, run.symbol, run.change_percent, run.status, run.generated_by) == (
+        "m1", "TEST01", 2.1, "succeeded", "llm")
+    assert db.statements == [(SELECT_MOVES_SQL, ("move", since, until))]
+
+
+def test_a_failed_read_is_none_and_the_log_names_only_the_error_kind(sleeps, caplog):
+    db = FakeDb(fail_times=1)
+    with caplog.at_level(logging.WARNING):
+        assert store_for(db, sleeps).morning_outlooks(AT.date()) is None
+        assert store_for(FakeDb(fail_times=1), sleeps).moves_between(AT, AT) is None
+    assert "ConnectionError" in caplog.text and "hunter2" not in caplog.text and "secret-user" not in caplog.text
+    # 읽기는 다시 시도하지 않는다(판 발행을 늦추지 않는다).
+    assert sleeps == []

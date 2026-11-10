@@ -49,6 +49,8 @@ FAKE_STATEMENT = "[가짜 LLM] 시험용 요약 문장입니다."
 # 마감 후 판 입력의 판 이름과 ETF별 하루 등락 항목 이름(briefing/daily_report.py)
 POST_CLOSE_NAME = "마감 후 판"
 ETF_DAY_ITEM = "보유 ETF별 하루 등락"
+EXCHANGE_ITEM = "환율"
+FAKE_RATE_ISSUE = "[가짜 LLM] 받은 자료에 금리 관련 기사가 없습니다."
 COMMON = {"broker.address.family": "v4"}
 
 
@@ -191,8 +193,9 @@ def schema_errors(topic: str, event: dict) -> list[str]:
 def fake_llm_output(user: str) -> str:
     """입력의 첫 근거 번호를 인용한 요약 한 줄. 근거가 없으면 근거 부족.
 
+    아침 판(입력에 outlookEtfs 가 있음)은 요약 한 줄에 더해 ETF마다 방향 예상과 환율·금리 이슈 칸을 쓴다.
     마감 후 판(입력의 edition 이 "마감 후 판")은 그 판의 출력 형식으로 답한다: 요약 2줄과, 하루 등락이 있는 ETF마다
-    그 ETF의 하루 등락 번호를 인용한 이유 한 줄."""
+    그 ETF의 하루 등락 번호를 인용한 이유 한 줄, 아침 예상을 대조한 ETF(입력의 reviewEtfs)마다 대조 이유 한 줄."""
     try:
         data = json.loads(user)
         items = data.get("items", [])
@@ -206,12 +209,33 @@ def fake_llm_output(user: str) -> str:
             return json.dumps({"summary": [], "etfs": [], "notables": [], "insufficientEvidence": True})
         etfs = [{"symbol": e["symbol"], "reason": FAKE_STATEMENT, "refs": [e["ref"]], "weak": False, "shortfall": ""}
                 for e in days]
-        return json.dumps({"summary": [FAKE_STATEMENT, FAKE_STATEMENT], "etfs": etfs, "notables": [],
-                           "insufficientEvidence": False}, ensure_ascii=False)
+        # 환율 이슈는 환율 항목의 첫 근거를 인용하고, 가짜 자료에는 금리 기사가 없으므로 금리 이슈는 근거 약함으로 쓴다.
+        fx_refs = [e["ref"] for item in items if item.get("name") == EXCHANGE_ITEM for e in item.get("entries", [])
+                   if "ref" in e][:1]
+        output = {"summary": [FAKE_STATEMENT, FAKE_STATEMENT], "etfs": etfs, "notables": [],
+                  "rateIssue": {"statement": FAKE_RATE_ISSUE, "refs": [], "weak": True,
+                                "shortfall": "금리를 다룬 기사가 더 있어야 합니다."},
+                  "insufficientEvidence": False}
+        if fx_refs:
+            output["fxIssue"] = {"statement": FAKE_STATEMENT, "refs": fx_refs, "weak": False, "shortfall": ""}
+        # 같은 날 아침 예상이 있어 코드가 대조한 ETF(입력의 reviewEtfs)마다 이유 한 줄을 쓴다. 근거는 그 ETF의 하루 등락 번호다.
+        day_ref = {e["symbol"]: e["ref"] for e in days}
+        output["reviews"] = [{"symbol": r["symbol"], "reason": FAKE_STATEMENT, "refs": [day_ref[r["symbol"]]],
+                              "weak": False, "shortfall": ""}
+                             for r in data.get("reviewEtfs", []) if r.get("symbol") in day_ref]
+        return json.dumps(output, ensure_ascii=False)
     if not refs:
         return json.dumps({"points": [], "insufficientEvidence": True})
-    return json.dumps({"points": [{"statement": FAKE_STATEMENT, "refs": [refs[0]]}], "insufficientEvidence": False},
-                      ensure_ascii=False)
+    output = {"points": [{"statement": FAKE_STATEMENT, "refs": [refs[0]]}], "insufficientEvidence": False}
+    outlook_etfs = data.get("outlookEtfs")
+    if outlook_etfs:
+        # 아침 판: ETF마다 첫 근거 번호를 인용한 방향 예상, 환율 이슈, 근거 약한 금리 이슈
+        output["etfs"] = [{"symbol": e["symbol"], "direction": "상승", "reason": FAKE_STATEMENT, "refs": [refs[0]],
+                           "weak": False, "shortfall": ""} for e in outlook_etfs]
+        output["fxIssue"] = {"statement": FAKE_STATEMENT, "refs": [refs[0]], "weak": False, "shortfall": ""}
+        output["rateIssue"] = {"statement": FAKE_RATE_ISSUE, "refs": [], "weak": True,
+                               "shortfall": "금리를 다룬 기사가 더 있어야 합니다."}
+    return json.dumps(output, ensure_ascii=False)
 
 
 def fake_message(request: dict) -> dict:

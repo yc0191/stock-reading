@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
+from typing import Callable
 
+from briefing.compose import KST
 from briefing.daily_report import (
     DAILY_DISCLAIMER,
     DAILY_INSUFFICIENT,
@@ -11,7 +14,10 @@ from briefing.daily_report import (
     MINUS,
     NO_DATA,
     POINT_ETF,
+    POINT_FX,
     POINT_NOTABLE,
+    POINT_RATE,
+    POINT_REVIEW,
     DailyInput,
     DailyOutput,
     Entry,
@@ -19,13 +25,48 @@ from briefing.daily_report import (
     etf_line,
     conclusion,
     etf_groups,
+    etf_name,
     headline,
     member_line,
     section_title,
 )
+from briefing.daily_review import NOT_COMPARED
+from briefing.job_log import MoveRun, RunStatus
 from briefing.llm_output import weak_note_line
-from briefing.move_figures import KOSDAQ_NAME, KOSPI_NAME, index_figure, round_cent
+from briefing.move_figures import (
+    KOSDAQ_NAME,
+    KOSPI_NAME,
+    USD_KRW_NAME,
+    display,
+    exchange_rate_figure,
+    index_figure,
+    round_cent,
+)
 from briefing.sources import MARK_TRUNCATED
+
+
+# 모든 ETF에 영향을 주는 환율과 금리는 ETF별 이유와 따로 칸을 둔다.
+FX_TITLE = "환율 이슈"
+RATE_TITLE = "금리 이슈"
+RATE_NOT_WRITTEN = f"{NO_DATA} (이 판에서는 금리 기사를 정리하지 못했습니다)"
+
+# 아침 예상 대조 칸과 그날 급변동 칸
+REVIEW_TITLE = "아침 예상 대조"
+MOVES_TITLE = "그날 급변동"
+MOVES_NONE = "없음"
+MOVES_NOT_READ = "기록을 읽지 못했습니다"
+# 급변동 리포트 결과 표시. 모르는 상태 값은 그대로 보인다.
+MOVE_RESULT_TEXT = {RunStatus.SUCCEEDED.value: "성공", RunStatus.FAILED.value: "실패", RunStatus.RUNNING.value: "진행 중"}
+
+
+@dataclass(frozen=True)
+class IssueRow:
+    """환율 이슈·금리 이슈 칸 하나. numbers가 비어 있으면 근거 번호 없이 쓴 문장(자료 없음, 근거 약한 문장)이다."""
+
+    title: str
+    statement: str
+    numbers: tuple[int, ...]
+    shortfall: str | None
 
 
 @dataclass(frozen=True)
@@ -40,6 +81,16 @@ class EtfRow:
 
 
 @dataclass(frozen=True)
+class ReviewRow:
+    """아침 예상 대조 한 줄과 그 아래 이유. reason이 None이면 이유를 쓰지 않은 줄(대조 안 함, 규칙 기반 본문)이다."""
+
+    line: str
+    reason: str | None
+    numbers: tuple[int, ...]
+    shortfall: str | None
+
+
+@dataclass(frozen=True)
 class PostCloseView:
     """마감 후 판 본문의 내용. 글자판과 HTML이 같은 값을 같은 순서로 보여 준다.
 
@@ -50,10 +101,15 @@ class PostCloseView:
     market: str
     summary: tuple[str, ...]
     notables: tuple[tuple[str, tuple[int, ...], str | None], ...]
+    issues: tuple[IssueRow, ...]
     etf_title: str
     groups: tuple[tuple[str, tuple[EtfRow, ...]], ...]
     extra: tuple[str, ...]
     sources: tuple[tuple[int, Entry], ...]
+    # 아침 예상 대조(줄들과, 대조를 뺀 이유). 급변동 줄들은 칸을 보이지 않는 판이면 None이다.
+    reviews: tuple[ReviewRow, ...] = ()
+    review_note: str | None = None
+    moves: tuple[str, ...] | None = None
 
 
 def market_line(i: DailyInput, sections: tuple[Section, ...]) -> str:
@@ -72,6 +128,54 @@ def market_line(i: DailyInput, sections: tuple[Section, ...]) -> str:
     return f"{ITEM_KR_TODAY}: {part('코스피', KOSPI_NAME)} · {part('코스닥', KOSDAQ_NAME)}"
 
 
+def issue_rows(i: DailyInput, output: DailyOutput | None, number: Callable[[tuple[str, ...]], tuple[int, ...]]
+               ) -> tuple[IssueRow, ...]:
+    """환율 이슈·금리 이슈 칸(두 판 공통). output에 그 문장이 없으면 코드가 받은 숫자나 안내 줄로 채운다."""
+    written = {p.kind: p for p in output.issues} if output is not None else {}
+    rows = []
+    for kind, title, fallback in ((POINT_FX, FX_TITLE, _fx_fallback(i)), (POINT_RATE, RATE_TITLE, RATE_NOT_WRITTEN)):
+        p = written.get(kind)
+        rows.append(IssueRow(title, p.statement, number(p.refs), p.shortfall) if p
+                    else IssueRow(title, fallback, (), None))
+    return tuple(rows)
+
+
+def _fx_fallback(i: DailyInput) -> str:
+    """Claude가 환율 이슈를 쓰지 않은 판(규칙 기반, 장 시작 전 등)에 코드가 받은 숫자만 옮겨 쓰는 줄."""
+    figure = exchange_rate_figure(tuple(i.background or ()))
+    if figure is None or figure.value is None:
+        return NO_DATA
+    return (f"{USD_KRW_NAME} {display(figure.value)}(전일대비 {display(figure.change, sign=True)}, "
+            f"{display(figure.rate, sign=True)}%)")
+
+
+def _signed_percent(rate: Decimal) -> str:
+    return f"{'+' if rate >= 0 else MINUS}{abs(round_cent(rate))}%"
+
+
+def move_line(move: MoveRun, names: dict[str, str]) -> str:
+    """급변동 한 건의 한 줄: 시각 · ETF · 등락 · 리포트 결과."""
+    at = move.move_at.astimezone(KST)
+    change = _signed_percent(Decimal(str(move.change_percent))) if move.change_percent is not None else NO_DATA
+    result = MOVE_RESULT_TEXT.get(move.status, move.status)
+    return f"{at:%H:%M} {names.get(move.symbol, move.symbol)} {change} · 리포트 {result}"
+
+
+def _moves_lines(i: DailyInput) -> tuple[str, ...] | None:
+    if i.review is None:
+        return None
+    if i.review.moves is None:
+        return (MOVES_NOT_READ,)
+    if not i.review.moves:
+        return (MOVES_NONE,)
+    names = {e.symbol: etf_name(e) for e in i.etfs or ()}
+    cap = i.settings.max_move_lines
+    lines = [move_line(m, names) for m in i.review.moves[:cap]]
+    if len(i.review.moves) > cap:
+        lines.append(f"외 {len(i.review.moves) - cap}건")
+    return tuple(lines)
+
+
 def post_close_view(i: DailyInput, sections: tuple[Section, ...], output: DailyOutput | None) -> PostCloseView:
     by_ref = {e.ref: e for s in sections for e in s.entries}
     etf_section = next(s for s in sections if s.name == ITEM_ETFS)
@@ -84,6 +188,7 @@ def post_close_view(i: DailyInput, sections: tuple[Section, ...], output: DailyO
         return tuple(numbers.setdefault(ref, len(numbers) + 1) for ref in refs)
 
     notables = tuple((p.statement, number(p.refs), p.shortfall) for p in notable_points)
+    issues = issue_rows(i, output if usable else None, number)
     members: dict[str, list[str]] = {}
     for issue in i.member_issues:
         members.setdefault(issue.etf, []).append(member_line(issue))
@@ -100,10 +205,24 @@ def post_close_view(i: DailyInput, sections: tuple[Section, ...], output: DailyO
     else:
         groups.append(("", tuple(EtfRow(line, None, (), None, ()) for line in etf_section.lines)))
     extra = (f"({MARK_TRUNCATED}: 상한까지만 받음)",) if i.etfs and i.etfs_truncated else ()
+    # 번호는 ETF 줄 다음에 매기므로 대조 이유는 ETF 이유 뒤에 만든다.
+    review_reasons = {p.symbol: p for p in output.reviews if p.kind == POINT_REVIEW} if usable else {}
+    etf_by_symbol = {e.symbol: e for e in i.etfs or ()}
+    review_rows = []
+    for r in i.reviews():
+        name = etf_name(etf_by_symbol[r.symbol])
+        if r.verdict is None:
+            review_rows.append(ReviewRow(f"{name} 아침 예상 {r.call.direction} → {NOT_COMPARED}", None, (), None))
+            continue
+        p = review_reasons.get(r.symbol)
+        review_rows.append(ReviewRow(
+            f"{name} 아침 예상 {r.call.direction} → 실제 {_signed_percent(r.rate)}: {r.verdict}",
+            p.statement if p else None, number(p.refs) if p else (), p.shortfall if p else None))
     return PostCloseView(
         output is not None, bool(output is not None and output.insufficient_evidence), market_line(i, sections),
-        output.summary if usable else (), notables, section_title(etf_section), tuple(groups), extra,
-        tuple((n, by_ref[ref]) for ref, n in numbers.items()))
+        output.summary if usable else (), notables, issues, section_title(etf_section), tuple(groups), extra,
+        tuple((n, by_ref[ref]) for ref, n in numbers.items()),
+        tuple(review_rows), i.review.note if i.review is not None and not review_rows else None, _moves_lines(i))
 
 
 def source_plain(entry: Entry) -> str:
@@ -117,10 +236,10 @@ def _numbers(numbers: tuple[int, ...]) -> str:
 
 def post_close_text(i: DailyInput, sections: tuple[Section, ...], output: DailyOutput | None,
                     status_text: str | None = None) -> str:
-    """마감 후 판 글자판. 순서: 제목 → 결론 → 그날 한국 증시 → 요약 2줄 → 눈에 띄는 점 → ETF 줄(이유, ↳) → 면책 → 서버 상태 → 출처.
+    """마감 후 판 글자판. 순서: 제목 → 결론 → 그날 한국 증시 → 요약 2줄 → 눈에 띄는 점 → 환율 이슈 → 금리 이슈 → ETF 줄(이유, ↳) → 아침 예상 대조 → 그날 급변동 → 면책 → 서버 상태 → 출처.
     output이 None이면 요약·이유 없이 코드가 쓴 숫자·목록만 있는 규칙 기반 본문이다."""
     v = post_close_view(i, sections, output)
-    lines = [*headline(i), "", conclusion(i), v.market]
+    lines = [*headline(i), "", conclusion(i, output), v.market]
     if v.has_output:
         lines.extend(["", "요약:"])
         if v.insufficient:
@@ -132,6 +251,12 @@ def post_close_text(i: DailyInput, sections: tuple[Section, ...], output: DailyO
             lines.append(f"  - {statement} {_numbers(nums)}")
             if shortfall:
                 lines.append(weak_note_line(shortfall, "    "))
+    for issue in v.issues:
+        lines.extend(["", f"{issue.title}:"])
+        cite = f" {_numbers(issue.numbers)}" if issue.numbers else ""
+        lines.append(f"  - {issue.statement}{cite}")
+        if issue.shortfall:
+            lines.append(weak_note_line(issue.shortfall, "    "))
     lines.extend(["", f"■ {v.etf_title}"])
     for title, rows in v.groups:
         if title:
@@ -146,6 +271,20 @@ def post_close_text(i: DailyInput, sections: tuple[Section, ...], output: DailyO
                     lines.append(weak_note_line(row.shortfall, "      "))
             lines.extend(f"    {m}" for m in row.members)
     lines.extend(f"  - {line}" for line in v.extra)
+    if v.reviews or v.review_note:
+        lines.extend(["", f"■ {REVIEW_TITLE}"])
+        for row in v.reviews:
+            lines.append(f"  - {row.line}")
+            if row.reason is not None:
+                cite = f" {_numbers(row.numbers)}" if row.numbers else ""
+                lines.append(f"    이유: {row.reason}{cite}")
+                if row.shortfall:
+                    lines.append(weak_note_line(row.shortfall, "      "))
+        if v.review_note:
+            lines.append(f"  - {v.review_note}")
+    if v.moves is not None:
+        lines.extend(["", f"■ {MOVES_TITLE}"])
+        lines.extend(f"  - {line}" for line in v.moves)
     lines.extend(["", DAILY_DISCLAIMER])
     if status_text:
         lines.extend(["", status_text])
