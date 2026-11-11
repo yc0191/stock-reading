@@ -11,11 +11,10 @@
 secrets/
 credentials*
 
-# ---- Terraform (상태 파일에 비밀이 들어갈 수 있음) ----
+# ---- Terraform (상태 파일에 비밀이 들어갈 수 있음. .terraform.lock.hcl 은 플러그인 버전 고정이라 커밋한다) ----
 *.tfstate
 *.tfstate.*
 .terraform/
-.terraform.lock.hcl
 crash.log
 
 # ---- 개인·비공개 데이터 ----

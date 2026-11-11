@@ -1,0 +1,69 @@
+# main 푸시마다 이미지 6개(서비스 5개 + DB 표 만들기 migrate)를 같은 커밋 태그로 ECR에 올리고,
+# 모두 성공했을 때만 대기 버전 값(Parameter Store)을 그 커밋으로 적는다. 하나라도 실패하면 값을 적지 않는다.
+# 서버 적용은 서버가 값을 읽어 가져가는 방식이라 여기서 서버로 접속하지 않는다(infra/deploy/README.md).
+# 필요한 저장소 변수(Settings > Variables): AWS_ROLE_ARN(terraform output github_actions_role_arn), AWS_REGION.
+name: deploy-images
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+# 줄 서서 차례로 돈다. 나중 커밋의 실행이 먼저 끝나 대기 버전이 옛 커밋으로 덮이는 일을 막는다.
+concurrency:
+  group: deploy-images
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: collector, dockerfile: services/collector/Dockerfile }
+          - { image: market, dockerfile: services/market/Dockerfile }
+          - { image: news, dockerfile: services/news/Dockerfile }
+          - { image: notifier, dockerfile: services/notifier/Dockerfile }
+          - { image: briefing, dockerfile: services/briefing/Dockerfile }
+          - { image: migrate, dockerfile: infra/deploy/migrate/Dockerfile }
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: aws-actions/configure-aws-credentials@v4.1.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2.0.1
+      - uses: docker/setup-buildx-action@v3.10.0
+      # Lightsail 은 x86 이라 linux/amd64 로 만든다.
+      - uses: docker/build-push-action@v6.15.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.ecr.outputs.registry }}/stock-reading-${{ matrix.image }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+
+  # build 가 6개 모두 성공해야 돈다(needs 는 매트릭스 전체의 성공을 요구한다).
+  publish-standby-version:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4.1.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: 대기 버전 기록
+        run: |
+          aws ssm put-parameter \
+            --name /stock-reading/prod/deploy/standby-version \
+            --type String --overwrite \
+            --value "$GITHUB_SHA" >/dev/null
+          echo "대기 버전: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
