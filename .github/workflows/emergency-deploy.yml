@@ -1,0 +1,78 @@
+# 긴급 배포 버튼. 대기 버전(main에서 이미지가 모두 올라간 가장 최근 커밋)을 다음 00:00까지 기다리지 않고
+# 서비스 서버가 5분 안에 적용하게 한다. 서버는 긴급 값이 대기 버전과 다르면 무시하므로, 여기서는
+# 그 시점의 대기 버전 값을 그대로 긴급 버전 값에 적는다.
+# 한국 시간 09:00~15:30에는 누를 수 없다(서버도 같은 시간에 적용하지 않고 그 시간에 온 요청은 버린다).
+# 필요한 저장소 변수: AWS_ROLE_ARN, AWS_REGION (deploy-images.yml 과 같다).
+name: emergency-deploy
+run-name: 긴급 배포 (${{ inputs.reason }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "긴급 배포 사유 (필수, 기록으로 남습니다)"
+        required: true
+        type: string
+      ack_restart:
+        description: "경고: 재시작하면 수집기의 뉴스 검색 하루 호출 횟수가 0으로 돌아갑니다. 진행 중이던 작업도 끊깁니다. 확인했으면 체크하세요"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  emergency:
+    # 다른 브랜치에서 눌러도 AWS 역할을 받지 못하지만, 여기서 먼저 막는다.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      STANDBY_PARAM: /stock-reading/prod/deploy/standby-version
+      URGENT_PARAM: /stock-reading/prod/deploy/urgent-version
+      # 사유는 셸 코드에 끼워 넣지 않고 환경변수로만 쓴다.
+      REASON: ${{ inputs.reason }}
+      ACK_RESTART: ${{ inputs.ack_restart }}
+    steps:
+      - name: 입력과 배포 금지 시간 확인
+        run: |
+          if [ -z "${REASON//[[:space:]]/}" ]; then
+            echo "::error::사유를 입력해야 합니다."; exit 1
+          fi
+          if [ "$ACK_RESTART" != "true" ]; then
+            echo "::error::뉴스 검색 하루 호출 횟수 초기화 경고를 확인(체크)해야 합니다."; exit 1
+          fi
+          hms=$((10#$(TZ=Asia/Seoul date +%H%M%S)))
+          if [ "$hms" -ge 90000 ] && [ "$hms" -le 153059 ]; then
+            echo "::error::한국 시간 09:00~15:30에는 긴급 배포를 할 수 없습니다. 15:31 이후에 다시 누르세요."; exit 1
+          fi
+      - uses: aws-actions/configure-aws-credentials@v4.1.0
+        with:
+          # OIDC(역할)가 기본. 역할 변수가 비고 키 비밀값이 있으면 접근 키로 들어간다(infra/terraform 의 github_auth).
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: 대기 버전을 긴급 버전에 기록
+        run: |
+          standby=$(aws ssm get-parameter --name "$STANDBY_PARAM" --query Parameter.Value --output text)
+          if ! [[ "$standby" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::대기 버전이 커밋 해시가 아닙니다. 아직 main 이미지가 올라간 적이 없는지 확인하세요."; exit 1
+          fi
+          # 값을 읽는 동안 금지 시간이 시작됐을 수 있어 쓰기 직전에 한 번 더 본다.
+          hms=$((10#$(TZ=Asia/Seoul date +%H%M%S)))
+          if [ "$hms" -ge 90000 ] && [ "$hms" -le 153059 ]; then
+            echo "::error::한국 시간 09:00~15:30에는 긴급 배포를 할 수 없습니다."; exit 1
+          fi
+          aws ssm put-parameter --name "$URGENT_PARAM" --type String --overwrite --value "$standby" >/dev/null
+          # 읽은 뒤 새 main 이 대기 버전을 바꿨으면 서버가 이 긴급 값을 무시한다.
+          after=$(aws ssm get-parameter --name "$STANDBY_PARAM" --query Parameter.Value --output text)
+          if [ "$after" != "$standby" ]; then
+            echo "::warning::그 사이 대기 버전이 바뀌어 서버가 이 요청을 무시합니다. 다시 눌러 주세요."
+          fi
+          {
+            echo "긴급 버전: $standby"
+            echo "서버는 5분 안에 확인합니다. 이미 같은 값을 적용했거나 본 요청이면 다시 적용하지 않습니다."
+            echo "사유: $REASON"
+          } >> "$GITHUB_STEP_SUMMARY"

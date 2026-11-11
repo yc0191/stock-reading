@@ -1,0 +1,10 @@
+# 이 파일을 terraform.tfvars 로 복사해 채운다. *.tfvars 는 gitignore 대상이라 커밋되지 않는다.
+aws_profile        = "<Terraform 실행용 AWS CLI 프로필>"
+github_repository  = "<소유자>/<저장소 이름>"
+backup_bucket_name = "<전 세계에서 유일한 버킷 이름>"
+
+# GitHub Actions 가 AWS에 들어가는 방법: oidc(기본, 권장) | access_key(OIDC 등록이 조직 정책으로 막힌 계정)
+# github_auth = "access_key"
+
+# 계정에 GitHub OIDC 공급자가 이미 있으면 false
+# create_github_oidc_provider = false
