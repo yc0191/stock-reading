@@ -547,6 +547,9 @@ def test_live_checks_count_only_rows_saved_after_this_run_started():
     assert quote.count("FROM market.") == quote.count(bounded) >= 2 and 'os.environ["QUOTE_FLOW_LIVE_SINCE"]' in quote
     brief = (REPO_ROOT / "scripts" / "tests" / "test_briefing_flow_live.py").read_text(encoding="utf-8")
     assert "created_at >= %s::timestamptz" in brief and 'env["BRIEFING_FLOW_LIVE_SINCE"]' in brief
+    # 재검색이 근거를 못 찾고 접은 단계 기록(step-failed)이 아니라 작업 실패(job_run)로 판정한다.
+    failed_sql = brief.split("def _failed_jobs", 1)[1].split("\ndef ", 1)[0].split("cur.execute", 1)[1]
+    assert "FROM briefing.job_run WHERE status = 'failed'" in failed_sql and "step-failed" not in failed_sql
     seed = (REPO_ROOT / "scripts" / "live_briefing.py").read_text(encoding="utf-8")
     assert seed.count("FROM market.price_snapshot") == seed.count(bounded) == 2
     assert 'LIVE_BRIEFING_SINCE="$LIVE_SINCE"' in text
