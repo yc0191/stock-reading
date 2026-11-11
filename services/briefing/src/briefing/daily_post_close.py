@@ -31,7 +31,7 @@ from briefing.daily_report import (
     section_title,
 )
 from briefing.daily_review import NOT_COMPARED
-from briefing.job_log import MoveRun, RunStatus
+from briefing.job_log import REASON_NO_EVIDENCE, MoveRun, RunStatus
 from briefing.llm_output import weak_note_line
 from briefing.move_figures import (
     KOSDAQ_NAME,
@@ -158,6 +158,8 @@ def move_line(move: MoveRun, names: dict[str, str]) -> str:
     at = move.move_at.astimezone(KST)
     change = _signed_percent(Decimal(str(move.change_percent))) if move.change_percent is not None else NO_DATA
     result = MOVE_RESULT_TEXT.get(move.status, move.status)
+    if move.status == RunStatus.SUCCEEDED.value and move.failure_reason == REASON_NO_EVIDENCE:
+        return f"{at:%H:%M} {names.get(move.symbol, move.symbol)} {change} · 근거 없어 보내지 않음"
     return f"{at:%H:%M} {names.get(move.symbol, move.symbol)} {change} · 리포트 {result}"
 
 

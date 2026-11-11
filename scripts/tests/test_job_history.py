@@ -160,3 +160,10 @@ def test_missing_connection_settings_name_the_variables_without_printing_values(
         jh.connect({"JOB_HISTORY_DB_PASSWORD": "secret-value"})
 
     assert "JOB_HISTORY_DB_URL" in str(stop.value) and "secret-value" not in str(stop.value)
+
+
+def test_a_succeeded_run_with_a_reason_shows_why_it_was_not_published_not_a_failure_reason():
+    unsent = {**RUN, "status": "succeeded", "failure_reason": "no_evidence", "result_event_id": None}
+    _, text, _ = run_cli(JOB_ID, FakeConn(unsent, []))
+
+    assert "발행 안 한 이유 no_evidence" in text and "실패 사유" not in text

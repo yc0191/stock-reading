@@ -764,19 +764,74 @@ def test_unchecked_items_name_missing_truncated_and_too_large_data_without_ticke
         assert ticker not in unchecked
 
 
-def test_insufficient_evidence_keeps_the_headline_and_unchecked_items(core, rec):
+def test_insufficient_evidence_keeps_the_headline_and_unchecked_items_in_the_recorded_text_but_sends_nothing(core, rec):
     run_us(core)
-    stage, published, _ = report_stage(LlmWriter(FakeLlm(output([], insufficient=True))))
+    stage, published, job_log = report_stage(LlmWriter(FakeLlm(output([], insufficient=True))))
 
     stage.on_ready(rec.readied[0])
 
-    payload = published.sent[0].value["payload"]
-    text = payload["text"]
-    # 가짜 context 응답의 etf.name이 머리말과 이벤트의 name 칸까지 이어진다.
+    # 인용한 근거가 없어 메일 이벤트는 없고, 본문은 작업 기록에 남는다.
+    assert published.sent == []
+    text = job_log.finishes[0].final_text
     assert text.splitlines()[0].startswith("[TEST ETF ONE(TEST01)] ")
-    assert payload["name"] == "TEST ETF ONE"
     assert "추정하기 어렵습니다" in text and "- 시장종합: 원문이 커서 빠짐" in text
     assert "근거 1" not in text
+
+
+# ---- 변동 T+5분 재검색: 정기 수집 없이 끝나는 변동, 근거가 없어 보내지 않는 변동 ----
+
+ETF_WITH_NAME = {"name": "가짜 반도체 ETF", "membersTruncated": False,
+                 "members": [{"market": "KR", "symbol": "TESTB", "rank": 1, "name": "첫째회사"}]}
+
+
+def early_research_completed(research_id):
+    event = sample("collection.completed.sample.json")
+    event["payload"].update(jobType="research-news", startedAt=(T + S.early_research_delay).isoformat(),
+                            incompleteSymbols=[], researchJobId=research_id)
+    return json.dumps(event)
+
+
+def run_without_the_regular_collection(core, rec):
+    """정기 수집 완료는 끝내 오지 않는다. T+5분 재검색의 완료만으로 리포트 입력까지 간다."""
+    from briefing.jobs import early_research_id
+    core.on_move(move(), T)
+    core.on_tick(T + S.early_research_delay)
+    request_at = T + S.early_research_delay
+    context_event = context(tickers=())
+    context_event["payload"]["etf"] = ETF_WITH_NAME
+    core.on_context_responded(json.dumps(context_event), request_at + SEC)
+    assert core.on_research_completed(early_research_completed(early_research_id(JOB_ID)), request_at + 20 * SEC)
+    core.on_history_responded(history(), request_at + 21 * SEC)
+    stable_articles(core, now=request_at + 21 * SEC)
+
+
+def test_a_move_finishes_into_a_briefing_event_without_the_regular_news_collection(core, rec):
+    run_without_the_regular_collection(core, rec)
+    (research,) = [e for e in rec.sent if e.topic == "news.research.requested"]
+    assert validate("news.research.requested.v1.schema.json", research.value) == []
+    assert research.value["payload"]["queries"] == ["가짜 반도체 ETF", "첫째회사"]
+    assert rec.failed == []
+    stage, published, job_log = report_stage(LlmWriter(FakeLlm(output([("기사가 영향을 줬을 수 있습니다.", ["a1"])]))))
+
+    stage.on_ready(rec.readied[0])
+
+    (event,) = published.sent
+    assert validate("briefing.generated.v1.schema.json", event.value) == []
+    assert [e["articleId"] for e in event.value["payload"]["evidence"]] == ["a1"]
+    assert job_log.finishes[0].result_event_id == event.value["eventId"]
+
+
+def test_a_move_without_any_cited_evidence_sends_no_event_and_leaves_the_result_in_the_job_record(core, rec):
+    run_without_the_regular_collection(core, rec)
+    stage, published, job_log = report_stage(LlmWriter(FakeLlm(output([], insufficient=True))))
+
+    stage.on_ready(rec.readied[0])
+
+    assert published.sent == []
+    (result,) = job_log.finishes
+    assert (result.failure_reason, result.status.value, result.result_event_id) == ("no_evidence", "succeeded", None)
+    (entry,) = job_log.of_reason("no_evidence")
+    assert entry.data["receivedCounts"]["articles"] == 1 and entry.data["finalText"] == result.final_text
 
 
 # ---- 급변동 실패 기록 (근거 조회) ----

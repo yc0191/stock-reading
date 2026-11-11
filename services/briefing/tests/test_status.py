@@ -137,7 +137,7 @@ def test_all_four_lines_and_a_clean_attention_line():
         "- 수집: 장 시작 전 08:30 · 1초 현재가 09:00~15:30 · 장중 09:00~15:30 · 장 마감 후 16:30",
         "- 시세: 받음 1,000 · 실패 639(38.99%) [빈 현재가 344 · 칸 불일치 295]",
         "- 뉴스: 정기 수집 2회 · 일부 종목 빠짐 1회 · 기사 8건 · 재검색 1회",
-        "- 브리핑: 급변동 4건(성공 2 · 실패 1[기사 무응답 1] · 진행 중 1 · 규칙 기반 0) · 아침 판 성공",
+        "- 브리핑: 급변동 4건(성공 2 · 실패 1[기사 무응답 1] · 진행 중 1 · 규칙 기반 0) · 근거 없어 보내지 않은 급변동 0건 · 아침 판 성공",
         "- 주의: 급변동 리포트 실패 1[기사 무응답 1]",
     ]
 
@@ -209,7 +209,7 @@ def test_the_old_tick_skip_has_its_own_name_and_is_not_an_attention_item():
 
 def test_no_moves_and_the_current_job_itself_is_not_counted():
     r = report(runs=[run(0, "morning"), JobRunRow(CURRENT, "post-close", "running", None, None, at(17))])
-    assert lines(r)[4] == "- 브리핑: 급변동 0건(성공 0 · 실패 0 · 진행 중 0 · 규칙 기반 0) · 아침 판 성공"
+    assert lines(r)[4] == "- 브리핑: 급변동 0건(성공 0 · 실패 0 · 진행 중 0 · 규칙 기반 0) · 근거 없어 보내지 않은 급변동 0건 · 아침 판 성공"
     assert lines(r)[5] == "- 주의: 없음"
 
 
@@ -271,3 +271,28 @@ def test_environment_problems_are_not_attention_targets():
 def test_several_attention_targets_are_joined_in_one_line():
     r = report(operations=ops({"TOKEN_ISSUE_FAILED": 1}, dropped=2), runs=[run(0, "morning")])
     assert lines(r)[5] == "- 주의: 시세처리기 버린 메시지 2 · 토큰 발급 실패 1"
+
+
+def test_moves_not_sent_for_lack_of_evidence_are_counted_apart_from_successes_and_failures():
+    # 근거 없어 보내지 않은 작업은 succeeded로 끝나지만 성공에 세지 않고, 실패에도 세지 않으며 주의에도 올리지 않는다.
+    runs = [run(0, "morning"), run(1), run(2, reason="no_evidence"), run(3, reason="no_evidence"),
+            run(4, status="failed", reason="llm_error")]
+    r = report(runs=runs)
+    assert lines(r)[4] == ("- 브리핑: 급변동 4건(성공 1 · 실패 1[LLM 오류 1] · 진행 중 0 · 규칙 기반 0)"
+                           " · 근거 없어 보내지 않은 급변동 2건 · 아침 판 성공")
+    assert "no_evidence" not in lines(r)[5] and "근거 없어" not in lines(r)[5]
+
+
+def test_a_no_evidence_morning_run_or_other_reason_on_a_success_is_not_counted_as_not_sent():
+    # 다른 사유가 붙은 성공(중간에 포기한 단계가 있었던 작업)과 아침 판은 세지 않는다.
+    runs = [run(0, "morning", reason="no_evidence"), run(1, reason="news_no_response")]
+    assert "성공 1" in lines(report(runs=runs))[4] and "보내지 않은 급변동 0건" in lines(report(runs=runs))[4]
+
+
+def test_a_rule_based_move_not_sent_for_lack_of_evidence_is_not_counted_as_rule_based():
+    runs = [run(0, "morning"), run(1, reason="no_evidence", by="rule-based"), run(2, by="rule-based")]
+    line = lines(report(runs=runs))[4]
+    assert "규칙 기반 1)" in line and "보내지 않은 급변동 1건" in line
+    r = report(runs=[run(0, "morning"), run(1, reason="no_evidence", by="rule-based")])
+    assert "규칙 기반 0)" in lines(r)[4] and "보내지 않은 급변동 1건" in lines(r)[4]
+    assert "규칙 기반 급변동" not in lines(r)[5]

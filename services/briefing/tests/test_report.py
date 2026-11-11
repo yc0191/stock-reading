@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from briefing.jobs import ReportInput
+from briefing.job_log import REASON_NO_EVIDENCE
 from briefing.ports import FailureReason
 from fake_job_log import FakeJobLog
 from briefing.llm import DEFAULT_MODEL, LlmCallError
@@ -198,30 +199,55 @@ def test_three_failed_attempts_record_llm_error_and_publish_nothing():
 
 # ---- 근거 부족 ----
 
-def test_insufficient_evidence_publishes_a_report_without_causes_or_evidence():
+def test_insufficient_evidence_is_not_published_and_the_result_and_details_are_recorded():
     llm = FakeLlm(output([], insufficient=True))
-    s, published, failures = stage(LlmWriter(llm))
+    s, published, job_log = stage(LlmWriter(llm))
 
     s.on_ready(report_input(articles=()))
 
-    assert failures.failed == []
-    payload = published[0].value["payload"]
-    assert payload["text"].splitlines()[1:] == [
+    # 인용한 근거가 0개라 결과 이벤트를 발행하지 않는다.
+    assert published == []
+    (result,) = job_log.finishes
+    assert (result.status.value, result.failure_reason, result.result_event_id) == ("succeeded", REASON_NO_EVIDENCE, None)
+    assert result.final_text.splitlines()[1:] == [
         "", LLM_INSUFFICIENT, "", "확인하지 못한 것:", "- 기사: 기간 안에 받은 자료 없음",
         "- 미국 공시·미국 종목 등락률: 변동 종목에 미국 종목이 없어 조회하지 않음", LLM_DISCLAIMER]
-    assert payload["evidence"] == []
-    assert validate("briefing.generated.v1.schema.json", published[0].value) == []
+    (entry,) = job_log.of_reason(REASON_NO_EVIDENCE)
+    assert entry.entry_type.value == "missing-items"
+    assert entry.data["receivedCounts"] == {"articles": 0, "researchArticles": 0, "filings": 0, "closeRates": 0,
+                                            "priceHistory": 2}
+    assert "기사: 기간 안에 받은 자료 없음" in entry.data["missingItems"]
+    assert entry.data["finalText"] == result.final_text
 
 
 def test_statements_sent_with_insufficient_evidence_are_not_used():
     llm = FakeLlm(output([("억지 원인이 영향을 줬을 수 있습니다.", ["a1"])], insufficient=True))
-    s, published, _ = stage(LlmWriter(llm))
+    s, published, job_log = stage(LlmWriter(llm))
 
     s.on_ready(report_input())
 
-    payload = published[0].value["payload"]
-    assert "억지 원인" not in payload["text"]
-    assert payload["evidence"] == []
+    assert published == []
+    assert "억지 원인" not in job_log.finishes[0].final_text
+
+
+def test_one_cited_ref_is_enough_to_publish():
+    # 경계: 인용한 근거가 1개면 발행하고, 0개일 때만 발행하지 않는다.
+    s, published, job_log = stage(LlmWriter(FakeLlm(VALID)))
+
+    s.on_ready(report_input())
+
+    assert len(published) == 1
+    assert job_log.of_reason(REASON_NO_EVIDENCE) == []
+    assert job_log.finishes[0].failure_reason != REASON_NO_EVIDENCE
+
+
+def test_a_rule_based_report_without_any_article_or_filing_is_not_published():
+    s, published, job_log = stage(RuleBasedWriter())
+
+    s.on_ready(report_input(articles=()))
+
+    assert published == []
+    assert job_log.finishes[0].failure_reason == REASON_NO_EVIDENCE
 
 
 # ---- LLM 입력 ----

@@ -326,7 +326,8 @@ def test_collection_not_covered_after_the_wait_limit(core, rec):
     (failure,) = rec.failed
     assert failure.reason == FailureReason.COLLECTION_NOT_COVERED
     core.on_collection_completed(completed(), T + S.collection_wait_limit + SEC)
-    assert rec.sent == []  # 실패한 작업은 되살아나지 않는다
+    # 실패한 작업은 되살아나지 않는다. 나간 것은 T+5분에 ETF 이름을 알려고 보낸 배경 자료 요청뿐이다.
+    assert [e.topic for e in rec.sent] == ["market.context.requested"]
 
 
 def test_a_failed_job_leaves_one_failure_line_and_one_result_line_under_the_same_job_id(core, rec):
@@ -368,6 +369,10 @@ def test_articles_outside_the_range_are_dropped_from_the_report_input(core, rec,
 def test_next_deadline_reports_the_earliest_timer(core):
     assert core.next_deadline() is None
     core.on_move(move(), T)
+    assert core.next_deadline() == T + S.early_research_delay  # 정기 수집을 기다리는 동안 T+5분에 먼저 재검색한다
+    core.on_tick(T + S.early_research_delay)
+    assert core.next_deadline() == T + S.early_research_delay + S.response_timeout
+    core.on_tick(T + S.early_research_delay + S.response_timeout)  # 배경 자료가 안 와서 포기
     assert core.next_deadline() == T + S.collection_wait_limit
     core.on_collection_completed(completed(), T)
     assert core.next_deadline() == T + S.response_timeout
@@ -386,3 +391,186 @@ def test_default_history_window_fits_in_the_point_cap_so_it_is_not_always_trunca
     s = CoreSettings()
     buckets = int((s.market_lookback + s.delta) / s.history_interval) + 1
     assert buckets <= s.max_history_points
+
+
+# ---- 변동 T+5분 재검색(정기 수집을 기다리지 않고 진행) ----
+
+RESEARCH_ID = "00000000-0000-4000-8000-0000000000aa"
+ETF = {"name": "가짜 반도체 ETF", "membersTruncated": False, "members": [
+    {"market": "US", "symbol": "TESTA", "rank": 2, "name": "둘째회사"},
+    {"market": "KR", "symbol": "TESTB", "rank": 1, "name": "첫째회사"},
+    {"market": "KR", "symbol": "TESTC", "rank": 3, "name": "셋째회사"}]}
+
+
+def etf_context(seq=1, etf=ETF, job_id=JOB_ID):
+    event = json.loads(context_response(seq, job_id))
+    if etf is not None:
+        event["payload"]["etf"] = etf
+    return json.dumps(event)
+
+
+def research_completed(job_id=JOB_ID, incomplete=(), started_at=T + DELTA, rid=None):
+    from briefing.jobs import early_research_id
+    event = sample("collection.completed.sample.json")
+    event["payload"].update(jobType="research-news", startedAt=started_at.isoformat(),
+                            incompleteSymbols=list(incomplete), researchJobId=rid or early_research_id(job_id))
+    return json.dumps(event)
+
+
+def early_started(core, rec, etf=ETF):
+    """T+5분에 배경 자료를 먼저 요청하고 그 응답으로 재검색 요청까지 보낸다."""
+    core.on_move(move(), T)
+    core.on_tick(T + S.early_research_delay)
+    core.on_context_responded(etf_context(1, etf), T + S.early_research_delay + SEC)
+
+
+def test_a_move_asks_for_the_context_at_t_plus_five_minutes_and_nothing_before(core, rec):
+    core.on_move(move(), T)
+    core.on_tick(T + S.early_research_delay - SEC)
+    assert rec.sent == []
+
+    core.on_tick(T + S.early_research_delay)
+
+    (context,) = rec.of("market.context.requested")
+    assert context.value["payload"]["seq"] == 1 and len(rec.sent) == 1
+
+
+def test_a_move_noticed_after_t_plus_five_minutes_asks_at_once(core, rec):
+    core.on_move(move(), T + S.early_research_delay + SEC)
+
+    assert len(rec.of("market.context.requested")) == 1
+
+
+def test_research_is_requested_with_the_etf_name_and_top_member_names_by_rank(core, rec):
+    early_started(core, rec)
+
+    (request,) = rec.of("news.research.requested")
+    assert validate("news.research.requested.v1.schema.json", request.value) == []
+    payload = request.value["payload"]
+    # 비중 순위(rank)가 높은 종목 순서이고, 검색어 상한(3개)을 넘기지 않는다.
+    assert payload["queries"] == ["가짜 반도체 ETF", "첫째회사", "둘째회사"]
+    assert (payload["jobKind"], payload["symbol"], payload["seq"]) == ("move", "TEST01", 1)
+    (entry,) = [e for e in rec.log.entries if e.entry_type == EntryType.RESEARCH_REQUESTED]
+    assert entry.data["queries"] == payload["queries"] and entry.data["researchJobId"] == payload["jobId"]
+
+
+@pytest.mark.parametrize("etf", [None, {**ETF, "name": "  "}, {**{k: v for k, v in ETF.items() if k != "name"}}])
+def test_without_an_etf_name_no_research_is_requested_and_the_regular_collection_is_awaited(core, rec, etf):
+    early_started(core, rec, etf)
+
+    assert rec.of("news.research.requested") == []
+    core.on_collection_completed(completed(), T + S.early_research_delay + 2 * SEC)
+    # 이미 받은 배경 자료는 다시 받지 않는다.
+    assert len(rec.of("market.context.requested")) == 1
+    assert len(rec.of("market.history.requested")) == 1 and len(rec.of("news.articles.requested")) == 1
+
+
+def test_early_research_completion_starts_the_evidence_fetch_without_the_regular_collection(core, rec):
+    early_started(core, rec)
+    done_at = T + S.early_research_delay + 20 * SEC
+
+    assert core.on_research_completed(research_completed(), done_at) is True
+
+    assert len(rec.of("market.history.requested")) == 1 and len(rec.of("news.articles.requested")) == 1
+    # 배경 자료는 이미 받았으므로 다시 요청하지 않고 곧바로 진행한다.
+    assert len(rec.of("market.context.requested")) == 1
+    core.on_history_responded(history_response(1, points=[100]), done_at)
+    core.on_articles_responded(news_response(1, ["a"]), done_at)
+    core.on_tick(done_at + S.recheck_interval)
+    core.on_articles_responded(news_response(2, ["a"]), done_at + S.recheck_interval)
+    (ready,) = rec.readied
+    assert [a.article_id for a in ready.articles] == ["a"]
+    assert rec.failed == []
+
+
+def test_early_research_completion_of_a_us_etf_still_requests_filings(core, rec):
+    event = json.loads(etf_context(1))
+    event["payload"]["tickers"] = ["TESTA"]
+    core.on_move(move(), T)
+    core.on_tick(T + S.early_research_delay)
+    core.on_context_responded(json.dumps(event), T + S.early_research_delay + SEC)
+    core.on_research_completed(research_completed(), T + S.early_research_delay + 2 * SEC)
+
+    assert [e.value["payload"]["tickers"] for e in rec.of("news.filings.requested")] == [["TESTA"]]
+
+
+def test_whichever_completion_comes_first_wins_and_the_later_one_changes_nothing(core, rec):
+    early_started(core, rec)
+    core.on_collection_completed(completed(started_at=T + S.early_research_delay + 5 * SEC),
+                                 T + S.early_research_delay + 6 * SEC)
+    assert len(rec.of("market.history.requested")) == 1
+
+    assert core.on_research_completed(research_completed(), T + S.early_research_delay + 20 * SEC) is True
+
+    assert len(rec.of("market.history.requested")) == 1 and len(rec.of("news.articles.requested")) == 1
+
+
+def test_early_research_completion_missing_this_symbol_keeps_waiting_for_the_regular_collection(core, rec):
+    early_started(core, rec)
+
+    assert core.on_research_completed(research_completed(incomplete=["TEST01"]), T + 330 * SEC) is True
+    assert rec.of("market.history.requested") == []
+    (entry,) = [e for e in rec.log.entries if e.reason == "collection_incomplete"]
+    assert entry.entry_type == EntryType.STEP_FAILED
+
+    core.on_collection_completed(completed(), T + 340 * SEC)
+    assert len(rec.of("market.history.requested")) == 1
+
+
+def test_completions_of_other_research_jobs_and_regular_collections_are_not_taken(core, rec):
+    early_started(core, rec)
+
+    assert core.on_research_completed(research_completed(rid=RESEARCH_ID), T + 330 * SEC) is False
+    assert core.on_research_completed(completed(), T + 330 * SEC) is False
+    assert rec.of("market.history.requested") == []
+
+
+def test_context_that_never_arrives_gives_up_early_research_and_late_reply_is_ignored(core, rec):
+    core.on_move(move(), T)
+    core.on_tick(T + S.early_research_delay)
+    core.on_tick(T + S.early_research_delay + S.response_timeout)
+
+    core.on_context_responded(etf_context(1), T + S.early_research_delay + S.response_timeout + SEC)
+    assert rec.of("news.research.requested") == []
+    at = T + S.early_research_delay + S.response_timeout + 2 * SEC
+    core.on_collection_completed(completed(), at)
+    # 정기 수집이 와도 답을 못 받은 요청은 그대로 두고, 다시 보내는 것은 제한 시간 규칙이 한다.
+    assert [e.value["payload"]["seq"] for e in rec.of("market.context.requested")] == [1]
+    core.on_tick(at + S.response_timeout)
+    assert [e.value["payload"]["seq"] for e in rec.of("market.context.requested")] == [1, 2]
+
+
+def test_a_job_that_is_already_fetching_does_not_start_early_research(core, rec):
+    start(core)
+    core.on_context_responded(context_response(), T + SEC)
+    core.on_tick(T + S.early_research_delay)
+
+    assert len(rec.of("market.context.requested")) == 1  # 근거 조회가 보낸 하나뿐
+    assert rec.of("news.research.requested") == []
+
+
+def test_early_queries_are_capped_deduplicated_and_skip_nameless_or_oversized_members():
+    from briefing.jobs import early_queries
+    from briefing.research import MAX_QUERY_LENGTH
+    from briefing.sources import EtfInfo, EtfMember
+    members = (EtfMember("KR", "A", 1, "가"), EtfMember("KR", "B", 2, None), EtfMember("KR", "C", 3, "가"),
+               EtfMember("KR", "D", 4, "나" * (MAX_QUERY_LENGTH + 1)), EtfMember("KR", "E", 5, "다"))
+
+    assert early_queries(EtfInfo(members, False, name="이름"), 3) == ("이름", "가", "다")
+    assert early_queries(EtfInfo(members, False, name="이름"), 1) == ("이름",)
+    assert early_queries(EtfInfo(members, False, name=None), 3) == ()
+    assert early_queries(None, 3) == ()
+
+
+def test_an_early_context_request_still_waiting_when_the_regular_completion_arrives_is_reused(core, rec):
+    core.on_move(move(), T + S.early_research_delay)
+    core.on_collection_completed(completed(), T + S.early_research_delay + SEC)
+
+    # 이미 나간 요청의 응답이 낡은 응답이 되지 않도록 새 순번으로 다시 보내지 않는다.
+    assert len(rec.of("market.context.requested")) == 1
+    core.on_context_responded(context_response(1), T + S.early_research_delay + 2 * SEC)
+    core.on_history_responded(history_response(1, points=[100]), T + S.early_research_delay + 2 * SEC)
+    core.on_articles_responded(news_response(1, ["a"]), T + S.early_research_delay + 2 * SEC)
+    core.on_tick(T + S.early_research_delay + 2 * SEC + S.recheck_interval)
+    core.on_articles_responded(news_response(2, ["a"]), T + S.early_research_delay + 2 * SEC + S.recheck_interval)
+    assert len(rec.readied) == 1 and rec.failed == []
