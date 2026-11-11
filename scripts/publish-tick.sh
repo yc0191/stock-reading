@@ -34,11 +34,17 @@ event_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 json="{\"eventId\":\"${event_id}\",\"eventType\":\"schedule.tick\",\"schemaVersion\":1,\"occurredAt\":\"${now}\",\"producedAt\":\"${now}\",\"correlationId\":\"${job_type}-${now}\",\"payload\":{\"jobType\":\"${job_type}\",\"scheduledFor\":\"${now}\"}}"
 
 # 메시지 키는 jobType 이다(수집기 발행과 동일). 콘솔 프로듀서는 "키|값" 한 줄을 받는다.
-printf '%s|%s\n' "$job_type" "$json" | docker exec -i "$container" \
-  /opt/kafka/bin/kafka-console-producer.sh \
-  --bootstrap-server "$bootstrap" \
-  --topic "$topic" \
-  --property parse.key=true \
-  --property key.separator='|'
+# 콘솔 프로듀서는 보내기에 실패해도(토픽 없음, 시간 초과) 오류만 찍고 0으로 끝나므로 출력의 ERROR 로도 실패를 가린다.
+if ! out=$(printf '%s|%s\n' "$job_type" "$json" | docker exec -i "$container" \
+    /opt/kafka/bin/kafka-console-producer.sh \
+    --bootstrap-server "$bootstrap" \
+    --topic "$topic" \
+    --property parse.key=true \
+    --property key.separator='|' 2>&1) || grep -q "ERROR" <<<"$out"; then
+  [ -n "$out" ] && echo "$out" >&2
+  echo "발행하지 못했습니다: topic=${topic} jobType=${job_type}" >&2
+  exit 1
+fi
+[ -n "$out" ] && echo "$out" >&2
 
 echo "발행했습니다: topic=${topic} jobType=${job_type} scheduledFor=${now}"

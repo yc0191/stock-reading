@@ -38,11 +38,17 @@ event_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 json="{\"eventId\":\"${event_id}\",\"eventType\":\"collector.command\",\"schemaVersion\":1,\"occurredAt\":\"${now}\",\"producedAt\":\"${now}\",\"correlationId\":\"command-${command}-${now}\",\"payload\":{\"command\":\"${command}\"}}"
 
 # 메시지 키는 명령 이름이다. 콘솔 프로듀서는 "키|값" 한 줄을 받는다.
-printf '%s|%s\n' "$command" "$json" | docker exec -i "$container" \
-  /opt/kafka/bin/kafka-console-producer.sh \
-  --bootstrap-server "$bootstrap" \
-  --topic "$topic" \
-  --property parse.key=true \
-  --property key.separator='|'
+# 콘솔 프로듀서는 보내기에 실패해도(토픽 없음, 시간 초과) 오류만 찍고 0으로 끝나므로 출력의 ERROR 로도 실패를 가린다.
+if ! out=$(printf '%s|%s\n' "$command" "$json" | docker exec -i "$container" \
+    /opt/kafka/bin/kafka-console-producer.sh \
+    --bootstrap-server "$bootstrap" \
+    --topic "$topic" \
+    --property parse.key=true \
+    --property key.separator='|' 2>&1) || grep -q "ERROR" <<<"$out"; then
+  [ -n "$out" ] && echo "$out" >&2
+  echo "보내지 못했습니다: topic=${topic} command=${command}" >&2
+  exit 1
+fi
+[ -n "$out" ] && echo "$out" >&2
 
 echo "보냈습니다: topic=${topic} command=${command} eventId=${event_id}"
