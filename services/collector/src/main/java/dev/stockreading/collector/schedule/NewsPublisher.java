@@ -82,6 +82,13 @@ class NewsPublisher {
             log.warn("news collect failed corr={} errorType={}", correlationId, e.getClass().getSimpleName());
             return;
         }
+        if (collector.hasNoQueries()) {
+            // 검색어를 읽지 못한 채 정상처럼 끝나면 브리핑이 "뉴스가 없었다"로 읽는다. 수집 대상 종목 전부를 불완전으로 알린다.
+            Set<String> targets = new LinkedHashSet<>(holdings.targetSymbols());
+            log.warn("news search queries are empty; reporting {} target symbols as incomplete corr={}",
+                    targets.size(), correlationId);
+            collection = new NewsCollection(collection.items(), targets, collection.startedAt());
+        }
         publish(collection, correlationId, scheduledFor, CollectorJobs.Job.COLLECT_NEWS.jobType(), null);
     }
 

@@ -32,7 +32,7 @@ class EmailComposerTest {
     }
 
     private static EmailComposer composer(String prefix) {
-        return new EmailComposer(new NotifierProperties(false, "from@example.com", "to@example.com", prefix, 6));
+        return new EmailComposer(new NotifierProperties(false, "from@example.com", prefix));
     }
 
     @Test
@@ -41,6 +41,11 @@ class EmailComposerTest {
                 .isEqualTo("[시뮬레이션] [TEST01] 하락 -1.50% 브리핑");
         assertThat(composer("[시뮬레이션]").compose(briefing("2.37")).subject())
                 .isEqualTo("[시뮬레이션] [TEST01] 상승 +2.37% 브리핑");
+    }
+
+    @Test
+    void moveMailIsSentUnderItsOwnSenderName() {
+        assertThat(composer("").compose(briefing("-1.50")).fromName()).isEqualTo("변동 감지");
     }
 
     @Test

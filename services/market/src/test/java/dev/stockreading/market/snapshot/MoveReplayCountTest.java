@@ -22,7 +22,7 @@ class MoveReplayCountTest {
     @Test
     void countsFalsePrevCloseMovesByDate(@TempDir Path dir) throws IOException {
         MarketProperties properties = new MarketProperties(
-                5, new BigDecimal("1.00"), List.of("f.a", "f.b", "f.c"), new BigDecimal("3.00"),
+                5, new BigDecimal("1.00"), List.of("f.a", "f.b", "f.c"), new BigDecimal("3.00"), List.of(),
                 1, List.of(), 0, new BigDecimal("2.00"));
         Path input = dir.resolve("snapshots.tsv");
         Files.writeString(input, String.join("\n",

@@ -25,7 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import dev.stockreading.news.event.ArticlesPayload;
-import dev.stockreading.news.holdings.ReceivedHoldings;
+import dev.stockreading.news.etfmap.EtfStockMembers;
 import tools.jackson.databind.json.JsonMapper;
 
 class ArticlesRequestListenerTest {
@@ -38,14 +38,14 @@ class ArticlesRequestListenerTest {
 
     private ArticleQueryRepository repository;
     private ArticlesPublisher publisher;
-    private ReceivedHoldings holdings;
+    private EtfStockMembers holdings;
     private ArticlesRequestListener listener;
 
     @BeforeEach
     void setUp() {
         repository = mock(ArticleQueryRepository.class);
         publisher = mock(ArticlesPublisher.class);
-        holdings = mock(ReceivedHoldings.class);
+        holdings = mock(EtfStockMembers.class);
         listener = new ArticlesRequestListener(repository, publisher, JsonMapper.builder().build(), holdings);
     }
 

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Clock;
 import java.time.ZoneId;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -13,6 +14,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 
+import dev.stockreading.collector.holdings.HoldingsPort;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -24,8 +26,29 @@ class EdgarWiringTest {
 
     @Configuration
     @EnableConfigurationProperties(EdgarProperties.class)
-    @ComponentScan(basePackages = {"dev.stockreading.collector.edgar", "dev.stockreading.collector.holdings"})
+    @ComponentScan(basePackages = "dev.stockreading.collector.edgar")
     static class Wiring {
+
+        // 수집 대상은 DB에서 읽는 빈이라 이 배선 테스트에서는 빈 목록으로 대신한다.
+        @Bean
+        HoldingsPort holdings() {
+            return new HoldingsPort() {
+                @Override
+                public List<String> allTickers() {
+                    return List.of();
+                }
+
+                @Override
+                public List<String> targetSymbols() {
+                    return List.of();
+                }
+
+                @Override
+                public List<String> etfsHolding(String ticker) {
+                    return List.of();
+                }
+            };
+        }
 
         @Bean
         Clock clock() {

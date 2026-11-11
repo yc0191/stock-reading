@@ -131,7 +131,7 @@ class MoveStateIntegrationTest {
     }
 
     private static MarketProperties properties() {
-        return new MarketProperties(5, new BigDecimal("1.00"), List.of("fake.a"), new BigDecimal("3.00"),
+        return new MarketProperties(5, new BigDecimal("1.00"), List.of("fake.a"), new BigDecimal("3.00"), List.of(),
                 1, List.of("fake.volume", "fake.open"), 30, new BigDecimal("2.00"));
     }
 

@@ -55,7 +55,7 @@ class BrokerClientTest {
         });
         server.start();
         var properties = new BrokerProperties("http://127.0.0.1:" + server.getAddress().getPort(), appKey, appSecret, 5, 10);
-        return new BrokerClient(properties, JsonMapper.builder().build(), clock);
+        return new BrokerClient(properties, JsonMapper.builder().build(), clock, CallRateLimiter.perSecond(10));
     }
 
     private static void reply(com.sun.net.httpserver.HttpExchange exchange, int status, String body) throws IOException {

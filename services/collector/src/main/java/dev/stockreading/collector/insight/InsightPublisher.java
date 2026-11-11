@@ -14,7 +14,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
-import dev.stockreading.collector.CollectorProperties;
+import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.edgar.ExchangePort;
 import dev.stockreading.collector.event.Envelope;
@@ -50,7 +50,7 @@ public class InsightPublisher {
     private static final Pattern SYMBOL = Pattern.compile("^[0-9A-Z]{6}$");
 
     private final InsightSourcePort source;
-    private final CollectorProperties collector;
+    private final QuoteSymbolsPort quoteSymbols;
     private final InsightProperties properties;
     private final HoldingsPort holdings;
     private final ExchangePort exchanges;
@@ -58,11 +58,11 @@ public class InsightPublisher {
     private final ObjectMapper mapper;
     private final Clock clock;
 
-    InsightPublisher(InsightSourcePort source, CollectorProperties collector, InsightProperties properties,
+    InsightPublisher(InsightSourcePort source, QuoteSymbolsPort quoteSymbols, InsightProperties properties,
                      HoldingsPort holdings, ExchangePort exchanges,
                      KafkaTemplate<String, String> kafka, ObjectMapper mapper, Clock clock) {
         this.source = source;
-        this.collector = collector;
+        this.quoteSymbols = quoteSymbols;
         this.properties = properties;
         this.holdings = holdings;
         this.exchanges = exchanges;
@@ -74,7 +74,7 @@ public class InsightPublisher {
     public void publishAll(String correlationId, String scheduledFor) {
         int published = 0;
         int failed = 0;
-        for (String symbol : collector.symbols()) {
+        for (String symbol : quoteSymbols.symbols()) {
             if (!SYMBOL.matcher(symbol).matches()) {
                 // 스키마를 어기는 종목코드는 조회하지 않고 건너뛴다.
                 log.warn("insight skipped apiType={} reason=invalid-target corr={}", DAILY_PRICE, correlationId);

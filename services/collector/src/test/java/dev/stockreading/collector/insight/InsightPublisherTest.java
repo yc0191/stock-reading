@@ -24,7 +24,7 @@ import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 
-import dev.stockreading.collector.CollectorProperties;
+import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.edgar.EdgarApiException;
 import dev.stockreading.collector.edgar.EdgarFailure;
@@ -89,7 +89,7 @@ class InsightPublisherTest {
     private InsightPublisher publisher(List<String> symbols, List<String> continents, int overseasMaxTickers) {
         var properties = new InsightProperties(new InsightProperties.Schedule(false, "0 30 16 * * MON-FRI"), "0", 30, continents,
                 30, overseasMaxTickers);
-        return new InsightPublisher(source, new CollectorProperties(symbols, 30000), properties,
+        return new InsightPublisher(source, (QuoteSymbolsPort) () -> symbols, properties,
                 holdings, exchanges, kafka, mapper, CLOCK);
     }
 

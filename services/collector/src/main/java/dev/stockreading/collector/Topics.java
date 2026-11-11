@@ -1,6 +1,5 @@
 package dev.stockreading.collector;
 
-import org.apache.kafka.common.config.TopicConfig;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.TopicBuilder;
@@ -18,8 +17,6 @@ public class Topics {
     public static final String COLLECTION_COMPLETED = "collection.completed";
     public static final String FILING_COLLECTED = "filing.collected";
     public static final String NEWS_RESEARCH_REQUESTED = "news.research.requested";
-    public static final String MARKET_HOLDINGS = "market.holdings";
-    public static final String NEWS_SEARCH_QUERY_LIST = "news.search-queries";
     public static final String COLLECTOR_COMMAND = "collector.command";
 
     // 파티션 수는 부하를 재서 정한 값이 아니라 시작값이다.
@@ -28,8 +25,6 @@ public class Topics {
     // news.collected, market.insight, filing.collected 의 파티션 수는 소비 쪽 선언과 같아야 한다.
     // collection.completed 는 키가 jobType 뿐이라 파티션 1개이며, 소비 쪽(briefing) 선언과 같아야 한다.
     // news.research.requested 는 생산 쪽(briefing) 선언과 같아야 한다.
-    // market.holdings 와 news.search-queries 는 키가 하나인 압축 토픽(마지막 목록만 남음)이고 파티션 1개이며,
-    // 생산 쪽(market, news) 선언과 같아야 한다.
     // collector.command 는 사람이 보내는 수동 실행 명령이라 순서만 지키면 되어 파티션 1개이며, 수집기만 선언한다.
     @Bean
     NewTopics kafkaTopics() {
@@ -42,10 +37,6 @@ public class Topics {
                 TopicBuilder.name(COLLECTION_COMPLETED).partitions(1).replicas(1).build(),
                 TopicBuilder.name(FILING_COLLECTED).partitions(3).replicas(1).build(),
                 TopicBuilder.name(NEWS_RESEARCH_REQUESTED).partitions(3).replicas(1).build(),
-                TopicBuilder.name(MARKET_HOLDINGS).partitions(1).replicas(1)
-                        .config(TopicConfig.CLEANUP_POLICY_CONFIG, TopicConfig.CLEANUP_POLICY_COMPACT).build(),
-                TopicBuilder.name(NEWS_SEARCH_QUERY_LIST).partitions(1).replicas(1)
-                        .config(TopicConfig.CLEANUP_POLICY_CONFIG, TopicConfig.CLEANUP_POLICY_COMPACT).build(),
                 TopicBuilder.name(COLLECTOR_COMMAND).partitions(1).replicas(1).build());
     }
 }

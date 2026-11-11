@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import java.io.IOException;
 import java.time.Clock;
@@ -23,10 +24,14 @@ import org.springframework.scheduling.support.CronExpression;
 
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.ContractSchemas;
+import dev.stockreading.collector.marketdata.MarketDayPort;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 class DailyBriefingTickPublisherTest {
+
+    private static final MarketDayPort OPEN = () -> true;
+    private static final MarketDayPort HOLIDAY = () -> false;
 
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
 
@@ -34,9 +39,9 @@ class DailyBriefingTickPublisherTest {
     @Test
     void morningCronPublishesOneMorningTickThatPassesTheTickContract() throws IOException {
         KafkaTemplate<String, String> kafka = mock(KafkaTemplate.class);
-        Clock clock = Clock.fixed(Instant.parse("2026-10-20T23:45:00Z"), KST);
+        Clock clock = Clock.fixed(Instant.parse("2026-10-21T00:10:00Z"), KST);
 
-        new DailyBriefingTickPublisher(kafka, JsonMapper.builder().build(), clock).publishMorningTick();
+        new DailyBriefingTickPublisher(OPEN, kafka, JsonMapper.builder().build(), clock).publishMorningTick();
 
         ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
         verify(kafka, times(1)).send(anyString(), anyString(), anyString());
@@ -44,8 +49,8 @@ class DailyBriefingTickPublisherTest {
         assertThat(ContractSchemas.validate("schedule.tick.v1.schema.json", value.getValue())).isEmpty();
         assertThat(value.getValue())
                 .contains("\"jobType\":\"daily-briefing-morning\"")
-                .contains("\"scheduledFor\":\"2026-10-21T08:45:00+09:00\"")
-                .contains("\"correlationId\":\"daily-briefing-morning-2026-10-21T08:45:00+09:00\"");
+                .contains("\"scheduledFor\":\"2026-10-21T09:10:00+09:00\"")
+                .contains("\"correlationId\":\"daily-briefing-morning-2026-10-21T09:10:00+09:00\"");
     }
 
     @SuppressWarnings("unchecked")
@@ -54,7 +59,7 @@ class DailyBriefingTickPublisherTest {
         KafkaTemplate<String, String> kafka = mock(KafkaTemplate.class);
         Clock clock = Clock.fixed(Instant.parse("2026-10-21T08:00:00Z"), KST);
 
-        new DailyBriefingTickPublisher(kafka, JsonMapper.builder().build(), clock).publishPostCloseTick();
+        new DailyBriefingTickPublisher(OPEN, kafka, JsonMapper.builder().build(), clock).publishPostCloseTick();
 
         ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
         verify(kafka, times(1)).send(anyString(), anyString(), anyString());
@@ -87,12 +92,13 @@ class DailyBriefingTickPublisherTest {
                 .withBean(KafkaTemplate.class, () -> mock(KafkaTemplate.class))
                 .withBean(ObjectMapper.class, () -> JsonMapper.builder().build())
                 .withBean(Clock.class, Clock::systemUTC)
+                .withBean(MarketDayPort.class, () -> OPEN)
                 .withUserConfiguration(DailyBriefingTickPublisher.class);
 
         runner.run(context -> {
             assertThat(context).doesNotHaveBean(DailyBriefingTickPublisher.class);
             assertThat(context.getEnvironment().getProperty("collector.daily-briefing.morning-cron"))
-                    .isEqualTo("0 45 8 * * MON-FRI");
+                    .isEqualTo("0 10 9 * * MON-FRI");
             assertThat(context.getEnvironment().getProperty("collector.daily-briefing.post-close-cron"))
                     .isEqualTo("0 0 17 * * MON-FRI");
         });
@@ -122,5 +128,18 @@ class DailyBriefingTickPublisherTest {
         ZonedDateTime holidayEve = ZonedDateTime.of(2026, 10, 8, 18, 0, 0, 0, KST);
         assertThat(morning.next(holidayEve)).isEqualTo(ZonedDateTime.of(2026, 10, 9, 8, 45, 0, 0, KST));
         assertThat(postClose.next(holidayEve)).isEqualTo(ZonedDateTime.of(2026, 10, 9, 17, 0, 0, 0, KST));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void marketHolidayPublishesNeitherBriefingTick() {
+        KafkaTemplate<String, String> kafka = mock(KafkaTemplate.class);
+        Clock clock = Clock.fixed(Instant.parse("2026-10-08T23:45:00Z"), KST);
+        var publisher = new DailyBriefingTickPublisher(HOLIDAY, kafka, JsonMapper.builder().build(), clock);
+
+        publisher.publishMorningTick();
+        publisher.publishPostCloseTick();
+
+        verifyNoInteractions(kafka);
     }
 }

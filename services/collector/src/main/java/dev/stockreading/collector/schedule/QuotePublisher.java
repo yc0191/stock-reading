@@ -1,6 +1,8 @@
 package dev.stockreading.collector.schedule;
 
 import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
 
@@ -9,12 +11,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
-import dev.stockreading.collector.CollectorProperties;
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.Envelope;
 import dev.stockreading.collector.event.EventFactory;
 import dev.stockreading.collector.event.FailurePayload;
 import dev.stockreading.collector.event.SnapshotPayload;
+import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import dev.stockreading.collector.marketdata.FetchResult;
 import dev.stockreading.collector.marketdata.MarketDataPort;
 import dev.stockreading.collector.marketdata.PriceQuote;
@@ -32,23 +34,28 @@ class QuotePublisher {
     /** 앞 회차 조회가 끝나지 않아 조회하지 않은 회차를 TICK_SKIPPED 의 다른 사유(RateLimited 등)와 구분하는 exceptionType 값. */
     static final String SUPERSEDED = "SupersededByNewerTick";
 
+    /** 시세 종목이 비었다는 경고는 1초 회차마다 쏟아지지 않게 이 간격으로만 남긴다. */
+    static final Duration EMPTY_WARN_INTERVAL = Duration.ofMinutes(10);
+
     private final MarketDataPort marketData;
-    private final CollectorProperties properties;
+    private final QuoteSymbolsPort quoteSymbols;
     private final KafkaTemplate<String, String> kafka;
     private final ObjectMapper mapper;
     private final Clock clock;
+    private Instant lastEmptyWarnAt;
 
-    QuotePublisher(MarketDataPort marketData, CollectorProperties properties,
+    QuotePublisher(MarketDataPort marketData, QuoteSymbolsPort quoteSymbols,
                    KafkaTemplate<String, String> kafka, ObjectMapper mapper, Clock clock) {
         this.marketData = marketData;
-        this.properties = properties;
+        this.quoteSymbols = quoteSymbols;
         this.kafka = kafka;
         this.mapper = mapper;
         this.clock = clock;
     }
 
     void publishCollected(String correlationId, String scheduledFor) {
-        FetchResult result = marketData.fetch(properties.symbols());
+        warnIfEmpty();
+        FetchResult result = marketData.fetch(quoteSymbols.symbols());
         for (PriceQuote quote : result.quotes()) {
             Envelope<SnapshotPayload> snapshot = EventFactory.create(
                     clock,
@@ -65,8 +72,20 @@ class QuotePublisher {
                 result.quotes().size(), result.failures().size(), correlationId);
     }
 
+    // 회차는 한 스레드에서 차례로 돌지만 수동 실행과 겹칠 수 있어 잠근다.
+    private synchronized void warnIfEmpty() {
+        if (!quoteSymbols.symbols().isEmpty()) {
+            return;
+        }
+        Instant now = clock.instant();
+        if (lastEmptyWarnAt == null || !now.isBefore(lastEmptyWarnAt.plus(EMPTY_WARN_INTERVAL))) {
+            lastEmptyWarnAt = now;
+            log.warn("quote symbols are empty (personal.collect_target); load the seed data and restart the collector");
+        }
+    }
+
     void publishSkipped(String correlationId, String scheduledFor) {
-        List<QuoteFailure> skipped = properties.symbols().stream()
+        List<QuoteFailure> skipped = quoteSymbols.symbols().stream()
                 .map(symbol -> QuoteFailure.skipped(symbol, SUPERSEDED)).toList();
         publishFailures(skipped, correlationId, scheduledFor, 0);
     }

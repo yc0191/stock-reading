@@ -36,8 +36,8 @@ class MemberFetchServiceTest {
         when(repository.latest(anyLong())).thenReturn(Optional.empty());
     }
 
-    private MemberFetchService service(String template, String fundIds) {
-        return new MemberFetchService(new MemberSourceProperties(template, fundIds, null, 10, Duration.ZERO, null,
+    private MemberFetchService service(String template) {
+        return new MemberFetchService(new MemberSourceProperties(template, null, 10, Duration.ZERO, null,
                 DayOfWeek.MONDAY), source, repository);
     }
 
@@ -54,24 +54,34 @@ class MemberFetchServiceTest {
     }
 
     @Test
+    void withNoEtfHavingASourceIdNothingIsFetchedOrRecorded() {
+        tracked();
+
+        service("http://x/{fundId}").run(MONDAY);
+
+        verifyNoInteractions(source);
+        verify(repository, never()).record(anyLong(), any(), any());
+    }
+
+    @Test
     void firstReceivedCompositionIsRecordedOnTheFetchDay() {
-        tracked(new MemberRepository.Target(1, "TEST01", "TEST INDEX"));
+        tracked(new MemberRepository.Target(1, "TEST01", "TEST INDEX", "F1"));
         when(source.fetchTop(eq("F1"), eq(LocalDate.parse("2026-11-06")), any())).thenReturn(members("AAA", "BBB"));
 
-        service("http://x/{fundId}", "TEST01:F1").run(MONDAY);
+        service("http://x/{fundId}").run(MONDAY);
 
         verify(repository).record(1, members("AAA", "BBB"), MONDAY);
     }
 
     @Test
     void aSameCompositionOnlyMovesTheLastSeenDayEvenWhenWeightsDiffer() {
-        tracked(new MemberRepository.Target(1, "TEST01", null));
+        tracked(new MemberRepository.Target(1, "TEST01", null, "F1"));
         when(repository.latest(1)).thenReturn(Optional.of(new MemberRepository.Latest(7,
                 List.of(new Member("US", "AAA", null, "9.0", 1), new Member("US", "BBB", null, "8.0", 2)),
                 LocalDate.parse("2026-11-02"))));
         when(source.fetchTop(eq("F1"), any(), any())).thenReturn(members("AAA", "BBB"));
 
-        service("http://x/{fundId}", "TEST01:F1").run(MONDAY);
+        service("http://x/{fundId}").run(MONDAY);
 
         verify(repository).touch(7, 1, members("AAA", "BBB"), MONDAY);
         verify(repository, never()).record(anyLong(), any(), any());
@@ -79,12 +89,12 @@ class MemberFetchServiceTest {
 
     @Test
     void aRankChangeAloneIsAChangeAndGetsANewHistoryRow() {
-        tracked(new MemberRepository.Target(1, "TEST01", null));
+        tracked(new MemberRepository.Target(1, "TEST01", null, "F1"));
         when(repository.latest(1)).thenReturn(Optional.of(new MemberRepository.Latest(7, members("AAA", "BBB"),
                 LocalDate.parse("2026-11-02"))));
         when(source.fetchTop(eq("F1"), any(), any())).thenReturn(members("BBB", "AAA"));
 
-        service("http://x/{fundId}", "TEST01:F1").run(MONDAY);
+        service("http://x/{fundId}").run(MONDAY);
 
         verify(repository).record(1, members("BBB", "AAA"), MONDAY);
         verify(repository, never()).touch(anyLong(), anyLong(), any(), any());
@@ -92,11 +102,11 @@ class MemberFetchServiceTest {
 
     @Test
     void aFailedFetchKeepsThePreviousCompositionAndDoesNotStopTheOtherEtfs() {
-        tracked(new MemberRepository.Target(1, "TEST01", null), new MemberRepository.Target(2, "TEST02", null));
+        tracked(new MemberRepository.Target(1, "TEST01", null, "F1"), new MemberRepository.Target(2, "TEST02", null, "F2"));
         when(source.fetchTop(eq("F1"), any(), any())).thenThrow(new MemberSourcePort.MemberSourceException("unexpected shape"));
         when(source.fetchTop(eq("F2"), any(), any())).thenReturn(members("CCC"));
 
-        service("http://x/{fundId}", "TEST01:F1,TEST02:F2").run(MONDAY);
+        service("http://x/{fundId}").run(MONDAY);
 
         verify(repository, never()).record(eq(1L), any(), any());
         verify(repository, never()).touch(anyLong(), anyLong(), any(), any());
@@ -105,25 +115,25 @@ class MemberFetchServiceTest {
 
     @Test
     void aDatabaseFailureOnOneEtfAlsoLeavesTheOthersRunning() {
-        tracked(new MemberRepository.Target(1, "TEST01", null), new MemberRepository.Target(2, "TEST02", null));
+        tracked(new MemberRepository.Target(1, "TEST01", null, "F1"), new MemberRepository.Target(2, "TEST02", null, "F2"));
         when(source.fetchTop(any(), any(), any())).thenReturn(members("AAA"));
         org.mockito.Mockito.doThrow(new IllegalStateException("db down")).when(repository)
                 .record(eq(1L), any(), any());
 
-        service("http://x/{fundId}", "TEST01:F1,TEST02:F2").run(MONDAY);
+        service("http://x/{fundId}").run(MONDAY);
 
         verify(repository).record(eq(2L), any(), any());
     }
 
     @Test
     void onANonFetchDayNothingIsFetchedUnlessTheIndexRebalancesThisMonth() {
-        tracked(new MemberRepository.Target(1, "TEST01", "TEST INDEX"), new MemberRepository.Target(2, "TEST02", "OTHER"));
+        tracked(new MemberRepository.Target(1, "TEST01", "TEST INDEX", "F1"), new MemberRepository.Target(2, "TEST02", "OTHER", "F2"));
         when(repository.latest(anyLong())).thenReturn(Optional.of(new MemberRepository.Latest(7,
                 List.of(new Member("US", "AAA", null, "9.0", 1)), MONDAY)));
         when(repository.inRebalanceMonth("TEST INDEX", TUESDAY)).thenReturn(true);
         when(source.fetchTop(eq("F1"), any(), any())).thenReturn(members("AAA"));
 
-        service("http://x/{fundId}", "TEST01:F1,TEST02:F2").run(TUESDAY);
+        service("http://x/{fundId}").run(TUESDAY);
 
         verify(source).fetchTop(eq("F1"), eq(MONDAY), any());
         verify(source, never()).fetchTop(eq("F2"), any(), any());
@@ -131,28 +141,17 @@ class MemberFetchServiceTest {
 
     @Test
     void anEtfWithNoCompositionYetIsFetchedWithoutWaitingForTheFetchDay() {
-        tracked(new MemberRepository.Target(1, "TEST01", null));
+        tracked(new MemberRepository.Target(1, "TEST01", null, "F1"));
         when(source.fetchTop(eq("F1"), any(), any())).thenReturn(members("AAA"));
 
-        service("http://x/{fundId}", "TEST01:F1").run(TUESDAY);
+        service("http://x/{fundId}").run(TUESDAY);
 
         verify(repository).record(1, members("AAA"), TUESDAY);
     }
 
     @Test
-    void etfsWithoutAFundIdAreLeftToManualEditing() {
-        tracked(new MemberRepository.Target(1, "TEST01", null), new MemberRepository.Target(3, "TEST03", null));
-        when(source.fetchTop(eq("F1"), any(), any())).thenReturn(members("AAA"));
-
-        service("http://x/{fundId}", "TEST01:F1").run(MONDAY);
-
-        verify(source).fetchTop(eq("F1"), any(), any());
-        verify(repository, never()).record(eq(3L), any(), any());
-    }
-
-    @Test
     void doesNothingWithoutASourceTemplate() {
-        service("", "TEST01:F1").run(MONDAY);
+        service("").run(MONDAY);
 
         verifyNoInteractions(source, repository);
     }
@@ -167,7 +166,7 @@ class MemberFetchServiceTest {
 
     @Test
     void anEtfNotSeenForMoreThanSevenDaysIsFetchedOnAnyWeekday() {
-        tracked(new MemberRepository.Target(1, "TEST01", null), new MemberRepository.Target(2, "TEST02", null));
+        tracked(new MemberRepository.Target(1, "TEST01", null, "F1"), new MemberRepository.Target(2, "TEST02", null, "F2"));
         // 8일 전이면 받고, 7일 전이면 아직 받지 않는다.
         when(repository.latest(1)).thenReturn(Optional.of(new MemberRepository.Latest(7, members("AAA"),
                 TUESDAY.minusDays(8))));
@@ -175,7 +174,7 @@ class MemberFetchServiceTest {
                 TUESDAY.minusDays(7))));
         when(source.fetchTop(any(), any(), any())).thenReturn(members("AAA"));
 
-        service("http://x/{fundId}", "TEST01:F1,TEST02:F2").run(TUESDAY);
+        service("http://x/{fundId}").run(TUESDAY);
 
         verify(source).fetchTop(eq("F1"), any(), any());
         verify(source, never()).fetchTop(eq("F2"), any(), any());
@@ -183,13 +182,13 @@ class MemberFetchServiceTest {
 
     @Test
     void theResponseRawIsSavedThroughTheRecorderTheSourceCalls() {
-        tracked(new MemberRepository.Target(1, "TEST01", null));
+        tracked(new MemberRepository.Target(1, "TEST01", null, "F1"));
         when(source.fetchTop(eq("F1"), any(), any())).thenAnswer(invocation -> {
             invocation.<MemberSourcePort.RawRecorder>getArgument(2).record(503, "down");
             throw new MemberSourcePort.MemberSourceException("unexpected status 503");
         });
 
-        service("http://x/{fundId}", "TEST01:F1").run(MONDAY);
+        service("http://x/{fundId}").run(MONDAY);
 
         verify(repository).saveRaw(1, LocalDate.parse("2026-11-06"), 503, "down");
         verify(repository, never()).record(anyLong(), any(), any());

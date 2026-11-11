@@ -33,6 +33,7 @@ class MarketPropertiesDefaultsTest {
             assertThat(properties.prevCloseFields())
                     .containsExactly("dataBody.bdy_cls_prc", "dataBody.sprc", "dataBody.krx_bdy_clpr");
             assertThat(properties.prevCloseThresholdPercent()).isEqualByComparingTo("3.00");
+            assertThat(properties.openPriceFields()).containsExactly("dataBody.opn_prc");
             assertThat(properties.confirmCount()).isEqualTo(3);
             // 첫 체결 전에는 누적 거래량과 시가가 모두 0으로 온다(2026-11-11 확인).
             assertThat(properties.firstTradeFields()).containsExactly("dataBody.acml_vlm", "dataBody.opn_prc");
@@ -53,5 +54,11 @@ class MarketPropertiesDefaultsTest {
     void prevCloseFieldsAreReadFromTheEnvironmentVariableName() {
         runner().withPropertyValues("MARKET_PREV_CLOSE_FIELDS=other.a,other.b").run(context ->
                 assertThat(context.getBean(MarketProperties.class).prevCloseFields()).containsExactly("other.a", "other.b"));
+    }
+
+    @Test
+    void openPriceFieldsAreReadFromTheEnvironmentVariableName() {
+        runner().withPropertyValues("MARKET_OPEN_PRICE_FIELDS=other.open").run(context ->
+                assertThat(context.getBean(MarketProperties.class).openPriceFields()).containsExactly("other.open"));
     }
 }

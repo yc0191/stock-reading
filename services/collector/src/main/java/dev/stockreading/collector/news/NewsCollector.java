@@ -37,9 +37,14 @@ public class NewsCollector {
         this.searchQueries = searchQueries;
     }
 
-    /** 뉴스 서비스가 알린 검색어(news.search-queries)로 수집한다. 목록을 아직 받지 못했으면 IllegalStateException 이다. */
+    /** DB에서 시작할 때 읽은 검색어 목록으로 수집한다. */
     public List<NewsItem> collect() {
         return collect(searchQueries.queries());
+    }
+
+    /** 읽은 검색어가 하나도 없는지. 비면 수집은 아무것도 찾지 못한다. */
+    public boolean hasNoQueries() {
+        return searchQueries.queries().isEmpty();
     }
 
     /** collect() 와 같지만 제대로 모으지 못했을 수 있는 종목과 시작 시각도 함께 돌려준다. */

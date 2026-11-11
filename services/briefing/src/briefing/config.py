@@ -28,9 +28,18 @@ class CoreSettings:
     # 배경 자료(환율·지수·시장종합·일봉)와 해외 등락률은 받은 시각이 이 기간보다 오래되면 없음으로 본다.
     background_window: timedelta = timedelta(days=4)
     max_background_bytes: int = 32 * 1024
+    # 아침 판의 개장 시세 범위: 판 날짜의 장 시작 시각(한국 시간)부터 판 시각까지. 판이 늦게 시작해도 판 시각에서 이 길이보다
+    # 멀리 거슬러 읽지 않는다. 판 시각 뒤에 받은 시세는 쓰지 않는다(상태형 자료).
+    open_flow_start: time = time(9, 0)
+    open_flow_max_window: timedelta = timedelta(minutes=30)
     max_tickers: int = 100
     # LLM 입력에 넣는 ETF 구성 종목 수. 비중 순위가 높은 종목부터 이 수까지 넣는다.
     max_etf_members: int = 10
+    # 같은 종목의 market.move는 바로 처리하지 않고 모은다. 마지막 변동 뒤 이 시간 동안 같은 종목 변동이 더 없으면 모인 변동으로
+    # 작업 하나를 만든다. 변동이 계속 와도 첫 변동부터 최대 이 시간이 지나면 그때까지 모인 것으로 만든다(영영 밀리지 않게).
+    # 0이면 변동마다 바로 작업을 만든다(기본). 급변동 메일을 변동 뒤 약 10분 안에 보내려는 것이며, 같은 종목 중복은 시세처리기가 막는다.
+    move_quiet_period: timedelta = timedelta(0)
+    move_max_wait: timedelta = timedelta(minutes=30)
     # 같은 eventId 중복 처리를 위해 기억하는 작업 키 수. 메모리가 무한히 늘지 않게 한다.
     remembered_jobs: int = 10000
     # 근거 부족 시 재검색: 검색어 LLM이 낼 수 있는 검색어 수, 검색어 LLM 시도 횟수, 재검색 완료 알림을 기다리는 상한.
@@ -93,14 +102,25 @@ class DailySettings:
     us_index_target: str = "C"
     # 마감 후 판 기준 시각(한국 시간)이 이보다 이르면 그날 장이 아직 열리지 않은 것으로 본다(일봉이 모두 등락 0.00일 때만).
     market_open: time = time(9, 0)
+    # 장 시작부터 이 시각 전까지의 급변동은 급변동 리포트를 따로 만들지 않고 아침 판에 합친다. 아침 판 시작 시각(수집기의
+    # collector.daily-briefing.morning-cron 기본 평일 09:10)과 같아야 한다. 합침 구간이 끝난 뒤 이 시간이 지나도 아침 판
+    # 결과가 없으면 모아 둔 변동을 급변동 리포트로 넘긴다.
+    morning_merge_end: time = time(9, 10)
+    # 합침을 켠다. 수집기의 아침 판 tick을 켜는 값(collector.daily-briefing.enabled = COLLECTOR_DAILY_BRIEFING_ENABLED)과
+    # 짝이다. tick이 오지 않는데 켜 두면 합침 구간의 급변동이 grace만큼 늦게 나가므로 꺼져 있으면 바로 리포트를 만든다.
+    morning_merge_enabled: bool = False
+    # 합침 경로가 기억하는 eventId 수. 급변동 묶음기(remembered_jobs)와 같은 상한이다.
+    remembered_move_ids: int = 10000
+    morning_merge_grace: timedelta = timedelta(minutes=30)
     # 기사가 그 ETF와 관계있는지 볼 때 추종 대상·ETF 이름에서 앞의 나라 이름과 끝의 접미어를 뗀 것도 비교어로 쓴다
     # (예: '미국 나스닥100 지수' → '나스닥100'). 뗀 결과가 숫자·기호뿐이거나 2글자 미만이면 쓰지 않는다.
     relevance_country_prefixes: tuple[str, ...] = ("미국", "한국", "중국", "일본", "인도", "베트남", "유럽", "글로벌")
     relevance_suffixes: tuple[str, ...] = ("지수",)
     # 구성 종목에 미국 종목이 있는 ETF는 이 시장 단어가 제목·요약에 있는 기사도 남긴다.
     relevance_us_market_terms: tuple[str, ...] = ("뉴욕증시", "미국증시", "월가", "나스닥", "S&P", "다우존스", "다우지수", "wall street")
-    # 마감 후 판의 아침 예상 대조: 보합 예상은 실제 등락 절댓값(%)이 이 값 이하이면 맞음이다.
-    flat_band_percent: float = 0.5
+    # 마감 후 판의 아침 예상 대조 보합 폭(%): 실제 등락 절댓값이 이 값 이하이면 보합이다. 보합 예상은 보합일 때만, 상승 예상은
+    # 등락이 +폭을 넘을 때만, 하락 예상은 -폭 아래일 때만 맞음이다.
+    flat_band_percent: float = 0.3
     # 마감 후 판의 그날 급변동 요약에 보여 주는 최대 건수. 넘으면 '외 N건'으로 줄인다.
     max_move_lines: int = 20
     llm_max_attempts: int = 3

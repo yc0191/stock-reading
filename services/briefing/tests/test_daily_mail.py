@@ -10,6 +10,7 @@ from briefing.config import DailySettings
 from briefing.daily_jobs import CHART_FAILED_ITEM, CHART_OVERSIZED_ITEM, DailyCore
 from briefing.daily_report import DailyLlmWriter
 from contracts import validate
+from fake_members import FakeMembers, member
 from fake_news import answer_news
 from test_daily_jobs import (
     MORNING_AT,
@@ -32,31 +33,32 @@ PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 FETCHED = "2026-10-20T16:30:02+09:00"
 
 
-def etfs(relation=True):
-    items = [etf_v2("TEST01", "TEST 하나", fetched=FETCHED, rate="-1.50"),
-             etf_v2("TEST02", "TEST 둘", fetched=FETCHED, rate="2.10"),
-             etf_v2("TEST03", "TEST 셋", fetched=FETCHED, rate="0.40"),
-             etf_v2_missing("TEST04", name="TEST 넷")]
-    if relation:
-        for item, value in zip(items, ("HELD", "HELD", "WATCH", "WATCH")):
-            item["relation"] = value
-    return items
+def etfs():
+    return [etf_v2("TEST01", "TEST 하나", fetched=FETCHED, rate="-1.50"),
+            etf_v2("TEST02", "TEST 둘", fetched=FETCHED, rate="2.10"),
+            etf_v2("TEST03", "TEST 셋", fetched=FETCHED, rate="0.40"),
+            etf_v2_missing("TEST04", name="TEST 넷")]
 
 
-def run(edition="post-close", settings=None, llm=True, answer_etfs=None, ref=None, whole_event=False, output=None):
+# 멤버 한 명의 포트폴리오: TEST01·TEST02는 보유, TEST03·TEST04는 관심
+ONE_MEMBER = (member(1, held=("TEST01", "TEST02"), watched=("TEST03", "TEST04")),)
+
+
+def run(edition="post-close", settings=None, llm=True, answer_etfs=None, ref=None, whole_event=False, output=None,
+        members=ONE_MEMBER):
     requests, details = Requests(), Details()
     settings = settings or DailySettings()
     output = output or (post_close_output() if edition == "post-close" else good_output(ref or "B1", symbols=(
         "TEST04",)))  # 아침 판 범위 밖에 받은 ETF 셋은 버려지고 일봉이 빈 TEST04만 남는다
     writer = DailyLlmWriter(FakeLlm(output), settings.llm_max_attempts) if llm else None
-    core = DailyCore(requests, writer, details, settings)
+    core = DailyCore(requests, writer, details, settings, members=FakeMembers(members))
     job, at = (POST_CLOSE_JOB, POST_CLOSE_AT) if edition == "post-close" else (MORNING_JOB, MORNING_AT)
     core.on_schedule_tick(tick(job, at), at, edition)
     background = POST_CLOSE_BACKGROUND if edition == "post-close" else None
     core.on_daily_data_responded(daily_response(etfs=answer_etfs or etfs(), background=background), at)
     answer_news(core, requests, at)
     [event] = requests.topic("briefing.daily.generated")
-    assert validate("briefing.daily.generated.v1.schema.json", event.value) == []
+    assert validate("briefing.daily.generated.v2.schema.json", event.value) == []
     return (event.value if whole_event else event.value["payload"]), details
 
 
@@ -72,10 +74,12 @@ def test_post_close_event_carries_text_html_and_one_chart_the_html_points_at():
     assert payload["missingItems"] == ["보유 ETF별 하루 등락: TEST 넷, 범위 안에 받은 일봉이 없음"]
 
 
-def test_the_stored_final_text_is_the_text_sent_in_the_event():
+def test_the_stored_final_text_is_the_job_wide_text_while_the_mail_is_split_by_the_members_portfolio():
     payload, details = run()
     [result] = details.results()
-    assert result.final_text == payload["text"]
+    # 작업 기록에는 멤버를 가르지 않은 판 전체 글이 남고, 메일 글은 그 멤버의 보유/관심으로 나뉜다.
+    assert "결론: ETF 4개 중 2개 상승(자료 없음 1)" in result.final_text and "[보유]" not in result.final_text
+    assert "결론: 보유 2개 중 1개 상승 · 관심 2개 중 1개 상승(자료 없음 1)" in payload["text"]
 
 
 def test_rule_based_post_close_also_gets_html_and_a_chart():
@@ -88,19 +92,6 @@ def test_morning_event_has_html_without_a_chart_or_conclusion():
     payload, _ = run("morning")
     assert payload["html"] and "images" not in payload
     assert "결론" not in payload["html"] and "cid:" not in payload["html"]
-
-
-def test_without_relation_the_conclusion_is_one_group_and_no_watch_suffix():
-    payload, _ = run(answer_etfs=etfs(relation=False))
-    assert "ETF 4개 중 2개 상승(자료 없음 1)" in payload["text"] and "관심" not in payload["html"]
-
-
-def test_an_unknown_relation_value_is_treated_as_no_relation():
-    items = etfs()
-    for item in items:
-        item["relation"] = "NONE"
-    payload, _ = run(answer_etfs=items)
-    assert "ETF 4개 중 2개 상승" in payload["text"]
 
 
 def test_no_chart_is_drawn_when_no_etf_has_a_value():

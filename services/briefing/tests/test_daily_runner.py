@@ -8,6 +8,7 @@ from briefing import main
 from briefing.daily_report import DailyLlmWriter
 from briefing.ports import FailureReason
 from contracts import validate
+from fake_members import FakeMembers
 from test_daily_jobs import MARKET, FakeLlm, daily_response, etf_v2, filings_response, good_output, post_close_output, tick
 from test_runner import Clock, FakeConsumer, FakeMessage, FakeProducer, FakeStore, sent
 
@@ -34,7 +35,7 @@ def setup():
 
         runner = main.BriefingRunner("localhost:9092", None, store, clock=clock, consumer_factory=consumer_factory,
                                      producer_factory=producer_factory, declare_topics=lambda _: None,
-                                     daily_writer=daily_writer)
+                                     daily_writer=daily_writer, member_store=FakeMembers())
         runner.open()
         return runner, runner.tick_consumers, consumers[-1], producers[-1]
 
@@ -86,8 +87,8 @@ def test_a_morning_tick_flows_to_a_daily_briefing(setup):
                                           "articles": [], "truncated": False}})))
     runner.run_once()
     [(key, briefing)] = sent(producer, "briefing.daily.generated")
-    assert key == "morning"
-    assert validate("briefing.daily.generated.v1.schema.json", briefing) == []
+    assert key == "morning:1" and briefing["payload"]["memberId"] == 1
+    assert validate("briefing.daily.generated.v2.schema.json", briefing) == []
     assert briefing["payload"]["generatedBy"] == "llm"
     assert store.failures == []
     assert sent(producer, "briefing.generated") == []
@@ -117,7 +118,7 @@ def test_a_post_close_tick_flows_through_articles_and_filings_to_a_daily_briefin
         seq=filings_request["payload"]["seq"], filings=[])))
     runner.run_once()
     [(key, briefing)] = sent(producer, "briefing.daily.generated")
-    assert key == "post-close" and validate("briefing.daily.generated.v1.schema.json", briefing) == []
+    assert key == "post-close:1" and validate("briefing.daily.generated.v2.schema.json", briefing) == []
 
 
 def test_daily_no_response_is_resent_by_the_runner_timer_and_still_publishes(setup):
@@ -131,7 +132,7 @@ def test_daily_no_response_is_resent_by_the_runner_timer_and_still_publishes(set
         runner.run_once()
     assert len(sent(producer, "market.daily.requested")) == 3
     [(key, briefing)] = sent(producer, "briefing.daily.generated")
-    assert key == "post-close" and briefing["payload"]["generatedBy"] == "rule-based"
+    assert key == "post-close:1" and briefing["payload"]["generatedBy"] == "rule-based"
     [failure] = store.failures
     assert failure.reason == FailureReason.CONTEXT_NO_RESPONSE
     assert [run.job_kind for run in store.starts] == ["post-close"]
@@ -170,11 +171,7 @@ def test_close_closes_the_tick_consumers(setup):
 
 class FakeStatusStore:
     def __init__(self):
-        self.created = 0
         self.saved = []
-
-    def create_table(self):
-        self.created += 1
 
     def save_collection(self, record):
         self.saved.append(record)
@@ -193,15 +190,14 @@ def status_runner(setup):
     runner = main.BriefingRunner("localhost:9092", None, store, clock=clock,
                                  consumer_factory=lambda config: FakeConsumer(config),
                                  producer_factory=lambda config: FakeProducer(config),
-                                 declare_topics=lambda _: None, status_store=status)
+                                 declare_topics=lambda _: None, status_store=status, member_store=FakeMembers())
     runner.open()
     return runner, status
 
 
-def test_startup_creates_the_status_table_and_every_collection_completed_is_saved_as_received(setup):
+def test_every_collection_completed_is_saved_as_received(setup):
     from test_runner import completed_message
     runner, status = status_runner(setup)
-    assert status.created == 1
     message = completed_message(incomplete=["TEST02"])
     runner._consumer.commit = lambda **_: None
     runner.handle_message(message)

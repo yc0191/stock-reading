@@ -4,7 +4,6 @@ import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 import org.slf4j.Logger;
@@ -12,7 +11,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
- * 출처를 설정한 ETF의 상위 구성 종목을 받아 바뀐 것만 반영한다. 평소에는 한 주에 한 번(fetchDay), 지수 교체일이 든 달에는
+ * 출처 번호가 있는 ETF의 상위 구성 종목을 받아 바뀐 것만 반영한다. 평소에는 한 주에 한 번(fetchDay), 지수 교체일이 든 달에는
  * 매일 받는다. 받기만 하고 바뀐 게 없으면 이력의 마지막 확인일만 고친다.
  * 받기에 실패한 ETF는 이전 구성을 그대로 두고 다음 ETF로 넘어간다(한 ETF의 실패가 다른 ETF를 막지 않는다).
  */
@@ -39,15 +38,16 @@ class MemberFetchService {
             log.debug("member source is not configured; skipping");
             return;
         }
-        Map<String, String> fundIds = properties.fundIdByEtf();
         int fetched = 0;
         int changed = 0;
         int failed = 0;
-        for (MemberRepository.Target target : repository.targets()) {
-            String fundId = fundIds.get(target.symbol());
-            if (fundId == null) {
-                continue;
-            }
+        List<MemberRepository.Target> targets = repository.targets();
+        if (targets.isEmpty()) {
+            // 구성 종목을 받을 펀드 번호(constituent_source_id)를 가진 ETF가 없으면 조용히 멈추므로 한 줄 남긴다.
+            log.info("no ETF has a constituent source id; nothing to fetch");
+            return;
+        }
+        for (MemberRepository.Target target : targets) {
             Optional<MemberRepository.Latest> latest = repository.latest(target.etfId());
             if (!isDue(target, latest, today)) {
                 continue;
@@ -57,7 +57,7 @@ class MemberFetchService {
             }
             fetched++;
             try {
-                if (apply(target, latest, fundId, today)) {
+                if (apply(target, latest, target.fundId(), today)) {
                     changed++;
                 }
             } catch (RuntimeException e) {

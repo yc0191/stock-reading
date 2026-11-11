@@ -13,7 +13,7 @@ import org.springframework.boot.test.context.ConfigDataApplicationContextInitial
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
 
-import dev.stockreading.collector.CollectorProperties;
+import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -65,9 +65,9 @@ class BrokerSerialProbeTest {
                     var broker = new BrokerProperties(System.getenv("BROKER_BASE_URL"), System.getenv("BROKER_APP_KEY"),
                             System.getenv("BROKER_APP_SECRET"), 10,
                             Integer.parseInt(env("BROKER_MAX_CALLS_PER_SECOND", "0")));
-                    var client = new BrokerClient(broker, mapper, Clock.systemDefaultZone());
+                    var client = new BrokerClient(broker, mapper, Clock.systemDefaultZone(), CallRateLimiter.perSecond(10));
                     CallRateLimit limiter = CallRateLimiter.perSecond(broker.maxCallsPerSecond());
-                    var marketData = new BrokerMarketData(client, new CollectorProperties(symbols, 1_000), broker,
+                    var marketData = new BrokerMarketData(client, (QuoteSymbolsPort) () -> symbols, broker,
                             limiter, priceCheck);
 
                     SerialProbe.Result result = new SerialProbe(client, marketData, limiter, priceCheck, settings)

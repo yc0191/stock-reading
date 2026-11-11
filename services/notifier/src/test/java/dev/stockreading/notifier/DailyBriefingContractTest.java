@@ -12,20 +12,22 @@ import tools.jackson.databind.json.JsonMapper;
 /** 리플레이 안전망(ADR-003/010): 데일리 브리핑 샘플을 현재 소비자가 계속 읽을 수 있어야 한다. */
 class DailyBriefingContractTest {
 
-    private static final String SCHEMA = "briefing.daily.generated.v1.schema.json";
+    private static final String SCHEMA = "briefing.daily.generated.v2.schema.json";
     private static final String SAMPLE = "briefing.daily.generated.sample.json";
 
     @Test
-    void v1SampleMatchesTheSchema() throws IOException {
-        assertThat(ContractSchemas.validate(SCHEMA, ContractSchemas.sample(SAMPLE))).isEmpty();
+    void v2SampleMatchesTheSchema() throws IOException {
+        assertThat(ContractSchemas.validate(SCHEMA, ContractSchemas.sample("v2", SAMPLE))).isEmpty();
     }
 
     @Test
-    void consumerReadsTheV1Sample() throws IOException {
+    void consumerReadsTheV2Sample() throws IOException {
         DailyBriefingEnvelope daily = JsonMapper.builder().build()
-                .readValue(ContractSchemas.sample(SAMPLE), DailyBriefingEnvelope.class);
+                .readValue(ContractSchemas.sample("v2", SAMPLE), DailyBriefingEnvelope.class);
 
         assertThat(daily.eventType()).isEqualTo("briefing.daily.generated");
+        assertThat(daily.schemaVersion()).isEqualTo(2);
+        assertThat(daily.payload().memberId()).isEqualTo(1L);
         assertThat(daily.payload().edition()).isEqualTo("post-close");
         assertThat(daily.payload().rangeStart()).isEqualTo("2026-10-19T17:00:00+09:00");
         assertThat(daily.payload().rangeEnd()).isEqualTo("2026-10-20T17:00:00+09:00");
@@ -36,7 +38,7 @@ class DailyBriefingContractTest {
 
     @Test
     void consumerIgnoresFieldsAddedInFutureVersions() throws IOException {
-        String withExtras = ContractSchemas.sample(SAMPLE)
+        String withExtras = ContractSchemas.sample("v2", SAMPLE)
                 .replace("\"payload\": {", "\"newTopLevelHint\": \"x\",\n  \"payload\": {\n    \"venue\": \"future\",");
 
         assertThat(ContractSchemas.validate(SCHEMA, withExtras)).isEmpty();
@@ -46,14 +48,14 @@ class DailyBriefingContractTest {
 
     @Test
     void unknownEditionIsRejectedByTheSchema() throws IOException {
-        String broken = ContractSchemas.sample(SAMPLE).replace("\"edition\": \"post-close\"", "\"edition\": \"noon\"");
+        String broken = ContractSchemas.sample("v2", SAMPLE).replace("\"edition\": \"post-close\"", "\"edition\": \"noon\"");
 
         assertThat(ContractSchemas.validate(SCHEMA, broken)).isNotEmpty();
     }
 
     @Test
     void rangeTimeWithoutSecondsIsRejectedProvingFormatChecksAreOn() throws IOException {
-        String broken = ContractSchemas.sample(SAMPLE)
+        String broken = ContractSchemas.sample("v2", SAMPLE)
                 .replace("\"rangeStart\": \"2026-10-19T17:00:00+09:00\"", "\"rangeStart\": \"2026-10-19T17:00+09:00\"");
 
         assertThat(ContractSchemas.validate(SCHEMA, broken)).isNotEmpty();
@@ -62,7 +64,7 @@ class DailyBriefingContractTest {
     @Test
     void consumerReadsTheOptionalHtmlAndImages() throws IOException {
         DailyBriefingEnvelope daily = JsonMapper.builder().build()
-                .readValue(ContractSchemas.sample(SAMPLE), DailyBriefingEnvelope.class);
+                .readValue(ContractSchemas.sample("v2", SAMPLE), DailyBriefingEnvelope.class);
 
         assertThat(daily.payload().html()).contains("cid:chart-1");
         assertThat(daily.payload().images()).hasSize(1);
@@ -72,7 +74,7 @@ class DailyBriefingContractTest {
 
     @Test
     void sampleWithoutHtmlAndImagesStillMatchesAndIsReadable() throws IOException {
-        String textOnly = ContractSchemas.sample(SAMPLE).replaceAll("(?s),\\s*\"html\".*?\\]\\s*(?=\\})", "\n  ");
+        String textOnly = ContractSchemas.sample("v2", SAMPLE).replaceAll("(?s),\\s*\"html\".*?\\]\\s*(?=\\})", "\n  ");
 
         assertThat(textOnly).doesNotContain("\"html\"");
         assertThat(ContractSchemas.validate(SCHEMA, textOnly)).isEmpty();
@@ -84,8 +86,26 @@ class DailyBriefingContractTest {
     @Test
     void imageWithAnUnknownTypeOrNonBase64DataIsRejected() throws IOException {
         assertThat(ContractSchemas.validate(SCHEMA,
-                ContractSchemas.sample(SAMPLE).replace("image/png", "image/svg+xml"))).isNotEmpty();
+                ContractSchemas.sample("v2", SAMPLE).replace("image/png", "image/svg+xml"))).isNotEmpty();
         assertThat(ContractSchemas.validate(SCHEMA,
-                ContractSchemas.sample(SAMPLE).replace("iVBORw0KGgo", "iVBORw0K Ggo"))).isNotEmpty();
+                ContractSchemas.sample("v2", SAMPLE).replace("iVBORw0KGgo", "iVBORw0K Ggo"))).isNotEmpty();
+    }
+
+    @Test
+    void memberIdIsRequiredAndMustBeAPositiveNumberAndTheEventCarriesNoAddress() throws IOException {
+        String sample = ContractSchemas.sample("v2", SAMPLE);
+
+        assertThat(ContractSchemas.validate(SCHEMA, sample.replaceFirst("\"memberId\": 1,\\s*", ""))).isNotEmpty();
+        assertThat(ContractSchemas.validate(SCHEMA, sample.replace("\"memberId\": 1", "\"memberId\": 0"))).isNotEmpty();
+        assertThat(ContractSchemas.validate(SCHEMA, sample.replace("\"memberId\": 1", "\"memberId\": \"1\""))).isNotEmpty();
+        assertThat(sample).doesNotContain("@");
+    }
+
+    @Test
+    void aV1EventHasNoMemberIdSoTheConsumerCannotTellWhoShouldGetIt() throws IOException {
+        DailyBriefingEnvelope v1 = JsonMapper.builder().build()
+                .readValue(ContractSchemas.sample("v1", SAMPLE), DailyBriefingEnvelope.class);
+
+        assertThat(v1.payload().memberId()).isNull();
     }
 }

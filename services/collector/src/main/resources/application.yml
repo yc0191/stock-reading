@@ -9,6 +9,11 @@ spring:
     scheduling:
       pool:
         size: 8
+  # 수집 대상과 뉴스 검색어를 읽기 전용 계정으로 읽는다(시작할 때 한 번). 쓰기는 하지 않는다.
+  datasource:
+    url: jdbc:postgresql://localhost:5432/${POSTGRES_DB:stock}
+    username: ${COLLECTOR_DB_USER:collector_svc}
+    password: ${COLLECTOR_DB_PASSWORD:}
   kafka:
     bootstrap-servers: localhost:9092
     consumer:
@@ -22,8 +27,6 @@ spring:
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
 collector:
-  # 가짜 종목 코드만 쓴다. 실제 종목은 커밋하지 않는다.
-  symbols: TEST01,TEST02,TEST03
   # 1초 현재가 조회 주기. 1초 미만이면 회차의 기준 시각(scheduledFor, 초 단위)과 correlationId 가 겹친다.
   # 앞 회차 조회가 끝나지 않았으면 이번 회차는 조회하지 않고 종목마다 건너뜀(SupersededByNewerTick)으로 기록한다.
   tick-interval-ms: ${COLLECTOR_TICK_INTERVAL_MS:1000}
@@ -34,23 +37,23 @@ collector:
     news-interval-ms: 900000
   quote-hours:
     # 1초 현재가를 조회하는 시간대(한국 시간 HH:mm, 양끝 포함, 평일만). 뉴스 수집은 이 시간대와 상관없다.
-    # 장 밖에서는 현재가가 전일 종가 그대로라 조회하지 않는다. 휴장일은 판정하지 않는다.
+    # 장 밖에서는 현재가가 전일 종가 그대로라 조회하지 않는다. 휴장일도 조회하지 않는다.
     start: "${COLLECTOR_QUOTE_START:09:00}"
     end: "${COLLECTOR_QUOTE_END:15:30}"
   pre-open:
-    # 꺼 두면 수집기 타이머가 장 시작 전 수집을 하지 않는다. 휴장일은 판정하지 않는다.
+    # 꺼 두면 수집기 타이머가 장 시작 전 수집을 하지 않는다. 휴장일에는 수집하지 않는다(시세 제공자의 장 운영 상태로 판정, 판정하지 못하면 영업일로 본다).
     # 한 회차에서 보유 미국 종목 해외 일봉, 세계지수 아메리카(C), SEC 공시를 받는다. 공시는 이때만 받는다.
     enabled: ${COLLECTOR_PRE_OPEN_ENABLED:false}
     # 한국 시간 기준 cron(초 분 시 일 월 요일)
     cron: ${COLLECTOR_PRE_OPEN_CRON:0 30 8 * * MON-FRI}
   members:
-    # 꺼 두면 ETF 구성 종목 조회 tick(collect-members)을 발행하지 않는다. 휴장일은 판정하지 않는다.
+    # 꺼 두면 ETF 구성 종목 조회 tick(collect-members)을 발행하지 않는다. 휴장일에는 발행하지 않는다(시세 제공자의 장 운영 상태로 판정, 판정하지 못하면 영업일로 본다).
     # 이 tick을 받은 시세처리기가 그날 받을 차례인 ETF(평소 주 1회, 지수 교체 달 매일)만 구성을 받는다.
     enabled: ${COLLECTOR_MEMBERS_ENABLED:false}
     # 한국 시간 기준 cron(초 분 시 일 월 요일)
-    cron: ${COLLECTOR_MEMBERS_CRON:0 30 7 * * MON-FRI}
+    cron: ${COLLECTOR_MEMBERS_CRON:0 0 8 * * MON-FRI}
   intraday:
-    # 꺼 두면 수집기 타이머가 장중 수집을 하지 않는다. 휴장일은 판정하지 않는다.
+    # 꺼 두면 수집기 타이머가 장중 수집을 하지 않는다. 휴장일에는 수집하지 않는다(시세 제공자의 장 운영 상태로 판정, 판정하지 못하면 영업일로 본다).
     # 한 회차에서 환율종합, 시장종합, 세계지수 아시아(S)·아메리카(C)를 시차를 두고 차례로 받는다.
     enabled: ${COLLECTOR_INTRADAY_ENABLED:false}
     # 한국 시간 기준 cron(초 분 시 일 월 요일). 주기를 정하고, 끝 시각은 아래 end 로 거른다.
@@ -62,7 +65,7 @@ collector:
     stagger-ms: ${COLLECTOR_INTRADAY_STAGGER_MS:15000}
   insight:
     schedule:
-      # 꺼 두면 수집기 타이머가 마감 후 수집을 하지 않는다. 휴장일은 판정하지 않는다.
+      # 꺼 두면 수집기 타이머가 마감 후 수집을 하지 않는다. 휴장일에는 수집하지 않는다(시세 제공자의 장 운영 상태로 판정, 판정하지 못하면 영업일로 본다).
       enabled: ${COLLECTOR_INSIGHT_SCHEDULE_ENABLED:false}
       # 한국 시간 기준 cron(초 분 시 일 월 요일)
       cron: ${COLLECTOR_INSIGHT_CRON:0 30 16 * * MON-FRI}
@@ -76,15 +79,26 @@ collector:
     # 한 번에 해외 일봉을 조회할 종목 수 상한. 넘친 종목은 호출하지 않고 건너뛴 개수만 경고로 남긴다.
     overseas-max-tickers: 100
   daily-briefing:
-    # 꺼 두면 데일리 브리핑 시작 tick 을 발행하지 않는다. 휴장일은 판정하지 않는다.
-    # 각 판은 그 판의 자료 수집(장 시작 전 08:30, 장 마감 후 16:30)이 끝난 뒤에 오도록 둔다.
+    # 꺼 두면 데일리 브리핑 시작 tick 을 발행하지 않는다. 휴장일에는 발행하지 않는다(시세 제공자의 장 운영 상태로 판정, 판정하지 못하면 영업일로 본다).
+    # 각 판은 그 판의 자료 수집이 끝난 뒤에 오도록 둔다(아침 판은 장 시작 후 09:10까지의 개장 흐름을 담으므로 09:10, 마감 후 판은 장 마감 후 16:30 수집 뒤).
     enabled: ${COLLECTOR_DAILY_BRIEFING_ENABLED:false}
     # 한국 시간 기준 cron(초 분 시 일 월 요일). 한 판만 끄려면 그 판의 값을 "-" 로 준다.
-    morning-cron: ${COLLECTOR_DAILY_BRIEFING_MORNING_CRON:0 45 8 * * MON-FRI}
+    morning-cron: ${COLLECTOR_DAILY_BRIEFING_MORNING_CRON:0 10 9 * * MON-FRI}
     post-close-cron: ${COLLECTOR_DAILY_BRIEFING_POST_CLOSE_CRON:0 0 17 * * MON-FRI}
   market-data:
     # simulator | broker
     source: ${COLLECTOR_MARKET_DATA_SOURCE:simulator}
+  market-status:
+    # 시세 제공자의 장 운영 상태 조회로 휴장일을 판정한다. 경로와 응답 칸 이름은 제공자 문서에서 확인해 환경변수로 넣는다.
+    # 하나라도 비어 있으면 시작할 때 경고를 한 번 남기고 휴장일을 판정하지 않는다(늘 영업일로 본다).
+    # 평일 이 시각(한국 시간 cron)에 그날의 장 운영 상태를 미리 판정해 하루 동안 쓴다. 가장 이른 tick(collect-members)보다 앞서거나 같아야 한다.
+    decide-cron: "0 0 8 * * MON-FRI"
+    path: ${BROKER_MARKET_STATUS_PATH:}
+    # 응답에서 현재 일자를 담은 칸과 기준 영업일을 담은 칸. 두 값이 같으면 영업일이다.
+    today-field: ${BROKER_MARKET_STATUS_TODAY_FIELD:}
+    business-day-field: ${BROKER_MARKET_STATUS_BUSINESS_DAY_FIELD:}
+    # 한 번 판정에 쓰는 전체 시간 상한. 넘으면 남은 시도를 하지 않고 영업일로 본다(스케줄러 스레드를 오래 잡지 않으려는 것).
+    lookup-timeout: ${BROKER_MARKET_STATUS_TIMEOUT:5s}
   broker:
     # 주소와 키는 환경변수로만 받는다(키는 Parameter Store -> .env).
     base-url: ${BROKER_BASE_URL:}

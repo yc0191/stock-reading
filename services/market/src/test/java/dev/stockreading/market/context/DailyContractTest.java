@@ -3,6 +3,8 @@ package dev.stockreading.market.context;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -209,35 +211,20 @@ class DailyContractTest {
     }
 
     @Test
-    void producerEtfRelationMatchesSchemaAndIsLeftOutWhenUnknown() throws IOException {
+    void etfCarriesNoHeldOrWatchedBecauseThatBelongsToEachMembersPortfolio() throws IOException {
         String json = serialize(new DailyPayload(JOB_ID, 1, List.of(
-                DailyPayload.Etf.withoutDaily("TEST01", DailyPayload.NO_DAILY_PRICE_IN_RANGE, List.of(), false, null)
-                        .withRelation("HELD"),
-                DailyPayload.Etf.withoutDaily("TEST02", DailyPayload.NO_DAILY_PRICE_IN_RANGE, List.of(), false, null)
-                        .withRelation("WATCH"),
-                DailyPayload.Etf.withoutDaily("TEST03", DailyPayload.NO_DAILY_PRICE_IN_RANGE, List.of(), false, null)),
+                DailyPayload.Etf.withoutDaily("TEST01", DailyPayload.NO_DAILY_PRICE_IN_RANGE, List.of(), false, null),
+                DailyPayload.Etf.withoutDaily("TEST02", DailyPayload.NO_DAILY_PRICE_IN_RANGE, List.of(), false, null)),
                 List.of(), List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false));
 
         assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", json)).isEmpty();
-        var etfs = mapper.readTree(json).get("payload").get("etfs");
-        assertThat(etfs.get(0).get("relation").asString()).isEqualTo("HELD");
-        assertThat(etfs.get(1).get("relation").asString()).isEqualTo("WATCH");
-        assertThat(etfs.get(2).has("relation")).isFalse();
-    }
-
-    @Test
-    void schemaTakesOnlyHeldOrWatchAsRelationAndTheSampleCarriesIt() throws IOException {
+        assertThat(json).doesNotContain("\"relation\"");
         String sample = ContractSchemas.sample("v2", "market.daily.responded.sample.json");
-        assertThat(sample).contains("\"relation\": \"HELD\"").contains("\"relation\": \"WATCH\"");
+        assertThat(sample).doesNotContain("\"relation\"");
         assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", sample)).isEmpty();
-        for (String bad : new String[] {"NONE", "held", ""}) {
-            String broken = sample.replaceFirst("\"relation\": \"HELD\"", "\"relation\": \"" + bad + "\"");
-            assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", broken))
-                    .as("relation=%s", bad).isNotEmpty();
-        }
-        String without = sample.replaceAll("\"relation\": \"[A-Z]+\",\\s*", "");
-        assertThat(without).doesNotContain("\"relation\"");
-        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", without)).isEmpty();
+        // 스키마가 추가 칸을 막지 않으므로 칸 이름이 스키마에서 빠졌는지는 정의 쪽에서 확인한다.
+        assertThat(Files.readString(Path.of("../../contracts/events/market.daily.responded.v2.schema.json")))
+                .doesNotContain("\"relation\"");
     }
 
     @Test
@@ -302,5 +289,42 @@ class DailyContractTest {
     private String serialize(DailyPayload payload) {
         return mapper.writeValueAsString(EventFactory.create(CLOCK, "market.daily.responded", 2,
                 OffsetDateTime.now(CLOCK), "daily-briefing-post-close-2026-10-20T17:00:00+09:00", payload));
+    }
+
+    @Test
+    void requestWithOpenFlowSinceMatchesTheSchemaAndRejectsANonTimestamp() throws IOException {
+        String sample = ContractSchemas.sample("market.daily.requested.sample.json");
+        String with = sample.replace("\"includeOperations\": true",
+                "\"includeOperations\": true,\n    \"openFlowSince\": \"2026-10-20T16:50:00+09:00\"");
+
+        assertThat(ContractSchemas.validate("market.daily.requested.v1.schema.json", with)).isEmpty();
+        assertThat(mapper.readValue(with, DailyRequestEnvelope.class).payload().openFlowSince())
+                .isEqualTo("2026-10-20T16:50:00+09:00");
+        assertThat(mapper.readValue(sample, DailyRequestEnvelope.class).payload().openFlowSince()).isNull();
+        assertThat(ContractSchemas.validate("market.daily.requested.v1.schema.json",
+                with.replace("2026-10-20T16:50:00+09:00", "ten to five"))).isNotEmpty();
+    }
+
+    @Test
+    void producerOpenFlowMatchesSchemaAndIsLeftOutWhenNull() throws IOException {
+        DailyPayload.OpenFlow present = new DailyPayload.OpenFlow("present", "10000", "10200", "raw", "2.00",
+                "2026-10-20T09:00:01+09:00", "10100", "2026-10-20T09:09:58+09:00", "10300", "1.98", "3.00");
+        DailyPayload.OpenFlow partial = new DailyPayload.OpenFlow("present", null, "10100", "first-snapshot", null,
+                "2026-10-20T09:00:01+09:00", "10100", "2026-10-20T09:09:58+09:00", "10300", "1.98", null);
+        DailyPayload.Etf plain = new DailyPayload.Etf("TEST01", "20261020", "9850", "10000", "-1.50",
+                "2026-10-20T16:30:02+09:00", List.of(), false);
+        String json = serialize(new DailyPayload(JOB_ID, 1,
+                List.of(plain.withOpenFlow(present), plain.withOpenFlow(partial),
+                        plain.withOpenFlow(DailyPayload.OpenFlow.none()), plain),
+                List.of(), List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false));
+
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", json)).isEmpty();
+        var etfs = mapper.readTree(json).get("payload").get("etfs");
+        assertThat(etfs.get(0).get("openFlow").get("openRate").asString()).isEqualTo("2.00");
+        assertThat(etfs.get(1).get("openFlow").get("prevClose").isNull()).isTrue();
+        assertThat(etfs.get(2).get("openFlow").get("status").asString()).isEqualTo("no-snapshot");
+        assertThat(etfs.get(3).has("openFlow")).isFalse();
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json",
+                json.replace("\"status\":\"no-snapshot\"", "\"status\":\"other\""))).isNotEmpty();
     }
 }

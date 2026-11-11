@@ -3,8 +3,9 @@
 흐름: schedule.tick(판마다 따로 받음) -> 범위 계산 -> 데일리 자료 요청(market.daily.requested)
 -> 아침 판이고 미국 종목이 있으면 그 티커로 공시 요청 -> 받은 자료 재검사 -> 본문(LLM 또는 규칙 기반)
 -> (LLM이 약한 문장을 냈으면 문장마다 뉴스 재검색 -> 그 문장만 다시 쓰기, 근거 부족이면 보고서 전체를 한 번 재검색)
--> briefing.daily.generated 발행. 응답을 끝내 받지 못하거나 LLM이 끝내 실패해도 판은 나간다.
-예외는 작업 기록을 끝내 저장하지 못했을 때뿐이며, 그때는 이 판의 결과 이벤트를 발행하지 않고 ERROR 로그만 남긴다.
+-> 멤버마다 그 멤버의 포트폴리오 ETF만 담은 판을 짜서 briefing.daily.generated 발행(LLM 본문은 판 하나에 한 번만 쓴다).
+응답을 끝내 받지 못하거나 LLM이 끝내 실패해도 판은 나간다. 예외는 작업 기록을 끝내 저장하지 못했을 때와 받을 멤버를 읽지 못했을 때뿐이며,
+그때는 이 판의 결과 이벤트를 발행하지 않고 ERROR 로그만 남긴다.
 """
 from __future__ import annotations
 
@@ -14,13 +15,14 @@ import logging
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
-from datetime import datetime, time, timedelta
-from typing import Any
+from datetime import date, datetime, time, timedelta
+from typing import Any, Callable
 
 from briefing.compose import KST
-from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
+from briefing.config import DEFAULT_DAILY_SETTINGS, DEFAULT_SETTINGS, CoreSettings, DailySettings
 from briefing.daily_chart import chart_bars, no_data_names, render_day_chart
 from briefing.daily_html import ChartSlot, render_html
+from briefing.daily_members import MemberPort, MemberPortfolio, member_input, member_output, member_sections
 from briefing.daily_morning import outlook_records
 from briefing.daily_inputs import EtfArticles, member_issues, moves_with_market, notable_candidates
 from briefing.daily_relevance import split_related
@@ -37,8 +39,6 @@ from briefing.daily_report import (
     GENERATED_BY_LLM,
     POINT_NOTABLE,
     build_llm_input,
-    RELATION_HELD,
-    RELATION_WATCH,
     build_sections,
     daily_text,
     has_evidence,
@@ -72,6 +72,7 @@ from briefing.job_log import (
     record_result,
 )
 from briefing.evidence import MARKET_WIDE
+from briefing.open_flow import in_range, open_flow_start, parse_open_flow
 from briefing.ports import FailureReason, RequestPort
 from briefing.research import ResearchTarget
 from briefing.sentence_research import WHOLE_REPORT, SentenceResearch, WeakSentence
@@ -117,6 +118,11 @@ REASON_LLM_REJECTED = "llm_attempt_rejected"
 REASON_MISSING_ITEMS = "missing_items"
 REASON_LLM_ACCEPTED = "llm_attempt_accepted"
 REASON_PUBLISHED = "published"
+# 판을 멤버 한 명 몫으로 발행함 / 그 멤버의 판을 짜다 실패함
+REASON_MEMBER_PUBLISHED = "member_published"
+# 판을 받을 멤버를 읽지 못해 발행하지 못한 작업의 실패 사유
+REASON_MEMBERS_UNREADABLE = "members_unreadable"
+REASON_MEMBER_FAILED = "member_failed"
 REASON_OUTLOOK_RECORDED = "morning_outlook_recorded"
 # 마감 후 판이 같은 날 아침 예상을 읽지 못해 대조를 뺀 사유
 REASON_OUTLOOK_MISSING = "morning_outlook_missing"
@@ -202,6 +208,8 @@ class _DailyJob:
     first_failure: tuple[FailureReason, str, int] | None = None
     # 문장 단위 재검색이 진행 중인가. 끝나면 재검색 흐름이 발행한다.
     researching: bool = False
+    # 아침 판만: 개장 시세를 읽을 구간의 시작. 판 시각이 장 시작 전이라 읽지 않으면 None.
+    open_flow_since: datetime | None = None
 
     def waiting(self) -> bool:
         return (self.data.awaiting() and not self.data_given_up) or (self.filings.awaiting() and not self.filings_given_up) \
@@ -214,10 +222,17 @@ class DailyCore:
     writer: DailyLlmWriter | None = None
     job_log: JobLogPort = field(default_factory=DiscardJobLog)
     settings: DailySettings = DEFAULT_DAILY_SETTINGS
+    # 아침 판의 개장 시세 범위(장 시작 시각, 거슬러 읽는 상한)는 근거 조회와 같은 CoreSettings에서 온다.
+    core_settings: CoreSettings = DEFAULT_SETTINGS
     # 있을 때만 재검색한다. 급변동과 함께 쓰는 문장 단위 재검색 흐름이다.
     sentences: SentenceResearch | None = None
     # 있을 때만 마감 후 판 끝에 서버 상태 절을 붙인다.
     status: StatusPort | None = None
+    # 판을 받을 멤버와 그 포트폴리오를 읽는 곳. 없으면 받을 멤버를 모르므로 판을 발행하지 않는다.
+    members: MemberPort | None = None
+    # 아침 판의 결과(판 시각, 나갔는가, 판에 개장 흐름이 담긴 종목코드, 개장 흐름을 읽은 구간 시작)를 받는 곳.
+    # 장 시작 뒤 급변동을 아침 판에 합쳤는지 정하는 데 쓴다.
+    on_morning_result: Callable[[datetime, bool, datetime, frozenset[str], datetime | None], None] | None = None
     _jobs: dict[str, _DailyJob] = field(default_factory=dict, init=False)
     _seen: OrderedDict[str, None] = field(default_factory=OrderedDict, init=False)
 
@@ -250,6 +265,8 @@ class DailyCore:
         while len(self._seen) > self.settings.remembered_ticks:
             self._seen.popitem(last=False)
         job = _DailyJob(job_id, edition, correlation_id, scheduled_for, range_start(scheduled_for, self.settings))
+        if edition == EDITION_MORNING:
+            job.open_flow_since = open_flow_start(scheduled_for, self.core_settings)
         self._jobs[job_id] = job
         # 작업 한 줄은 시작 때 만들고 끝날 때 고친다. 입력은 시작시킨 이벤트 원문이다.
         raw = message.decode("utf-8") if isinstance(message, bytes) else message
@@ -390,6 +407,11 @@ class DailyCore:
                 self._send_articles(job, symbol, now)
         self._finish(job, now)
 
+    def morning_in_progress(self, day: date) -> bool:
+        """그 날의 아침 판이 시작됐고 아직 끝나지 않았는가."""
+        return any(j.edition == EDITION_MORNING and j.scheduled_for.astimezone(KST).date() == day
+                   for j in self._jobs.values())
+
     def next_deadline(self) -> datetime | None:
         deadlines = [exchange.sent_at + self.settings.response_timeout
                      for job in self._jobs.values()
@@ -416,6 +438,8 @@ class DailyCore:
         if job.edition == EDITION_POST_CLOSE and self.status is not None:
             # 서버 상태 절의 시세처리기 운영 상태. 마감 후 판만 요청한다.
             payload["includeOperations"] = True
+        if job.open_flow_since is not None:
+            payload["openFlowSince"] = format_timestamp(job.open_flow_since)
         job.sent.append(_Sent(DAILY_DATA_REQUESTED_TOPIC, seq, now, payload))
         self.requests.send(daily_data_request(job.correlation_id, now, payload))
 
@@ -459,7 +483,12 @@ class DailyCore:
         # 일봉이 없는 ETF(받은 시각 없음)는 버리지 않고 자료 없음으로 싣는다.
         kept = tuple(e for e in etfs if e.fetched_at is None or job.range_start <= e.fetched_at <= job.scheduled_for)
         self._note_excluded(job, "etfs", len(etfs) - len(kept))
-        return kept
+        # 개장 흐름은 읽은 구간(장 시작~판 시각) 밖이거나 요청하지 않았는데 온 것을 버리고 자료 없음으로 싣는다.
+        rechecked = tuple(replace(e, open_flow=None) if e.open_flow is not None and (
+            job.open_flow_since is None or not in_range(e.open_flow, job.open_flow_since, job.scheduled_for)) else e
+                          for e in kept)
+        self._note_excluded(job, "openFlow", sum(1 for a, b in zip(kept, rechecked) if a is not b))
+        return rechecked
 
     def _recheck_state(self, job: _DailyJob, close_rates: tuple[CloseRate, ...],
                        background: tuple[Background, ...]) -> tuple[tuple[CloseRate, ...], tuple[Background, ...]]:
@@ -546,6 +575,7 @@ class DailyCore:
             background=job.background,
             filings=job.filings_data,
             filings_truncated=job.filings_truncated,
+            open_flow_start=job.open_flow_since,
             settings=self.settings,
         )
         if job.edition in EDITIONS_WITH_ETF_ARTICLES:
@@ -731,10 +761,10 @@ class DailyCore:
             return None, True, CHART_OVERSIZED_ITEM
         return png, False, None
 
-    def _daily_event(self, job: _DailyJob, now: datetime, daily_input: DailyInput, sections: tuple[Section, ...],
-                     draft: _Draft, text: str, status_text: str | None,
+    def _daily_event(self, job: _DailyJob, now: datetime, member_id: int, daily_input: DailyInput,
+                     sections: tuple[Section, ...], draft: _Draft, text: str, status_text: str | None,
                      missing: list[str]) -> tuple[OutboundEvent, list[str]]:
-        """글자판·HTML·차트를 담은 메일 본문 이벤트. 이벤트가 상한을 넘으면 그림만 빼고 다시 만든다."""
+        """멤버 한 명의 글자판·HTML·차트를 담은 메일 본문 이벤트. 이벤트가 상한을 넘으면 그림만 빼고 다시 만든다."""
         post_close = job.edition == EDITION_POST_CLOSE
         png, oversized, chart_missing = self._chart_image(daily_input) if post_close else (None, False, None)
 
@@ -747,7 +777,7 @@ class DailyCore:
                        "data": base64.b64encode(image).decode("ascii")}] if image is not None else None
             return daily_briefing_event(job.job_id, job.correlation_id, job.scheduled_for, now, job.edition,
                                         job.range_start, job.scheduled_for, text, items, draft.generated_by,
-                                        html, images)
+                                        member_id, html, images)
 
         items = [*missing, chart_missing] if chart_missing else missing
         event = build(png, oversized, items)
@@ -755,6 +785,29 @@ class DailyCore:
             items = [*missing, CHART_OVERSIZED_ITEM]
             event = build(None, True, items)
         return event, items
+
+    def _member_events(self, job: _DailyJob, now: datetime, daily_input: DailyInput, sections: tuple[Section, ...],
+                       draft: _Draft, status_text: str | None, status_missing: list[str],
+                       members: tuple[MemberPortfolio, ...]) -> list[tuple[MemberPortfolio, OutboundEvent, int]]:
+        """멤버마다 판을 짠다. 같은 LLM 본문에서 그 멤버의 ETF에 관련된 부분만 남기고, 한 멤버가 실패해도 다른 멤버의 판은 나간다."""
+        events = []
+        for member in members:
+            try:
+                mine = member_input(daily_input, member)
+                mine_sections = member_sections(mine, sections, self.settings)
+                mine_draft = replace(draft, output=member_output(draft.output, mine, mine_sections))
+                text = daily_text(mine, mine_sections, mine_draft.output, status_text)
+                missing = missing_items(mine_sections)
+                missing = [*missing, *status_missing]
+                event, _ = self._daily_event(job, now, member.member_id, mine, mine_sections, mine_draft, text,
+                                             status_text, missing)
+            except Exception as error:  # noqa: BLE001 - 멤버 한 명의 판이 실패해도 다른 멤버의 판은 낸다
+                log.error("daily %s for one member failed: job=%s %s", job.edition, job.job_id, type(error).__name__)
+                self._detail(job, STAGE_COMPOSE, EntryType.STEP_FAILED, REASON_MEMBER_FAILED, type(error).__name__, 0,
+                             now, memberId=member.member_id)
+                continue
+            events.append((member, event, len(mine.etfs or ())))
+        return events
 
     def _publish(self, job: _DailyJob, now: datetime, daily_input: DailyInput, sections: tuple[Section, ...],
                  draft: _Draft, research_count: int = 0) -> None:
@@ -764,9 +817,16 @@ class DailyCore:
         status_text = report.text if report is not None else None
         if report is not None:
             missing = [*missing, *report.missing]
-        # 글자판은 서버 상태를 면책 아래·근거 목록 위에 끼워 다시 만든다.
+        # 작업 기록에 남기는 본문은 멤버를 가르지 않은 판 전체 글이다(멤버마다 다른 글자판은 메일로만 나간다).
         text = daily_text(daily_input, sections, draft.output, status_text)
-        event, missing = self._daily_event(job, now, daily_input, sections, draft, text, status_text, missing)
+        members = self.members.daily_members(job.edition) if self.members is not None else None
+        if members is None:
+            # 받을 멤버를 모르면 누구에게 보낼지 알 수 없다. 틀린 사람에게 보내지 않도록 발행하지 않고 실패로 남긴다.
+            self._detail(job, STAGE_COMPOSE, EntryType.STEP_FAILED, REASON_MEMBERS_UNREADABLE, "ReadFailed", 0, now)
+            events: list[tuple[MemberPortfolio, OutboundEvent, int]] = []
+        else:
+            events = self._member_events(job, now, daily_input, sections, draft, status_text,
+                                         list(report.missing) if report is not None else [], members)
         if missing:
             self._detail(job, STAGE_COMPOSE, EntryType.MISSING_ITEMS, REASON_MISSING_ITEMS, None, 0, now,
                          missingItems=missing,
@@ -775,18 +835,40 @@ class DailyCore:
                                       for e in daily_input.etfs or () if not e.has_day()],
                          evidence=[{"ref": ref, "describe": by_ref[ref].describe} for ref in draft.cited],
                          weakItems=list(draft.weak_shortfalls))
+        for member, event, etf_count in events:
+            # 같은 작업 안에서 이 판이 어느 멤버 몫인지 남긴다. 멤버 번호와 결과 이벤트 ID만 담고 주소는 알지 못한다.
+            self._detail(job, STAGE_COMPOSE, EntryType.MEMBER_BRIEFING, REASON_MEMBER_PUBLISHED, None, 0, now,
+                         memberId=member.member_id, resultEventId=event.value["eventId"], etfCount=etf_count,
+                         missingItems=event.value["payload"]["missingItems"])
+        if members is not None and not members:
+            log.warning("daily %s: no member to send to: job=%s", job.edition, job.job_id)
+        # 멤버가 있는데 판이 한 건도 안 나가면 모두 실패한 것이라 성공으로 남기지 않는다(일부만 실패하면 나머지는 보낸다).
+        all_failed = bool(members) and not events
+        if all_failed:
+            log.error("daily %s: every member briefing failed: job=%s members=%d", job.edition, job.job_id, len(members))
+        failed = members is None or all_failed
+        failure = REASON_MEMBERS_UNREADABLE if members is None else REASON_MEMBER_FAILED if all_failed else None
         result = JobResult(
-            job.job_id, RunStatus.SUCCEEDED, now, generated_by=GeneratedBy(draft.generated_by),
+            job.job_id, RunStatus.FAILED if failed else RunStatus.SUCCEEDED, now,
+            generated_by=GeneratedBy(draft.generated_by),
             final_text=text, weak_count=len(draft.weak_shortfalls), research_count=research_count,
             # 성공했어도 중간에 포기한 단계가 있으면 첫 사유를 남긴다.
-            failure_reason=job.first_failure[0].value if job.first_failure is not None else None,
-            result_event_id=event.value["eventId"])
-        if not record_result(self.job_log, result):
+            failure_reason=failure if failed
+            else job.first_failure[0].value if job.first_failure is not None else None,
+            # 멤버마다 이벤트가 따로라 작업 한 줄에는 첫 멤버의 것만 싣고, 나머지는 member-briefing 줄에 있다.
+            result_event_id=events[0][1].value["eventId"] if events else None)
+        saved = record_result(self.job_log, result)
+        if job.edition == EDITION_MORNING and self.on_morning_result is not None:
+            # 나가지 않은 아침 판(실패, 기록 저장 실패)은 합쳐 둔 급변동을 받지 못했으므로 그 변동을 따로 알린다.
+            flowed = frozenset(e.symbol for e in job.etfs or () if e.open_flow is not None and e.open_flow.present)
+            self.on_morning_result(job.scheduled_for, saved and not failed, now, flowed, job.open_flow_since)
+        if not saved:
             del self._jobs[job.job_id]
             return
-        self.requests.send(event)
-        log.info("daily %s ready: job=%s generatedBy=%s missing=%d etfs=%s filings=%s excluded=%s",
-                 job.edition, job.job_id, draft.generated_by, len(missing),
+        for _, event, _ in events:
+            self.requests.send(event)
+        log.info("daily %s ready: job=%s generatedBy=%s members=%d missing=%d etfs=%s filings=%s excluded=%s",
+                 job.edition, job.job_id, draft.generated_by, len(events), len(missing),
                  "n/a" if job.etfs is None else len(job.etfs),
                  "n/a" if job.filings_data is None else len(job.filings_data), sum(job.excluded.values()))
         del self._jobs[job.job_id]
@@ -886,12 +968,7 @@ def _parse_etf_day(e: dict[str, Any]) -> EtfDay:
     return EtfDay(e["symbol"], e["date"], e["close"], e["prevClose"], e["rate"],
                   parse_timestamp(fetched) if fetched is not None else None,
                   tuple(e["tickers"]), bool(e["tickersTruncated"]), parse_etf_info(e.get("etf")),
-                  e.get("missingReason"), _relation(e.get("relation")))
-
-
-def _relation(value: Any) -> str | None:
-    """보유/관심 구분. 칸이 없거나 모르는 값이면 구분을 모르는 것으로 본다."""
-    return value if value in (RELATION_HELD, RELATION_WATCH) else None
+                  e.get("missingReason"), open_flow=parse_open_flow(e.get("openFlow")))
 
 
 def daily_data_request(correlation_id: str, now: datetime, payload: dict[str, Any]) -> OutboundEvent:

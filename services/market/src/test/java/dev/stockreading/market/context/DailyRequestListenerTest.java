@@ -26,10 +26,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import dev.stockreading.market.MarketProperties;
 import dev.stockreading.market.event.ContextPayload;
 import dev.stockreading.market.event.DailyPayload;
-import dev.stockreading.market.holdings.EtfInfo;
-import dev.stockreading.market.holdings.HoldingsPort;
+import dev.stockreading.market.constituent.EtfInfo;
+import dev.stockreading.market.constituent.HoldingsPort;
 import dev.stockreading.market.members.Member;
 import dev.stockreading.market.members.MemberChanges;
 import dev.stockreading.market.members.MemberChangesPort;
@@ -55,6 +56,7 @@ class DailyRequestListenerTest {
     private MemberChangesPort memberChanges;
     private OperationsReader operationsReader;
     private DailyPublisher publisher;
+    private OpenFlowPort openFlowPort;
 
     @BeforeEach
     void setUp() {
@@ -64,6 +66,7 @@ class DailyRequestListenerTest {
         memberChanges = mock(MemberChangesPort.class);
         operationsReader = mock(OperationsReader.class);
         publisher = mock(DailyPublisher.class);
+        openFlowPort = mock(OpenFlowPort.class);
         when(repository.latest(any(), any(), any(), any())).thenReturn(Optional.empty());
         when(repository.worldIndexRows(anyString(), any(), any())).thenReturn(List.of());
         when(repository.latestDailyPrices(any(), any())).thenReturn(List.of());
@@ -76,7 +79,9 @@ class DailyRequestListenerTest {
     private DailyRequestListener listener(int maxTickers, int maxEtfs) {
         return new DailyRequestListener(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
                 memberChanges, new ContextProperties(Duration.ofDays(4), 32_768, maxTickers, List.of("C", "S"), Duration.ofDays(7)),
-                new DailyProperties(maxEtfs), operationsReader, publisher, mapper);
+                new DailyProperties(maxEtfs, null), operationsReader, publisher, mapper, openFlowPort,
+                new MarketProperties(5, BigDecimal.ONE, List.of("f.a", "f.b", "f.c"), BigDecimal.ONE, List.of("f.open"),
+                        1, List.of(), 0, new BigDecimal("2.00")));
     }
 
     private DailyRequestListener listener() {
@@ -96,7 +101,7 @@ class DailyRequestListenerTest {
 
     private void tracked(String... symbols) {
         when(holdings.trackedEtfs()).thenReturn(
-                Arrays.stream(symbols).map(symbol -> new HoldingsPort.TrackedEtf(symbol, "HELD")).toList());
+                List.of(symbols));
     }
 
     private static BackgroundRepository.StoredTargetResponse daily(String symbol, String rate, OffsetDateTime fetched) {
@@ -131,23 +136,22 @@ class DailyRequestListenerTest {
 
         assertThat(payload.etfs()).containsExactly(
                 new DailyPayload.Etf("TEST01", "20261020", "9850", "10000", "-1.50", "2026-10-20T16:30:00+09:00",
-                        List.of(), false).withRelation("HELD"),
+                        List.of(), false),
                 new DailyPayload.Etf("TEST02", "20261020", "9850", "10000", "0.50", "2026-10-20T16:31:00+09:00",
-                        List.of(), false).withRelation("HELD"));
+                        List.of(), false));
     }
 
     @Test
-    void eachEtfCarriesItsRelationFromTheHoldingsTableIncludingOnesWithoutADailyPrice() throws IOException {
-        when(holdings.trackedEtfs()).thenReturn(List.of(new HoldingsPort.TrackedEtf("TEST01", "HELD"),
-                new HoldingsPort.TrackedEtf("TEST02", "WATCH"), new HoldingsPort.TrackedEtf("TEST03", "WATCH")));
+    void everyTrackedEtfIsListedIncludingOnesWithoutADailyPrice() throws IOException {
+        when(holdings.trackedEtfs()).thenReturn(List.of("TEST01", "TEST02", "TEST03"));
         when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
                 daily("TEST01", "-1.50", AS_OF.minusMinutes(30)), daily("TEST02", "0.50", AS_OF.minusMinutes(29))));
 
         DailyPayload payload = answer(listener(), request());
 
-        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol, DailyPayload.Etf::relation,
-                DailyPayload.Etf::missingReason).containsExactly(tuple("TEST01", "HELD", null),
-                tuple("TEST02", "WATCH", null), tuple("TEST03", "WATCH", DailyPayload.NO_DAILY_PRICE_IN_RANGE));
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol, DailyPayload.Etf::missingReason)
+                .containsExactly(tuple("TEST01", null), tuple("TEST02", null),
+                        tuple("TEST03", DailyPayload.NO_DAILY_PRICE_IN_RANGE));
     }
 
     @Test
@@ -442,5 +446,73 @@ class DailyRequestListenerTest {
 
         assertThat(answer.operations()).isNull();
         assertThat(mapper.writeValueAsString(answer)).doesNotContain("operations");
+    }
+
+    private static final String OPEN_FLOW_SINCE = "2026-10-20T16:50:00+09:00";
+
+    private static String withOpenFlowSince(String request, String since) {
+        return request.replace("\"maxTickers\": 100", "\"maxTickers\": 100,\n    \"openFlowSince\": \"" + since + "\"");
+    }
+
+    private void quotes() {
+        when(openFlowPort.first(anyString(), any(), any())).thenReturn(Optional.of(new OpenFlowPort.Snapshot(
+                AS_OF.minusMinutes(10), 10_100, null)));
+        when(openFlowPort.last(anyString(), any(), any())).thenReturn(Optional.of(new OpenFlowPort.Snapshot(
+                AS_OF.minusSeconds(2), 10_300, "{\"f\":{\"open\":10200,\"a\":10000,\"b\":10000,\"c\":10000}}")));
+    }
+
+    @Test
+    void withoutOpenFlowSinceNoEtfCarriesAnOpenFlowAndNoQuoteIsRead() throws IOException {
+        tracked("TEST01");
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs()).hasSize(1);
+        assertThat(payload.etfs().get(0).openFlow()).isNull();
+        verifyNoInteractions(openFlowPort);
+    }
+
+    @Test
+    void openFlowSinceAddsAnOpenFlowToEveryEtfEvenWithoutADailyPrice() throws IOException {
+        tracked("TEST01", "TEST02");
+        quotes();
+
+        DailyPayload payload = answer(listener(), withOpenFlowSince(request(), OPEN_FLOW_SINCE));
+
+        assertThat(payload.etfs()).extracting(e -> e.openFlow().open()).containsExactly("10200", "10200");
+        assertThat(payload.etfs().get(0).missingReason()).isNotNull();
+        verify(openFlowPort).first("TEST01", OffsetDateTime.parse(OPEN_FLOW_SINCE), AS_OF);
+        verify(openFlowPort).last("TEST02", OffsetDateTime.parse(OPEN_FLOW_SINCE), AS_OF);
+    }
+
+    @Test
+    void openFlowSinceOlderThanTheSafetyWindowIsCutToTheWindow() throws IOException {
+        tracked("TEST01");
+        quotes();
+
+        answer(listener(), withOpenFlowSince(request(), "2026-10-20T10:00:00+09:00"));
+
+        verify(openFlowPort).first("TEST01", AS_OF.minusMinutes(30), AS_OF);
+    }
+
+    @Test
+    void openFlowSinceAfterAsOfIsInvalidAndNotAnswered() throws IOException {
+        tracked("TEST01");
+        String bad = withOpenFlowSince(request(), "2026-10-20T17:00:01+09:00");
+
+        assertThatThrownBy(() -> listener().onRequest(bad)).isInstanceOf(IllegalArgumentException.class);
+        verify(publisher, never()).publish(any(), anyString(), anyString());
+    }
+
+    @Test
+    void aFailedQuoteReadLeavesOnlyThatEtfWithoutAnOpenFlow() throws IOException {
+        tracked("TEST01", "TEST02");
+        quotes();
+        when(openFlowPort.first(eq("TEST01"), any(), any())).thenThrow(new IllegalStateException("db down"));
+
+        DailyPayload payload = answer(listener(), withOpenFlowSince(request(), OPEN_FLOW_SINCE));
+
+        assertThat(payload.etfs().get(0).openFlow()).isNull();
+        assertThat(payload.etfs().get(1).openFlow().open()).isEqualTo("10200");
     }
 }

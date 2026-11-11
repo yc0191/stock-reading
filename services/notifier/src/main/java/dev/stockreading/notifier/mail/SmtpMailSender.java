@@ -1,5 +1,7 @@
 package dev.stockreading.notifier.mail;
 
+import java.io.UnsupportedEncodingException;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -23,28 +25,30 @@ class SmtpMailSender implements MailSenderPort {
 
     private final JavaMailSender mailSender;
     private final String sender;
-    private final String recipient;
 
     SmtpMailSender(JavaMailSender mailSender, NotifierProperties properties) {
-        if (isBlank(properties.sender()) || isBlank(properties.recipient())) {
-            throw new IllegalStateException(
-                    "notifier.sender and notifier.recipient must be set when notifier.send-enabled=true");
+        if (isBlank(properties.sender())) {
+            throw new IllegalStateException("notifier.sender must be set when notifier.send-enabled=true");
         }
         if (mailSender instanceof JavaMailSenderImpl impl && isBlank(impl.getHost())) {
             throw new IllegalStateException("spring.mail.host (SMTP_HOST) must be set when notifier.send-enabled=true");
         }
         this.mailSender = mailSender;
         this.sender = properties.sender();
-        this.recipient = properties.recipient();
     }
 
     @Override
-    public void send(EmailMessage message) {
+    public void send(String recipient, EmailMessage message) {
         try {
             MimeMessage mime = mailSender.createMimeMessage();
             // HTML이 있으면 글자판+HTML(alternative)에 인라인 그림(related)을 묶은 multipart로 만든다.
             MimeMessageHelper helper = new MimeMessageHelper(mime, message.hasHtml(), "UTF-8");
-            helper.setFrom(sender);
+            // 이름은 UTF-8로 인코딩되어 한글 그대로 보인다.
+            if (isBlank(message.fromName())) {
+                helper.setFrom(sender);
+            } else {
+                helper.setFrom(sender, message.fromName());
+            }
             helper.setTo(recipient);
             helper.setSubject(message.subject());
             if (message.hasHtml()) {
@@ -57,7 +61,7 @@ class SmtpMailSender implements MailSenderPort {
             }
             mailSender.send(mime);
             log.info("email sent to={} subject=\"{}\"", MailAddresses.mask(recipient), message.subject());
-        } catch (MessagingException error) {
+        } catch (MessagingException | UnsupportedEncodingException error) {
             throw new IllegalStateException("could not build email", error);
         } catch (MailException error) {
             // SMTP 서버의 메시지에 우리 주소나 AWS 계정 번호가 들어 있을 수 있다: 마스킹하고 원인은 연결하지 않는다.

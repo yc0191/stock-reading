@@ -15,7 +15,7 @@ import org.slf4j.LoggerFactory;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import dev.stockreading.collector.CollectorProperties;
+import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import tools.jackson.databind.json.JsonMapper;
 
 class BrokerMarketDataTest {
@@ -36,8 +36,8 @@ class BrokerMarketDataTest {
     private BrokerMarketData marketData(int maxCalls, int timeoutSeconds, List<String> symbols) throws IOException {
         server = new FakeBrokerServer();
         var broker = new BrokerProperties(server.baseUrl(), KEY, SECRET, timeoutSeconds, maxCalls);
-        var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK);
-        return new BrokerMarketData(client, new CollectorProperties(symbols, 1_000), broker,
+        var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10));
+        return new BrokerMarketData(client, (QuoteSymbolsPort) () -> symbols, broker,
                 CallRateLimiter.perSecond(maxCalls), PriceChecks.fake());
     }
 
@@ -96,9 +96,9 @@ class BrokerMarketDataTest {
     void aSwappedInLimitDecidesWhetherTheProviderIsCalled() throws IOException {
         server = new FakeBrokerServer();
         var broker = new BrokerProperties(server.baseUrl(), KEY, SECRET, 5, 10);
-        var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK);
+        var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10));
         CallRateLimit denyAll = maxWait -> false;
-        var marketData = new BrokerMarketData(client, new CollectorProperties(List.of("TEST01"), 1_000), broker, denyAll, PriceChecks.fake());
+        var marketData = new BrokerMarketData(client, (QuoteSymbolsPort) () -> List.of("TEST01"), broker, denyAll, PriceChecks.fake());
 
         FetchResult result = marketData.fetch(List.of("TEST01"));
 

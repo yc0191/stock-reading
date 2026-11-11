@@ -115,7 +115,7 @@ def make():
 
 def only_event(requests):
     [event] = requests.topic("briefing.daily.generated")
-    assert validate("briefing.daily.generated.v1.schema.json", event.value) == []
+    assert validate("briefing.daily.generated.v2.schema.json", event.value) == []
     return event.value["payload"]
 
 
@@ -160,7 +160,8 @@ def test_the_four_lines_come_after_the_disclaimer_at_the_very_end_of_a_rule_base
     ]
     assert payload["generatedBy"] == "rule-based"
     [result] = details.results()
-    assert result.final_text == text  # 저장하는 최종 본문도 같다
+    # 저장하는 최종 본문은 멤버를 가르지 않은 판 전체 글이라 보유/관심 표시만 다르고 서버 상태 절은 같다.
+    assert status_lines(result.final_text) == status_lines(text)
 
 
 def test_the_range_given_to_the_store_is_the_edition_range(make):

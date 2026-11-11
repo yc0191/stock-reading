@@ -23,6 +23,7 @@
         "maxResponseBytes": { "type": "integer", "minimum": 1, "description": "시장 배경 원문 1건의 최대 크기(UTF-8 바이트). 넘으면 원문을 빼고 너무 큼으로 표시한다." },
         "maxEtfs": { "type": "integer", "minimum": 1, "description": "응답에 담을 보유 ETF의 최대 개수. 넘으면 종목코드 순으로 잘라서 잘림을 표시한다." },
         "maxTickers": { "type": "integer", "minimum": 1, "description": "ETF 하나에 담을 미국 종목 티커의 최대 개수. 넘으면 잘라서 그 ETF에 잘림을 표시한다." },
+        "openFlowSince": { "type": "string", "format": "date-time", "description": "선택. 있으면 응답의 ETF마다 선택 칸 openFlow(아침 판용 개장 흐름)를 싣는다. 이 시각부터 asOf까지(양끝 포함)의 저장된 시세로 계산하며, asOf보다 늦을 수 없다. market은 asOf에서 안전 상한(30분)보다 앞서지 않게 자른다. 없으면 싣지 않는다." },
         "includeOperations": { "type": "boolean", "description": "선택. true이면 응답에 운영 상태(operations)를 싣는다. 없거나 false이면 싣지 않는다. 범위는 since~asOf(양끝 포함)다." }
       }
     }

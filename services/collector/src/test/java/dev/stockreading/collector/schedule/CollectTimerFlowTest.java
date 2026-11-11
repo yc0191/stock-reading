@@ -34,12 +34,14 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 import dev.stockreading.collector.CollectorProperties;
+import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.ContractSchemas;
 import dev.stockreading.collector.insight.InsightProperties;
 import dev.stockreading.collector.insight.InsightPublisher;
 import dev.stockreading.collector.insight.IntradayProperties;
 import dev.stockreading.collector.marketdata.BrokerProperties;
+import dev.stockreading.collector.marketdata.MarketStatusProperties;
 import dev.stockreading.collector.marketdata.FakeBrokerServer;
 import dev.stockreading.collector.marketdata.PriceCheckProperties;
 import tools.jackson.databind.ObjectMapper;
@@ -56,7 +58,7 @@ class CollectTimerFlowTest {
     private static final List<String> SYMBOLS = IntStream.rangeClosed(1, 9).mapToObj(i -> "TEST0" + i).toList();
 
     // @Configuration 을 달지 않는다. 달면 같은 패키지를 스캔하는 다른 조립 테스트가 이 설정까지 읽어 빈이 겹친다.
-    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, InsightProperties.class,
+    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, MarketStatusProperties.class, InsightProperties.class,
             PriceCheckProperties.class, QuoteHoursProperties.class, IntradayProperties.class})
     @ComponentScan(basePackages = "dev.stockreading.collector.marketdata")
     // 수집기 타이머 쪽은 현재가 흐름과 마감 후 타이머만 올린다. 뉴스·공시 발행기는 아래 mock 이다.
@@ -64,6 +66,11 @@ class CollectTimerFlowTest {
             includeFilters = @ComponentScan.Filter(type = FilterType.REGEX,
                     pattern = ".*\\.(CollectorJobs|QuotePublisher|CollectTimer|PostCloseTimer)"))
     static class Wiring {
+
+        @Bean
+        QuoteSymbolsPort quoteSymbols() {
+            return () -> SYMBOLS;
+        }
 
         @Bean
         Clock clock() {
@@ -118,8 +125,7 @@ class CollectTimerFlowTest {
                         "BROKER_APP_KEY=k",
                         "BROKER_APP_SECRET=s",
                         "BROKER_PRICE_CHECK_ENABLED=false",
-                        "COLLECTOR_SCHEDULE_ENABLED=true",
-                        "collector.symbols=" + String.join(",", SYMBOLS));
+                        "COLLECTOR_SCHEDULE_ENABLED=true");
     }
 
     @SuppressWarnings("unchecked")

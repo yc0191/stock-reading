@@ -15,22 +15,15 @@ from briefing.job_log import (
     RunStatus,
 )
 from briefing.job_log_store import (
-    CHECKED_COLUMNS,
-    CREATE_INDEXES_SQL,
-    CREATE_LOG_TABLE_SQL,
-    CREATE_RUN_TABLE_SQL,
+    FAIL_UNFINISHED_SQL,
     FINISH_RUN_SQL,
     INSERT_SQL,
-    LEGACY_LOG_PROBE_SQL,
-    LEGACY_LOG_TABLE,
     LOG_TABLE,
-    RENAME_LEGACY_SQLS,
     RUN_TABLE,
     SELECT_MOVES_SQL,
     SELECT_OUTLOOKS_SQL,
     START_RUN_SQL,
     PostgresJobLog,
-    check_constraint_sqls,
 )
 
 JOB_ID = "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13"
@@ -42,16 +35,16 @@ RAW_INPUT = '{"eventId":  "x", "payload": {"b": 1,  "a": [1.50]}}'
 class FakeDb:
     """실행된 SQL과 값을 모으는 가짜 DB. 앞의 fail_times번 연결은 실패시킨다.
 
-    legacy는 job_log 테이블이 이미 있는지와 새 모양인지를 알려 주는 질문의 답이다.
+    returning은 UPDATE ... RETURNING이 돌려줄 줄이다.
     """
 
-    def __init__(self, fail_times=0, legacy=(False, False), answer=None):
-        # answer는 읽기 질문(SELECT)에 돌려줄 줄들이다. 없으면 옛 모양 질문의 답을 돌려준다.
+    def __init__(self, fail_times=0, returning=(), answer=None):
+        # answer는 읽기 질문(SELECT)에 돌려줄 줄들이다. 없으면 UPDATE ... RETURNING의 줄(returning)을 돌려준다.
         self.answer = answer
         self.rows = []
         self.statements = []
         self.fail_times = fail_times
-        self.legacy = legacy
+        self.returning = [(job_id,) for job_id in returning]
         self.connects = 0
         self.closed = 0
         self.commits = 0
@@ -93,7 +86,7 @@ class FakeCursor:
             self.db.rows.append(params)
 
     def fetchall(self):
-        return list(self.db.answer) if self.db.answer is not None else [self.db.legacy]
+        return list(self.db.answer) if self.db.answer is not None else self.db.returning
 
 
 def entry(job_id=JOB_ID, data=None, **changes):
@@ -111,64 +104,6 @@ def sleeps():
 
 def store_for(db, sleeps, attempts=3):
     return PostgresJobLog(db.connect, StoreSettings(record_attempts=attempts), sleep=sleeps.append)
-
-
-def test_create_table_makes_the_run_and_log_tables_with_their_indexes_and_can_run_twice():
-    db = FakeDb()
-    store = PostgresJobLog(db.connect)
-
-    store.create_table()
-    store.create_table()
-
-    sqls = [sql for sql, _ in db.statements]
-    one_round = [LEGACY_LOG_PROBE_SQL, CREATE_RUN_TABLE_SQL, CREATE_LOG_TABLE_SQL, *CREATE_INDEXES_SQL,
-                 *[sql for table, column, values in CHECKED_COLUMNS
-                   for sql in check_constraint_sqls(table, column, values)]]
-    assert sqls == one_round * 2
-    assert RUN_TABLE == "briefing.job_run" and LOG_TABLE == "briefing.job_log"
-    assert f"CREATE TABLE IF NOT EXISTS {RUN_TABLE}" in CREATE_RUN_TABLE_SQL
-    assert f"CREATE TABLE IF NOT EXISTS {LOG_TABLE}" in CREATE_LOG_TABLE_SQL
-    assert f"REFERENCES {RUN_TABLE} (job_id)" in CREATE_LOG_TABLE_SQL
-    assert "failed_jobs" not in CREATE_RUN_TABLE_SQL + CREATE_LOG_TABLE_SQL
-
-
-def test_value_checks_are_built_from_the_code_enums_each_time_the_tables_are_created():
-    db = FakeDb()
-    PostgresJobLog(db.connect).create_table()
-
-    sqls = [sql for sql, _ in db.statements]
-    columns = {(table, column): values for table, column, values in CHECKED_COLUMNS}
-    assert columns == {(RUN_TABLE, "job_kind"): JobKind, (RUN_TABLE, "status"): RunStatus,
-                       (RUN_TABLE, "generated_by"): GeneratedBy, (LOG_TABLE, "entry_type"): EntryType}
-    drop, add = check_constraint_sqls(LOG_TABLE, "entry_type", EntryType)
-    assert drop in sqls and add in sqls and sqls.index(drop) < sqls.index(add)
-    assert "DROP CONSTRAINT IF EXISTS" in drop and "ADD CONSTRAINT" in add
-    # 값은 enum의 모든 멤버이고, 테이블 정의에는 값이 글자로 박혀 있지 않다.
-    for member in EntryType:
-        assert f"'{member.value}'" in add
-    assert "'sentence-rewritten'" not in CREATE_LOG_TABLE_SQL
-    assert "'running'" not in CREATE_RUN_TABLE_SQL
-    # 옛 기록 종류는 더 이상 허용하지 않는다.
-    assert "'result'" not in add and "'llm-succeeded'" not in add
-
-
-def test_an_old_shaped_job_log_is_renamed_aside_and_not_dropped():
-    db = FakeDb(legacy=(True, False))
-    PostgresJobLog(db.connect).create_table()
-
-    sqls = [sql for sql, _ in db.statements]
-    assert sqls[0] == LEGACY_LOG_PROBE_SQL
-    assert sqls[1:3] == list(RENAME_LEGACY_SQLS) and "RENAME TO job_log_legacy" in RENAME_LEGACY_SQLS[0]
-    assert LEGACY_LOG_TABLE == "briefing.job_log_legacy"
-    assert not any("DROP TABLE" in sql for sql in sqls)
-    assert sqls.index(CREATE_LOG_TABLE_SQL) > 2
-
-
-def test_a_job_log_that_already_has_the_new_shape_is_left_alone():
-    db = FakeDb(legacy=(True, True))
-    PostgresJobLog(db.connect).create_table()
-
-    assert not any(sql in RENAME_LEGACY_SQLS for sql, _ in db.statements)
 
 
 def test_start_inserts_the_run_line_as_running_with_the_original_event_text(sleeps):
@@ -289,17 +224,38 @@ def test_default_store_settings_keep_the_receive_loop_from_stalling():
     assert settings.record_attempts * settings.record_retry_interval.total_seconds() <= 3
 
 
-def test_run_and_log_columns_follow_the_plan_and_keep_json_as_json():
-    for column in ("job_id", "job_kind", "input", "status", "failure_reason", "generated_by", "target", "started_at",
-                   "finished_at", "final_text", "weak_count", "research_count", "result_event_id"):
-        assert column in CREATE_RUN_TABLE_SQL
-    for column in ("id", "job_id", "entry_type", "stage", "sentence_no", "round", "before", "after", "reason",
-                   "error_type", "attempts", "data", "occurred_at"):
-        assert column in CREATE_LOG_TABLE_SQL
-    # 시작시킨 이벤트 원문, 대상, 관련 데이터는 표기를 바꾸는 JSONB가 아니라 JSON이다.
-    assert "JSONB" not in CREATE_RUN_TABLE_SQL.upper() + CREATE_LOG_TABLE_SQL.upper()
-    assert "input           JSON NOT NULL" in CREATE_RUN_TABLE_SQL
-    assert "data        JSON NOT NULL" in CREATE_LOG_TABLE_SQL
+# ---- 시작할 때 끝나지 않고 남은 작업 정리 ----
+
+def test_unfinished_runs_of_the_previous_run_are_failed_with_the_restart_reason_and_each_gets_a_log_line(sleeps):
+    db = FakeDb(returning=("job-b", "job-a"))
+
+    interrupted = store_for(db, sleeps).fail_unfinished(AT)
+
+    assert sorted(interrupted) == ["job-a", "job-b"]
+    [(sql, params), *logged] = db.statements
+    assert sql is FAIL_UNFINISHED_SQL
+    assert "WHERE status = %s AND started_at < %s" in sql
+    # 진행 중인 것만 고르고, 이번 실행이 시작한 뒤에 만든 작업은 건드리지 않도록 시작 시각을 상한으로 둔다.
+    assert params == ("failed", "interrupted_by_restart", AT, "running", AT)
+    assert [p[0] for _, p in logged] == ["job-a", "job-b"]
+    assert {p[1] for _, p in logged} == {"step-failed"}
+    assert {p[2] for _, p in logged} == {"restart"}
+    assert {p[7] for _, p in logged} == {"interrupted_by_restart"}
+    assert db.commits == 3 and db.closed == db.connects
+
+
+def test_nothing_is_written_when_no_run_was_left_unfinished(sleeps):
+    db = FakeDb()
+
+    assert store_for(db, sleeps).fail_unfinished(AT) == []
+    assert [sql for sql, _ in db.statements] == [FAIL_UNFINISHED_SQL]
+
+
+def test_an_unreachable_database_stops_the_startup_cleanup_instead_of_hiding_it(sleeps):
+    db = FakeDb(fail_times=1)
+
+    with pytest.raises(ConnectionError):
+        store_for(db, sleeps).fail_unfinished(AT)
 
 
 # ---- 읽기: 그날 아침 예상과 급변동 ----

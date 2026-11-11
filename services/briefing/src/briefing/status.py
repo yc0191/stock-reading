@@ -14,7 +14,7 @@ from typing import Any, Mapping, Protocol
 
 from briefing.compose import KST
 from briefing.events import parse_timestamp
-from briefing.job_log import REASON_NO_EVIDENCE
+from briefing.job_log import REASON_MERGED_INTO_MORNING, REASON_NO_EVIDENCE
 
 log = logging.getLogger("briefing.status")
 
@@ -46,7 +46,7 @@ QUOTE_FAILURE_NAMES = (
 ATTENTION_QUOTE_FAILURES = ("RESULT_CODE_FAILED", "PRICE_PARSE_FAILED", "TICK_SKIPPED_RATE_LIMITED",
                             "TOKEN_ISSUE_FAILED")
 
-# 브리핑 실패 사유(ports.FailureReason 값)의 표시 이름
+# 브리핑 실패 사유(ports.FailureReason 값과 재시작 중단 사유)의 표시 이름
 FAILURE_REASON_NAMES = {
     "collection_not_covered": "기사 수집 미포함",
     "market_no_response": "시세 무응답",
@@ -55,6 +55,7 @@ FAILURE_REASON_NAMES = {
     "context_no_response": "배경 자료 무응답",
     "filings_no_response": "공시 무응답",
     "llm_error": "LLM 오류",
+    "interrupted_by_restart": "재시작으로 중단",
 }
 
 JOB_KIND_MOVE = "move"
@@ -247,6 +248,8 @@ class _Moves:
     no_evidence: int = 0
     running: int = 0
     rule_based: int = 0
+    # 아침 판에 합쳐 따로 리포트를 만들지 않은 변동(성공으로 끝났지만 리포트가 없다)
+    merged: int = 0
     reasons: dict[str, int] = field(default_factory=dict)
 
 
@@ -256,7 +259,9 @@ def _tally_moves(runs: list[JobRunRow]) -> _Moves:
         if r.job_kind != JOB_KIND_MOVE:
             continue
         moves.total += 1
-        if r.status == STATUS_SUCCEEDED and r.failure_reason == REASON_NO_EVIDENCE:
+        if r.status == STATUS_SUCCEEDED and r.failure_reason == REASON_MERGED_INTO_MORNING:
+            moves.merged += 1
+        elif r.status == STATUS_SUCCEEDED and r.failure_reason == REASON_NO_EVIDENCE:
             moves.no_evidence += 1
         elif r.status == STATUS_SUCCEEDED:
             moves.succeeded += 1
@@ -299,7 +304,8 @@ def _briefing_line(runs: list[JobRunRow] | None) -> str:
         return f"- 브리핑: {NO_DATA}"
     m = _tally_moves(runs)
     failed = f"실패 {m.failed}" + (f"[{_reasons_text(m.reasons)}]" if m.reasons else "")
-    return (f"- 브리핑: 급변동 {m.total}건(성공 {m.succeeded} · {failed} · 진행 중 {m.running} · 규칙 기반 {m.rule_based})"
+    merged = f" · 아침 판에 합침 {m.merged}" if m.merged else ""
+    return (f"- 브리핑: 급변동 {m.total}건(성공 {m.succeeded} · {failed} · 진행 중 {m.running} · 규칙 기반 {m.rule_based}{merged})"
             f" · 근거 없어 보내지 않은 급변동 {m.no_evidence}건 · 아침 판 {_morning_text(_morning(runs))}")
 
 

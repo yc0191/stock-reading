@@ -12,6 +12,8 @@ MySQL, MongoDB, OpenSearch/Elasticsearch, TimescaleDB, DynamoDB/Cassandra
 ## 결정
 **PostgreSQL + pgvector**. 한 인스턴스 안에서 서비스별로 **스키마와 DB 계정**을 나누고, 서비스는 자기 스키마만 접근한다. 다른 서비스의 데이터는 DB를 직접 읽지 않고 Kafka 이벤트로 받는다.
 
+2026-11-11 변경: 종목·검색어·멤버 같은 업무 데이터는 DB 표가 원본이 되어, 다른 서비스가 그 표의 필요한 표·열만 읽기 전용 계정 권한으로 직접 읽는 것을 허용한다. 쓰기는 그 스키마의 주인만 한다. 같은 목록을 이벤트로 퍼뜨리면 서비스마다 어긋나 종목이 오류 없이 빠질 수 있어서다. 계정마다 읽는 표·열은 `infra/db/personal/init.sql`과 personal 마이그레이션이 원본이다.
+
 ## 이유 (모두 문서로 확인)
 1. **벡터 검색을 같은 DB에서 해결:** pgvector는 HNSW·IVFFlat 인덱스와 코사인 등 거리 계산을 지원한다. 별도 벡터 DB 컨테이너가 필요 없다.
 2. **MySQL은 현재 이 용도로 부적합:** `VECTOR` 타입은 있으나 `DISTANCE()`는 HeatWave 전용이고 벡터 컬럼에는 인덱스를 걸 수 없다(검색 결과 기준, 버전에 따라 변할 수 있음 → 도입 시 재확인).

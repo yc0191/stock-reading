@@ -605,7 +605,7 @@ class DailyFlow:
     def published(self):
         events = self.requests.topic("briefing.daily.generated")
         for event in events:
-            assert validate("briefing.daily.generated.v1.schema.json", event.value) == []
+            assert validate("briefing.daily.generated.v2.schema.json", event.value) == []
         return events
 
     def research_requests(self):

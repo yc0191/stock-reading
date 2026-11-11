@@ -11,7 +11,6 @@
     "etfs": [
       {
         "symbol": "TEST01",
-        "relation": "HELD",
         "date": "20261020",
         "close": "9850",
         "prevClose": "10000",
@@ -76,7 +75,6 @@
       },
       {
         "symbol": "TEST02",
-        "relation": "HELD",
         "date": "20261020",
         "close": "20100",
         "prevClose": "20000",
@@ -88,7 +86,6 @@
       },
       {
         "symbol": "TEST03",
-        "relation": "WATCH",
         "date": null,
         "close": null,
         "prevClose": null,

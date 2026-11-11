@@ -9,23 +9,15 @@ import org.junit.jupiter.api.Test;
 
 class MemberSourcePropertiesTest {
 
-    private static MemberSourceProperties of(String template, String fundIds) {
-        return new MemberSourceProperties(template, fundIds, null, 0, null, null, null);
-    }
-
-    @Test
-    void parsesEtfToFundIdPairsAndSkipsBrokenOnes() {
-        assertThat(of("http://x/{fundId}", " TEST01 : F1 ,TEST02:F2,broken,:x,y:").fundIdByEtf())
-                .containsOnly(org.assertj.core.api.Assertions.entry("TEST01", "F1"),
-                        org.assertj.core.api.Assertions.entry("TEST02", "F2"));
-        assertThat(of("http://x/{fundId}", null).fundIdByEtf()).isEmpty();
+    private static MemberSourceProperties of(String template) {
+        return new MemberSourceProperties(template, null, 0, null, null, null);
     }
 
     @Test
     void isDisabledWithoutATemplateAndFillsDefaults() {
-        assertThat(of("", "TEST01:F1").enabled()).isFalse();
-        assertThat(of(null, "TEST01:F1").enabled()).isFalse();
-        MemberSourceProperties properties = of("http://x/{fundId}", "TEST01:F1");
+        assertThat(of("").enabled()).isFalse();
+        assertThat(of(null).enabled()).isFalse();
+        MemberSourceProperties properties = of("http://x/{fundId}");
         assertThat(properties.enabled()).isTrue();
         assertThat(properties.topCount()).isEqualTo(10);
         assertThat(properties.fetchDay()).isEqualTo(DayOfWeek.MONDAY);
@@ -35,7 +27,7 @@ class MemberSourcePropertiesTest {
 
     @Test
     void toStringHidesTheValues() {
-        assertThat(of("http://secret.example/{fundId}", "TEST01:F1").toString())
+        assertThat(of("http://secret.example/{fundId}").toString())
                 .doesNotContain("secret").doesNotContain("TEST01");
     }
 }

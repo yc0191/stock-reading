@@ -27,11 +27,13 @@ import org.springframework.context.annotation.FilterType;
 import org.springframework.kafka.core.KafkaTemplate;
 
 import dev.stockreading.collector.CollectorProperties;
+import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.ContractSchemas;
 import dev.stockreading.collector.insight.InsightProperties;
 import dev.stockreading.collector.insight.IntradayProperties;
 import dev.stockreading.collector.marketdata.BrokerProperties;
+import dev.stockreading.collector.marketdata.MarketStatusProperties;
 import dev.stockreading.collector.marketdata.FakeBrokerServer;
 import dev.stockreading.collector.marketdata.PriceCheckProperties;
 import tools.jackson.databind.ObjectMapper;
@@ -49,7 +51,7 @@ class CollectorCommandFlowTest {
     private static final String SAMPLE_EVENT_ID = "6f1d2c3b-4a59-4e7f-8d10-2b3c4d5e6f70";
 
     // @Configuration 을 달지 않는다. 달면 같은 패키지를 스캔하는 다른 조립 테스트가 이 설정까지 읽어 빈이 겹친다.
-    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, InsightProperties.class,
+    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, MarketStatusProperties.class, InsightProperties.class,
             PriceCheckProperties.class, QuoteHoursProperties.class, IntradayProperties.class})
     @ComponentScan(basePackages = "dev.stockreading.collector.marketdata")
     // 실행 입구·현재가 흐름·명령 리스너와 타이머를 올린다. 타이머는 켜기 설정이 꺼져 있어 빈이 만들어지지 않아야 한다.
@@ -57,6 +59,11 @@ class CollectorCommandFlowTest {
             includeFilters = @ComponentScan.Filter(type = FilterType.REGEX,
                     pattern = ".*\\.(CollectorJobs|QuotePublisher|CollectorCommandListener|CollectTimer)"))
     static class Wiring {
+
+        @Bean
+        QuoteSymbolsPort quoteSymbols() {
+            return () -> SYMBOLS;
+        }
 
         @Bean
         Clock clock() {
@@ -104,8 +111,7 @@ class CollectorCommandFlowTest {
                         "BROKER_BASE_URL=" + server.baseUrl(),
                         "BROKER_APP_KEY=k",
                         "BROKER_APP_SECRET=s",
-                        "BROKER_PRICE_CHECK_ENABLED=false",
-                        "collector.symbols=" + String.join(",", SYMBOLS));
+                        "BROKER_PRICE_CHECK_ENABLED=false");
     }
 
     @SuppressWarnings("unchecked")
@@ -123,6 +129,26 @@ class CollectorCommandFlowTest {
             assertThat(snapshots.getAllValues()).allSatisfy(json ->
                     assertThat(ContractSchemas.validate("market.snapshot.v1.schema.json", json)).isEmpty());
             assertThat(server.priceCalls.get()).isEqualTo(3);
+        });
+    }
+
+    // 수동 실행 명령은 사람이 지금 하라고 한 일이라 휴장일 확인 없이 실행한다. 장 운영 상태 조회도 부르지 않는다.
+    @SuppressWarnings("unchecked")
+    @Test
+    void aCollectCommandRunsOnAMarketHolidayWithoutAskingTheMarketStatus() throws IOException {
+        runner().withPropertyValues(
+                "BROKER_MARKET_STATUS_PATH=/api/v1/market-status",
+                "BROKER_MARKET_STATUS_TODAY_FIELD=today_field",
+                "BROKER_MARKET_STATUS_BUSINESS_DAY_FIELD=business_day_field").run(context -> {
+            // 오늘이 휴장일이라는 응답을 줘도 명령은 실행된다.
+            server.marketStatusBody = FakeBrokerServer.marketStatus("20261025", "20261023");
+            KafkaTemplate<String, String> kafka = context.getBean(KafkaTemplate.class);
+
+            context.getBean(CollectorCommandListener.class)
+                    .onCommand(ContractSchemas.sample("collector.command.sample.json"));
+
+            verify(kafka, timeout(10_000).times(3)).send(eq(Topics.MARKET_SNAPSHOT), anyString(), anyString());
+            assertThat(server.marketStatusCalls).hasValue(0);
         });
     }
 

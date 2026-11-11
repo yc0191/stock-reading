@@ -42,7 +42,8 @@ class QueryOnlyPathsTest {
             "/api/v1/gsc10060",   // 해외 일봉
             "/api/v1/iva60140",   // 세계지수
             "/api/v1/iva60190",   // 환율종합
-            "/api/v1/ivsa0070");  // 시장종합
+            "/api/v1/ivsa0070",   // 시장종합
+            FakeBrokerServer.MARKET_STATUS_PATH);  // 장 운영 상태(실제 경로는 설정으로 받는다)
 
     private static final Path MAIN_SOURCES = Path.of("src/main/java/dev/stockreading/collector");
     private static final Path CLIENT_PACKAGE = MAIN_SOURCES.resolve("marketdata");
@@ -106,7 +107,7 @@ class QueryOnlyPathsTest {
         try {
             BrokerClient client = new BrokerClient(
                     new BrokerProperties("http://127.0.0.1:" + server.getAddress().getPort(), "key-test", "secret-test", 5, 10),
-                    JsonMapper.builder().build(), CLOCK);
+                    JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10));
             // 새로 생긴 메서드도 빠지지 않도록 선언된 메서드를 모두 부른다.
             for (Method method : BrokerClient.class.getDeclaredMethods()) {
                 if (Modifier.isPrivate(method.getModifiers()) || Modifier.isStatic(method.getModifiers()) || method.isSynthetic()) {
@@ -137,7 +138,11 @@ class QueryOnlyPathsTest {
         Class<?>[] types = method.getParameterTypes();
         Object[] values = new Object[types.length];
         for (int i = 0; i < types.length; i++) {
-            if (types[i] == String.class) {
+            if (types[i] == String.class && method.getName().equals("marketStatusRaw")) {
+                values[i] = FakeBrokerServer.MARKET_STATUS_PATH; // 경로는 설정으로 받으므로 가짜 경로를 넣는다
+            } else if (types[i] == java.time.Duration.class) {
+                values[i] = java.time.Duration.ofSeconds(5);
+            } else if (types[i] == String.class) {
                 values[i] = "TEST0001";
             } else if (types[i] == int.class || types[i] == Integer.class) {
                 values[i] = 1;

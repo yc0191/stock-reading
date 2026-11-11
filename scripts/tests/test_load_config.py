@@ -46,7 +46,7 @@ def test_profile_is_passed_when_given(tmp_path):
 def test_all_parameters_map_to_env_names():
     updates, ignored = lc.to_env_updates(full_parameters())
     assert updates["SMTP_HOST"] == "v-smtp-host"
-    assert updates["NOTIFIER_RECIPIENT"] == "v-recipient"
+    assert updates["TEST_ALL_LIVE_RECIPIENT"] == "v-recipient"
     assert set(updates) == set(lc.ENV_NAMES.values())
     assert ignored == []
 
@@ -56,13 +56,6 @@ def test_send_switch_is_never_loaded_even_if_present():
     assert "NOTIFIER_SEND_ENABLED" not in updates
     assert ignored == ["send-enabled"]
     assert "NOTIFIER_SEND_ENABLED" not in lc.ENV_NAMES.values()
-
-
-def test_max_per_hour_stays_a_code_default():
-    # 한도는 application.yml 기본값을 쓰므로 파라미터로 덮어쓰지 않는다.
-    updates, ignored = lc.to_env_updates([param("max-per-hour", "100")])
-    assert "NOTIFIER_MAX_PER_HOUR" not in updates
-    assert ignored == ["max-per-hour"]
 
 
 def test_value_with_newline_is_rejected():

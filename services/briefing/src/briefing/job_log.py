@@ -4,7 +4,7 @@
 한 줄인 job_log(job_run을 가리킴)다. 같은 작업의 줄은 작업 id로 묶는다. 키·수신 주소·보유 수량·금액은 담지 않는다.
 저장은 JobLogPort 구현(job_log_store)이 맡는다.
 
-작업 종류·상태·작성 방식·기록 종류의 값은 아래 enum이 유일한 원본이다. DB의 CHECK 제약도 시작할 때 이 enum으로 다시 만든다.
+작업 종류·상태·작성 방식·기록 종류의 값은 아래 enum이 원본이다. DB의 CHECK 제약은 Flyway V1 파일에 같은 값으로 적혀 있고, 어긋나면 test_job_log_schema.py가 실패한다.
 """
 from __future__ import annotations
 
@@ -54,7 +54,9 @@ class EntryType(str, Enum):
     RESENT = "resent"                          # 무응답이라 같은 요청을 다시 보냄
     MISSING_ITEMS = "missing-items"            # 판은 나갔지만 빠진 항목이 있음
     STEP_FAILED = "step-failed"                # 단계가 끝내 실패하거나 포기됨
+    MOVES_GROUPED = "moves-grouped"            # 같은 종목의 변동 여럿을 모아 작업 하나로 만듦(모인 변동 전부)
     ETF_OUTLOOK = "etf-outlook"                # 아침 판이 쓴 ETF별 방향 예상(data.outlooks). 마감 후 판이 다시 읽는다
+    MEMBER_BRIEFING = "member-briefing"        # 이 작업의 판을 멤버 한 명 몫으로 발행함(data.memberId, 결과 이벤트 ID)
 
 
 # 급변동 단계: 근거 조회의 어느 요청인지, 또는 LLM 작성
@@ -66,6 +68,8 @@ STAGE_ARTICLES = "news.articles"
 STAGE_ARTICLES_RECHECK = "news.articles.recheck"
 STAGE_LLM = "llm-report"
 STAGE_PUBLISH = "publish"
+STAGE_MOVE_GROUP = "move-group"
+STAGE_RESTART = "restart"
 
 # 급변동 사유. 끝내 실패한 경우는 ports.FailureReason 값을 그대로 쓴다.
 REASON_RESENT = "resent-after-timeout"
@@ -75,6 +79,12 @@ REASON_LLM_CALL_FAILED = "llm-call-failed"
 REASON_LLM_ACCEPTED = "llm-output-accepted"
 REASON_PUBLISHED = "published"
 REASON_NOT_SAVED = "log-not-saved"
+REASON_GROUPED = "grouped-by-symbol"
+# 재시작으로 끝나지 못한 작업의 실패 사유(job_run.failure_reason). 코드의 단계 실패 사유(ports.FailureReason)와 달리
+# 작업이 아니라 프로세스가 원인이라 여기에 둔다.
+REASON_INTERRUPTED = "interrupted_by_restart"
+# 장 시작~아침 판 시작 사이 급변동을 따로 보내지 않고 아침 판에 합쳤다(성공으로 끝난 작업의 사유이며 리포트는 없다)
+REASON_MERGED_INTO_MORNING = "merged_into_morning"
 # 최종 본문에 인용한 근거가 하나도 없어 결과 이벤트를 발행하지 않았다. 작업 상태는 succeeded, 발행 이벤트는 없다.
 REASON_NO_EVIDENCE = "no_evidence"
 
@@ -172,6 +182,9 @@ class JobLogPort(Protocol):
     def has_failed(self, job_id: str) -> bool:
         """이 작업의 줄 중 끝내 저장하지 못한 것이 있는가."""
 
+    def fail_unfinished(self, now: datetime) -> list[str]:
+        """시작할 때 부른다. 진행 중으로 남은 이전 실행의 작업을 실패로 끝내고 그 작업 id를 돌려준다."""
+
     def morning_outlooks(self, day: date) -> list[Mapping[str, Any]] | None:
         """그날(한국 시간) 아침 판이 남긴 etf-outlook 줄의 data를 기록이 늦은 것부터 돌려준다. 읽지 못하면 None."""
 
@@ -193,6 +206,9 @@ class DiscardJobLog:
 
     def has_failed(self, job_id: str) -> bool:
         return False
+
+    def fail_unfinished(self, now: datetime) -> list[str]:
+        return []
 
     def morning_outlooks(self, day: date) -> list[Mapping[str, Any]] | None:
         return []

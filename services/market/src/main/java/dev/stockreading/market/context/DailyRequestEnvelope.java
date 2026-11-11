@@ -16,7 +16,7 @@ record DailyRequestEnvelope(
     @JsonIgnoreProperties(ignoreUnknown = true)
     record RequestPayload(
             String jobId, int seq, String asOf, String since, int maxResponseBytes, int maxEtfs, int maxTickers,
-            Boolean includeOperations) {
+            Boolean includeOperations, String openFlowSince) {
 
         boolean wantsOperations() {
             return Boolean.TRUE.equals(includeOperations);

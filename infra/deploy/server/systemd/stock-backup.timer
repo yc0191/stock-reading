@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly Postgres backup to S3 (Sunday early morning KST)
+
+[Timer]
+# 일요일 새벽 3시 30분(한국 시간). 장이 닫힌 시간이다.
+OnCalendar=Sun *-*-* 03:30:00 Asia/Seoul
+Persistent=true
+Unit=stock-backup.service
+
+[Install]
+WantedBy=timers.target

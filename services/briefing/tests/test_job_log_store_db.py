@@ -1,7 +1,7 @@
 """작업 기록(job_run·job_log)을 실제 Postgres에 저장한 뒤 다시 읽어 확인한다.
 
 BRIEFING_IT_DB_URL·BRIEFING_IT_DB_USER·BRIEFING_IT_DB_PASSWORD가 모두 있을 때만 실행하고, 없으면 건너뛴다.
-대상은 briefing 스키마가 비어 있는 테스트 전용 DB라고 가정한다.
+대상은 Flyway가 briefing 스키마에 services/briefing/db/migration을 적용해 둔 테스트 전용 DB라고 가정한다(scripts/test-all.sh가 준비한다).
 """
 import json
 import os
@@ -34,11 +34,7 @@ def connect():
 
 @pytest.fixture(scope="module")
 def store(connect):
-    # 서비스가 시작할 때와 같이 테이블을 만든다. 두 번 불러도 오류가 나지 않아야 한다.
-    store = PostgresJobLog(connect=connect, sleep=lambda _seconds: None)
-    store.create_table()
-    store.create_table()
-    return store
+    return PostgresJobLog(connect=connect, sleep=lambda _seconds: None)
 
 
 def fetch(connect, sql, params=None):
@@ -65,11 +61,14 @@ def entry(job_id, entry_type=EntryType.RESENT, data=None, **changes):
     return JobLogEntry(**values)
 
 
-def test_startup_creates_the_run_and_log_tables_in_the_briefing_schema(store, connect):
+def test_flyway_created_the_briefing_tables_and_recorded_versions_1_and_2(store, connect):
     rows = fetch(connect, "SELECT table_name FROM information_schema.tables WHERE table_schema = 'briefing' "
-                          "AND table_name IN ('job_run', 'job_log', 'failed_jobs') ORDER BY table_name")
+                          "AND table_name IN ('job_run', 'job_log', 'collection_completed', 'failed_jobs') "
+                          "ORDER BY table_name")
+    applied = fetch(connect, "SELECT version, success FROM briefing.flyway_schema_history WHERE version IS NOT NULL")
 
-    assert rows == [("job_log",), ("job_run",)]
+    assert rows == [("collection_completed",), ("job_log",), ("job_run",)]
+    assert applied == [("1", True), ("2", True)]
 
 
 def test_job_run_line_is_made_running_and_updated_when_the_job_ends(store, connect):
@@ -181,6 +180,53 @@ def test_a_log_line_needs_its_run_line(store, connect):
         connection.close()
     # 저장소는 같은 일을 false로 돌려주고 그 작업을 실패로 기억한다.
     assert store.record(entry("it-no-run")) is False and store.has_failed("it-no-run") is True
+
+
+def test_unfinished_runs_are_failed_once_with_the_restart_reason_and_a_log_line_and_newer_runs_are_left(store, connect):
+    now = AT + timedelta(days=1)
+    for job_id, started_at in (("it-restart-old", AT), ("it-restart-done", AT), ("it-restart-new", now + timedelta(hours=1))):
+        assert store.start(JobStart(job_id, JobKind.MOVE, RAW, {"symbol": "ITB001", "moveAt": AT.isoformat()},
+                                    started_at)) is True
+    assert store.finish(JobResult("it-restart-done", RunStatus.SUCCEEDED, AT, generated_by=GeneratedBy.LLM)) is True
+
+    interrupted = store.fail_unfinished(now)
+
+    assert "it-restart-old" in interrupted
+    assert "it-restart-done" not in interrupted and "it-restart-new" not in interrupted
+    runs = dict((row[0], row[1:]) for row in fetch(
+        connect, f"SELECT job_id, status, failure_reason, finished_at, final_text FROM {RUN_TABLE} "
+                 "WHERE job_id LIKE 'it-restart-%'"))
+    assert runs["it-restart-old"] == ("failed", "interrupted_by_restart", now, None)
+    assert runs["it-restart-done"][0] == "succeeded"  # 이미 끝난 작업은 그대로
+    assert runs["it-restart-new"] == ("running", None, None, None)  # 이번 실행이 만든 작업은 그대로
+    lines = fetch(connect, f"SELECT entry_type, stage, reason FROM {LOG_TABLE} WHERE job_id = 'it-restart-old'")
+    assert lines == [("step-failed", "restart", "interrupted_by_restart")]
+    # 다시 불러도 같은 작업을 또 고치거나 기록하지 않는다.
+    assert "it-restart-old" not in store.fail_unfinished(now)
+    assert len(fetch(connect, f"SELECT 1 FROM {LOG_TABLE} WHERE job_id = 'it-restart-old'")) == 1
+
+
+def test_a_moves_grouped_line_is_accepted_and_read_back_with_every_grouped_move(store, connect):
+    start(store, "it-group-1")
+    moves = [{"eventId": "it-g1", "price": 10000, "changePercent": 1.5}, {"eventId": "it-g2", "price": 10100}]
+    assert store.record(entry("it-group-1", EntryType.MOVES_GROUPED, stage="move-group", reason="grouped-by-symbol",
+                              error_type=None, attempts=2, data={"moves": moves})) is True
+
+    ((entry_type, attempts, data),) = fetch(
+        connect, f"SELECT entry_type, attempts, data::text FROM {LOG_TABLE} WHERE job_id = 'it-group-1'")
+    assert (entry_type, attempts) == ("moves-grouped", 2) and json.loads(data) == {"moves": moves}
+
+
+def test_a_member_briefing_line_says_which_member_the_board_was_for(store, connect):
+    # V2가 기록 종류에 member-briefing을 더했다. 멤버 번호와 결과 이벤트 ID가 JSON 칸에 그대로 남는다.
+    start(store, "it-member-1", kind=JobKind.POST_CLOSE)
+    data = {"memberId": 41, "resultEventId": "it-event-41", "etfCount": 2, "missingItems": []}
+    assert store.record(entry("it-member-1", EntryType.MEMBER_BRIEFING, stage="compose", reason="member_published",
+                              error_type=None, attempts=0, data=data)) is True
+
+    ((entry_type, stored),) = fetch(
+        connect, f"SELECT entry_type, data::text FROM {LOG_TABLE} WHERE job_id = 'it-member-1'")
+    assert entry_type == "member-briefing" and json.loads(stored) == data
 
 
 # ---- 마감 후 판이 읽는 그날 아침 예상과 급변동 ----

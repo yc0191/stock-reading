@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from briefing.config import DEFAULT_DAILY_SETTINGS
+
 READING_GUIDE = """당신은 ETF 투자자에게 하루 시장 흐름을 짧게 정리해 주는 도우미입니다.
 입력은 JSON이며 판 종류(아침 판, 마감 후 판), 다룬 범위, 항목(items) 목록을 담고 있습니다.
 항목마다 status(상태)와 entries(자료)가 있고, 근거로 쓸 수 있는 자료에는 ref(근거 번호)가 붙어 있습니다.
@@ -27,19 +29,25 @@ DIRECTION_FLAT = "보합"
 DIRECTION_UNSURE = "예상 어려움"
 DIRECTIONS = (DIRECTION_UP, DIRECTION_DOWN, DIRECTION_FLAT, DIRECTION_UNSURE)
 
-# 아침 판에 더해지는 항목 설명. 아침 판은 지난 일봉이 아니라 받은 기사·환율·지수·미국 종목 등락으로 오늘을 예상한다.
+# 마감 후 판이 예상을 채점하는 보합 폭. 아침 판 지시문의 __FLAT_BAND__ 자리에 같은 숫자를 넣어 방향 예상의 뜻(보합 = 이 폭 안)을 맞춘다.
+FLAT_BAND = f"{DEFAULT_DAILY_SETTINGS.flat_band_percent:g}"
+
+# 아침 판에 더해지는 항목 설명. 아침 판은 장이 막 시작한 뒤(평일 09:10)에 나가며, 지난 일봉이 아니라 밤사이 자료(미국 지수·환율·
+# 기사·공시·미국 종목 등락)와 개장 흐름으로 오늘을 예상한다.
 MORNING_GUIDE_EXTRA = """
 - 항목 "ETF별 기사"는 ETF마다 모아 둔 기사이며 etf 칸은 그 기사가 붙은 ETF 종목코드입니다. 항목의 missing에 있는 ETF는 기사 응답을 받지 못한 것이라 기사가 없는 것이 아니라 모르는 것입니다.
-- outlookEtfs는 오늘 방향을 예상할 ETF 목록입니다. relation은 보유 또는 관심입니다.
+- 항목 "ETF별 개장 흐름"은 장이 열린 뒤 판 기준 시각까지 코드가 저장된 시세로 계산한 값이며 ETF마다 한 건입니다. openRatePercent는 전일 종가 대비 시가 등락률(%), flowRatePercent는 장 시작 뒤 첫 시세(startAt)부터 마지막 시세(endAt)까지의 등락률(%), rateVsPrevClosePercent는 전일 종가 대비 마지막 시세의 등락률(%)이며 minutesBeforeAsOf는 마지막 시세가 판 기준 시각보다 몇 분 전인지입니다. openSource가 "first-snapshot"이면 시세 원문에 시가 칸이 없어 장 시작 뒤 첫 시세를 시가로 쓴 것입니다. 값이 null이면 그 숫자는 모르는 것입니다. 항목의 missing에 있는 ETF는 개장 흐름 자료가 없는 것입니다.
+- outlookEtfs는 오늘 방향을 예상할 ETF 목록입니다.
 - 항목 "환율"의 usdKrw(있을 때만 담깁니다)는 코드가 원문의 원/달러 행에서 꺼낸 값이며 value는 원/달러 환율, change는 전일대비, ratePercent는 등락률(%)입니다. 환율 숫자는 usdKrw의 값을 씁니다."""
 
 MORNING_RULES = """규칙:
-- 아침 판의 목적은 오늘 장에서 어떤 변화가 예상되는지 알리는 것입니다. etfs에 outlookEtfs의 ETF마다 오늘의 방향 예상을 씁니다.
+- 아침 판은 장이 막 열린 뒤에 나갑니다. 목적은 밤사이 자료(미국 지수, 환율, 기사, 공시, 담긴 미국 종목의 직전 장 등락)와 개장 흐름을 근거로 오늘 장에서 어떤 변화가 예상되는지 알리는 것입니다. etfs에 outlookEtfs의 ETF마다 오늘의 방향 예상을 씁니다.
+- 방향의 뜻: 오늘 하루 등락이 ±__FLAT_BAND__% 안일 것 같으면 "보합", +__FLAT_BAND__%를 넘을 것 같으면 "상승", -__FLAT_BAND__% 아래일 것 같으면 "하락"입니다. 마감 후 판이 이 기준으로 맞고 틀림을 채점합니다.
 - 예상과 원인은 단정하지 않습니다. "~가 영향을 줄 수 있어 오를 수 있다"처럼 씁니다.
 - 각 문장은 근거가 된 자료의 ref를 refs에 하나 이상 넣습니다. 입력에 없는 ref는 쓰지 않습니다.
 - 상태가 "없음"인 항목을 추측으로 채우지 않습니다.
 - etfs는 outlookEtfs에 있는 ETF마다 정확히 하나씩 씁니다(보유와 관심 모두). symbol은 그 ETF의 종목코드입니다. direction은 "상승", "하락", "보합", "예상 어려움" 중 하나이고, reason은 그 방향을 예상한 이유 한 문장입니다.
-- 방향의 근거는 그 ETF의 이름·추종 대상·담긴 종목과 관련된 기사(ETF별 기사), 담긴 미국 종목의 직전 장 등락, 미국 지수, 환율, 공시입니다. etfInfo는 맥락일 뿐 ref가 없어 인용하지 않습니다.
+- 방향의 근거는 그 ETF의 이름·추종 대상·담긴 종목과 관련된 기사(ETF별 기사), 담긴 미국 종목의 직전 장 등락, 미국 지수, 환율, 공시, 그 ETF의 개장 흐름입니다. 개장 흐름은 이미 일어난 움직임이므로 밤사이 자료와 함께 읽고, 개장 흐름의 숫자는 입력 값 그대로 인용하며(새로 계산하지 않습니다) 그 ETF의 개장 흐름 번호를 refs에 넣습니다. etfInfo는 맥락일 뿐 ref가 없어 인용하지 않습니다.
 - 방향이 "상승", "하락", "보합"이면 reason의 refs에 근거 번호를 하나 이상 넣습니다. 근거가 약해 방향을 정하기 어려우면 direction을 "예상 어려움"으로 쓰고, reason에 근거가 부족한 점을 쓰고, refs는 빈 목록으로 두고 weak를 true로 합니다.
 - 환율이나 금리가 어떤 ETF 예상의 단서이면 reason 문장 안에 끼워 넣지 말고 문장 끝에 "(환율 이슈 참고)", "(금리 이슈 참고)"처럼 괄호로 짧게 붙입니다. 숫자는 되풀이하지 않습니다.
 - fxIssue는 환율 이슈 칸입니다. 환율은 모든 ETF에 영향을 주므로 ETF와 따로 씁니다. 항목 "환율"의 usdKrw(원/달러 값, 전일대비, 등락률)와 환율을 다룬 기사를 근거로 환율이 오늘 ETF들에 영향을 줄 수 있는 점을 한 문장으로 씁니다. 근거 번호는 refs에 넣고 weak·shortfall을 냅니다.
@@ -55,7 +63,7 @@ MORNING_RULES = """규칙:
 출력은 다음 JSON 하나만 냅니다:
 {"points":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"etfs":[{"symbol":"...","direction":"상승","reason":"...","refs":["..."],"weak":false,"shortfall":""}],"fxIssue":{"statement":"...","refs":["..."],"weak":false,"shortfall":""},"rateIssue":{"statement":"...","refs":["..."],"weak":false,"shortfall":""},"insufficientEvidence":false}"""
 
-SYSTEM_PROMPT = READING_GUIDE + MORNING_GUIDE_EXTRA + "\n\n" + MORNING_RULES
+SYSTEM_PROMPT = (READING_GUIDE + MORNING_GUIDE_EXTRA + "\n\n" + MORNING_RULES).replace("__FLAT_BAND__", FLAT_BAND)
 
 # 마감 후 판 지시문: 입력 읽는 법은 아침 판과 같고, 마감 후 판에 더해지는 항목 설명과 출력 규칙이 다르다.
 POST_CLOSE_GUIDE_EXTRA = """
@@ -71,7 +79,7 @@ POST_CLOSE_RULES = """규칙:
 - 투자 조언(매수·매도·보유 권유, 가격 전망)을 하지 않습니다.
 - 숫자를 새로 계산하지 않습니다. 입력에 있는 값만 씁니다. 자료 없음 ETF(missing)에는 숫자를 쓰지 않습니다.
 - 문장에 미국 종목의 티커(ticker, tickers 칸의 값)를 쓰지 않습니다. 개별 종목을 말해야 하면 "미국 종목"이라고 씁니다.
-- summary는 그날 ETF 흐름을 한국어 문장 정확히 2개로 요약합니다. 개별 ETF 하나하나를 나열하지 않고, 근거 번호는 붙이지 않습니다.
+- summary는 그날 시장 전체 흐름(지수, 환율, 금리)을 한국어 문장 정확히 2개로 요약합니다. 요약은 받는 사람마다 같은 글로 나가므로 특정 ETF나 종목의 이름·종목코드를 쓰지 않고, 근거 번호는 붙이지 않습니다. ETF 이야기는 etfs의 reason에 씁니다.
 - etfs는 항목 "보유 ETF별 하루 등락"의 entries에 있는 ETF마다 정확히 하나씩 씁니다. symbol은 그 entry의 symbol 값이고, reason은 그 ETF가 왜 움직였는지 한 문장입니다. 자료 없음 ETF(missing)는 etfs에 넣지 않습니다.
 - 미국 자산에 투자하는 ETF(원화로 거래되며, etfInfo의 추종 대상·구성 종목으로 판단합니다)는 담긴 종목 등락과 달러-원 환율 변화를 함께 봅니다. 미국 종목이 올라도 환율이 내리면 원화 가격은 덜 오를 수 있고, 그 반대도 같습니다.
 - reason의 refs에는 그 문장의 근거가 된 기사·공시·구성 종목 이슈·미국 지수·환율 번호를 넣습니다. 이 자료 어디에서도 이유를 찾지 못하면 reason을 "받은 자료에서 이유를 찾지 못했습니다."로 한 글자도 바꾸지 않고 쓰고(코드가 이 문장을 세어 결론 줄의 이유를 찾지 못한 ETF 수로 씁니다) refs는 빈 목록으로 두며 weak를 true로 합니다. 그 ETF의 하루 등락 번호를 이유의 근거로 넣지 않습니다.

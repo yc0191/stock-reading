@@ -191,6 +191,8 @@ def _post_close_review(v: PostCloseView) -> str:
                 cite = f" {_cite(row.numbers)}" if row.numbers else ""
                 inner += _p(NOTE_STYLE, f"이유: {_rate_spans(escape(row.reason))}{cite}") + _weak(row.shortfall)
             items.append(f'<li style="{ITEM_STYLE}">{inner}</li>')
+        if v.review_tally:
+            items.append(f'<li style="{ITEM_STYLE}">{escape(v.review_tally)}</li>')
         if v.review_note:
             items.append(f'<li style="{ITEM_STYLE}">{escape(v.review_note)}</li>')
         parts.append(f'<ul style="{LIST_STYLE}">{"".join(items)}</ul>')

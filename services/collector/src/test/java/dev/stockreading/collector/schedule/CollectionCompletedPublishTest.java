@@ -107,6 +107,31 @@ class CollectionCompletedPublishTest {
         assertThat(incomplete()).containsExactly("TEST01", "TEST02", "TEST03");
     }
 
+    // 검색어를 하나도 읽지 못했으면 정상처럼 끝내지 않고, 수집 대상 전부(미국 티커는 담은 ETF로)를 불완전으로 알린다.
+    @Test
+    void emptySearchQueriesReportEveryCollectTargetAsIncomplete() throws IOException {
+        when(holdings.targetSymbols()).thenReturn(List.of("FAKE", "TEST01", "TEST03"));
+        when(holdings.etfsHolding("FAKE")).thenReturn(List.of("TEST02"));
+        when(collector.hasNoQueries()).thenReturn(true);
+        collect(Set.of());
+
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
+
+        assertThat(ContractSchemas.validate(SCHEMA, completionJson())).isEmpty();
+        assertThat(incomplete()).containsExactly("TEST01", "TEST02", "TEST03");
+    }
+
+    @Test
+    void emptySearchQueriesWithoutCollectTargetsStillSendTheCompletionWithNoSymbols() throws IOException {
+        when(holdings.targetSymbols()).thenReturn(List.of());
+        when(collector.hasNoQueries()).thenReturn(true);
+        collect(Set.of());
+
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
+
+        assertThat(incomplete()).isEmpty();
+    }
+
     @Test
     void marketWideSymbolIsKeptWhenItsQueryWasNotCollected() throws IOException {
         collect(Set.of("*"));

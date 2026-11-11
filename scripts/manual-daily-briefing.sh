@@ -18,7 +18,7 @@
 # 사용법: scripts/manual-daily-briefing.sh
 # 환경변수:
 #   DAILY_E2E_REAL_LLM   1 이면 실제 Claude(기본 가짜)
-#   DAILY_E2E_ENV_FILE   서비스 DB 계정(MARKET_/NEWS_/BRIEFING_DB_USER·PASSWORD)을 읽을 파일(기본 저장소 .env)
+#   DAILY_E2E_ENV_FILE   서비스 DB 계정(MARKET_/NEWS_/BRIEFING_/NOTIFIER_/COLLECTOR_/PERSONAL_*_DB_USER·PASSWORD)을 읽을 파일(기본 저장소 .env)
 #   DAILY_E2E_SMTP_SINK  1 이면 가짜 SMTP 수신 서버로 보낸다(기본 드라이런)
 #   DAILY_E2E_OUT_DIR    판 본문을 쓸 폴더(기본 임시 폴더, 저장소 안이면 거절)
 #   JAVA_HOME_21         JDK 21
@@ -39,6 +39,10 @@ PY="$ROOT/services/briefing/.venv/bin/python"
 REAL_LLM="${DAILY_E2E_REAL_LLM:-0}"
 OUT_DIR="${DAILY_E2E_OUT_DIR:-${TMPDIR:-/tmp}}"
 RECIPIENT="daily-e2e@example.com"
+FLYWAY_IMAGE="flyway/flyway:12.4.0"
+# market → personal 계정·권한 → personal 표를 만드는 함수. 전체 실행 스크립트와 같이 쓴다.
+# shellcheck source=scripts/personal-db-lib.sh
+. "$ROOT/scripts/personal-db-lib.sh"
 
 TMP=""
 KAFKA_STARTED=0
@@ -142,13 +146,19 @@ fi
 docker info >/dev/null 2>&1 || fail "Docker 에 연결할 수 없습니다"
 [ "$(docker inspect -f '{{.State.Running}}' "$PG_CONTAINER" 2>/dev/null)" = true ] || fail "$PG_CONTAINER 가 켜져 있지 않습니다"
 
-for key in MARKET_DB_USER MARKET_DB_PASSWORD NEWS_DB_USER NEWS_DB_PASSWORD BRIEFING_DB_USER BRIEFING_DB_PASSWORD; do
+for key in MARKET_DB_USER MARKET_DB_PASSWORD NEWS_DB_USER NEWS_DB_PASSWORD BRIEFING_DB_USER BRIEFING_DB_PASSWORD \
+    PERSONAL_OWNER_DB_USER PERSONAL_OWNER_DB_PASSWORD PERSONAL_WRITER_DB_USER PERSONAL_WRITER_DB_PASSWORD \
+    COLLECTOR_DB_USER COLLECTOR_DB_PASSWORD NOTIFIER_DB_USER NOTIFIER_DB_PASSWORD; do
   [ -n "$(dotenv_value "$key")" ] || fail "$ENV_FILE 에 $key 가 없습니다"
 done
 M_USER=$(dotenv_value MARKET_DB_USER); M_PW=$(dotenv_value MARKET_DB_PASSWORD)
 N_USER=$(dotenv_value NEWS_DB_USER); N_PW=$(dotenv_value NEWS_DB_PASSWORD)
 B_USER=$(dotenv_value BRIEFING_DB_USER); B_PW=$(dotenv_value BRIEFING_DB_PASSWORD)
-for role in "$M_USER" "$N_USER" "$B_USER"; do
+PO_USER=$(dotenv_value PERSONAL_OWNER_DB_USER); PO_PW=$(dotenv_value PERSONAL_OWNER_DB_PASSWORD)
+PW_USER=$(dotenv_value PERSONAL_WRITER_DB_USER); PW_PW=$(dotenv_value PERSONAL_WRITER_DB_PASSWORD)
+PC_USER=$(dotenv_value COLLECTOR_DB_USER); PC_PW=$(dotenv_value COLLECTOR_DB_PASSWORD)
+PN_USER=$(dotenv_value NOTIFIER_DB_USER); PN_PW=$(dotenv_value NOTIFIER_DB_PASSWORD)
+for role in "$M_USER" "$N_USER" "$B_USER" "$PO_USER" "$PW_USER" "$PC_USER" "$PN_USER"; do
   # SQL 에 그대로 넣으므로 이름 형식을 먼저 확인한다.
   [[ "$role" =~ ^[a-z_][a-z0-9_]*$ ]] || fail "서비스 계정 이름 형식이 맞지 않습니다"
 done
@@ -192,6 +202,14 @@ CREATE SCHEMA market AUTHORIZATION "$M_USER";
 CREATE SCHEMA news AUTHORIZATION "$N_USER";
 CREATE SCHEMA briefing AUTHORIZATION "$B_USER";
 SQL
+# market 표 → personal 계정·권한 → personal 표 순서로 만든다(personal 이 market.etf·market.stock 을 가리킨다).
+echo "market·personal 표 생성(Flyway)"
+migrate_market >/dev/null || fail "market 표를 만들지 못했습니다"
+init_personal || fail "personal 계정·권한을 만들지 못했습니다"
+migrate_personal >/dev/null || fail "personal 표를 만들지 못했습니다"
+# 가짜 대응표: TEST01 에 미국 종목 두 개, TEST02 는 미국 종목 없음. 가짜 멤버 한 명이 두 ETF 를 보유하고 받는 주소는 가짜 주소다.
+"$PY" -c 'import sys; sys.path.insert(0, "scripts"); import daily_e2e; print(daily_e2e.holdings_seed_sql(sys.argv[1]))' "$RECIPIENT" \
+  | admin_sql "$DB_NAME" >/dev/null || fail "가짜 종목·멤버를 넣지 못했습니다"
 JDBC_URL="jdbc:postgresql://127.0.0.1:5432/$DB_NAME"
 
 # ---------------------------------------------------------------- 서비스
@@ -200,10 +218,7 @@ echo "market 기동"
 (
   export SPRING_DATASOURCE_URL="$JDBC_URL?currentSchema=market" SPRING_DATASOURCE_USERNAME="$M_USER" SPRING_DATASOURCE_PASSWORD="$M_PW"
   export SPRING_KAFKA_BOOTSTRAP_SERVERS="$BOOTSTRAP"
-  # 가짜 대응표: TEST01 에 미국 종목 두 개, TEST02 는 미국 종목 없음. 전일 종가 기준 감지는 끈다(시세를 넣지 않음).
-  # 새 데이터베이스라 종목 테이블이 비어 있으므로 시세처리기가 시작하면서 이 파일로 한 번 채운다.
-  "$PY" -c 'import sys; sys.path.insert(0, "scripts"); import daily_e2e; print(daily_e2e.holdings_file_json())' > "$TMP/holdings.json"
-  export HOLDINGS_FILE="$TMP/holdings.json"
+  # 전일 종가 기준 감지는 끈다(시세를 넣지 않음). 종목은 위에서 가짜 대응표로 DB 에 넣었다.
   export MARKET_PREV_CLOSE_FIELDS=
   cd "$TMP/market" && exec "$JAVA_HOME_21/bin/java" -jar "$MARKET_JAR"
 ) > "$TMP/market.log" 2>&1 &
@@ -234,7 +249,9 @@ else
 fi
 (
   export SPRING_KAFKA_BOOTSTRAP_SERVERS="$BOOTSTRAP"
-  export NOTIFIER_RECIPIENT="$RECIPIENT" NOTIFIER_SENDER="$RECIPIENT"
+  # 받는 사람은 DB(member_mail)에서 고른다. 위에서 넣은 가짜 주소 하나뿐이다.
+  export SPRING_DATASOURCE_URL="$JDBC_URL" SPRING_DATASOURCE_USERNAME="$PN_USER" SPRING_DATASOURCE_PASSWORD="$PN_PW"
+  export NOTIFIER_SENDER="$RECIPIENT"
   unset SMTP_HOST SMTP_PORT SMTP_USERNAME SMTP_PASSWORD
   if [ "$SMTP_SINK" = 1 ]; then
     # 이 인스턴스에만 발송을 켠다. 목적지는 루프백 수신 서버뿐이라 암호화·인증은 끈다.

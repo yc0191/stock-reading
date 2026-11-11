@@ -42,28 +42,61 @@ public record DailyPayload(
             List<String> tickers,
             boolean tickersTruncated,
             @JsonInclude(JsonInclude.Include.NON_NULL) ContextPayload.EtfInfo etf,
-            @JsonInclude(JsonInclude.Include.NON_NULL) String relation) {
+            @JsonInclude(JsonInclude.Include.NON_NULL) OpenFlow openFlow) {
+
+        public Etf(String symbol, String date, String close, String prevClose, String rate, String fetchedAt,
+                String missingReason, List<String> tickers, boolean tickersTruncated, ContextPayload.EtfInfo etf) {
+            this(symbol, date, close, prevClose, rate, fetchedAt, missingReason, tickers, tickersTruncated, etf, null);
+        }
+
+        public Etf withOpenFlow(OpenFlow flow) {
+            return new Etf(symbol, date, close, prevClose, rate, fetchedAt, missingReason, tickers, tickersTruncated,
+                    etf, flow);
+        }
 
         public Etf(String symbol, String date, String close, String prevClose, String rate, String fetchedAt,
                 List<String> tickers, boolean tickersTruncated, ContextPayload.EtfInfo etf) {
-            this(symbol, date, close, prevClose, rate, fetchedAt, null, tickers, tickersTruncated, etf, null);
+            this(symbol, date, close, prevClose, rate, fetchedAt, null, tickers, tickersTruncated, etf);
         }
 
         public Etf(String symbol, String date, String close, String prevClose, String rate, String fetchedAt,
                 List<String> tickers, boolean tickersTruncated) {
-            this(symbol, date, close, prevClose, rate, fetchedAt, null, tickers, tickersTruncated, null, null);
+            this(symbol, date, close, prevClose, rate, fetchedAt, null, tickers, tickersTruncated, null);
         }
 
         /** 일봉 없이 이유만 담은 ETF. */
         public static Etf withoutDaily(String symbol, String missingReason, List<String> tickers,
                 boolean tickersTruncated, ContextPayload.EtfInfo etf) {
-            return new Etf(symbol, null, null, null, null, null, missingReason, tickers, tickersTruncated, etf, null);
+            return new Etf(symbol, null, null, null, null, null, missingReason, tickers, tickersTruncated, etf);
         }
+    }
 
-        /** 보유(HELD)·관심(WATCH) 구분을 더한 사본. */
-        public Etf withRelation(String relation) {
-            return new Etf(symbol, date, close, prevClose, rate, fetchedAt, missingReason, tickers, tickersTruncated,
-                    etf, relation);
+    /** 개장 흐름의 시가 출처: 시세 원문의 시가 칸 / 09:00 이후 첫 스냅샷 가격. */
+    public static final String OPEN_SOURCE_RAW = "raw";
+    public static final String OPEN_SOURCE_FIRST_SNAPSHOT = "first-snapshot";
+    public static final String OPEN_FLOW_PRESENT = "present";
+    public static final String OPEN_FLOW_NO_SNAPSHOT = "no-snapshot";
+
+    /**
+     * 아침 판용 개장 흐름. 요청이 openFlowSince를 보냈을 때만 ETF마다 담긴다. 값은 저장한 시세에서 코드가 계산한다.
+     * 범위 안(요청 구간 시작 이상, 기준 시각 이하) 시세가 없으면 status만 no-snapshot이고 나머지는 null이다.
+     * 비율은 %, 소수 둘째 자리 반올림 문자열이다. open이 시세 원문에서 읽히지 않으면 첫 스냅샷 가격이며 openSource에 표시한다.
+     */
+    public record OpenFlow(
+            String status,
+            String prevClose,
+            String open,
+            String openSource,
+            String openRate,
+            String startAt,
+            String startPrice,
+            String endAt,
+            String endPrice,
+            String flowRate,
+            String rateVsPrevClose) {
+
+        public static OpenFlow none() {
+            return new OpenFlow(OPEN_FLOW_NO_SNAPSHOT, null, null, null, null, null, null, null, null, null, null);
         }
     }
 

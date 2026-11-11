@@ -1,0 +1,12 @@
+[Unit]
+Description=Apply the standby version to the services (daily 00:00 KST path)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# 이미지를 받고 서비스를 다시 띄우는 시간까지 넉넉히 준다.
+TimeoutStartSec=30min
+EnvironmentFile=-/etc/stock-reading/deploy.env
+ExecStart=/opt/stock-reading/infra/deploy/server/apply-deploy.sh scheduled

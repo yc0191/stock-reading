@@ -2,8 +2,7 @@
 
 job_run은 작업마다 한 줄(시작 때 만들고 끝날 때 고침), job_log는 그 작업에서 일어난 일마다 한 줄이다.
 DB 연결은 connect 함수로 주입받는다. 드라이버는 psycopg_connector 안에서만 import하므로 실제 DB 없이 시험할 수 있다.
-테이블은 시작할 때 create_table로 만든다. 마이그레이션 도구가 없으므로 옛 모양의 job_log가 있으면 이름을 바꿔 남겨 두고
-새 모양으로 다시 만든다(지우지 않는다).
+테이블은 이 코드가 만들지 않는다. Flyway가 services/briefing/db/migration의 번호 파일로 먼저 만들어 둔다.
 """
 from __future__ import annotations
 
@@ -12,15 +11,15 @@ import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from enum import Enum
 from datetime import date, datetime, time as day_time, timedelta
 from typing import Any, Callable, Mapping, Protocol
 
 from briefing.config import DEFAULT_STORE_SETTINGS, StoreSettings
 from briefing.compose import KST
 from briefing.job_log import (
+    REASON_INTERRUPTED,
+    STAGE_RESTART,
     EntryType,
-    GeneratedBy,
     JobKind,
     JobLogEntry,
     JobResult,
@@ -34,81 +33,14 @@ log = logging.getLogger("briefing.job_log_store")
 
 RUN_TABLE = "briefing.job_run"
 LOG_TABLE = "briefing.job_log"
-# 옛 모양(작업 종류·대상이 줄마다 있던 단일 테이블)의 job_log는 이 이름으로 바꿔 남겨 둔다.
-LEGACY_LOG_TABLE = "briefing.job_log_legacy"
 
-# 입력·대상·관련 데이터는 받은 내용을 가공하지 않고 담아야 하므로 키 순서와 표기를 바꾸는 JSONB가 아니라 JSON으로 둔다.
-# 종류·상태·작성 방식·기록 종류의 값 제한은 글자로 적지 않고 시작할 때 코드 enum으로 건다(CHECKED_COLUMNS).
-CREATE_RUN_TABLE_SQL = f"""
-CREATE TABLE IF NOT EXISTS {RUN_TABLE} (
-    job_id          VARCHAR(64) PRIMARY KEY,
-    job_kind        VARCHAR(16) NOT NULL,
-    input           JSON NOT NULL,
-    status          VARCHAR(16) NOT NULL,
-    failure_reason  VARCHAR(48),
-    generated_by    VARCHAR(16),
-    target          JSON NOT NULL,
-    started_at      TIMESTAMPTZ NOT NULL,
-    finished_at     TIMESTAMPTZ,
-    final_text      TEXT,
-    weak_count      INTEGER NOT NULL DEFAULT 0 CHECK (weak_count >= 0),
-    research_count  INTEGER NOT NULL DEFAULT 0 CHECK (research_count >= 0),
-    result_event_id VARCHAR(64),
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-)
+# 이전 실행이 끝내지 못하고 남긴 작업. started_at 조건은 이번 실행이 시작한 뒤에 만든 작업을 건드리지 않기 위한 것이다.
+FAIL_UNFINISHED_SQL = f"""
+UPDATE {RUN_TABLE}
+SET status = %s, failure_reason = %s, finished_at = %s
+WHERE status = %s AND started_at < %s
+RETURNING job_id
 """
-
-CREATE_LOG_TABLE_SQL = f"""
-CREATE TABLE IF NOT EXISTS {LOG_TABLE} (
-    id          BIGSERIAL PRIMARY KEY,
-    job_id      VARCHAR(64) NOT NULL REFERENCES {RUN_TABLE} (job_id),
-    entry_type  VARCHAR(24) NOT NULL,
-    stage       VARCHAR(48) NOT NULL,
-    sentence_no INTEGER,
-    round       INTEGER,
-    before      TEXT,
-    after       TEXT,
-    reason      VARCHAR(48) NOT NULL,
-    error_type  VARCHAR(64),
-    attempts    INTEGER NOT NULL CHECK (attempts >= 0),
-    data        JSON NOT NULL,
-    occurred_at TIMESTAMPTZ NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-)
-"""
-
-CREATE_INDEXES_SQL = (
-    f"CREATE INDEX IF NOT EXISTS job_log_job_id_idx ON {LOG_TABLE} (job_id, id)",
-    f"CREATE INDEX IF NOT EXISTS job_run_result_event_id_idx ON {RUN_TABLE} (result_event_id)",
-)
-
-# (테이블, 칸, 값의 원본 enum). 시작할 때마다 제약을 지우고 enum으로 다시 건다.
-CHECKED_COLUMNS: tuple[tuple[str, str, type[Enum]], ...] = (
-    (RUN_TABLE, "job_kind", JobKind),
-    (RUN_TABLE, "status", RunStatus),
-    (RUN_TABLE, "generated_by", GeneratedBy),
-    (LOG_TABLE, "entry_type", EntryType),
-)
-
-
-def check_constraint_sqls(table: str, column: str, values: type[Enum]) -> tuple[str, str]:
-    name = f"{table.split('.')[-1]}_{column}_check"
-    allowed = ", ".join(f"'{member.value}'" for member in values)
-    return (f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {name}",
-            f"ALTER TABLE {table} ADD CONSTRAINT {name} CHECK ({column} IN ({allowed}))")
-
-
-# 옛 모양의 job_log인지 알아내는 질문: 새 모양에만 있는 칸이 없으면 옛 모양이다.
-LEGACY_LOG_PROBE_SQL = """
-SELECT
-    EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'briefing' AND table_name = 'job_log'),
-    EXISTS (SELECT 1 FROM information_schema.columns
-            WHERE table_schema = 'briefing' AND table_name = 'job_log' AND column_name = 'sentence_no')
-"""
-RENAME_LEGACY_SQLS = (
-    f"ALTER TABLE {LOG_TABLE} RENAME TO {LEGACY_LOG_TABLE.split('.')[-1]}",
-    "ALTER INDEX IF EXISTS briefing.job_log_job_id_idx RENAME TO job_log_legacy_job_id_idx",
-)
 
 START_RUN_SQL = f"""
 INSERT INTO {RUN_TABLE} (job_id, job_kind, input, status, target, started_at)
@@ -175,16 +107,6 @@ class PostgresJobLog:
     sleep: Callable[[float], None] = field(default=time.sleep)
     _failed: OrderedDict[str, None] = field(default_factory=OrderedDict, init=False)
 
-    def create_table(self) -> None:
-        self._move_legacy_log_aside()
-        self._execute(CREATE_RUN_TABLE_SQL, None)
-        self._execute(CREATE_LOG_TABLE_SQL, None)
-        for sql in CREATE_INDEXES_SQL:
-            self._execute(sql, None)
-        for table, column, values in CHECKED_COLUMNS:
-            for sql in check_constraint_sqls(table, column, values):
-                self._execute(sql, None)
-
     def start(self, run: JobStart) -> bool:
         params = (run.job_id, run.job_kind.value, run.input, RunStatus.RUNNING.value, _dumps(run.target),
                   run.started_at)
@@ -201,6 +123,22 @@ class PostgresJobLog:
                   result.final_text, result.weak_count, result.research_count, result.result_event_id,
                   result.job_id)
         return self._save(FINISH_RUN_SQL, params, result.job_id, f"finish/{result.status.value}")
+
+    def fail_unfinished(self, now: datetime) -> list[str]:
+        """진행 중으로 남은 이전 실행의 작업을 모두 실패(재시작으로 중단)로 끝낸다. 리포트는 다시 만들지 않는다.
+
+        저장소에 닿지 못하면 예외를 그대로 낸다. 시작할 때 부르므로 시작이 실패해야 한다.
+        """
+        params = (RunStatus.FAILED.value, REASON_INTERRUPTED, now, RunStatus.RUNNING.value, now)
+        interrupted = [row[0] for row in self._execute_returning(FAIL_UNFINISHED_SQL, params)]
+        for job_id in sorted(interrupted):
+            self.record(JobLogEntry(
+                job_id=job_id, entry_type=EntryType.STEP_FAILED, stage=STAGE_RESTART, reason=REASON_INTERRUPTED,
+                occurred_at=now, error_type="InterruptedByRestart", attempts=1,
+                data={"detail": "the previous run ended before this job finished; the report was not remade"}))
+        if interrupted:
+            log.warning("marked %d unfinished job(s) from the previous run as failed", len(interrupted))
+        return interrupted
 
     def has_failed(self, job_id: str) -> bool:
         return job_id in self._failed
@@ -250,19 +188,14 @@ class PostgresJobLog:
             self._failed.popitem(last=False)
         return False
 
-    def _move_legacy_log_aside(self) -> None:
-        exists, is_current = self._query(LEGACY_LOG_PROBE_SQL)[0]
-        if exists and not is_current:
-            log.warning("renaming the old job_log table to %s", LEGACY_LOG_TABLE)
-            for sql in RENAME_LEGACY_SQLS:
-                self._execute(sql, None)
-
-    def _query(self, sql: str) -> list[tuple]:
+    def _execute_returning(self, sql: str, params: tuple) -> list[tuple]:
         connection = self.connect()
         try:
             with connection.cursor() as cursor:
-                cursor.execute(sql, None)
-                return list(cursor.fetchall())
+                cursor.execute(sql, params)
+                rows = list(cursor.fetchall())
+            connection.commit()
+            return rows
         finally:
             connection.close()
 

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check the urgent deploy version every 5 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=15s
+Unit=stock-deploy-urgent.service
+
+[Install]
+WantedBy=timers.target

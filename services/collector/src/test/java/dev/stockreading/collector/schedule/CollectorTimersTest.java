@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import java.lang.reflect.Method;
 import java.time.Clock;
@@ -24,6 +25,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.scheduling.annotation.Scheduled;
 
 import dev.stockreading.collector.insight.IntradayProperties;
+import dev.stockreading.collector.marketdata.MarketDayPort;
 import dev.stockreading.collector.schedule.CollectorJobs.Job;
 
 /** 수집기 타이머가 작업마다 정한 일정·시간대에만 실행 입구를 부르는지 본다. 작업 자체는 부르지 않는다(mock). */
@@ -32,6 +34,9 @@ class CollectorTimersTest {
     private static final QuoteHoursProperties QUOTE_HOURS = new QuoteHoursProperties("09:00", "15:30");
     private static final IntradayProperties INTRADAY =
             new IntradayProperties(true, "0 */5 9-15 * * MON-FRI", "09:00", "15:30", 15_000);
+
+    private static final MarketDayPort OPEN = () -> true;
+    private static final MarketDayPort HOLIDAY = () -> false;
 
     private final CollectorJobs jobs = mock(CollectorJobs.class);
 
@@ -43,7 +48,7 @@ class CollectorTimersTest {
     @ParameterizedTest
     @ValueSource(strings = {"2026-10-20T00:00:00Z", "2026-10-20T03:00:00Z", "2026-10-20T06:30:00Z", "2026-10-20T06:30:59Z"})
     void quotesAreCollectedInsideTheWeekdayQuoteHoursWithoutWaitingForTheFetch(String instant) {
-        new CollectTimer(jobs, QUOTE_HOURS, at(instant)).collect();
+        new CollectTimer(jobs, QUOTE_HOURS, OPEN, at(instant)).collect();
 
         // 타이머 스레드에서 조회하지 않고 작업 스레드로 넘긴다(start). 그래야 밀린 회차가 몰아서 돌지 않는다.
         verify(jobs).start(Job.COLLECT);
@@ -55,7 +60,7 @@ class CollectorTimersTest {
     @ValueSource(strings = {"2026-10-19T23:59:59Z", "2026-10-20T06:31:00Z", "2026-10-20T07:00:00Z",
             "2026-10-24T01:00:00Z", "2026-10-25T01:00:00Z"})
     void quotesAreNotCollectedOutsideTheQuoteHoursOrOnWeekends(String instant) {
-        new CollectTimer(jobs, QUOTE_HOURS, at(instant)).collect();
+        new CollectTimer(jobs, QUOTE_HOURS, OPEN, at(instant)).collect();
 
         verify(jobs, never()).start(any());
         verify(jobs, never()).run(any());
@@ -65,7 +70,7 @@ class CollectorTimersTest {
     @ParameterizedTest
     @ValueSource(strings = {"2026-10-19T23:00:00Z", "2026-10-20T07:00:00Z", "2026-10-24T01:00:00Z"})
     void newsIsCollectedOutsideTheQuoteHours(String instant) {
-        new CollectTimer(jobs, QUOTE_HOURS, at(instant)).collectNews();
+        new CollectTimer(jobs, QUOTE_HOURS, OPEN, at(instant)).collectNews();
 
         verify(jobs).run(Job.COLLECT_NEWS);
     }
@@ -74,7 +79,7 @@ class CollectorTimersTest {
     @ParameterizedTest
     @ValueSource(strings = {"2026-10-21T00:00:00Z", "2026-10-21T01:05:00Z", "2026-10-21T06:30:00Z", "2026-10-21T06:30:02Z"})
     void intradayIsCollectedAtTheEdgesOfTheTradingHours(String instant) {
-        new IntradayTimer(jobs, INTRADAY, at(instant)).collectIntraday();
+        new IntradayTimer(jobs, INTRADAY, OPEN, at(instant)).collectIntraday();
 
         verify(jobs).run(Job.COLLECT_INTRADAY);
     }
@@ -84,18 +89,47 @@ class CollectorTimersTest {
     @ValueSource(strings = {"2026-10-20T23:55:00Z", "2026-10-21T06:35:00Z", "2026-10-21T06:55:00Z",
             "2026-10-24T01:00:00Z", "2026-10-25T01:00:00Z"})
     void intradayIsNotCollectedOutsideTheTradingHoursOrOnWeekends(String instant) {
-        new IntradayTimer(jobs, INTRADAY, at(instant)).collectIntraday();
+        new IntradayTimer(jobs, INTRADAY, OPEN, at(instant)).collectIntraday();
 
         verify(jobs, never()).run(any());
     }
 
     @Test
     void preOpenAndPostCloseRunTheirJobs() {
-        new PreOpenTimer(jobs).collectPreOpen();
-        new PostCloseTimer(jobs).collectPostClose();
+        new PreOpenTimer(jobs, OPEN).collectPreOpen();
+        new PostCloseTimer(jobs, OPEN).collectPostClose();
 
         verify(jobs).run(Job.COLLECT_PRE_OPEN);
         verify(jobs).run(Job.COLLECT_POST_CLOSE);
+    }
+
+    @Test
+    void marketHolidayStopsQuotePreOpenIntradayAndPostCloseButKeepsNews() {
+        // 2026-10-20(화) 10:00 한국 시간, 시세·장중 시간대 안이지만 휴장일로 판정된 경우
+        Clock clock = at("2026-10-20T01:00:00Z");
+        CollectTimer collect = new CollectTimer(jobs, QUOTE_HOURS, HOLIDAY, clock);
+
+        collect.collect();
+        new PreOpenTimer(jobs, HOLIDAY).collectPreOpen();
+        new IntradayTimer(jobs, INTRADAY, HOLIDAY, clock).collectIntraday();
+        new PostCloseTimer(jobs, HOLIDAY).collectPostClose();
+        verifyNoInteractions(jobs);
+
+        collect.collectNews();
+        verify(jobs).run(Job.COLLECT_NEWS);
+    }
+
+    @Test
+    void marketDayIsNotAskedOutsideTheHours() {
+        // 시간대 밖(16:00)에서는 장 운영 상태 조회를 부르지 않는다. 하루 조회 횟수를 줄이기 위해서다.
+        MarketDayPort mustNotBeAsked = () -> {
+            throw new AssertionError("시간대 밖에서는 장 운영 상태를 묻지 않아야 합니다");
+        };
+
+        new CollectTimer(jobs, QUOTE_HOURS, mustNotBeAsked, at("2026-10-20T07:00:00Z")).collect();
+        new IntradayTimer(jobs, INTRADAY, mustNotBeAsked, at("2026-10-20T07:00:00Z")).collectIntraday();
+
+        verifyNoInteractions(jobs);
     }
 
     @Test
@@ -140,6 +174,7 @@ class CollectorTimersTest {
                 .withInitializer(new ConfigDataApplicationContextInitializer())
                 .withBean(CollectorJobs.class, () -> jobs)
                 .withBean(Clock.class, Clock::systemUTC)
+                .withBean(MarketDayPort.class, () -> OPEN)
                 .withUserConfiguration(Wiring.class, CollectTimer.class, PreOpenTimer.class, IntradayTimer.class,
                         PostCloseTimer.class);
     }

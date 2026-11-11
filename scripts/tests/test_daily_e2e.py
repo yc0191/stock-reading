@@ -35,12 +35,17 @@ def test_values_are_fake():
             assert target.startswith(("TEST", "FAKE")) or len(target) == 1
 
 
-def test_holdings_file_is_a_fake_krx_etf_list_with_us_members_in_rank_order():
-    items = json.loads(de.holdings_file_json())
-    from_file = {item["symbol"]: [m["symbol"] for m in item["members"] if m["market"] == "US"] for item in items}
+def test_holdings_seed_sql_inserts_only_fake_etfs_members_and_a_fake_recipient():
+    sql = de.holdings_seed_sql("daily-e2e@example.com")
 
-    assert from_file == {"TEST01": ["TESTA", "FAKEB"], "TEST02": []}
-    assert all(item["kind"] == "ETF" and item["market"] == "KR" for item in items)
+    assert "market.etf (market, symbol) VALUES ('KR', 'TEST01')" in sql
+    assert "market.etf (market, symbol) VALUES ('KR', 'TEST02')" in sql
+    # TEST01 의 미국 구성 종목은 순위 순이고 TEST02 에는 구성 종목이 없다.
+    assert sql.index("1 FROM market.etf e, market.stock s WHERE e.symbol = 'TEST01' AND s.symbol = 'TESTA'") < \
+        sql.index("2 FROM market.etf e, market.stock s WHERE e.symbol = 'TEST01' AND s.symbol = 'FAKEB'")
+    assert "TEST02' AND s.symbol" not in sql
+    assert sql.count("'HELD'") == 2
+    assert "'daily-e2e@example.com'" in sql
 
 
 def test_us_close_is_the_latest_new_york_close_before_the_time():

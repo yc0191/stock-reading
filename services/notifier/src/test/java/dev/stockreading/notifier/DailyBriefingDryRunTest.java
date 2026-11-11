@@ -1,9 +1,14 @@
 package dev.stockreading.notifier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,6 +25,8 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import dev.stockreading.notifier.mail.MailSenderPort;
+import dev.stockreading.notifier.recipient.Recipient;
+import dev.stockreading.notifier.recipient.RecipientPort;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -32,11 +39,18 @@ class DailyBriefingDryRunTest {
     @Configuration
     @EnableConfigurationProperties(NotifierProperties.class)
     @ComponentScan(basePackageClasses = MailSenderPort.class)
-    @Import({DailyBriefingListener.class, SendRateLimiter.class})
+    @Import(DailyBriefingListener.class)
     static class Wiring {
         @Bean
         ObjectMapper objectMapper() {
             return JsonMapper.builder().build();
+        }
+
+        @Bean
+        RecipientPort recipientPort() {
+            RecipientPort port = mock(RecipientPort.class);
+            when(port.forMember(anyLong(), any())).thenReturn(List.of(new Recipient(1, "reader@example.com")));
+            return port;
         }
 
         @Bean
@@ -47,8 +61,7 @@ class DailyBriefingDryRunTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withUserConfiguration(Wiring.class)
-            .withPropertyValues("notifier.recipient=reader@example.com", "notifier.subject-prefix=[시뮬레이션]",
-                    "notifier.max-per-hour=6");
+            .withPropertyValues("notifier.subject-prefix=[시뮬레이션]");
 
     private ListAppender<ILoggingEvent> logs;
 
@@ -69,7 +82,7 @@ class DailyBriefingDryRunTest {
         runner.run(context -> {
             assertThat(context).hasNotFailed();
             context.getBean(DailyBriefingListener.class)
-                    .onDailyBriefing(ContractSchemas.sample("briefing.daily.generated.sample.json"));
+                    .onDailyBriefing(ContractSchemas.sample("v2", "briefing.daily.generated.sample.json"));
         });
 
         assertThat(logs.list).hasSize(1);

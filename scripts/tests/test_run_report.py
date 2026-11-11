@@ -425,7 +425,7 @@ def test_plan_with_live_lists_the_briefing_and_mail_step():
 def test_script_checks_every_live_key_before_calling_anything():
     text = SCRIPT.read_text(encoding="utf-8")
     keys = text.split('LIVE_KEYS="', 1)[1].split('"', 1)[0].split()
-    assert {"BROKER_APP_KEY", "TEST_ALL_LIVE_SYMBOL", "ANTHROPIC_API_KEY", "SMTP_HOST", "NOTIFIER_RECIPIENT"} <= set(keys)
+    assert {"BROKER_APP_KEY", "TEST_ALL_LIVE_SYMBOL", "ANTHROPIC_API_KEY", "SMTP_HOST", "TEST_ALL_LIVE_RECIPIENT"} <= set(keys)
     # 브리핑 재검색에 수집기가 실제 뉴스 검색으로 답하도록 뉴스 검색 키도 미리 확인하고 수집기에만 넘긴다.
     # 비밀값(ID·시크릿)은 Parameter Store, 비밀이 아닌 주소·헤더 이름은 실행 환경변수나 .env 에서 읽어 둘 다 미리 확인한다.
     secrets = {"NEWS_SEARCH_CLIENT_ID", "NEWS_SEARCH_CLIENT_SECRET"}
@@ -493,7 +493,7 @@ def test_script_turns_on_real_mail_only_inside_the_test_notifier():
     assert text.count("NOTIFIER_SEND_ENABLED=true") == 1
     notifier_block = text.split('echo "notifier 기동', 1)[1].split("NOTIFIER_PID=$!", 1)[0]
     assert "NOTIFIER_SEND_ENABLED=true" in notifier_block
-    assert 'NOTIFIER_SUBJECT_PREFIX="[테스트]"' in notifier_block and "NOTIFIER_MAX_PER_HOUR=1" in notifier_block
+    assert 'NOTIFIER_SUBJECT_PREFIX="[테스트]"' in notifier_block and "PER_HOUR" not in notifier_block
     # .env 에 쓰는 명령이 없어야 한다(읽기만 한다).
     assert ">> \"$ENV_FILE\"" not in text and "> \"$ENV_FILE\"" not in text
 

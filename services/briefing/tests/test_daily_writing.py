@@ -172,6 +172,15 @@ def test_the_summary_must_be_exactly_two_lines(lines):
         parse(llm_output(summary=lines))
 
 
+@pytest.mark.parametrize("name", ["TEST01", "TEST TEST01"])
+def test_a_summary_line_naming_an_etf_is_rejected_when_the_names_are_given(name):
+    text = llm_output(summary=(f"{name}가 내렸습니다.", "둘째 줄입니다."))
+    names = frozenset({"TEST01", "TEST TEST01"})
+    with pytest.raises(InvalidDailyOutput, match="etf name or code"):
+        parse_post_close_output(text, ALLOWED, TICKERS, REQUIRED, {"TEST01": (ISSUE,)}, etf_names=names)
+    parse(text)  # 이름을 주지 않으면 검사하지 않는다
+
+
 def test_an_empty_summary_line_is_rejected():
     with pytest.raises(InvalidDailyOutput, match="no summary"):
         parse(llm_output(summary=("첫째 줄입니다.", "  ")))

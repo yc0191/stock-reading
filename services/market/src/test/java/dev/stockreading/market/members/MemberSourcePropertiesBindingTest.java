@@ -28,7 +28,7 @@ class MemberSourcePropertiesBindingTest {
     @Test
     void isOffWhenTheTemplateEnvironmentVariableIsEmptyAndKeepsTheDocumentedDefaults() {
         // 셸에 실제 값이 설정돼 있어도 읽지 않게 막는다.
-        runner().withPropertyValues("MEMBERS_URL_TEMPLATE=", "MEMBERS_FUND_IDS=", "MEMBERS_USER_AGENT=stock-reading-members/1.0")
+        runner().withPropertyValues("MEMBERS_URL_TEMPLATE=", "MEMBERS_USER_AGENT=stock-reading-members/1.0")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     MemberSourceProperties properties = context.getBean(MemberSourceProperties.class);
@@ -41,14 +41,13 @@ class MemberSourcePropertiesBindingTest {
     }
 
     @Test
-    void templateFundIdsAndUserAgentComeFromTheEnvironmentVariables() {
+    void templateAndUserAgentComeFromTheEnvironmentVariables() {
         runner().withPropertyValues("MEMBERS_URL_TEMPLATE=http://test.invalid/{fundId}?d={date}",
-                        "MEMBERS_FUND_IDS=TEST01:F1,TEST02:F2", "MEMBERS_USER_AGENT=test-agent/9")
+                        "MEMBERS_USER_AGENT=test-agent/9")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     MemberSourceProperties properties = context.getBean(MemberSourceProperties.class);
                     assertThat(properties.enabled()).isTrue();
-                    assertThat(properties.fundIdByEtf()).containsOnlyKeys("TEST01", "TEST02");
                     assertThat(properties.userAgent()).isEqualTo("test-agent/9");
                 });
     }

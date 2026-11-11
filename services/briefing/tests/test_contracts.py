@@ -424,16 +424,16 @@ def test_new_samples_use_fake_symbols_and_tickers_only():
         assert all(t.startswith(("TEST", "FAKE")) for t in tickers), topic
 
 
-DAILY_SCHEMA = "briefing.daily.generated.v1.schema.json"
+DAILY_SCHEMA = "briefing.daily.generated.v2.schema.json"
 DAILY_SAMPLE = "briefing.daily.generated.sample.json"
 
 
 def test_committed_daily_briefing_sample_matches_its_schema():
-    assert validate(DAILY_SCHEMA, sample(DAILY_SAMPLE)) == []
+    assert validate(DAILY_SCHEMA, sample(DAILY_SAMPLE, "v2")) == []
 
 
 def test_daily_briefing_tolerates_unknown_fields():
-    future = sample(DAILY_SAMPLE)
+    future = sample(DAILY_SAMPLE, "v2")
     future["newTopLevelHint"] = "x"
     future["payload"]["venue"] = "future"
 
@@ -444,17 +444,17 @@ DAILY_OPTIONAL_FIELDS = {"html", "images"}
 
 
 def test_daily_briefing_rejects_missing_payload_field():
-    for field in sample(DAILY_SAMPLE)["payload"]:
+    for field in sample(DAILY_SAMPLE, "v2")["payload"]:
         if field in DAILY_OPTIONAL_FIELDS:
             continue
-        broken = sample(DAILY_SAMPLE)
+        broken = sample(DAILY_SAMPLE, "v2")
         del broken["payload"][field]
 
         assert validate(DAILY_SCHEMA, broken) != [], field
 
 
 def test_daily_briefing_html_and_images_are_optional():
-    text_only = sample(DAILY_SAMPLE)
+    text_only = sample(DAILY_SAMPLE, "v2")
     for field in DAILY_OPTIONAL_FIELDS:
         del text_only["payload"][field]
 
@@ -463,11 +463,11 @@ def test_daily_briefing_html_and_images_are_optional():
 
 def test_daily_briefing_rejects_a_bad_inline_image():
     for field, value in [("contentType", "image/svg+xml"), ("data", "not base64!"), ("contentId", "a b")]:
-        broken = sample(DAILY_SAMPLE)
+        broken = sample(DAILY_SAMPLE, "v2")
         broken["payload"]["images"][0][field] = value
 
         assert validate(DAILY_SCHEMA, broken) != [], field
-    missing = sample(DAILY_SAMPLE)
+    missing = sample(DAILY_SAMPLE, "v2")
     del missing["payload"]["images"][0]["data"]
     assert validate(DAILY_SCHEMA, missing) != []
 
@@ -479,7 +479,7 @@ def test_daily_briefing_rejects_a_bad_inline_image():
     ("missingItems", [""]),
 ])
 def test_daily_briefing_rejects_invalid_payload_values(field, value):
-    broken = sample(DAILY_SAMPLE)
+    broken = sample(DAILY_SAMPLE, "v2")
     broken["payload"][field] = value
 
     assert validate(DAILY_SCHEMA, broken) != []
@@ -489,8 +489,9 @@ def test_daily_briefing_carries_no_personal_fields():
     schema = json.loads((CONTRACTS_DIR / DAILY_SCHEMA).read_text(encoding="utf-8"))
     names = set(schema["properties"]["payload"]["properties"])
 
-    # 보유 수량·금액·주소는 이 이벤트에 담지 않는다. 수신 주소는 발송기 설정에만 있다.
-    assert not {n for n in names if re.search(r"quantity|amount|holding|recipient|email|address|account|balance", n, re.I)}
+    # 보유 수량·금액·주소는 이 이벤트에 담지 않는다. 받는 사람은 멤버 번호로만 가리키고 주소는 발송기가 DB에서 찾는다.
+    assert not {n for n in names if re.search(r"quantity|amount|holding|recipient|email|address|account|balance|name", n, re.I)}
+    assert "memberId" in names and "memberId" in schema["properties"]["payload"]["required"]
 
 
 @pytest.mark.parametrize("edition, generated_by, missing", [
@@ -503,10 +504,11 @@ def test_daily_briefing_event_built_by_the_producer_matches_the_schema(edition, 
         tick_event_id="0b8c2d3e-4f50-4a6b-9c7d-1e2f3a4b5c6d", correlation_id="tick-correlation",
         scheduled_for=at, now=at + timedelta(seconds=40), edition=edition,
         range_start=at - timedelta(days=1), range_end=at, text="본문", missing_items=missing,
-        generated_by=generated_by)
+        generated_by=generated_by, member_id=7)
 
     assert event.topic == "briefing.daily.generated"
-    assert event.key == edition
+    assert event.key == f"{edition}:7"
+    assert event.value["schemaVersion"] == 2 and event.value["payload"]["memberId"] == 7
     assert validate(DAILY_SCHEMA, event.value) == []
     assert event.value["correlationId"] == "tick-correlation"
     assert event.value["occurredAt"] == "2026-10-20T17:00:00+09:00"
@@ -518,7 +520,7 @@ def test_daily_briefing_event_carries_html_and_images_only_when_given():
     def build(**extra):
         return daily_briefing_event(tick_event_id="t", correlation_id="c", scheduled_for=at, now=at,
                                     edition=EDITION_POST_CLOSE, range_start=at, range_end=at, text="본문",
-                                    missing_items=[], generated_by="llm", **extra)
+                                    missing_items=[], generated_by="llm", member_id=1, **extra)
 
     plain = build().value["payload"]
     assert "html" not in plain and "images" not in plain
@@ -534,15 +536,18 @@ def test_daily_briefing_event_carries_html_and_images_only_when_given():
 def test_daily_briefing_event_id_is_the_same_for_the_same_tick_and_edition():
     at = datetime(2026, 10, 20, 8, 45, tzinfo=KST)
 
-    def build(tick_id, edition, now):
+    def build(tick_id, edition, now, member_id=1):
         return daily_briefing_event(tick_event_id=tick_id, correlation_id="c", scheduled_for=at, now=now,
                                     edition=edition, range_start=at - timedelta(days=1), range_end=at,
-                                    text="본문", missing_items=[], generated_by="llm").value["eventId"]
+                                    text="본문", missing_items=[], generated_by="llm",
+                                    member_id=member_id).value["eventId"]
 
     first = build("tick-1", EDITION_MORNING, at)
     assert build("tick-1", EDITION_MORNING, at + timedelta(minutes=5)) == first
     assert build("tick-2", EDITION_MORNING, at) != first
     assert build("tick-1", EDITION_POST_CLOSE, at) != first
+    # 같은 판이라도 멤버가 다르면 다른 이벤트다(멤버마다 한 통씩 나간다).
+    assert build("tick-1", EDITION_MORNING, at, member_id=2) != first
 
 
 def test_daily_briefing_event_rejects_an_unknown_edition():
@@ -550,7 +555,7 @@ def test_daily_briefing_event_rejects_an_unknown_edition():
 
     with pytest.raises(ValueError):
         daily_briefing_event(tick_event_id="t", correlation_id="c", scheduled_for=at, now=at, edition="noon",
-                             range_start=at, range_end=at, text="본문", missing_items=[], generated_by="llm")
+                             range_start=at, range_end=at, text="본문", missing_items=[], generated_by="llm", member_id=1)
 
 
 def test_daily_briefing_job_types_are_the_ones_listed_in_the_tick_schema():
@@ -884,3 +889,31 @@ def test_daily_responded_v2_operations_are_optional_and_follow_the_schema():
     }
     for name, event in cases.items():
         assert validate(DAILY_V2, event) != [], name
+
+
+OPEN_FLOW_CELL = {"status": "present", "prevClose": "10000", "open": "10200", "openSource": "raw", "openRate": "2.00",
+                  "startAt": "2026-10-20T09:00:01+09:00", "startPrice": "10100", "endAt": "2026-10-20T09:09:58+09:00",
+                  "endPrice": "10300", "flowRate": "1.98", "rateVsPrevClose": "3.00"}
+
+
+def test_daily_data_request_accepts_the_optional_open_flow_start_and_rejects_a_bad_one():
+    event = sample("market.daily.requested.sample.json")
+    event["payload"]["openFlowSince"] = "2026-10-20T09:00:00+09:00"
+    assert validate("market.daily.requested.v1.schema.json", event) == []
+
+    event["payload"]["openFlowSince"] = "09:00"
+    assert validate("market.daily.requested.v1.schema.json", event) != []
+
+
+def test_daily_data_v2_response_accepts_an_open_flow_per_etf_and_rejects_a_broken_one():
+    event = sample("market.daily.responded.sample.json", "v2")
+    event["payload"]["etfs"][0]["openFlow"] = dict(OPEN_FLOW_CELL)
+    assert validate("market.daily.responded.v2.schema.json", event) == []
+
+    for field in OPEN_FLOW_CELL:
+        broken = sample("market.daily.responded.sample.json", "v2")
+        broken["payload"]["etfs"][0]["openFlow"] = {k: v for k, v in OPEN_FLOW_CELL.items() if k != field}
+        assert validate("market.daily.responded.v2.schema.json", broken) != [], field
+    other = sample("market.daily.responded.sample.json", "v2")
+    other["payload"]["etfs"][0]["openFlow"] = {**OPEN_FLOW_CELL, "openSource": "guess"}
+    assert validate("market.daily.responded.v2.schema.json", other) != []

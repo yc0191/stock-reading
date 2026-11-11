@@ -42,7 +42,7 @@ TICK_TOPIC = "schedule.tick"
 DAILY_TOPIC = "briefing.daily.generated"
 JOB_TYPES = {"morning": "daily-briefing-morning", "post-close": "daily-briefing-post-close"}
 
-# 시세처리기 보유 종목 테이블을 처음 채울 가짜 대응표. TEST02 는 미국 종목이 없는 ETF 로 둔다.
+# 시세처리기 종목 표를 채울 가짜 대응표. TEST02 는 미국 종목이 없는 ETF 로 둔다.
 HOLDINGS = {"TEST01": ("TESTA", "FAKEB"), "TEST02": ()}
 US_TICKERS = ("TESTA", "FAKEB")
 FAKE_STATEMENT = "[가짜 LLM] 시험용 요약 문장입니다."
@@ -54,13 +54,24 @@ FAKE_RATE_ISSUE = "[가짜 LLM] 받은 자료에 금리 관련 기사가 없습�
 COMMON = {"broker.address.family": "v4"}
 
 
-def holdings_file_json() -> str:
-    """시세처리기 보유 종목 파일(HOLDINGS_FILE) 내용. 새 데이터베이스의 빈 종목 테이블을 처음 채우는 가짜 대응표다."""
-    items = [{"kind": "ETF", "market": "KR", "symbol": etf, "relation": "HELD",
-              "members": [{"market": "US", "symbol": ticker, "rank": rank}
-                          for rank, ticker in enumerate(tickers, start=1)]}
-             for etf, tickers in HOLDINGS.items()]
-    return json.dumps(items)
+def holdings_seed_sql(recipient: str) -> str:
+    """새 데이터베이스의 빈 종목·개인 표를 채우는 SQL. 가짜 대응표(HOLDINGS)로 ETF·미국 구성 종목·포트폴리오와 받는 가짜 주소를 넣는다."""
+    lines = []
+    for etf in HOLDINGS:
+        lines.append(f"INSERT INTO market.etf (market, symbol) VALUES ('KR', '{etf}');")
+    for ticker in dict.fromkeys(t for tickers in HOLDINGS.values() for t in tickers):
+        lines.append(f"INSERT INTO market.stock (market, symbol) VALUES ('US', '{ticker}');")
+    for etf, tickers in HOLDINGS.items():
+        for rank, ticker in enumerate(tickers, start=1):
+            lines.append("INSERT INTO market.etf_stock_map (etf_id, stock_id, rank) "
+                         f"SELECT e.id, s.id, {rank} FROM market.etf e, market.stock s "
+                         f"WHERE e.symbol = '{etf}' AND s.symbol = '{ticker}';")
+    lines.append("INSERT INTO personal.member (name) VALUES ('TEST MEMBER');")
+    lines.append(f"INSERT INTO personal.member_mail (member_id, email) SELECT id, '{recipient}' FROM personal.member;")
+    for etf in HOLDINGS:
+        lines.append("INSERT INTO personal.member_portfolio (member_id, etf_id, relation) "
+                     f"SELECT m.id, e.id, 'HELD' FROM personal.member m, market.etf e WHERE e.symbol = '{etf}';")
+    return "\n".join(lines)
 
 
 def _ts(value: datetime) -> str:
@@ -179,7 +190,7 @@ def tick_events(now: datetime) -> list[tuple[str, str, dict]]:
 def schema_errors(topic: str, event: dict) -> list[str]:
     from jsonschema import Draft202012Validator, FormatChecker
 
-    schema = json.loads((CONTRACTS / f"{topic}.v1.schema.json").read_text(encoding="utf-8"))
+    schema = json.loads((CONTRACTS / f"{topic}.v{event.get('schemaVersion', 1)}.schema.json").read_text(encoding="utf-8"))
     return [e.message for e in Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(event)]
 
 

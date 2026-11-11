@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import java.io.IOException;
 import java.time.Clock;
 import java.time.ZoneId;
+import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -24,6 +25,7 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import dev.stockreading.collector.CollectorProperties;
+import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.ContractSchemas;
 import dev.stockreading.collector.insight.InsightProperties;
@@ -40,13 +42,18 @@ class PriceCheckFlowTest {
     private static final String NOW = "2026-10-21T10:00:00+09:00";
 
     // @Configuration 을 달지 않는다. 달면 같은 패키지를 스캔하는 다른 조립 테스트가 이 설정까지 읽어 빈이 겹친다.
-    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, InsightProperties.class,
+    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, MarketStatusProperties.class, InsightProperties.class,
             PriceCheckProperties.class})
     @ComponentScan(basePackages = "dev.stockreading.collector.marketdata")
     // 다른 패키지의 현재가 발행기는 이 하나만 올린다.
     @ComponentScan(basePackages = "dev.stockreading.collector.schedule", useDefaultFilters = false,
             includeFilters = @ComponentScan.Filter(type = FilterType.REGEX, pattern = ".*\\.QuotePublisher"))
     static class Wiring {
+
+        @Bean
+        QuoteSymbolsPort quoteSymbols() {
+            return () -> List.of("TEST01", "TEST02", "TEST03");
+        }
 
         @Bean
         Clock clock() {
@@ -84,7 +91,6 @@ class PriceCheckFlowTest {
                         "BROKER_BASE_URL=" + server.baseUrl(),
                         "BROKER_APP_KEY=key-secret-value",
                         "BROKER_APP_SECRET=app-secret-value",
-                        "collector.symbols=TEST01,TEST02,TEST03",
                         "BROKER_PRICE_CHECK_BASE_FIELDS=" + PriceChecks.BASE + "," + PriceChecks.BASE_ALT,
                         "BROKER_PRICE_CHECK_CHANGE_FIELD=" + PriceChecks.CHANGE,
                         "BROKER_PRICE_CHECK_CHANGE_SIGN_FIELD=" + PriceChecks.SIGN,
