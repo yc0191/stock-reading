@@ -12,6 +12,7 @@ import os
 import signal
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime
 from typing import Callable, Mapping
 
@@ -41,6 +42,7 @@ from briefing.jobs import BriefingCore
 from briefing.llm import AnthropicClient
 from briefing.member_store import PostgresMemberStore
 from briefing.move_group import MoveGrouper
+from briefing.move_merge import MorningMerge
 from briefing.report import ReportStage, ReportWriter, build_report_writer
 from briefing.research import QueryWriter, build_query_writer
 from briefing.sentence_research import ResearchReportStage, SentenceResearch
@@ -184,6 +186,7 @@ class BriefingRunner:
         self._producer: Producer | None = None
         self.core: BriefingCore | None = None
         self.grouper: MoveGrouper | None = None
+        self.merge: MorningMerge | None = None
         self.research: ResearchReportStage | None = None
         self.sentences: SentenceResearch | None = None
         self._running = threading.Event()
@@ -240,8 +243,12 @@ class BriefingRunner:
         self.core = BriefingCore(publisher, self.research, self.settings, self.job_log)
         # 같은 종목의 급변동은 모아서 작업 하나로 넘긴다.
         self.grouper = MoveGrouper(self.core.on_move, self.job_log, self.settings)
+        # 장 시작부터 아침 판 시작 사이의 급변동은 따로 리포트를 만들지 않고 아침 판에 합친다(실패하면 리포트로 넘긴다).
+        self.merge = MorningMerge(self.grouper.on_move, self.job_log, self.daily_settings)
         self.daily = DailyCore(publisher, self.daily_writer, self.job_log, self.daily_settings,
-                               sentences=self.sentences, status=self.status_store, members=self.member_store)
+                               sentences=self.sentences, status=self.status_store, members=self.member_store,
+                               on_morning_result=self.merge.on_morning_result)
+        self.merge.morning_in_progress = self.daily.morning_in_progress
         for edition, group in TICK_CONSUMER_GROUPS.items():
             consumer = self._consumer_factory({
                 "bootstrap.servers": self.bootstrap,
@@ -295,7 +302,7 @@ class BriefingRunner:
         # 응답·완료 알림도 메모리 상태에만 쓰이므로 같은 이유로 바로 확정한다.
         self._consumer.commit(message=message, asynchronous=False)
         handler = {
-            MOVE_TOPIC: self.grouper.on_move,
+            MOVE_TOPIC: self._on_move,
             # 재검색 완료 알림과 재검색 기사 응답은 재검색 쪽이 먼저 가져가고, 아니면 근거 조회 작업으로 넘긴다.
             COLLECTION_COMPLETED_TOPIC: self._on_collection_completed,
             HISTORY_RESPONDED_TOPIC: self.core.on_history_responded,
@@ -321,6 +328,11 @@ class BriefingRunner:
         except ValueError as error:
             log.error("skipping malformed tick at %s[%d]@%d: %s",
                       message.topic(), message.partition(), message.offset(), error)
+
+    def _on_move(self, message: str | bytes, now: datetime) -> None:
+        # 장 시작~아침 판 시작 사이 변동은 아침 판이 담으므로 모아 두고, 그 밖의 변동은 급변동 리포트로 간다.
+        if not self.daily_settings.morning_merge_enabled or not self.merge.on_move(message, now):
+            self.grouper.on_move(message, now)
 
     def _on_collection_completed(self, message: str | bytes, now: datetime) -> None:
         # 서버 상태 절이 센다. 저장은 eventId로 멱등하다. 저장에 실패해도 근거 조회 흐름은 막지 않는다.
@@ -360,7 +372,7 @@ class BriefingRunner:
     # ---- 내부 ----
 
     def _next_deadline(self) -> datetime | None:
-        deadlines = [d for d in (self.grouper.next_deadline(), self.core.next_deadline(),
+        deadlines = [d for d in (self.grouper.next_deadline(), self.merge.next_deadline(), self.core.next_deadline(),
                                  self.sentences.next_deadline(), self.daily.next_deadline()) if d is not None]
         return min(deadlines) if deadlines else None
 
@@ -373,7 +385,11 @@ class BriefingRunner:
 
     def _tick(self) -> None:
         now = self.clock()
-        # 모은 변동을 먼저 내보낸다. 그래야 방금 만든 작업의 제한 시간을 같은 순서에서 볼 수 있다.
+        # 아침 판에 합치려고 모아 둔 변동 중 때가 지난 것을 먼저 리포트 흐름으로 넘기고, 모은 변동을 내보낸다.
+        # 그래야 방금 만든 작업의 제한 시간을 같은 순서에서 볼 수 있다.
+        deadline = self.merge.next_deadline()
+        if deadline is not None and now >= deadline:
+            self.merge.on_tick(now)
         deadline = self.grouper.next_deadline()
         if deadline is not None and now >= deadline:
             self.grouper.on_tick(now)
@@ -394,6 +410,8 @@ class BriefingRunner:
             return
         try:
             abandoned = self.grouper.abandon_pending(self.clock())
+            if self.merge is not None:
+                abandoned += self.merge.abandon_pending(self.clock())
         except Exception:  # noqa: BLE001 - 종료를 막지 않는다
             log.exception("could not record pending market.move groups at shutdown")
             return
@@ -429,7 +447,11 @@ def build_runner(env: Mapping[str, str]) -> BriefingRunner:
     bootstrap = env.get("KAFKA_BOOTSTRAP", "localhost:9092")
     connect = psycopg_connector(db_conninfo(env))
     store = PostgresJobLog(connect)
+    # 아침 판 합침은 수집기의 아침 판 tick을 켜는 값과 같은 환경변수로 켠다. tick이 안 오면 합칠 판이 없다.
+    daily_settings = replace(DEFAULT_DAILY_SETTINGS, morning_merge_enabled=env.get(
+        "COLLECTOR_DAILY_BRIEFING_ENABLED", "").strip().lower() == "true")
     return BriefingRunner(bootstrap, build_report_writer(env), store, daily_writer=build_daily_writer(env),
+                          daily_settings=daily_settings,
                           query_writer=build_query_writer(env, AnthropicClient),
                           status_store=PostgresStatusStore(connect), member_store=PostgresMemberStore(connect))
 

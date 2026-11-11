@@ -67,20 +67,46 @@ DAY = datetime(2026, 10, 20).date()
 # ---- 판정 ----
 
 @pytest.mark.parametrize("direction, rate, expected", [
-    ("상승", "0.01", VERDICT_RIGHT), ("상승", "0.00", VERDICT_WRONG), ("상승", "-0.01", VERDICT_WRONG),
-    ("하락", "-0.01", VERDICT_RIGHT), ("하락", "0.00", VERDICT_WRONG), ("하락", "0.80", VERDICT_WRONG),
-    # 보합은 절댓값이 0.50 이하일 때만 맞다(경계 포함).
-    ("보합", "0.50", VERDICT_RIGHT), ("보합", "-0.50", VERDICT_RIGHT), ("보합", "0.00", VERDICT_RIGHT),
-    ("보합", "0.51", VERDICT_WRONG), ("보합", "-0.51", VERDICT_WRONG),
+    # 상승은 +0.30%를 넘을 때만 맞다. 보합 폭 안(경계 +0.30 포함)이면 빗나간다.
+    ("상승", "0.31", VERDICT_RIGHT), ("상승", "0.30", VERDICT_WRONG), ("상승", "0.01", VERDICT_WRONG),
+    ("상승", "0.00", VERDICT_WRONG), ("상승", "-0.31", VERDICT_WRONG),
+    # 하락은 -0.30% 아래일 때만 맞다.
+    ("하락", "-0.31", VERDICT_RIGHT), ("하락", "-0.30", VERDICT_WRONG), ("하락", "-0.01", VERDICT_WRONG),
+    ("하락", "0.00", VERDICT_WRONG), ("하락", "0.80", VERDICT_WRONG),
+    # 보합은 절댓값이 0.30 이하일 때만 맞다(경계 포함).
+    ("보합", "0.30", VERDICT_RIGHT), ("보합", "-0.30", VERDICT_RIGHT), ("보합", "0.00", VERDICT_RIGHT),
+    ("보합", "0.31", VERDICT_WRONG), ("보합", "-0.31", VERDICT_WRONG),
     ("예상 어려움", "1.00", None), ("모르는 값", "1.00", None),
 ])
-def test_the_verdict_follows_the_sign_or_the_flat_band(direction, rate, expected):
-    assert verdict_of(direction, Decimal(rate), 0.5) == expected
+def test_the_verdict_follows_the_flat_band_in_both_directions(direction, rate, expected):
+    assert verdict_of(direction, Decimal(rate), 0.3) == expected
+
+
+def test_the_default_flat_band_is_point_three_percent():
+    from briefing.config import DailySettings
+
+    assert DailySettings().flat_band_percent == 0.3
 
 
 def test_the_flat_band_comes_from_the_setting():
     assert verdict_of("보합", Decimal("0.70"), 0.5) == VERDICT_WRONG
     assert verdict_of("보합", Decimal("0.70"), 1.0) == VERDICT_RIGHT
+    # 폭이 넓어지면 같은 상승 폭이 보합 안으로 들어가 상승 예상은 빗나간다.
+    assert verdict_of("상승", Decimal("0.70"), 0.5) == VERDICT_RIGHT
+    assert verdict_of("상승", Decimal("0.70"), 1.0) == VERDICT_WRONG
+
+
+def test_the_tally_line_counts_unsure_calls_apart_from_the_graded_ones():
+    from briefing.daily_review import Review, review_tally_line
+
+    call = MorningCall("TEST01", "상승", "이유")
+    rows = (Review("TEST01", call, Decimal("1.00"), VERDICT_RIGHT), Review("TEST02", call, Decimal("0.10"), VERDICT_WRONG),
+            Review("TEST03", call, None, None), Review("TEST04", call, None, None))
+
+    line = review_tally_line(rows, 0.3)
+
+    assert "맞음 1 · 빗나감 1 · 예상 어려움 2개(채점하지 않음)" in line
+    assert "±0.3% 안이면 보합" in line and "+0.3% 초과" in line and "-0.3% 미만" in line
 
 
 def day(symbol, rate):
@@ -271,11 +297,14 @@ def test_the_morning_call_is_checked_against_the_real_move_and_claude_explains_i
     payload = run(store, llm)
     text, html = payload["text"], payload["html"]
     assert "■ 아침 예상 대조" in text and "아침 예상 대조" in html
-    # 판정은 코드가 한다: 상승 예상·+1.20% → 맞음, 보합 예상·-0.60% → 빗나감(0.50 초과), 예상 어려움은 대조 안 함.
+    # 판정은 코드가 한다: 상승 예상·+1.20% → 맞음, 보합 예상·-0.60% → 빗나감(0.30 초과), 예상 어려움은 대조 안 함.
     assert any("TEST01" in ln and "아침 예상 상승 → 실제 +1.20%: 맞음" in ln for ln in text.splitlines())
     assert any("TEST02" in ln and "아침 예상 보합 → 실제 −0.60%: 빗나감" in ln for ln in text.splitlines())
     assert any("TEST03" in ln and f"→ {NOT_COMPARED}" in ln for ln in text.splitlines())
     assert "맞음" in html and "빗나감" in html and NOT_COMPARED in html
+    # 채점 요약은 예상 어려움을 개수로만 보이고 기준(보합 ±0.3%)을 함께 알린다.
+    tally = "채점: 맞음 1 · 빗나감 1 · 예상 어려움 1개(채점하지 않음)"
+    assert any(tally in ln and "±0.3% 안이면 보합" in ln for ln in text.splitlines()) and tally in html
     assert "시장이 쉬어 가는 흐름이었을 수 있습니다." in text and "시장이 쉬어 가는 흐름이었을 수 있습니다." in html
     # ETF 줄(번호 1~3) 다음에 대조 이유의 새 근거가 4번으로 붙고, 이미 번호가 있는 근거(E2)는 그 번호(2)를 다시 쓴다.
     [first] = [ln for ln in text.splitlines() if "미국 지수가 영향을 줬을 수 있습니다." in ln and "출처 4" in ln]

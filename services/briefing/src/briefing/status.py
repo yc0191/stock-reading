@@ -14,6 +14,7 @@ from typing import Any, Mapping, Protocol
 
 from briefing.compose import KST
 from briefing.events import parse_timestamp
+from briefing.job_log import REASON_MERGED_INTO_MORNING
 
 log = logging.getLogger("briefing.status")
 
@@ -245,6 +246,8 @@ class _Moves:
     failed: int = 0
     running: int = 0
     rule_based: int = 0
+    # 아침 판에 합쳐 따로 리포트를 만들지 않은 변동(성공으로 끝났지만 리포트가 없다)
+    merged: int = 0
     reasons: dict[str, int] = field(default_factory=dict)
 
 
@@ -254,7 +257,9 @@ def _tally_moves(runs: list[JobRunRow]) -> _Moves:
         if r.job_kind != JOB_KIND_MOVE:
             continue
         moves.total += 1
-        if r.status == STATUS_SUCCEEDED:
+        if r.status == STATUS_SUCCEEDED and r.failure_reason == REASON_MERGED_INTO_MORNING:
+            moves.merged += 1
+        elif r.status == STATUS_SUCCEEDED:
             moves.succeeded += 1
         elif r.status == STATUS_FAILED:
             moves.failed += 1
@@ -293,7 +298,8 @@ def _briefing_line(runs: list[JobRunRow] | None) -> str:
         return f"- 브리핑: {NO_DATA}"
     m = _tally_moves(runs)
     failed = f"실패 {m.failed}" + (f"[{_reasons_text(m.reasons)}]" if m.reasons else "")
-    return (f"- 브리핑: 급변동 {m.total}건(성공 {m.succeeded} · {failed} · 진행 중 {m.running} · 규칙 기반 {m.rule_based})"
+    merged = f" · 아침 판에 합침 {m.merged}" if m.merged else ""
+    return (f"- 브리핑: 급변동 {m.total}건(성공 {m.succeeded} · {failed} · 진행 중 {m.running} · 규칙 기반 {m.rule_based}{merged})"
             f" · 아침 판 {_morning_text(_morning(runs))}")
 
 

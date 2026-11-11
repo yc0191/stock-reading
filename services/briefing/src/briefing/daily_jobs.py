@@ -15,11 +15,11 @@ import logging
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
-from datetime import datetime, time, timedelta
-from typing import Any
+from datetime import date, datetime, time, timedelta
+from typing import Any, Callable
 
 from briefing.compose import KST
-from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
+from briefing.config import DEFAULT_DAILY_SETTINGS, DEFAULT_SETTINGS, CoreSettings, DailySettings
 from briefing.daily_chart import chart_bars, no_data_names, render_day_chart
 from briefing.daily_html import ChartSlot, render_html
 from briefing.daily_members import MemberPort, MemberPortfolio, member_input, member_output, member_sections
@@ -72,6 +72,7 @@ from briefing.job_log import (
     record_result,
 )
 from briefing.evidence import MARKET_WIDE
+from briefing.open_flow import in_range, open_flow_start, parse_open_flow
 from briefing.ports import FailureReason, RequestPort
 from briefing.research import ResearchTarget
 from briefing.sentence_research import WHOLE_REPORT, SentenceResearch, WeakSentence
@@ -207,6 +208,8 @@ class _DailyJob:
     first_failure: tuple[FailureReason, str, int] | None = None
     # 문장 단위 재검색이 진행 중인가. 끝나면 재검색 흐름이 발행한다.
     researching: bool = False
+    # 아침 판만: 개장 시세를 읽을 구간의 시작. 판 시각이 장 시작 전이라 읽지 않으면 None.
+    open_flow_since: datetime | None = None
 
     def waiting(self) -> bool:
         return (self.data.awaiting() and not self.data_given_up) or (self.filings.awaiting() and not self.filings_given_up) \
@@ -219,12 +222,17 @@ class DailyCore:
     writer: DailyLlmWriter | None = None
     job_log: JobLogPort = field(default_factory=DiscardJobLog)
     settings: DailySettings = DEFAULT_DAILY_SETTINGS
+    # 아침 판의 개장 시세 범위(장 시작 시각, 거슬러 읽는 상한)는 근거 조회와 같은 CoreSettings에서 온다.
+    core_settings: CoreSettings = DEFAULT_SETTINGS
     # 있을 때만 재검색한다. 급변동과 함께 쓰는 문장 단위 재검색 흐름이다.
     sentences: SentenceResearch | None = None
     # 있을 때만 마감 후 판 끝에 서버 상태 절을 붙인다.
     status: StatusPort | None = None
     # 판을 받을 멤버와 그 포트폴리오를 읽는 곳. 없으면 받을 멤버를 모르므로 판을 발행하지 않는다.
     members: MemberPort | None = None
+    # 아침 판의 결과(판 시각, 나갔는가, 판에 개장 흐름이 담긴 종목코드, 개장 흐름을 읽은 구간 시작)를 받는 곳.
+    # 장 시작 뒤 급변동을 아침 판에 합쳤는지 정하는 데 쓴다.
+    on_morning_result: Callable[[datetime, bool, datetime, frozenset[str], datetime | None], None] | None = None
     _jobs: dict[str, _DailyJob] = field(default_factory=dict, init=False)
     _seen: OrderedDict[str, None] = field(default_factory=OrderedDict, init=False)
 
@@ -257,6 +265,8 @@ class DailyCore:
         while len(self._seen) > self.settings.remembered_ticks:
             self._seen.popitem(last=False)
         job = _DailyJob(job_id, edition, correlation_id, scheduled_for, range_start(scheduled_for, self.settings))
+        if edition == EDITION_MORNING:
+            job.open_flow_since = open_flow_start(scheduled_for, self.core_settings)
         self._jobs[job_id] = job
         # 작업 한 줄은 시작 때 만들고 끝날 때 고친다. 입력은 시작시킨 이벤트 원문이다.
         raw = message.decode("utf-8") if isinstance(message, bytes) else message
@@ -397,6 +407,11 @@ class DailyCore:
                 self._send_articles(job, symbol, now)
         self._finish(job, now)
 
+    def morning_in_progress(self, day: date) -> bool:
+        """그 날의 아침 판이 시작됐고 아직 끝나지 않았는가."""
+        return any(j.edition == EDITION_MORNING and j.scheduled_for.astimezone(KST).date() == day
+                   for j in self._jobs.values())
+
     def next_deadline(self) -> datetime | None:
         deadlines = [exchange.sent_at + self.settings.response_timeout
                      for job in self._jobs.values()
@@ -423,6 +438,8 @@ class DailyCore:
         if job.edition == EDITION_POST_CLOSE and self.status is not None:
             # 서버 상태 절의 시세처리기 운영 상태. 마감 후 판만 요청한다.
             payload["includeOperations"] = True
+        if job.open_flow_since is not None:
+            payload["openFlowSince"] = format_timestamp(job.open_flow_since)
         job.sent.append(_Sent(DAILY_DATA_REQUESTED_TOPIC, seq, now, payload))
         self.requests.send(daily_data_request(job.correlation_id, now, payload))
 
@@ -466,7 +483,12 @@ class DailyCore:
         # 일봉이 없는 ETF(받은 시각 없음)는 버리지 않고 자료 없음으로 싣는다.
         kept = tuple(e for e in etfs if e.fetched_at is None or job.range_start <= e.fetched_at <= job.scheduled_for)
         self._note_excluded(job, "etfs", len(etfs) - len(kept))
-        return kept
+        # 개장 흐름은 읽은 구간(장 시작~판 시각) 밖이거나 요청하지 않았는데 온 것을 버리고 자료 없음으로 싣는다.
+        rechecked = tuple(replace(e, open_flow=None) if e.open_flow is not None and (
+            job.open_flow_since is None or not in_range(e.open_flow, job.open_flow_since, job.scheduled_for)) else e
+                          for e in kept)
+        self._note_excluded(job, "openFlow", sum(1 for a, b in zip(kept, rechecked) if a is not b))
+        return rechecked
 
     def _recheck_state(self, job: _DailyJob, close_rates: tuple[CloseRate, ...],
                        background: tuple[Background, ...]) -> tuple[tuple[CloseRate, ...], tuple[Background, ...]]:
@@ -553,6 +575,7 @@ class DailyCore:
             background=job.background,
             filings=job.filings_data,
             filings_truncated=job.filings_truncated,
+            open_flow_start=job.open_flow_since,
             settings=self.settings,
         )
         if job.edition in EDITIONS_WITH_ETF_ARTICLES:
@@ -834,7 +857,12 @@ class DailyCore:
             else job.first_failure[0].value if job.first_failure is not None else None,
             # 멤버마다 이벤트가 따로라 작업 한 줄에는 첫 멤버의 것만 싣고, 나머지는 member-briefing 줄에 있다.
             result_event_id=events[0][1].value["eventId"] if events else None)
-        if not record_result(self.job_log, result):
+        saved = record_result(self.job_log, result)
+        if job.edition == EDITION_MORNING and self.on_morning_result is not None:
+            # 나가지 않은 아침 판(실패, 기록 저장 실패)은 합쳐 둔 급변동을 받지 못했으므로 그 변동을 따로 알린다.
+            flowed = frozenset(e.symbol for e in job.etfs or () if e.open_flow is not None and e.open_flow.present)
+            self.on_morning_result(job.scheduled_for, saved and not failed, now, flowed, job.open_flow_since)
+        if not saved:
             del self._jobs[job.job_id]
             return
         for _, event, _ in events:
@@ -940,7 +968,7 @@ def _parse_etf_day(e: dict[str, Any]) -> EtfDay:
     return EtfDay(e["symbol"], e["date"], e["close"], e["prevClose"], e["rate"],
                   parse_timestamp(fetched) if fetched is not None else None,
                   tuple(e["tickers"]), bool(e["tickersTruncated"]), parse_etf_info(e.get("etf")),
-                  e.get("missingReason"))
+                  e.get("missingReason"), open_flow=parse_open_flow(e.get("openFlow")))
 
 
 def daily_data_request(correlation_id: str, now: datetime, payload: dict[str, Any]) -> OutboundEvent:

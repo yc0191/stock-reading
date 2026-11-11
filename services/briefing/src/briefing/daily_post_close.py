@@ -30,8 +30,8 @@ from briefing.daily_report import (
     member_line,
     section_title,
 )
-from briefing.daily_review import NOT_COMPARED
-from briefing.job_log import MoveRun, RunStatus
+from briefing.daily_review import NOT_COMPARED, review_tally_line
+from briefing.job_log import REASON_MERGED_INTO_MORNING, MoveRun, RunStatus
 from briefing.llm_output import weak_note_line
 from briefing.move_figures import (
     KOSDAQ_NAME,
@@ -56,6 +56,8 @@ MOVES_TITLE = "그날 급변동"
 MOVES_NONE = "없음"
 MOVES_NOT_READ = "기록을 읽지 못했습니다"
 # 급변동 리포트 결과 표시. 모르는 상태 값은 그대로 보인다.
+# 따로 리포트를 만들지 않고 아침 판이 개장 흐름으로 담은 급변동
+MOVE_MERGED_TEXT = "아침 판에 합침"
 MOVE_RESULT_TEXT = {RunStatus.SUCCEEDED.value: "성공", RunStatus.FAILED.value: "실패", RunStatus.RUNNING.value: "진행 중"}
 
 
@@ -110,6 +112,8 @@ class PostCloseView:
     reviews: tuple[ReviewRow, ...] = ()
     review_note: str | None = None
     moves: tuple[str, ...] | None = None
+    # 채점 요약(맞음·빗나감 개수, 예상 어려움 개수, 기준). 대조 줄이 없으면 None이다.
+    review_tally: str | None = None
 
 
 def market_line(i: DailyInput, sections: tuple[Section, ...]) -> str:
@@ -157,6 +161,8 @@ def move_line(move: MoveRun, names: dict[str, str]) -> str:
     """급변동 한 건의 한 줄: 시각 · ETF · 등락 · 리포트 결과."""
     at = move.move_at.astimezone(KST)
     change = _signed_percent(Decimal(str(move.change_percent))) if move.change_percent is not None else NO_DATA
+    if move.status == RunStatus.SUCCEEDED.value and move.failure_reason == REASON_MERGED_INTO_MORNING:
+        return f"{at:%H:%M} {names.get(move.symbol, move.symbol)} {change} · {MOVE_MERGED_TEXT}"
     result = MOVE_RESULT_TEXT.get(move.status, move.status)
     return f"{at:%H:%M} {names.get(move.symbol, move.symbol)} {change} · 리포트 {result}"
 
@@ -222,7 +228,8 @@ def post_close_view(i: DailyInput, sections: tuple[Section, ...], output: DailyO
         output is not None, bool(output is not None and output.insufficient_evidence), market_line(i, sections),
         output.summary if usable else (), notables, issues, section_title(etf_section), tuple(groups), extra,
         tuple((n, by_ref[ref]) for ref, n in numbers.items()),
-        tuple(review_rows), i.review.note if i.review is not None and not review_rows else None, _moves_lines(i))
+        tuple(review_rows), i.review.note if i.review is not None and not review_rows else None, _moves_lines(i),
+        review_tally=review_tally_line(i.reviews(), i.settings.flat_band_percent) if review_rows else None)
 
 
 def source_plain(entry: Entry) -> str:
@@ -280,6 +287,8 @@ def post_close_text(i: DailyInput, sections: tuple[Section, ...], output: DailyO
                 lines.append(f"    이유: {row.reason}{cite}")
                 if row.shortfall:
                     lines.append(weak_note_line(row.shortfall, "      "))
+        if v.review_tally:
+            lines.append(f"  - {v.review_tally}")
         if v.review_note:
             lines.append(f"  - {v.review_note}")
     if v.moves is not None:

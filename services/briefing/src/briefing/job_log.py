@@ -83,6 +83,8 @@ REASON_GROUPED = "grouped-by-symbol"
 # 재시작으로 끝나지 못한 작업의 실패 사유(job_run.failure_reason). 코드의 단계 실패 사유(ports.FailureReason)와 달리
 # 작업이 아니라 프로세스가 원인이라 여기에 둔다.
 REASON_INTERRUPTED = "interrupted_by_restart"
+# 장 시작~아침 판 시작 사이 급변동을 따로 보내지 않고 아침 판에 합쳤다(성공으로 끝난 작업의 사유이며 리포트는 없다)
+REASON_MERGED_INTO_MORNING = "merged_into_morning"
 
 
 @dataclass(frozen=True)

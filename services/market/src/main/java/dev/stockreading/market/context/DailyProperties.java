@@ -1,5 +1,7 @@
 package dev.stockreading.market.context;
 
+import java.time.Duration;
+
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -7,14 +9,18 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * 설정을 함께 쓰고, 여기에는 데일리 응답에만 있는 상한을 둔다.
  *
  * @param maxEtfs 응답에 담을 보유 ETF의 최대 개수
+ * @param openFlowMaxWindow 개장 흐름이 판 기준 시각부터 거슬러 읽는 시세 구간의 최대 길이. 비우면 30분
  */
 @ConfigurationProperties("market.daily")
-public record DailyProperties(int maxEtfs) {
+public record DailyProperties(int maxEtfs, Duration openFlowMaxWindow) {
 
     public DailyProperties {
         // 상한이 비면 모든 ETF가 잘려 조용히 빈 응답이 나가므로 시작 단계에서 막는다.
         if (maxEtfs < 1) {
             throw new IllegalArgumentException("market.daily.max-etfs must be positive");
+        }
+        if (openFlowMaxWindow == null) {
+            openFlowMaxWindow = Duration.ofMinutes(30);
         }
     }
 }

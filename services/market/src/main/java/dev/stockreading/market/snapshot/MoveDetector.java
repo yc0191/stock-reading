@@ -2,10 +2,7 @@ package dev.stockreading.market.snapshot;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -111,48 +108,14 @@ class MoveDetector {
             log.info("{} prevClose skipped: raw response is not JSON", symbol);
             return null;
         }
-        List<String> fields = properties.prevCloseFields();
-        Map<Long, Integer> votes = new HashMap<>();
-        for (String field : fields) {
-            Long value = readField(root, field);
-            if (value != null) {
-                votes.merge(value, 1, Integer::sum);
-            }
+        Long majority = RawQuote.majority(root, properties.prevCloseFields());
+        if (majority == null) {
+            log.info("{} prevClose skipped: no majority among {} fields", symbol, properties.prevCloseFields().size());
         }
-        List<Long> majority = new ArrayList<>();
-        votes.forEach((value, count) -> {
-            if (count * 2 > fields.size()) {
-                majority.add(value);
-            }
-        });
-        if (majority.size() != 1) {
-            log.info("{} prevClose skipped: no majority among {} fields", symbol, fields.size());
-            return null;
-        }
-        return majority.get(0);
+        return majority;
     }
 
     static Long readField(JsonNode root, String field) {
-        JsonNode node = root;
-        for (String name : field.split("\\.")) {
-            node = node.path(name);
-        }
-        if (node.isMissingNode() || node.isNull()) {
-            return null;
-        }
-        BigDecimal value;
-        try {
-            value = new BigDecimal(node.asString().trim());
-        } catch (NumberFormatException e) {
-            return null;
-        }
-        if (value.signum() <= 0 || value.stripTrailingZeros().scale() > 0) {
-            return null;
-        }
-        try {
-            return value.longValueExact();
-        } catch (ArithmeticException e) {
-            return null;
-        }
+        return RawQuote.readField(root, field);
     }
 }

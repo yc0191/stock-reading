@@ -13,6 +13,7 @@ from briefing.daily_report import (
     ITEM_EXCHANGE,
     ITEM_FILINGS,
     ITEM_KR_REVIEW,
+    ITEM_OPEN_FLOW,
     ITEM_US_INDEX,
     ITEM_US_STOCKS,
     NO_DATA,
@@ -84,7 +85,8 @@ def morning_reply(points, symbols=("TEST01",)):
 
 def test_morning_and_post_close_choose_their_own_items():
     assert [s.name for s in build_sections(daily_input())] == \
-        [ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_KR_REVIEW, ITEM_ETF_ARTICLES]
+        [ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_KR_REVIEW, ITEM_OPEN_FLOW,
+         ITEM_ETF_ARTICLES]
     assert [s.name for s in build_sections(daily_input("post-close"))] == \
         ["그날 한국 증시", ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_ETFS, ITEM_ETF_ARTICLES, ITEM_FILINGS, ITEM_MEMBER_ISSUES]
 
@@ -94,10 +96,10 @@ def test_each_missing_item_is_marked_no_data():
     i = DailyInput(**{**i.__dict__, "close_rates": None, "background": None})
     sections = build_sections(i)
     assert missing_items(sections) == [ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_KR_REVIEW,
-                                       ITEM_ETF_ARTICLES]
+                                       ITEM_OPEN_FLOW, ITEM_ETF_ARTICLES]
     text = rule_based_text(i, sections)
-    # 항목 5개와, 규칙 기반 본문이 환율 이슈·금리 이슈 칸에 쓰는 대체 줄 2개
-    assert text.count(f"- {NO_DATA}") == 7
+    # 항목 6개와, 규칙 기반 본문이 환율 이슈·금리 이슈 칸에 쓰는 대체 줄 2개
+    assert text.count(f"- {NO_DATA}") == 8
     assert text.endswith(DAILY_DISCLAIMER)
 
 
@@ -136,7 +138,7 @@ def test_us_stocks_and_filings_are_not_applicable_without_us_holdings():
     sections = build_sections(i)
     assert sections[2].status == "해당 없음" and sections[3].status == "해당 없음"
     # 기사 응답이 없는 입력이라 ETF별 기사만 빠진 항목이다.
-    assert missing_items(sections) == [ITEM_ETF_ARTICLES]
+    assert missing_items(sections) == [ITEM_OPEN_FLOW, ITEM_ETF_ARTICLES]
 
 
 def test_filings_and_etf_lists_mark_truncation():

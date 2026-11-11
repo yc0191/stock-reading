@@ -80,10 +80,10 @@ collector:
     overseas-max-tickers: 100
   daily-briefing:
     # 꺼 두면 데일리 브리핑 시작 tick 을 발행하지 않는다. 휴장일에는 발행하지 않는다(시세 제공자의 장 운영 상태로 판정, 판정하지 못하면 영업일로 본다).
-    # 각 판은 그 판의 자료 수집(장 시작 전 08:30, 장 마감 후 16:30)이 끝난 뒤에 오도록 둔다.
+    # 각 판은 그 판의 자료 수집이 끝난 뒤에 오도록 둔다(아침 판은 장 시작 후 09:10까지의 개장 흐름을 담으므로 09:10, 마감 후 판은 장 마감 후 16:30 수집 뒤).
     enabled: ${COLLECTOR_DAILY_BRIEFING_ENABLED:false}
     # 한국 시간 기준 cron(초 분 시 일 월 요일). 한 판만 끄려면 그 판의 값을 "-" 로 준다.
-    morning-cron: ${COLLECTOR_DAILY_BRIEFING_MORNING_CRON:0 45 8 * * MON-FRI}
+    morning-cron: ${COLLECTOR_DAILY_BRIEFING_MORNING_CRON:0 10 9 * * MON-FRI}
     post-close-cron: ${COLLECTOR_DAILY_BRIEFING_POST_CLOSE_CRON:0 0 17 * * MON-FRI}
   market-data:
     # simulator | broker

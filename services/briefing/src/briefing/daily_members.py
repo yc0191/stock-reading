@@ -12,6 +12,7 @@ from typing import Protocol
 from briefing.daily_inputs import EtfArticles
 from briefing.daily_report import (
     KIND_DAY,
+    KIND_OPEN_FLOW,
     KIND_MEMBER,
     KIND_US_CLOSE,
     POINT_NOTABLE,
@@ -68,6 +69,8 @@ def _entry_key(entry: Entry) -> tuple | None:
     llm = entry.llm
     if entry.kind == KIND_DAY:
         return (KIND_DAY, llm.get("symbol"))
+    if entry.kind == KIND_OPEN_FLOW:
+        return (KIND_OPEN_FLOW, llm.get("symbol"))
     if entry.kind == KIND_US_CLOSE:
         return (KIND_US_CLOSE, llm.get("ticker"))
     if entry.kind == KIND_MEMBER:

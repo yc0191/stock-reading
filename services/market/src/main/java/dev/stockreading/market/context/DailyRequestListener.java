@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
+import dev.stockreading.market.MarketProperties;
 import dev.stockreading.market.Topics;
 import dev.stockreading.market.event.ContextPayload;
 import dev.stockreading.market.event.DailyPayload;
@@ -48,12 +49,13 @@ class DailyRequestListener {
     private final OperationsReader operationsReader;
     private final DailyPublisher publisher;
     private final ObjectMapper mapper;
+    private final OpenFlowCalculator openFlow;
 
     DailyRequestListener(BackgroundRepository repository, WorldIndexRates worldIndexRates,
             OverseasCloseRateQuery closeRateQuery, HoldingsPort holdings, MemberChangesPort memberChanges,
             ContextProperties contextProperties,
             DailyProperties dailyProperties, OperationsReader operationsReader, DailyPublisher publisher,
-            ObjectMapper mapper) {
+            ObjectMapper mapper, OpenFlowPort openFlowPort, MarketProperties marketProperties) {
         this.repository = repository;
         this.marketBackground = new MarketBackground(repository, worldIndexRates,
                 contextProperties.worldIndexPrevLookback());
@@ -66,6 +68,8 @@ class DailyRequestListener {
         this.operationsReader = operationsReader;
         this.publisher = publisher;
         this.mapper = mapper;
+        this.openFlow = new OpenFlowCalculator(openFlowPort, mapper, marketProperties.openPriceFields(),
+                marketProperties.prevCloseFields());
     }
 
     @KafkaListener(topics = Topics.MARKET_DAILY_REQUESTED, groupId = "market")
@@ -123,6 +127,10 @@ class DailyRequestListener {
                     unreadable);
         }
 
+        if (request.openFlowSince() != null) {
+            addOpenFlow(request, etfs, asOf);
+        }
+
         Set<String> tickers = new LinkedHashSet<>();
         etfs.forEach(etf -> tickers.addAll(etf.tickers()));
         List<ContextPayload.CloseRate> closeRates = new ArrayList<>();
@@ -136,6 +144,34 @@ class DailyRequestListener {
         // 요청이 운영 상태를 달라고 할 때만 읽는다. 아니면 칸 자체를 넣지 않는다.
         DailyPayload.Operations operations = request.wantsOperations() ? operations(request, since, asOf) : null;
         return new DailyPayload(request.jobId(), request.seq(), etfs, closeRates, background, truncated, operations);
+    }
+
+    /**
+     * 아침 판이 요청했을 때만 ETF마다 개장 흐름을 붙인다. 읽을 구간은 요청 시작 시각부터 기준 시각까지이고, 안전 상한보다
+     * 길면 기준 시각에서 그 기간만큼만 거슬러 읽는다. 한 ETF의 조회가 실패해도 나머지 응답은 보낸다(그 ETF는 칸이 없다).
+     */
+    private void addOpenFlow(DailyRequestEnvelope.RequestPayload request, List<DailyPayload.Etf> etfs,
+            OffsetDateTime asOf) {
+        OffsetDateTime requested = OffsetDateTime.parse(request.openFlowSince());
+        if (requested.isAfter(asOf)) {
+            throw new IllegalArgumentException("invalid daily request jobId=" + request.jobId()
+                    + " seq=" + request.seq());
+        }
+        OffsetDateTime floor = asOf.minus(dailyProperties.openFlowMaxWindow());
+        OffsetDateTime from = requested.isAfter(floor) ? requested : floor;
+        int failed = 0;
+        for (int i = 0; i < etfs.size(); i++) {
+            DailyPayload.Etf etf = etfs.get(i);
+            try {
+                etfs.set(i, etf.withOpenFlow(openFlow.calculate(etf.symbol(), from, asOf)));
+            } catch (RuntimeException e) {
+                failed++;
+            }
+        }
+        if (failed > 0) {
+            // 종목코드는 보유 종목이 드러나므로 건수만 남긴다.
+            log.warn("open flow unavailable jobId={} seq={} etfs={}", request.jobId(), request.seq(), failed);
+        }
     }
 
     /** 운영 상태는 부가 정보라 조회가 실패해도 나머지 응답은 보낸다. 종목코드·외부 오류 원문이 새지 않게 예외 종류만 남긴다. */

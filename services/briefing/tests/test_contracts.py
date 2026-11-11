@@ -876,3 +876,31 @@ def test_daily_responded_v2_operations_are_optional_and_follow_the_schema():
     }
     for name, event in cases.items():
         assert validate(DAILY_V2, event) != [], name
+
+
+OPEN_FLOW_CELL = {"status": "present", "prevClose": "10000", "open": "10200", "openSource": "raw", "openRate": "2.00",
+                  "startAt": "2026-10-20T09:00:01+09:00", "startPrice": "10100", "endAt": "2026-10-20T09:09:58+09:00",
+                  "endPrice": "10300", "flowRate": "1.98", "rateVsPrevClose": "3.00"}
+
+
+def test_daily_data_request_accepts_the_optional_open_flow_start_and_rejects_a_bad_one():
+    event = sample("market.daily.requested.sample.json")
+    event["payload"]["openFlowSince"] = "2026-10-20T09:00:00+09:00"
+    assert validate("market.daily.requested.v1.schema.json", event) == []
+
+    event["payload"]["openFlowSince"] = "09:00"
+    assert validate("market.daily.requested.v1.schema.json", event) != []
+
+
+def test_daily_data_v2_response_accepts_an_open_flow_per_etf_and_rejects_a_broken_one():
+    event = sample("market.daily.responded.sample.json", "v2")
+    event["payload"]["etfs"][0]["openFlow"] = dict(OPEN_FLOW_CELL)
+    assert validate("market.daily.responded.v2.schema.json", event) == []
+
+    for field in OPEN_FLOW_CELL:
+        broken = sample("market.daily.responded.sample.json", "v2")
+        broken["payload"]["etfs"][0]["openFlow"] = {k: v for k, v in OPEN_FLOW_CELL.items() if k != field}
+        assert validate("market.daily.responded.v2.schema.json", broken) != [], field
+    other = sample("market.daily.responded.sample.json", "v2")
+    other["payload"]["etfs"][0]["openFlow"] = {**OPEN_FLOW_CELL, "openSource": "guess"}
+    assert validate("market.daily.responded.v2.schema.json", other) != []

@@ -14,6 +14,17 @@ VERDICT_WRONG = "빗나감"
 # 방향을 정하지 못한 ETF는 맞고 틀림을 가릴 수 없어 대조하지 않는다.
 NOT_COMPARED = "대조 안 함(예상 어려움)"
 
+def review_tally_line(reviews: Iterable[Review], flat_band_percent: float) -> str:
+    """채점 요약 한 줄. 예상 어려움은 채점하지 않고 개수만 보인다."""
+    reviews = tuple(reviews)
+    right = sum(1 for r in reviews if r.verdict == VERDICT_RIGHT)
+    wrong = sum(1 for r in reviews if r.verdict == VERDICT_WRONG)
+    unsure = sum(1 for r in reviews if r.verdict is None)
+    band = f"{flat_band_percent:g}"
+    return (f"채점: {VERDICT_RIGHT} {right} · {VERDICT_WRONG} {wrong} · 예상 어려움 {unsure}개(채점하지 않음) "
+            f"— 기준: 등락이 ±{band}% 안이면 보합, 상승은 +{band}% 초과, 하락은 -{band}% 미만일 때만 맞음")
+
+
 # 대조를 뺀 이유(본문에 보이고 작업 기록에도 남는다)
 NO_MORNING_CALLS = "같은 날 아침 판의 ETF별 예상 기록이 없어 대조하지 못했습니다."
 MORNING_READ_FAILED = "아침 판의 ETF별 예상 기록을 읽지 못해 대조하지 못했습니다."
@@ -63,15 +74,17 @@ def parse_calls(records: Iterable[Mapping[str, Any]]) -> tuple[MorningCall, ...]
 
 
 def verdict_of(direction: str, rate: Decimal, flat_band_percent: float) -> str | None:
-    """상승·하락 예상은 실제 등락의 부호로, 보합 예상은 등락 절댓값이 flat_band_percent 이하인지로 가른다."""
+    """보합 폭(±flat_band_percent%) 안이 보합이다. 보합 예상은 폭 안일 때만, 상승 예상은 폭 위(rate > +폭)일 때만,
+    하락 예상은 폭 아래(rate < -폭)일 때만 맞다. 폭 안이면 상승·하락 예상은 빗나간다(경계값 ±폭은 보합이다)."""
     if direction == DIRECTION_UNSURE:
         return None
+    band = Decimal(str(flat_band_percent))
     if direction == DIRECTION_UP:
-        hit = rate > 0
+        hit = rate > band
     elif direction == DIRECTION_DOWN:
-        hit = rate < 0
+        hit = rate < -band
     elif direction == DIRECTION_FLAT:
-        hit = abs(rate) <= Decimal(str(flat_band_percent))
+        hit = abs(rate) <= band
     else:
         return None
     return VERDICT_RIGHT if hit else VERDICT_WRONG

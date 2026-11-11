@@ -52,6 +52,7 @@ from briefing.llm_output import (
     ticker_pattern,
 )
 from briefing.llm import API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCallError, LlmClient, llm_config
+from briefing.open_flow import OPEN_SOURCE_TEXT, OpenFlow, signed
 from briefing.move_figures import USD_KRW_NAME, display, exchange_rate_figure
 from briefing.sources import (
     BACKGROUND_LABEL,
@@ -100,6 +101,7 @@ ITEM_US_STOCKS = "미국 종목 직전 장 등락"
 ITEM_FILINGS = "범위 안 미국 공시"
 ITEM_KR_REVIEW = "전날 한국 증시"
 ITEM_KR_TODAY = "그날 한국 증시"
+ITEM_OPEN_FLOW = "ETF별 개장 흐름"
 ITEM_ETFS = "보유 ETF별 하루 등락"
 # 보유/관심으로 나뉠 때 글자판·HTML에 보이는 절 제목. LLM 입력과 자료 없음 목록은 ITEM_ETFS 이름을 그대로 쓴다.
 ITEM_ETFS_SPLIT_TITLE = "보유·관심 ETF별 하루 등락"
@@ -110,7 +112,8 @@ ITEM_MEMBER_ISSUES = "미국 구성 종목 이슈"
 ITEM_RESEARCH = "재검색 기사"
 
 EDITION_ITEMS = {
-    EDITION_MORNING: (ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_KR_REVIEW, ITEM_ETF_ARTICLES),
+    EDITION_MORNING: (ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_KR_REVIEW, ITEM_OPEN_FLOW,
+                      ITEM_ETF_ARTICLES),
     EDITION_POST_CLOSE: (ITEM_KR_TODAY, ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_ETFS, ITEM_ETF_ARTICLES, ITEM_FILINGS,
                          ITEM_MEMBER_ISSUES),
 }
@@ -125,6 +128,7 @@ KIND_FILING = "공시"
 KIND_DAY = "일봉"
 KIND_US_CLOSE = "해외 등락률"
 KIND_MEMBER = "구성 종목 이슈"
+KIND_OPEN_FLOW = "개장 시세"
 NO_REASON_LABEL = "이유를 찾지 못한 ETF"
 KIND_BACKGROUND = "시장 자료"
 
@@ -146,6 +150,7 @@ ETF_REF_PREFIX = "E"
 CLOSE_RATE_REF_PREFIX = "U"
 BACKGROUND_REF_PREFIX = "B"
 MEMBER_ISSUE_REF_PREFIX = "M"
+OPEN_FLOW_REF_PREFIX = "O"
 
 # 본문에는 미국 티커를 쓰지 않는다(보유 종목이 드러남). LLM 입력에는 넣는다.
 US_STOCK_LABEL = "미국 종목"
@@ -171,6 +176,8 @@ class EtfDay:
     missing_reason: str | None = None
     # 보유(HELD)·관심(WATCH) 구분. 멤버마다 달라 응답에는 없고, 멤버의 판을 짤 때 그 멤버의 포트폴리오 값으로 붙인다.
     relation: str | None = None
+    # 아침 판의 개장 흐름(선택 칸). 응답에 칸이 없으면 None이고, 범위 안 시세가 없으면 present가 False다.
+    open_flow: OpenFlow | None = None
 
     def has_day(self) -> bool:
         return self.missing_reason is None and None not in (self.date, self.close, self.prev_close, self.rate)
@@ -203,6 +210,8 @@ class DailyInput:
     notables: tuple[NotableCandidate, ...] = ()
     # 마감 후 판만: 같은 날 아침 예상과 그날 급변동을 작업 기록에서 읽은 값(None이면 읽지 않은 판).
     review: ReviewInput | None = None
+    # 아침 판만: 개장 시세를 읽은 구간의 시작. 판 시각이 장 시작 전이라 읽지 않았으면 None.
+    open_flow_start: datetime | None = None
     # 판을 만든 설정. 글자판을 다시 만드는 곳까지 설정을 넘기지 않아도 같은 장 시작 시각으로 판정하게 한다.
     settings: DailySettings = DEFAULT_DAILY_SETTINGS
 
@@ -483,6 +492,55 @@ def _etfs_section(i: DailyInput, refs: Callable[[], str]) -> Section:
                    tuple(gaps), tuple(gaps_llm), groups)
 
 
+OPEN_FLOW_NOT_OPEN = "장 시작 전이라 개장 시세가 없음"
+OPEN_FLOW_NO_QUOTE = "범위 안 시세 없음"
+OPEN_FLOW_NO_RESPONSE = "응답에 개장 흐름 칸이 없음"
+
+
+def _open_flow_line(etf: EtfDay, flow: OpenFlow) -> str:
+    start = flow.start_at.astimezone(KST) if flow.start_at else None
+    end = flow.end_at.astimezone(KST) if flow.end_at else None
+    parts = [f"{etf_name(etf)} 시가 {signed(flow.open_rate)}"]
+    if flow.open is not None:
+        parts[0] += f" (전일 종가 {flow.prev_close or NO_DATA}, 시가 {flow.open}"
+        parts[0] += f", {OPEN_SOURCE_TEXT.get(flow.open_source or '', '출처 모름')})"
+    if start is not None and end is not None:
+        parts.append(f"{start:%H:%M}~{end:%H:%M} {signed(flow.flow_rate)}")
+    parts.append(f"{end:%H:%M} 현재가 전일 종가 대비 {signed(flow.rate_vs_prev_close)}" if end else "")
+    return " · ".join(p for p in parts if p)
+
+
+def _open_flow_section(i: DailyInput, refs: Callable[[], str]) -> Section:
+    """아침 판 ETF별 개장 흐름. 시세처리기가 저장한 시세로 코드가 계산한 값이며, 없는 ETF는 자료 없음 줄로 둔다."""
+    if not i.etfs:
+        return _missing(ITEM_OPEN_FLOW, None if i.etfs is None else "받은 ETF가 없음")
+    if i.open_flow_start is None:
+        return _missing(ITEM_OPEN_FLOW, OPEN_FLOW_NOT_OPEN)
+    lines, entries, gaps, gaps_llm = [], [], [], []
+    for etf in i.etfs:
+        flow = etf.open_flow
+        if flow is None or not flow.present:
+            reason = OPEN_FLOW_NO_RESPONSE if flow is None else OPEN_FLOW_NO_QUOTE
+            gaps.append(f"{etf.label()}, {reason}")
+            gaps_llm.append({"symbol": etf.symbol, "name": etf.label(), "status": MARK_MISSING, "reason": reason})
+            continue
+        ref = refs()
+        line = _open_flow_line(etf, flow)
+        lines.append(line)
+        entries.append(Entry(ref, {
+            "ref": ref, "symbol": etf.symbol, "prevClose": flow.prev_close, "open": flow.open,
+            "openSource": flow.open_source, "openRatePercent": flow.open_rate,
+            "startAt": _at(flow.start_at), "startPrice": flow.start_price, "endAt": _at(flow.end_at),
+            "endPrice": flow.end_price, "flowRatePercent": flow.flow_rate,
+            "rateVsPrevClosePercent": flow.rate_vs_prev_close,
+            "minutesBeforeAsOf": _minutes_before(flow.end_at, i.as_of)},
+            f"{etf.symbol} 개장 흐름 시가 {signed(flow.open_rate)}, 현재가 전일 종가 대비 "
+            f"{signed(flow.rate_vs_prev_close)} ({_at(flow.end_at)}) — {BACKGROUND_SOURCE}", KIND_OPEN_FLOW))
+    if not entries:
+        return Section(ITEM_OPEN_FLOW, MARK_MISSING, (NO_DATA,), (), tuple(gaps), tuple(gaps_llm))
+    return Section(ITEM_OPEN_FLOW, MARK_PRESENT, tuple(lines), tuple(entries), tuple(gaps), tuple(gaps_llm))
+
+
 ARTICLES_NO_RESPONSE = "기사 응답을 받지 못함"
 
 
@@ -560,7 +618,8 @@ def _research_section(i: DailyInput) -> Section:
 
 def build_sections(i: DailyInput, settings: DailySettings = DEFAULT_DAILY_SETTINGS) -> tuple[Section, ...]:
     """판의 항목을 차례대로 만든다. 근거 번호는 이 순서로 붙는다."""
-    counters = {ETF_REF_PREFIX: 0, CLOSE_RATE_REF_PREFIX: 0, BACKGROUND_REF_PREFIX: 0, MEMBER_ISSUE_REF_PREFIX: 0}
+    counters = {ETF_REF_PREFIX: 0, CLOSE_RATE_REF_PREFIX: 0, BACKGROUND_REF_PREFIX: 0, MEMBER_ISSUE_REF_PREFIX: 0,
+                OPEN_FLOW_REF_PREFIX: 0}
 
     def next_ref(prefix: str) -> Callable[[], str]:
         def make() -> str:
@@ -578,6 +637,7 @@ def build_sections(i: DailyInput, settings: DailySettings = DEFAULT_DAILY_SETTIN
         ITEM_KR_REVIEW: lambda: _raw_background_section(ITEM_KR_REVIEW, i, "market-summary", background_ref),
         ITEM_KR_TODAY: lambda: _raw_background_section(ITEM_KR_TODAY, i, "market-summary", background_ref),
         ITEM_ETFS: lambda: _etfs_section(i, next_ref(ETF_REF_PREFIX)),
+        ITEM_OPEN_FLOW: lambda: _open_flow_section(i, next_ref(OPEN_FLOW_REF_PREFIX)),
         ITEM_ETF_ARTICLES: lambda: _etf_articles_section(i),
         ITEM_MEMBER_ISSUES: lambda: _member_issues_section(i, next_ref(MEMBER_ISSUE_REF_PREFIX)),
     }

@@ -27,6 +27,7 @@ from briefing.daily_report import (
     ITEM_FILINGS,
     ITEM_KR_REVIEW,
     ITEM_KR_TODAY,
+    ITEM_OPEN_FLOW,
     ITEM_US_INDEX,
     NO_DATA,
     DailyLlmWriter,
@@ -41,6 +42,7 @@ from fake_news import answer_news
 KST = timezone(timedelta(hours=9))
 TICK_ID = "8d3b5e17-6c2a-4f90-b1e4-7a9c0d2f3e68"
 MORNING_AT = datetime(2026, 10, 20, 8, 45, tzinfo=KST)    # 화요일
+OPEN_AT = datetime(2026, 10, 20, 9, 10, tzinfo=KST)        # 장 시작 뒤 아침 판 시각
 POST_CLOSE_AT = datetime(2026, 10, 20, 17, 0, tzinfo=KST)
 MORNING_JOB = "daily-briefing-morning"
 POST_CLOSE_JOB = "daily-briefing-post-close"
@@ -111,9 +113,19 @@ def envelope(event_type, payload):
     })
 
 
-def etf(symbol="TEST01", tickers=("TESTA", "FAKEB"), fetched="2026-10-19T16:30:02+09:00", rate="-1.50"):
-    return {"symbol": symbol, "date": "20261019", "close": "9850", "prevClose": "10000", "rate": rate,
+# 시세처리기가 09:00~09:10 저장 시세로 계산해 주는 개장 흐름(가짜 값). 시가 등락률은 응답 값이 아니라 가격에서 계산한 값이다.
+OPEN_FLOW = {"status": "present", "prevClose": "10000", "open": "10200", "openSource": "raw", "openRate": "2.00",
+             "startAt": "2026-10-20T09:00:01+09:00", "startPrice": "10100", "endAt": "2026-10-20T09:09:58+09:00",
+             "endPrice": "10300", "flowRate": "1.98", "rateVsPrevClose": "3.00"}
+
+
+def etf(symbol="TEST01", tickers=("TESTA", "FAKEB"), fetched="2026-10-19T16:30:02+09:00", rate="-1.50",
+        open_flow=None):
+    item = {"symbol": symbol, "date": "20261019", "close": "9850", "prevClose": "10000", "rate": rate,
             "fetchedAt": fetched, "tickers": list(tickers), "tickersTruncated": False}
+    if open_flow is not None:
+        item["openFlow"] = open_flow
+    return item
 
 
 WORLD_C = {"apiType": "world-index", "target": "C", "status": "ok", "response": "{\"raw\": \"TEST\"}",
@@ -321,7 +333,8 @@ def test_morning_edition_uses_us_markets_filings_and_the_previous_korean_session
     answer_news(c, requests, MORNING_AT)
     [event] = published(requests)
     payload = event.value["payload"]
-    assert payload["missingItems"] == [] and payload["generatedBy"] == GENERATED_BY_RULE
+    # 장 시작(09:00) 전에 시작한 판은 읽을 개장 시세가 없어 그 항목만 빠진다.
+    assert payload["missingItems"] == [ITEM_OPEN_FLOW] and payload["generatedBy"] == GENERATED_BY_RULE
     text = payload["text"]
     for item in (ITEM_US_INDEX, "환율", "미국 종목 직전 장 등락", ITEM_FILINGS, ITEM_KR_REVIEW):
         assert item in text
@@ -392,7 +405,7 @@ def test_daily_data_is_resent_with_a_new_seq_and_given_up_after_the_last_attempt
     payload = event.value["payload"]
     assert payload["generatedBy"] == GENERATED_BY_RULE
     assert payload["missingItems"] == [ITEM_US_INDEX, "환율", "미국 종목 직전 장 등락", ITEM_FILINGS, ITEM_KR_REVIEW,
-                                         ITEM_ETF_ARTICLES]
+                                         ITEM_OPEN_FLOW, ITEM_ETF_ARTICLES]
     assert payload["text"].count(NO_DATA) >= 5
     assert requests.topic("news.filings.requested") == []
 
@@ -423,7 +436,7 @@ def test_filings_no_response_still_sends_the_edition_and_records_one_failure(cor
     for n in (1, 2, 3):
         c.on_tick(MORNING_AT + timedelta(seconds=10 * n))
     [event] = published(requests)
-    assert event.value["payload"]["missingItems"] == [ITEM_FILINGS]
+    assert event.value["payload"]["missingItems"] == [ITEM_FILINGS, ITEM_OPEN_FLOW]
     [failure] = failures.records
     assert failure.reason == FailureReason.FILINGS_NO_RESPONSE and failure.job_id == TICK_ID
     [final] = details.by_reason("filings_no_response")
@@ -439,10 +452,10 @@ def test_filings_no_response_still_sends_the_edition_and_records_one_failure(cor
 def test_llm_writes_the_summary_and_cites_only_given_refs(core):
     llm = FakeLlm(good_output("B1", "0000000001-26-000001"))
     c, requests, failures, details = core(llm)
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
-    c.on_daily_data_responded(daily_response(), MORNING_AT)
-    c.on_filings_responded(filings_response(), MORNING_AT)
-    answer_news(c, requests, MORNING_AT)
+    c.on_schedule_tick(tick(at=OPEN_AT), OPEN_AT, "morning")
+    c.on_daily_data_responded(daily_response(etfs=[etf(open_flow=OPEN_FLOW)]), OPEN_AT)
+    c.on_filings_responded(filings_response(), OPEN_AT)
+    answer_news(c, requests, OPEN_AT)
     [event] = published(requests)
     payload = event.value["payload"]
     assert payload["generatedBy"] == GENERATED_BY_LLM
@@ -584,10 +597,10 @@ def test_default_log_port_keeps_nothing_and_logs_nothing(caplog):
 def test_every_edition_leaves_one_result_line_with_body_cited_evidence_missing_items_and_method(core):
     llm = FakeLlm(good_output("B1", "0000000001-26-000001"))
     c, requests, _, details = core(llm)
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
-    c.on_daily_data_responded(daily_response(), MORNING_AT)
-    c.on_filings_responded(filings_response(), MORNING_AT)
-    answer_news(c, requests, MORNING_AT)
+    c.on_schedule_tick(tick(at=OPEN_AT), OPEN_AT, "morning")
+    c.on_daily_data_responded(daily_response(etfs=[etf(open_flow=OPEN_FLOW)]), OPEN_AT)
+    c.on_filings_responded(filings_response(), OPEN_AT)
+    answer_news(c, requests, OPEN_AT)
 
     [event] = published(requests)
     [result] = details.results()
@@ -647,9 +660,11 @@ def test_post_close_edition_also_leaves_its_lines_under_its_own_job_kind(core):
 
 # ---- market.daily.responded v2: 일봉이 빈 ETF ----
 
-def etf_v2_missing(symbol="TEST02", reason="no-daily-price-in-range", tickers=("TESTC",), name=None):
+def etf_v2_missing(symbol="TEST02", reason="no-daily-price-in-range", tickers=("TESTC",), name=None, open_flow=None):
     item = {"symbol": symbol, "date": None, "close": None, "prevClose": None, "rate": None, "fetchedAt": None,
             "missingReason": reason, "tickers": list(tickers), "tickersTruncated": False}
+    if open_flow is not None:
+        item["openFlow"] = open_flow
     if name is not None:
         item["etf"] = {"name": name, "members": [], "membersTruncated": False}
     return item
@@ -750,10 +765,11 @@ def test_the_llm_is_told_which_etf_is_empty_and_not_to_invent_its_numbers(core):
 
 def test_morning_edition_ignores_an_empty_etf_in_its_missing_items(core):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
-    c.on_daily_data_responded(daily_response(etfs=[etf_v2_missing("TEST01", tickers=("TESTA",))]), MORNING_AT)
-    c.on_filings_responded(filings_response(), MORNING_AT)
-    answer_news(c, requests, MORNING_AT)
+    c.on_schedule_tick(tick(at=OPEN_AT), OPEN_AT, "morning")
+    c.on_daily_data_responded(
+        daily_response(etfs=[etf_v2_missing("TEST01", tickers=("TESTA",), open_flow=OPEN_FLOW)]), OPEN_AT)
+    c.on_filings_responded(filings_response(), OPEN_AT)
+    answer_news(c, requests, OPEN_AT)
     [event] = published(requests)
     # 아침 판에는 보유 ETF 항목이 없어 ETF 칸은 빠진 항목에 오르지 않는다.
     assert event.value["payload"]["missingItems"] == []

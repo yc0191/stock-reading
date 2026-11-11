@@ -21,7 +21,7 @@ class MoveReplayCountTest {
     @Test
     void countsFalsePrevCloseMovesByDate(@TempDir Path dir) throws IOException {
         MarketProperties properties = new MarketProperties(
-                5, new BigDecimal("1.00"), List.of("f.a", "f.b", "f.c"), new BigDecimal("3.00"));
+                5, new BigDecimal("1.00"), List.of("f.a", "f.b", "f.c"), new BigDecimal("3.00"), List.of());
         Path input = dir.resolve("snapshots.tsv");
         Files.writeString(input, String.join("\n",
                 row("e1", "2026-11-04T10:00:00+09:00", 10_000, 10_000, 10_000, 10_000),

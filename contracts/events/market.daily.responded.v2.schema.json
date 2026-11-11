@@ -317,6 +317,105 @@
                   }
                 }
               },
+              "openFlow": {
+                "type": "object",
+                "description": "선택. 요청이 openFlowSince를 보냈을 때만 담긴다(아침 판용 개장 흐름). 저장한 시세에서 코드가 계산한 값이다. 요청 구간 시작은 market의 안전 상한(기준 시각에서 30분)보다 앞서지 않는다.",
+                "required": [
+                  "status",
+                  "prevClose",
+                  "open",
+                  "openSource",
+                  "openRate",
+                  "startAt",
+                  "startPrice",
+                  "endAt",
+                  "endPrice",
+                  "flowRate",
+                  "rateVsPrevClose"
+                ],
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "present",
+                      "no-snapshot"
+                    ],
+                    "description": "present이면 범위 안 시세로 계산한 값이 있다. no-snapshot이면 범위 안(openFlowSince 이상, 기준 시각 이하, 받은 시각도 기준 시각 이하) 시세가 없어 나머지가 모두 null이다."
+                  },
+                  "prevClose": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "전일 종가. 구간 마지막 스냅샷 원문의 전일 종가 후보 칸 중 과반이 같은 값일 때만 담고, 아니면 null."
+                  },
+                  "open": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "시가(원). openSource가 raw이면 시세 원문의 시가 칸 값, first-snapshot이면 구간 첫 스냅샷 가격이다. 알 수 없으면 null."
+                  },
+                  "openSource": {
+                    "enum": [
+                      "raw",
+                      "first-snapshot",
+                      null
+                    ],
+                    "description": "open의 출처. open이 null이면 null."
+                  },
+                  "openRate": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "전일 종가 대비 시가 등락률(%, 소수 둘째 자리 반올림). 응답 값을 옮기지 않고 코드가 prevClose와 open으로 계산한다. 어느 한쪽을 모르면 null."
+                  },
+                  "startAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time",
+                    "description": "구간 첫 스냅샷의 시세 시각."
+                  },
+                  "startPrice": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "구간 첫 스냅샷 가격(원)."
+                  },
+                  "endAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time",
+                    "description": "구간 마지막 스냅샷의 시세 시각. 기준 시각 이하다."
+                  },
+                  "endPrice": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "구간 마지막 스냅샷 가격(원)."
+                  },
+                  "flowRate": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "구간 첫 스냅샷 대비 마지막 스냅샷의 등락률(%, 소수 둘째 자리 반올림). 코드가 계산한다."
+                  },
+                  "rateVsPrevClose": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "전일 종가 대비 마지막 스냅샷 가격의 등락률(%, 소수 둘째 자리 반올림). 전일 종가를 모르면 null."
+                  }
+                }
+              },
               "missingReason": {
                 "type": [
                   "string",

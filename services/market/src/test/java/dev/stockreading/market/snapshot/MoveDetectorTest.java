@@ -33,7 +33,7 @@ class MoveDetectorTest {
         repository = mock(PriceSnapshotRepository.class);
         // 가짜 필드 이름이다. 실제 응답 필드는 사용자가 원문을 보고 정한다.
         MarketProperties properties = new MarketProperties(
-                5, new BigDecimal("1.00"), List.of("fake.a", "fake.b", "fake.c"), new BigDecimal("3.00"));
+                5, new BigDecimal("1.00"), List.of("fake.a", "fake.b", "fake.c"), new BigDecimal("3.00"), List.of());
         detector = new MoveDetector(repository, properties, JsonMapper.builder().build());
     }
 
@@ -232,7 +232,7 @@ class MoveDetectorTest {
     @org.junit.jupiter.params.provider.EmptySource
     void prevCloseIsOffWhenNoFieldIsSet(List<String> fields) {
         MarketProperties properties = new MarketProperties(
-                5, new BigDecimal("1.00"), fields, new BigDecimal("3.00"));
+                5, new BigDecimal("1.00"), fields, new BigDecimal("3.00"), List.of());
         MoveDetector off = new MoveDetector(repository, properties, JsonMapper.builder().build());
         when(repository.findBetween(anyString(), any(), any())).thenReturn(List.of(point("16:00:00", 10_000)));
 

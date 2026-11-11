@@ -290,4 +290,41 @@ class DailyContractTest {
         return mapper.writeValueAsString(EventFactory.create(CLOCK, "market.daily.responded", 2,
                 OffsetDateTime.now(CLOCK), "daily-briefing-post-close-2026-10-20T17:00:00+09:00", payload));
     }
+
+    @Test
+    void requestWithOpenFlowSinceMatchesTheSchemaAndRejectsANonTimestamp() throws IOException {
+        String sample = ContractSchemas.sample("market.daily.requested.sample.json");
+        String with = sample.replace("\"includeOperations\": true",
+                "\"includeOperations\": true,\n    \"openFlowSince\": \"2026-10-20T16:50:00+09:00\"");
+
+        assertThat(ContractSchemas.validate("market.daily.requested.v1.schema.json", with)).isEmpty();
+        assertThat(mapper.readValue(with, DailyRequestEnvelope.class).payload().openFlowSince())
+                .isEqualTo("2026-10-20T16:50:00+09:00");
+        assertThat(mapper.readValue(sample, DailyRequestEnvelope.class).payload().openFlowSince()).isNull();
+        assertThat(ContractSchemas.validate("market.daily.requested.v1.schema.json",
+                with.replace("2026-10-20T16:50:00+09:00", "ten to five"))).isNotEmpty();
+    }
+
+    @Test
+    void producerOpenFlowMatchesSchemaAndIsLeftOutWhenNull() throws IOException {
+        DailyPayload.OpenFlow present = new DailyPayload.OpenFlow("present", "10000", "10200", "raw", "2.00",
+                "2026-10-20T09:00:01+09:00", "10100", "2026-10-20T09:09:58+09:00", "10300", "1.98", "3.00");
+        DailyPayload.OpenFlow partial = new DailyPayload.OpenFlow("present", null, "10100", "first-snapshot", null,
+                "2026-10-20T09:00:01+09:00", "10100", "2026-10-20T09:09:58+09:00", "10300", "1.98", null);
+        DailyPayload.Etf plain = new DailyPayload.Etf("TEST01", "20261020", "9850", "10000", "-1.50",
+                "2026-10-20T16:30:02+09:00", List.of(), false);
+        String json = serialize(new DailyPayload(JOB_ID, 1,
+                List.of(plain.withOpenFlow(present), plain.withOpenFlow(partial),
+                        plain.withOpenFlow(DailyPayload.OpenFlow.none()), plain),
+                List.of(), List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false));
+
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", json)).isEmpty();
+        var etfs = mapper.readTree(json).get("payload").get("etfs");
+        assertThat(etfs.get(0).get("openFlow").get("openRate").asString()).isEqualTo("2.00");
+        assertThat(etfs.get(1).get("openFlow").get("prevClose").isNull()).isTrue();
+        assertThat(etfs.get(2).get("openFlow").get("status").asString()).isEqualTo("no-snapshot");
+        assertThat(etfs.get(3).has("openFlow")).isFalse();
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json",
+                json.replace("\"status\":\"no-snapshot\"", "\"status\":\"other\""))).isNotEmpty();
+    }
 }

@@ -39,7 +39,7 @@ class DailyBriefingTickPublisherTest {
     @Test
     void morningCronPublishesOneMorningTickThatPassesTheTickContract() throws IOException {
         KafkaTemplate<String, String> kafka = mock(KafkaTemplate.class);
-        Clock clock = Clock.fixed(Instant.parse("2026-10-20T23:45:00Z"), KST);
+        Clock clock = Clock.fixed(Instant.parse("2026-10-21T00:10:00Z"), KST);
 
         new DailyBriefingTickPublisher(OPEN, kafka, JsonMapper.builder().build(), clock).publishMorningTick();
 
@@ -49,8 +49,8 @@ class DailyBriefingTickPublisherTest {
         assertThat(ContractSchemas.validate("schedule.tick.v1.schema.json", value.getValue())).isEmpty();
         assertThat(value.getValue())
                 .contains("\"jobType\":\"daily-briefing-morning\"")
-                .contains("\"scheduledFor\":\"2026-10-21T08:45:00+09:00\"")
-                .contains("\"correlationId\":\"daily-briefing-morning-2026-10-21T08:45:00+09:00\"");
+                .contains("\"scheduledFor\":\"2026-10-21T09:10:00+09:00\"")
+                .contains("\"correlationId\":\"daily-briefing-morning-2026-10-21T09:10:00+09:00\"");
     }
 
     @SuppressWarnings("unchecked")
@@ -98,7 +98,7 @@ class DailyBriefingTickPublisherTest {
         runner.run(context -> {
             assertThat(context).doesNotHaveBean(DailyBriefingTickPublisher.class);
             assertThat(context.getEnvironment().getProperty("collector.daily-briefing.morning-cron"))
-                    .isEqualTo("0 45 8 * * MON-FRI");
+                    .isEqualTo("0 10 9 * * MON-FRI");
             assertThat(context.getEnvironment().getProperty("collector.daily-briefing.post-close-cron"))
                     .isEqualTo("0 0 17 * * MON-FRI");
         });
