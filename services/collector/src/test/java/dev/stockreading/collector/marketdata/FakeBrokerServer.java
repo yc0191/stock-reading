@@ -43,6 +43,8 @@ public final class FakeBrokerServer implements AutoCloseable {
     // true 이면 발급할 때마다 다른 토큰(tok-secret-N)을 준다. 재발급된 토큰이 쓰였는지 확인할 때 켠다.
     volatile boolean rotateTokens;
     volatile int priceStatus = 200;
+    // priceStatus 를 이 번째 현재가 요청부터 적용하고 그 앞은 200으로 보낸다. 앞 요청은 성공하고 나중에 실패하는 서버를 흉내 낸다.
+    volatile int priceStatusFromCall = 1;
     volatile String priceBody = "{\"dataHeader\":" + OK_HEADER + ",\"dataBody\":{\"now_prc\":\"10250\"}}";
     public volatile long priceDelayMs;
     volatile int marketStatusStatus = 200;
@@ -84,7 +86,7 @@ public final class FakeBrokerServer implements AutoCloseable {
             reply(exchange, tokenStatus, body);
         });
         server.createContext("/api/v1/ivu10140", exchange -> {
-            priceCalls.incrementAndGet();
+            int call = priceCalls.incrementAndGet();
             authHeaders.add(exchange.getRequestHeaders().getFirst("Authorization"));
             if (rejectIfNeeded(exchange)) {
                 return;
@@ -100,7 +102,7 @@ public final class FakeBrokerServer implements AutoCloseable {
                 if (overlap != null && inFlight.get() > 1) {
                     body = overlap;
                 }
-                reply(exchange, priceStatus, body);
+                reply(exchange, call >= priceStatusFromCall ? priceStatus : 200, body);
             } finally {
                 inFlight.decrementAndGet();
             }
