@@ -7,9 +7,10 @@
   "correlationId": "collect-2026-10-20T16:00:30+09:00",
   "payload": {
     "symbol": "TEST01",
+    "name": "TEST 샘플 ETF",
     "changePercent": -1.5,
     "asOf": "2026-10-20T16:00:31+09:00",
-    "text": "[TEST01] 16:00 기준 하락 -1.50% (10,000 → 9,850)\n근거 후보:\n  1. Sample headline — sample, 발행 10-20 09:00\n※ 투자 조언이 아니며, 위 내용은 변동 시점 이전에 공개된 자료의 나열일 뿐 원인을 단정하지 않습니다.",
+    "text": "[TEST 샘플 ETF(TEST01)] 16:00 기준 하락 -1.50% (10,000 → 9,850)\n근거 후보:\n  1. Sample headline — sample, 발행 10-20 09:00\n※ 투자 조언이 아니며, 위 내용은 변동 시점 이전에 공개된 자료의 나열일 뿐 원인을 단정하지 않습니다.",
     "generatedBy": "rule-based",
     "evidence": [
       {

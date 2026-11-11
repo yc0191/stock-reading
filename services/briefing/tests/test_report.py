@@ -22,7 +22,7 @@ from briefing.report import (
     build_report_writer,
     unchecked_items,
 )
-from briefing.sources import Article, Background, PricePoint
+from briefing.sources import Article, Background, EtfInfo, PricePoint
 from contracts import validate
 from fake_anthropic import FAKE_KEY, fake_sdk  # noqa: F401 - 픽스처
 
@@ -41,12 +41,12 @@ def article(article_id, minutes_before, title="Sample headline"):
 ARTICLES = (article("a1", 90, "Rate decision"), article("a2", 30, "Fund outflow"), article("a3", -3, "Late note"))
 
 
-def report_input(articles=ARTICLES):
+def report_input(articles=ARTICLES, etf=None):
     return ReportInput(
         job_id=JOB_ID, symbol="TEST01", correlation_id="collect-1", as_of=AS_OF,
         previous_price=10_000, price=9_850, change_percent=-1.5,
         price_points=(PricePoint(AS_OF - timedelta(minutes=1), 10_000), PricePoint(AS_OF, 9_850)),
-        articles=articles)
+        articles=articles, etf=etf)
 
 
 def cause(title, detail, refs, meaning, meaning_refs):
@@ -584,3 +584,39 @@ def test_failure_records_and_their_logs_carry_no_api_key(fake_sdk, caplog):
     assert len(job_log.entries) == 4 and len(job_log.results()) == 1
     assert FAKE_KEY not in repr(job_log.entries) + repr(job_log.results())
     assert "TEST01" not in caplog.text
+
+
+# ---- 종목 이름 ----
+
+def etf_named(name):
+    return EtfInfo(members=(), members_truncated=False, name=name)
+
+
+@pytest.mark.parametrize("name, headline, event_name", [
+    ("TEST 샘플 ETF", "[TEST 샘플 ETF(TEST01)] 16:00 기준 하락 -1.50% (10,000 → 9,850)", "TEST 샘플 ETF"),
+    ("  TEST 샘플 ETF ", "[TEST 샘플 ETF(TEST01)] 16:00 기준 하락 -1.50% (10,000 → 9,850)", "TEST 샘플 ETF"),
+    (None, "[TEST01] 16:00 기준 하락 -1.50% (10,000 → 9,850)", None),
+    ("", "[TEST01] 16:00 기준 하락 -1.50% (10,000 → 9,850)", None),
+    ("   ", "[TEST01] 16:00 기준 하락 -1.50% (10,000 → 9,850)", None),
+])
+@pytest.mark.parametrize("writer", [lambda: LlmWriter(FakeLlm(VALID)), RuleBasedWriter])
+def test_headline_and_event_carry_the_etf_name_only_when_known(writer, name, headline, event_name):
+    s, published, _ = stage(writer())
+
+    s.on_ready(report_input(etf=etf_named(name)))
+
+    payload = published[0].value["payload"]
+    assert payload["text"].splitlines()[0] == headline
+    assert payload.get("name") == event_name
+    assert ("name" in payload) == (event_name is not None)
+    assert validate("briefing.generated.v1.schema.json", published[0].value) == []
+
+
+def test_headline_uses_the_symbol_alone_when_the_response_has_no_etf_info():
+    s, published, _ = stage(RuleBasedWriter())
+
+    s.on_ready(report_input(etf=None))
+
+    payload = published[0].value["payload"]
+    assert payload["text"].startswith("[TEST01] 16:00")
+    assert "name" not in payload

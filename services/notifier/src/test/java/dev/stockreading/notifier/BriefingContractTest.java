@@ -24,7 +24,18 @@ class BriefingContractTest {
 
         assertThat(briefing.eventType()).isEqualTo("briefing.generated");
         assertThat(briefing.payload().symbol()).isEqualTo("TEST01");
+        assertThat(briefing.payload().name()).isEqualTo("TEST 샘플 ETF");
         assertThat(briefing.payload().changePercent()).isEqualByComparingTo("-1.5");
+    }
+
+    @Test
+    void sampleWithoutTheOptionalNameStillMatchesTheSchemaAndIsRead() throws IOException {
+        String withoutName = ContractSchemas.sample("briefing.generated.sample.json")
+                .replace("    \"name\": \"TEST 샘플 ETF\",\n", "");
+
+        assertThat(withoutName).doesNotContain("\"name\"");
+        assertThat(ContractSchemas.validate("briefing.generated.v1.schema.json", withoutName)).isEmpty();
+        assertThat(JsonMapper.builder().build().readValue(withoutName, BriefingEnvelope.class).payload().name()).isNull();
     }
 
     @Test

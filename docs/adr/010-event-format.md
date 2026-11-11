@@ -57,6 +57,8 @@ Avro + 스키마 레지스트리, Protobuf
 
 2026-11-10 변경: `market.daily.responded` v2의 `etfs[].etf`에 선택 칸 `memberChanges`(상위 구성 종목의 들어옴·나감·순위 바뀜과 `since`·`asOf`)를 더했다. 판 요청 범위 안에 반영된 변경이 있을 때만 싣고 없으면 칸을 빼므로 기존 소비자와 샘플은 그대로 통과해 v2를 유지한다. `schedule.tick`에는 알려진 `jobType` 값 `collect-members`를 더했다(구조 변경 없음). 칸의 원본은 `contracts/events`의 스키마다.
 
+2026-11-11 변경: `briefing.generated`의 payload에 선택 칸 `name`(종목·ETF 이름)을 더했다. 급변동 메일의 제목과 본문 첫 줄을 '이름(코드)'로 쓰려는 것이며, 브리핑이 `market.context.responded`의 `etf.name`을 그대로 옮긴다. 이름을 모르면 칸을 뺀다(빈 문자열은 스키마가 거부한다). 소비자는 칸이 없거나 비어 있으면 코드만 쓴다. 같은 토픽·같은 버전의 필드 추가라 기존 소비자는 그대로 읽는다. 필드의 원본은 `contracts/events`의 스키마다.
+
 ## 실제로 겪은 함정
 - **시각 형식:** `OffsetDateTime.toString()`은 초가 0이면 초를 생략해 RFC 3339 `date-time`에 어긋난다. 표준 포매터를 쓰고, 해당 케이스 테스트를 둔다.
 - **형식 검증이 기본으로 꺼져 있다:** JSON 스키마 검증 라이브러리는 `date-time` 등 형식을 기본으로 검사하지 않는다(Java는 옵션을 켜야 하고, Python `jsonschema`는 선택 패키지가 없으면 조용히 통과). 형식 검사를 켜고, **잘못된 입력이 실제로 거부되는지** 음성 테스트로 확인한다.

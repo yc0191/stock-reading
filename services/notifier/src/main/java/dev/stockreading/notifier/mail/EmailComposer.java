@@ -20,7 +20,10 @@ public class EmailComposer {
     public EmailMessage compose(BriefingEnvelope briefing) {
         BriefingEnvelope.Payload payload = briefing.payload();
         String direction = payload.changePercent().compareTo(BigDecimal.ZERO) > 0 ? "상승" : "하락";
-        String core = "[%s] %s %+.2f%% 브리핑".formatted(payload.symbol(), direction, payload.changePercent());
+        // 이름 칸은 선택이라 없거나 비면 코드만 쓴다.
+        String label = payload.name() == null || payload.name().isBlank()
+                ? payload.symbol() : payload.name().trim() + "(" + payload.symbol() + ")";
+        String core = "[%s] %s %+.2f%% 브리핑".formatted(label, direction, payload.changePercent());
         String subject = subjectPrefix.isEmpty() ? core : subjectPrefix + " " + core;
 
         String body = payload.text()

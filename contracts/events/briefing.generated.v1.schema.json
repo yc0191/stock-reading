@@ -17,6 +17,7 @@
       "required": ["symbol", "changePercent", "asOf", "text", "evidence", "generatedBy"],
       "properties": {
         "symbol": { "type": "string", "pattern": "^[0-9A-Z]{6}$" },
+        "name": { "type": "string", "minLength": 1, "description": "선택. 종목(ETF) 이름. 메일 제목과 본문 첫 줄이 '이름(코드)'로 쓴다. 이름을 모르면 칸을 뺀다(빈 문자열을 넣지 않는다). 소비자는 칸이 없거나 비어 있으면 코드만 쓴다." },
         "changePercent": { "type": "number" },
         "asOf": { "type": "string", "format": "date-time" },
         "text": { "type": "string", "minLength": 1 },

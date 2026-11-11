@@ -51,7 +51,7 @@ class BriefingListenerTest {
 
         ArgumentCaptor<EmailMessage> email = ArgumentCaptor.forClass(EmailMessage.class);
         verify(mailSender).send(email.capture());
-        assertThat(email.getValue().subject()).isEqualTo("[시뮬레이션] [TEST01] 하락 -1.50% 브리핑");
+        assertThat(email.getValue().subject()).isEqualTo("[시뮬레이션] [TEST 샘플 ETF(TEST01)] 하락 -1.50% 브리핑");
     }
 
     @Test

@@ -299,7 +299,7 @@ def comparison_facts(report_input: ReportInput) -> list[str]:
 def move_headline(report_input: ReportInput) -> str:
     """머리말: 종목, 시각, 방향과 변동률, 몇 분 사이 움직였는지."""
     i = report_input
-    line = headline(i.symbol, i.previous_price, i.price, i.change_percent, i.as_of)
+    line = headline(i.symbol, i.previous_price, i.price, i.change_percent, i.as_of, i.etf.name if i.etf else None)
     if i.detection_type == "prevClose":
         return f"{line}, 전일 종가 대비"
     if i.detected_at is None or i.detection_type != "window":
@@ -792,9 +792,16 @@ def briefing_event(report_input: ReportInput, report: Report, now: datetime) -> 
                 "text": report.text,
                 "generatedBy": report.generated_by,
                 "evidence": [_evidence_entry(e) for e in report.evidence],
+                **_name_entry(i),
             },
         },
     )
+
+
+def _name_entry(report_input: ReportInput) -> dict[str, str]:
+    """ETF 이름을 알 때만 name 칸을 담는다. 모르거나 비었으면 칸을 뺀다."""
+    name = report_input.etf.name.strip() if report_input.etf and report_input.etf.name else ""
+    return {"name": name} if name else {}
 
 
 @dataclass

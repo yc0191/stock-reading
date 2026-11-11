@@ -770,8 +770,11 @@ def test_insufficient_evidence_keeps_the_headline_and_unchecked_items(core, rec)
 
     stage.on_ready(rec.readied[0])
 
-    text = published.sent[0].value["payload"]["text"]
-    assert text.splitlines()[0].startswith("[TEST01]")
+    payload = published.sent[0].value["payload"]
+    text = payload["text"]
+    # 가짜 context 응답의 etf.name이 머리말과 이벤트의 name 칸까지 이어진다.
+    assert text.splitlines()[0].startswith("[TEST ETF ONE(TEST01)] ")
+    assert payload["name"] == "TEST ETF ONE"
     assert "추정하기 어렵습니다" in text and "- 시장종합: 원문이 커서 빠짐" in text
     assert "근거 1" not in text
 
