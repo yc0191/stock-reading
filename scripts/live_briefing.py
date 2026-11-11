@@ -195,12 +195,13 @@ def _connect(user_var: str, password_var: str):
 def read_snapshot() -> Snapshot:
     with _connect("LIVE_BRIEFING_MARKET_USER", "LIVE_BRIEFING_MARKET_PASSWORD") as conn, conn.cursor() as cur:
         # 같은 DB 에 실제 DB 테스트가 넣은 가짜 스냅샷이 남아 있으므로 이 실행의 시세 흐름이 저장한 행만 본다.
+        # 가짜 스냅샷에는 미래 날짜도 있어 지금 이전으로도 자른다.
         since = _env("LIVE_BRIEFING_SINCE")
-        cur.execute("SELECT count(*) FROM market.price_snapshot WHERE received_at >= %s::timestamptz", (since,))
+        cur.execute("SELECT count(*) FROM market.price_snapshot WHERE received_at >= %s::timestamptz AND received_at <= now()", (since,))
         (count,) = cur.fetchone()
         if count != 1:
             raise RuntimeError(f"이번 실행이 저장한 스냅샷이 {count}행입니다(1행이어야 함)")
-        cur.execute("SELECT symbol, price, as_of FROM market.price_snapshot WHERE received_at >= %s::timestamptz",
+        cur.execute("SELECT symbol, price, as_of FROM market.price_snapshot WHERE received_at >= %s::timestamptz AND received_at <= now()",
                     (since,))
         symbol, price, as_of = cur.fetchone()
     return Snapshot(symbol, int(price), as_of)

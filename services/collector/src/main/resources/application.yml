@@ -3,6 +3,12 @@ spring:
     name: collector
   main:
     web-application-type: none
+  # 타이머 스레드 수: 타이머(수집 작업 5개, 다른 서비스로 가는 tick 3개)마다 한 자리. 기본 1개면 오래 걸리는
+  # 작업(뉴스·장 시작 전·장중·마감 후)이 도는 동안 1초 현재가 타이머가 멈춘다.
+  task:
+    scheduling:
+      pool:
+        size: 8
   kafka:
     bootstrap-servers: localhost:9092
     consumer:
@@ -18,23 +24,22 @@ spring:
 collector:
   # 가짜 종목 코드만 쓴다. 실제 종목은 커밋하지 않는다.
   symbols: TEST01,TEST02,TEST03
-  # 1초 미만이면 scheduledFor(초 단위)가 겹쳐 중복 tick 으로 버려진다.
+  # 1초 현재가 조회 주기. 1초 미만이면 회차의 기준 시각(scheduledFor, 초 단위)과 correlationId 가 겹친다.
+  # 앞 회차 조회가 끝나지 않았으면 이번 회차는 조회하지 않고 종목마다 건너뜀(SupersededByNewerTick)으로 기록한다.
   tick-interval-ms: ${COLLECTOR_TICK_INTERVAL_MS:1000}
-  # 이 시간 이상 밀린 tick 은 조회하지 않고 건너뜀으로 기록한다.
-  max-tick-age-ms: ${COLLECTOR_MAX_TICK_AGE_MS:3000}
   schedule:
-    # 꺼 두면 타이머가 tick 을 발행하지 않는다. 로컬에서는 scripts/publish-tick.sh 로 수동 발행한다.
+    # 꺼 두면 수집기 타이머가 1초 현재가와 뉴스를 수집하지 않는다.
     enabled: ${COLLECTOR_SCHEDULE_ENABLED:false}
     # 뉴스 수집 주기(15분)
     news-interval-ms: 900000
   quote-hours:
-    # 1초 시세 tick 을 발행하는 시간대(한국 시간 HH:mm, 양끝 포함, 평일만). 뉴스 tick 은 이 시간대와 상관없이 발행한다.
-    # 장 밖에서는 현재가가 전일 종가 그대로라 발행하지 않는다. 휴장일은 판정하지 않는다.
+    # 1초 현재가를 조회하는 시간대(한국 시간 HH:mm, 양끝 포함, 평일만). 뉴스 수집은 이 시간대와 상관없다.
+    # 장 밖에서는 현재가가 전일 종가 그대로라 조회하지 않는다. 휴장일은 판정하지 않는다.
     start: "${COLLECTOR_QUOTE_START:09:00}"
     end: "${COLLECTOR_QUOTE_END:15:30}"
   pre-open:
-    # 꺼 두면 장 시작 전 tick 을 발행하지 않는다. 휴장일은 판정하지 않는다.
-    # 이 tick 하나로 보유 미국 종목 해외 일봉, 세계지수 아메리카(C), SEC 공시를 받는다. 공시는 이때만 받는다.
+    # 꺼 두면 수집기 타이머가 장 시작 전 수집을 하지 않는다. 휴장일은 판정하지 않는다.
+    # 한 회차에서 보유 미국 종목 해외 일봉, 세계지수 아메리카(C), SEC 공시를 받는다. 공시는 이때만 받는다.
     enabled: ${COLLECTOR_PRE_OPEN_ENABLED:false}
     # 한국 시간 기준 cron(초 분 시 일 월 요일)
     cron: ${COLLECTOR_PRE_OPEN_CRON:0 30 8 * * MON-FRI}
@@ -45,19 +50,19 @@ collector:
     # 한국 시간 기준 cron(초 분 시 일 월 요일)
     cron: ${COLLECTOR_MEMBERS_CRON:0 30 7 * * MON-FRI}
   intraday:
-    # 꺼 두면 장중 tick 을 발행하지 않는다. 휴장일은 판정하지 않는다.
-    # 이 tick 하나로 환율종합, 시장종합, 세계지수 아시아(S)·아메리카(C)를 시차를 두고 차례로 받는다.
+    # 꺼 두면 수집기 타이머가 장중 수집을 하지 않는다. 휴장일은 판정하지 않는다.
+    # 한 회차에서 환율종합, 시장종합, 세계지수 아시아(S)·아메리카(C)를 시차를 두고 차례로 받는다.
     enabled: ${COLLECTOR_INTRADAY_ENABLED:false}
     # 한국 시간 기준 cron(초 분 시 일 월 요일). 주기를 정하고, 끝 시각은 아래 end 로 거른다.
     cron: "${COLLECTOR_INTRADAY_CRON:0 */5 9-15 * * MON-FRI}"
-    # 한국 시간 HH:mm. 이 범위 밖의 tick 은 발행하지 않는다(양끝 포함).
+    # 한국 시간 HH:mm. 이 범위 밖의 회차는 수집하지 않는다(양끝 포함).
     start: "${COLLECTOR_INTRADAY_START:09:00}"
     end: "${COLLECTOR_INTRADAY_END:15:30}"
     # 장중 조회 사이 대기(밀리초). 같은 1초에 시세 조회 자리를 여럿 빼앗지 않게 나눠 보낸다. 0~60000.
     stagger-ms: ${COLLECTOR_INTRADAY_STAGGER_MS:15000}
   insight:
     schedule:
-      # 꺼 두면 마감 후 tick 을 발행하지 않는다. 휴장일은 판정하지 않는다.
+      # 꺼 두면 수집기 타이머가 마감 후 수집을 하지 않는다. 휴장일은 판정하지 않는다.
       enabled: ${COLLECTOR_INSIGHT_SCHEDULE_ENABLED:false}
       # 한국 시간 기준 cron(초 분 시 일 월 요일)
       cron: ${COLLECTOR_INSIGHT_CRON:0 30 16 * * MON-FRI}

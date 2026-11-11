@@ -1,0 +1,11 @@
+{
+  "eventId": "6f1d2c3b-4a59-4e7f-8d10-2b3c4d5e6f70",
+  "eventType": "collector.command",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T16:05:00+09:00",
+  "producedAt": "2026-10-20T16:05:00+09:00",
+  "correlationId": "command-collect-2026-10-20T16:05:00+09:00",
+  "payload": {
+    "command": "collect"
+  }
+}

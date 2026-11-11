@@ -426,9 +426,19 @@ def test_script_checks_every_live_key_before_calling_anything():
     text = SCRIPT.read_text(encoding="utf-8")
     keys = text.split('LIVE_KEYS="', 1)[1].split('"', 1)[0].split()
     assert {"BROKER_APP_KEY", "TEST_ALL_LIVE_SYMBOL", "ANTHROPIC_API_KEY", "SMTP_HOST", "NOTIFIER_RECIPIENT"} <= set(keys)
+    # 브리핑 재검색에 수집기가 실제 뉴스 검색으로 답하도록 뉴스 검색 키도 미리 확인하고 수집기에만 넘긴다.
+    # 비밀값(ID·시크릿)은 Parameter Store, 비밀이 아닌 주소·헤더 이름은 실행 환경변수나 .env 에서 읽어 둘 다 미리 확인한다.
+    secrets = {"NEWS_SEARCH_CLIENT_ID", "NEWS_SEARCH_CLIENT_SECRET"}
+    settings = {"NEWS_SEARCH_BASE_URL", "NEWS_SEARCH_ID_HEADER", "NEWS_SEARCH_SECRET_HEADER"}
+    check = text.split("missing_live_settings() {", 1)[1].split("\n}\n", 1)[0]
+    assert secrets <= set(keys) and not settings & set(keys)
+    assert all(f"$(env_or_dotenv {key})" in check for key in settings)
+    collector = text.split('echo "collector 기동', 1)[1].split("COLLECTOR_PID=$!", 1)[0]
+    assert all(f'{key}="$(live_value {key})"' in collector for key in secrets)
+    assert all(f'{key}="$(env_or_dotenv {key})"' in collector for key in settings)
     # 키 확인이 bootJar·Kafka 기동보다 앞에 있어야 한다.
     body = text.split("run_live() {", 1)[1]
-    assert body.index("fetch_live_params") < body.index("missing_live_keys") < body.index("bootJar") < body.index("docker run")
+    assert body.index("fetch_live_params") < body.index("missing_live_keys") < body.index("missing_live_settings") < body.index("bootJar") < body.index("docker run")
 
 
 def _live_functions(text: str) -> str:
@@ -511,14 +521,14 @@ def test_jdk_check_refuses_another_version_that_java_home_falls_back_to(tmp_path
 
 
 def test_service_ready_patterns_match_the_kafka_client_log_format():
-    # Kafka 클라이언트는 "Adding newly assigned partitions: [schedule.tick-0]"처럼 대괄호로 감싸 찍는다.
+    # Kafka 클라이언트는 "Adding newly assigned partitions: [collector.command-0]"처럼 대괄호로 감싸 찍는다.
     # 대괄호 없이 토픽 이름을 기다리면 서비스가 떠도 끝까지 맞지 않아 대기 시간 초과로 실패한다.
     import re
     text = SCRIPT.read_text(encoding="utf-8")
     patterns = re.findall(r'wait_for_log "[^"]+" "([^"]*Adding newly assigned partitions:[^"]*)"', text)
     assert len(patterns) == 4
-    log_line = ("[Consumer clientId=consumer-collector-2, groupId=collector] "
-                "Adding newly assigned partitions: [schedule.tick-0]")
+    log_line = ("[Consumer clientId=consumer-collector-command-2, groupId=collector-command] "
+                "Adding newly assigned partitions: [collector.command-0]")
     assert any(p in log_line for p in patterns)
     for p in patterns:
         rest = p.split("Adding newly assigned partitions:", 1)[1]
@@ -529,14 +539,19 @@ def test_live_checks_count_only_rows_saved_after_this_run_started():
     # 실제 DB 테스트가 같은 테스트 DB 에 남긴 가짜 행(조회 실패 3종 등)을 이번 실행의 결과로 세면 안 된다.
     text = SCRIPT.read_text(encoding="utf-8")
     body = text.split("run_live() {", 1)[1]
-    assert body.index('LIVE_SINCE=$(echo "SELECT now();" | admin_sql)') < body.index('echo "tick 1건 발행"')
+    assert body.index('LIVE_SINCE=$(echo "SELECT now();" | admin_sql)') < body.index('echo "수동 실행 명령 collect 1건 발행"')
     assert 'QUOTE_FLOW_LIVE_SINCE="$LIVE_SINCE"' in text and 'BRIEFING_FLOW_LIVE_SINCE="$LIVE_SINCE"' in text
     quote = (REPO_ROOT / "scripts" / "tests" / "test_quote_flow_live.py").read_text(encoding="utf-8")
-    assert quote.count("FROM market.") == quote.count("received_at >= %s::timestamptz") >= 2 and 'os.environ["QUOTE_FLOW_LIVE_SINCE"]' in quote
+    # 앞 단계 실제 DB 테스트가 미래 날짜로 넣은 가짜 행이 섞이지 않게 시작 시각 뒤, 지금 이전만 센다.
+    bounded = "received_at >= %s::timestamptz AND received_at <= now()"
+    assert quote.count("FROM market.") == quote.count(bounded) >= 2 and 'os.environ["QUOTE_FLOW_LIVE_SINCE"]' in quote
     brief = (REPO_ROOT / "scripts" / "tests" / "test_briefing_flow_live.py").read_text(encoding="utf-8")
     assert "created_at >= %s::timestamptz" in brief and 'env["BRIEFING_FLOW_LIVE_SINCE"]' in brief
+    # 재검색이 근거를 못 찾고 접은 단계 기록(step-failed)이 아니라 작업 실패(job_run)로 판정한다.
+    failed_sql = brief.split("def _failed_jobs", 1)[1].split("\ndef ", 1)[0].split("cur.execute", 1)[1]
+    assert "FROM briefing.job_run WHERE status = 'failed'" in failed_sql and "step-failed" not in failed_sql
     seed = (REPO_ROOT / "scripts" / "live_briefing.py").read_text(encoding="utf-8")
-    assert seed.count("FROM market.price_snapshot") == seed.count("received_at >= %s::timestamptz") == 2
+    assert seed.count("FROM market.price_snapshot") == seed.count(bounded) == 2
     assert 'LIVE_BRIEFING_SINCE="$LIVE_SINCE"' in text
 
 

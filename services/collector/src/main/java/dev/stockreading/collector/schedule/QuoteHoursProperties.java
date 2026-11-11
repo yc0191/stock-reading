@@ -6,9 +6,9 @@ import java.time.format.DateTimeParseException;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * 1초 시세 tick 을 발행하는 시간대. start·end 는 한국 시간 "HH:mm" 이고 양끝을 포함한다.
- * 장 밖에서는 현재가가 전일 종가 그대로라 조회해도 쓸 값이 없고, 그 시간에도 응답 칸이 깨져 오므로 발행하지 않는다.
- * 뉴스 tick 은 이 시간대와 상관없이 발행한다.
+ * 1초 현재가를 조회하는 시간대. start·end 는 한국 시간 "HH:mm" 이고 양끝을 포함한다.
+ * 장 밖에서는 현재가가 전일 종가 그대로라 조회해도 쓸 값이 없고, 그 시간에도 응답 칸이 깨져 오므로 조회하지 않는다.
+ * 뉴스 수집은 이 시간대와 상관없다.
  */
 @ConfigurationProperties("collector.quote-hours")
 public record QuoteHoursProperties(String start, String end) {

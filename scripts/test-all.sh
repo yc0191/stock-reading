@@ -3,7 +3,8 @@
 # 돌린 뒤 테스트 지도(docs/test-map)의 기능별 '돌았음 / 건너뜀(이유) / 실패' 표를 출력한다. 하나라도 실패하면 1로 끝난다.
 #
 # 사용법: scripts/test-all.sh [--live] [--plan]
-#   --live  실제 외부를 부른다(시세 토큰 1 + 시세 1 + LLM 1 + 메일 1통). 사람이 직접 결정해서만 쓴다.
+#   --live  실제 외부를 부른다(시세 토큰 1 + 시세 1 + LLM 1 + 메일 1통, LLM이 근거 약함을 표시하면 재검색의 뉴스 검색
+#           최대 30회와 LLM 몇 회가 더 든다). 사람이 직접 결정해서만 쓴다.
 #   --plan  아무것도 띄우지 않고 실행 순서만 보여 준다.
 #
 # 실제 DB 테스트는 개발용 stock-postgres 안에 이 실행만의 stock_test_run_<시각>_<pid> 데이터베이스를 만들어 쓰고 지운다.
@@ -17,8 +18,11 @@
 #   TEST_ALL_AWS_PROFILE  --live 가 Parameter Store 를 읽을 AWS CLI 프로필. --live 에서는 필수이고,
 #                         엉뚱한 계정을 읽지 않도록 기본 자격증명 방식으로 넘어가지 않는다
 #   --live 전용: BROKER_BASE_URL, BROKER_APP_KEY, BROKER_APP_SECRET, TEST_ALL_LIVE_SYMBOL(6자리),
-#               ANTHROPIC_API_KEY, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, NOTIFIER_SENDER, NOTIFIER_RECIPIENT
+#               ANTHROPIC_API_KEY, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, NOTIFIER_SENDER, NOTIFIER_RECIPIENT,
+#               NEWS_SEARCH_CLIENT_ID, NEWS_SEARCH_CLIENT_SECRET
 #               (선택: SMTP_PORT, BRIEFING_LLM_MODEL)
+#               (비밀이 아닌 뉴스 검색 설정 NEWS_SEARCH_BASE_URL, NEWS_SEARCH_ID_HEADER, NEWS_SEARCH_SECRET_HEADER 는 필수이며
+#                실행 환경변수나 .env 에서 읽는다. 하나라도 비면 시세를 부르기 전에 실패로 끝낸다)
 #               (BRIEFING_LLM_MODEL 을 뺀 위 키는) 실행할 때마다 Parameter Store 에서 새로 읽어 임시 폴더에만 두고,
 #               실행 환경변수와 .env 의 같은 키는 쓰지 않는다. 하나라도 비면 시세를 부르기 전에 실패로 끝낸다.
 #               메일 발송 스위치는 이 스크립트가 띄운 테스트용 notifier 프로세스에만 켜고(.env 는 바꾸지 않음),
@@ -27,7 +31,7 @@
 set -uo pipefail
 
 usage() {
-  sed -n '5,7p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '5,8p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 LIVE=0
@@ -51,7 +55,7 @@ if [ "$PLAN" = 1 ]; then
   echo "4. 실제 DB 준비: stock-postgres 확인(꺼져 있으면 켬), stock_test_run_<시각>_<pid> 데이터베이스와 market·news·briefing 스키마 생성"
   echo "5. 실제 DB 테스트: 지도에서 고른 market·news·브리핑 실제 DB 테스트"
   if [ "$LIVE" = 1 ]; then
-    echo "6. 시세 흐름 실제: 일회용 Kafka, market(테스트 전용 데이터베이스), collector(실제 시세, 종목 1개), tick 1건, 저장 확인"
+    echo "6. 시세 흐름 실제: 일회용 Kafka, market(테스트 전용 데이터베이스), collector(실제 시세, 종목 1개), 수동 실행 명령 collect 1건, 저장 확인"
     echo "6b. 브리핑·메일 실제: news·notifier(발송 켬, [테스트], 1통)·briefing(실제 LLM) 기동, 가짜 변동·기사·수집 완료 넣기,"
     echo "    리포트(generatedBy=llm)와 메일 발송 1통 확인, 본문은 build/test-all-live/ 에 저장"
   else
@@ -478,13 +482,22 @@ live_value() {
 }
 
 # 브리핑·메일 단계까지 필요한 키. 시세를 부르기 전에 모두 확인해 메일 설정이 빠졌는데 시세만 부르는 일이 없게 한다.
-LIVE_KEYS="BROKER_BASE_URL BROKER_APP_KEY BROKER_APP_SECRET TEST_ALL_LIVE_SYMBOL ANTHROPIC_API_KEY SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER NOTIFIER_RECIPIENT"
+LIVE_KEYS="BROKER_BASE_URL BROKER_APP_KEY BROKER_APP_SECRET TEST_ALL_LIVE_SYMBOL ANTHROPIC_API_KEY SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER NOTIFIER_RECIPIENT NEWS_SEARCH_CLIENT_ID NEWS_SEARCH_CLIENT_SECRET"
 
 missing_live_keys() {
   local key missing=""
   for key in $LIVE_KEYS; do
     [ -n "$(live_value "$key")" ] || missing="$missing${missing:+·}$key"
   done
+  printf '%s' "$missing"
+}
+
+# 비밀이 아닌 뉴스 검색 설정(제공자 주소, 인증 헤더 이름)은 Parameter Store 에 두지 않으므로 실행 환경변수나 .env 에서 읽는다.
+missing_live_settings() {
+  local missing=""
+  [ -n "$(env_or_dotenv NEWS_SEARCH_BASE_URL)" ] || missing="$missing${missing:+·}NEWS_SEARCH_BASE_URL"
+  [ -n "$(env_or_dotenv NEWS_SEARCH_ID_HEADER)" ] || missing="$missing${missing:+·}NEWS_SEARCH_ID_HEADER"
+  [ -n "$(env_or_dotenv NEWS_SEARCH_SECRET_HEADER)" ] || missing="$missing${missing:+·}NEWS_SEARCH_SECRET_HEADER"
   printf '%s' "$missing"
 }
 
@@ -501,6 +514,8 @@ run_live() {
   if ! fetch_live_params; then LIVE_FAIL_REASON="Parameter Store 읽기 실패($(keep_loader_log) 참고, 키 이름만 있음)"; return 1; fi
   missing=$(missing_live_keys)
   if [ -n "$missing" ]; then LIVE_FAIL_REASON="키 없음($missing)"; return 1; fi
+  missing=$(missing_live_settings)
+  if [ -n "$missing" ]; then LIVE_FAIL_REASON="설정 없음($missing, 실행 환경변수나 .env)"; return 1; fi
   base_url=$(live_value BROKER_BASE_URL)
   # 다른 파라미터 값(예: 메일 주소)이 잘못 들어가면 요청 주소를 만들다 조용히 실패하므로 시세를 부르기 전에 막는다.
   if ! [[ "$base_url" =~ ^https://[^/[:space:]]+$ ]]; then LIVE_FAIL_REASON="BROKER_BASE_URL 이 https://<호스트>[:포트] 형식이 아님"; return 1; fi
@@ -525,7 +540,7 @@ run_live() {
   KAFKA_PORT=$port
   echo "일회용 Kafka 기동: $KAFKA_NAME (127.0.0.1:$port)"
   KAFKA_STARTED=1
-  # 컨테이너 안팎에서 같은 포트를 써서 publish-tick.sh 도 같은 주소로 붙게 한다. 볼륨이 없어 지우면 데이터도 사라진다.
+  # 컨테이너 안팎에서 같은 포트를 써서 collector-command.sh 도 같은 주소로 붙게 한다. 볼륨이 없어 지우면 데이터도 사라진다.
   if ! docker run -d --name "$KAFKA_NAME" --label "$KAFKA_LABEL=$RUN_ID" -p "127.0.0.1:$port:$port" \
       -e KAFKA_NODE_ID=1 -e KAFKA_PROCESS_ROLES=broker,controller \
       -e "KAFKA_LISTENERS=PLAINTEXT://:$port,CONTROLLER://:9093" \
@@ -570,14 +585,18 @@ run_live() {
     export SPRING_KAFKA_BOOTSTRAP_SERVERS="localhost:$port"
     export COLLECTOR_MARKET_DATA_SOURCE=broker BROKER_BASE_URL="$base_url" BROKER_APP_KEY="$app_key" BROKER_APP_SECRET="$app_secret"
     export COLLECTOR_SYMBOLS="$symbol"
+    # 브리핑이 근거 약한 문장을 재검색하면 이 수집기가 실제 뉴스 검색으로 답한다. 키가 없으면 다 모으지 못함으로 끝나 브리핑 확인이 실패한다.
+    export NEWS_SEARCH_CLIENT_ID="$(live_value NEWS_SEARCH_CLIENT_ID)" NEWS_SEARCH_CLIENT_SECRET="$(live_value NEWS_SEARCH_CLIENT_SECRET)"
+    export NEWS_SEARCH_BASE_URL="$(env_or_dotenv NEWS_SEARCH_BASE_URL)" NEWS_SEARCH_ID_HEADER="$(env_or_dotenv NEWS_SEARCH_ID_HEADER)"
+    export NEWS_SEARCH_SECRET_HEADER="$(env_or_dotenv NEWS_SEARCH_SECRET_HEADER)"
+    # 타이머를 모두 꺼서 시세 호출은 아래 수동 실행 명령 1건뿐이게 한다.
     export COLLECTOR_SCHEDULE_ENABLED=false COLLECTOR_PRE_OPEN_ENABLED=false COLLECTOR_INSIGHT_SCHEDULE_ENABLED=false
-    # 콘솔 프로듀서 기동에 몇 초 걸려 기본 3초 기준이면 tick 이 오래된 것으로 버려질 수 있다.
-    export COLLECTOR_MAX_TICK_AGE_MS=30000
+    export COLLECTOR_INTRADAY_ENABLED=false COLLECTOR_MEMBERS_ENABLED=false COLLECTOR_DAILY_BRIEFING_ENABLED=false
     cd "$svc_dir/collector" && exec "$JAVA_HOME_21/bin/java" -jar "$COLLECTOR_JAR"
   ) > "$svc_dir/collector.log" 2>&1 &
   COLLECTOR_PID=$!
-  # collector 그룹은 latest 부터 읽으므로 파티션을 받기 전에 보낸 tick 은 놓친다.
-  wait_for_log "$svc_dir/collector.log" "groupId=collector] Adding newly assigned partitions: [schedule.tick" "$COLLECTOR_PID" 120
+  # 명령 리스너는 파티션을 받을 때 끝으로 옮기므로(꺼져 있던 동안의 명령은 실행하지 않음) 받기 전에 보낸 명령은 놓친다.
+  wait_for_log "$svc_dir/collector.log" "groupId=collector-command] Adding newly assigned partitions: [collector.command" "$COLLECTOR_PID" 120
   case $? in
     0) ;;
     2) LIVE_FAIL_REASON="collector 가 시작 중에 끝남"; return 1 ;;
@@ -587,9 +606,9 @@ run_live() {
 
   # 같은 테스트 DB 에 실제 DB 테스트가 넣은 가짜 행이 남아 있어, 이 시각 뒤에 저장된 행만 이번 실행의 결과로 센다.
   LIVE_SINCE=$(echo "SELECT now();" | admin_sql) || { LIVE_FAIL_REASON="DB 시각을 읽지 못함"; return 1; }
-  echo "tick 1건 발행"
-  KAFKA_CONTAINER="$KAFKA_NAME" KAFKA_BOOTSTRAP="localhost:$port" bash scripts/publish-tick.sh collect >/dev/null \
-    || { LIVE_FAIL_REASON="tick 을 보내지 못함"; return 1; }
+  echo "수동 실행 명령 collect 1건 발행"
+  KAFKA_CONTAINER="$KAFKA_NAME" KAFKA_BOOTSTRAP="localhost:$port" bash scripts/collector-command.sh collect >/dev/null \
+    || { LIVE_FAIL_REASON="수동 실행 명령을 보내지 못함"; return 1; }
 
   echo "테스트 전용 데이터베이스에서 다시 읽어 확인(개수만 출력)"
   (
