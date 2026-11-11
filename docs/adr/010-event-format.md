@@ -57,6 +57,8 @@ Avro + 스키마 레지스트리, Protobuf
 
 2026-11-10 변경: `market.daily.responded` v2의 `etfs[].etf`에 선택 칸 `memberChanges`(상위 구성 종목의 들어옴·나감·순위 바뀜과 `since`·`asOf`)를 더했다. 판 요청 범위 안에 반영된 변경이 있을 때만 싣고 없으면 칸을 빼므로 기존 소비자와 샘플은 그대로 통과해 v2를 유지한다. `schedule.tick`에는 알려진 `jobType` 값 `collect-members`를 더했다(구조 변경 없음). 칸의 원본은 `contracts/events`의 스키마다.
 
+2026-11-11 변경: `market.holdings`와 `news.search-queries`를 없앴다. 두 목록의 원본이 DB 표가 되어 수집기와 뉴스가 시작할 때 표를 직접 읽는다(ADR-004 변경). 데일리 판 결과는 `briefing.daily.generated` v2로 멤버마다 한 건씩 내며 멤버 번호가 필수이고 주소는 싣지 않는다(필수 칸이 늘어 새 버전). `market.daily.responded` v2의 보유·관심 선택 칸은 멤버마다 달라 지웠고, 아침 판의 개장 흐름을 위해 `market.daily.requested`에 선택 칸 `openFlowSince`, 응답 ETF마다 선택 칸 `openFlow`를 더했다. 필드의 원본은 `contracts/events/`의 스키마다.
+
 2026-11-11 변경: `briefing.generated`의 payload에 선택 칸 `name`(종목·ETF 이름)을 더했다. 급변동 메일의 제목과 본문 첫 줄을 '이름(코드)'로 쓰려는 것이며, 브리핑이 `market.context.responded`의 `etf.name`을 그대로 옮긴다. 이름을 모르면 칸을 뺀다(빈 문자열은 스키마가 거부한다). 소비자는 칸이 없거나 비어 있으면 코드만 쓴다. 같은 토픽·같은 버전의 필드 추가라 기존 소비자는 그대로 읽는다. 필드의 원본은 `contracts/events`의 스키마다.
 
 ## 실제로 겪은 함정
