@@ -1,0 +1,11 @@
+[Unit]
+Description=Apply the urgent version to the services (checked every few minutes)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=30min
+EnvironmentFile=-/etc/stock-reading/deploy.env
+ExecStart=/opt/stock-reading/infra/deploy/server/apply-deploy.sh urgent
