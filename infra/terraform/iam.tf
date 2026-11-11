@@ -8,23 +8,26 @@ locals {
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_openid_connect_provider" "github" {
-  count = var.create_github_oidc_provider ? 1 : 0
+  count = local.github_oidc && var.create_github_oidc_provider ? 1 : 0
 
   url            = "https://token.actions.githubusercontent.com"
   client_id_list = ["sts.amazonaws.com"]
 }
 
 data "aws_iam_openid_connect_provider" "github" {
-  count = var.create_github_oidc_provider ? 0 : 1
+  count = local.github_oidc && !var.create_github_oidc_provider ? 1 : 0
 
   url = "https://token.actions.githubusercontent.com"
 }
 
 locals {
-  github_oidc_provider_arn = var.create_github_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : data.aws_iam_openid_connect_provider.github[0].arn
+  github_oidc              = var.github_auth == "oidc"
+  github_oidc_provider_arn = !local.github_oidc ? null : (var.create_github_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : data.aws_iam_openid_connect_provider.github[0].arn)
 }
 
 data "aws_iam_policy_document" "github_trust" {
+  count = local.github_oidc ? 1 : 0
+
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
 
@@ -49,8 +52,9 @@ data "aws_iam_policy_document" "github_trust" {
 }
 
 resource "aws_iam_role" "github_actions" {
+  count              = local.github_oidc ? 1 : 0
   name               = "${var.name_prefix}-github-actions"
-  assume_role_policy = data.aws_iam_policy_document.github_trust.json
+  assume_role_policy = data.aws_iam_policy_document.github_trust[0].json
 }
 
 data "aws_iam_policy_document" "github_actions" {
@@ -89,8 +93,23 @@ data "aws_iam_policy_document" "github_actions" {
 }
 
 resource "aws_iam_role_policy" "github_actions" {
+  count  = local.github_oidc ? 1 : 0
   name   = "ecr-push-and-deploy-versions"
-  role   = aws_iam_role.github_actions.id
+  role   = aws_iam_role.github_actions[0].id
+  policy = data.aws_iam_policy_document.github_actions.json
+}
+
+# OIDC 등록이 조직 정책으로 막힌 계정용. 역할 대신 CI 전용 사용자를 두고 권한은 역할과 같게 좁힌다.
+# 접근 키는 Terraform이 만들지 않는다(상태 파일에 남지 않게). 사람이 콘솔에서 발급해 GitHub Secrets 에 넣고 주기적으로 바꾼다.
+resource "aws_iam_user" "github_actions" {
+  count = local.github_oidc ? 0 : 1
+  name  = "${var.name_prefix}-github-actions"
+}
+
+resource "aws_iam_user_policy" "github_actions" {
+  count  = local.github_oidc ? 0 : 1
+  name   = "ecr-push-and-deploy-versions"
+  user   = aws_iam_user.github_actions[0].name
   policy = data.aws_iam_policy_document.github_actions.json
 }
 

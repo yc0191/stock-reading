@@ -35,7 +35,10 @@ jobs:
       - uses: actions/checkout@v4.2.2
       - uses: aws-actions/configure-aws-credentials@v4.1.0
         with:
+          # OIDC(역할)가 기본. 역할 변수가 비고 키 비밀값이 있으면 접근 키로 들어간다(infra/terraform 의 github_auth).
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2.0.1
@@ -58,7 +61,10 @@ jobs:
     steps:
       - uses: aws-actions/configure-aws-credentials@v4.1.0
         with:
+          # OIDC(역할)가 기본. 역할 변수가 비고 키 비밀값이 있으면 접근 키로 들어간다(infra/terraform 의 github_auth).
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
       - name: 대기 버전 기록
         run: |

@@ -29,9 +29,9 @@ variable "blueprint_id" {
 }
 
 variable "bundle_id" {
-  description = "Lightsail 묶음. small_3_0 이 2GB 메모리(월 $12)이다. 서비스 서버가 모자라면 서비스 서버만 medium_3_0(4GB)으로 올린다."
+  description = "Lightsail 묶음. small_3_2 가 2GB 메모리·공개 IPv4(월 $12)이다. 묶음 이름의 끝 번호는 AWS가 바꾸므로 aws lightsail get-bundles 로 확인한다. 서비스 서버가 모자라면 서비스 서버만 4GB 묶음으로 올린다."
   type        = string
-  default     = "small_3_0"
+  default     = "small_3_2"
 }
 
 variable "service_bundle_id" {
@@ -50,8 +50,19 @@ variable "github_repository" {
   }
 }
 
+variable "github_auth" {
+  description = "GitHub Actions가 AWS에 들어가는 방법. oidc 는 접근 키 없이 main 작업만 역할을 받는다(권장). access_key 는 OIDC 등록이 막힌 계정(조직 정책)에서 쓰며, CI 전용 IAM 사용자를 만들고 키는 사람이 콘솔에서 발급해 GitHub Secrets 에 넣는다."
+  type        = string
+  default     = "oidc"
+
+  validation {
+    condition     = contains(["oidc", "access_key"], var.github_auth)
+    error_message = "github_auth 는 oidc 또는 access_key 여야 합니다."
+  }
+}
+
 variable "create_github_oidc_provider" {
-  description = "GitHub OIDC 공급자를 이 코드가 만들지 여부. 계정에 이미 있으면 false(계정에 하나만 만들 수 있다)."
+  description = "github_auth 가 oidc 일 때 GitHub OIDC 공급자를 이 코드가 만들지 여부. 계정에 이미 있으면 false(계정에 하나만 만들 수 있다)."
   type        = bool
   default     = true
 }
