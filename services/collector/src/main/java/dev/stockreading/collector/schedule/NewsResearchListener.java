@@ -35,7 +35,7 @@ class NewsResearchListener {
     private final NewsResearchProperties properties;
     private final ObjectMapper mapper;
 
-    // 메모리 기반 중복 방지(NewsTickListener 와 같은 방식). 재시작하면 초기화된다.
+    // 메모리 기반 중복 방지. 재시작하면 초기화된다.
     private final Set<String> processedRequests = ConcurrentHashMap.newKeySet();
 
     NewsResearchListener(NewsPublisher publisher, NewsResearchProperties properties, ObjectMapper mapper) {

@@ -9,9 +9,7 @@ import static org.mockito.Mockito.verify;
 
 import java.io.IOException;
 import java.time.Clock;
-import java.time.OffsetDateTime;
 import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -39,13 +37,15 @@ import tools.jackson.databind.json.JsonMapper;
  */
 class PriceCheckFlowTest {
 
+    private static final String NOW = "2026-10-21T10:00:00+09:00";
+
     // @Configuration 을 달지 않는다. 달면 같은 패키지를 스캔하는 다른 조립 테스트가 이 설정까지 읽어 빈이 겹친다.
     @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, MarketStatusProperties.class, InsightProperties.class,
             PriceCheckProperties.class})
     @ComponentScan(basePackages = "dev.stockreading.collector.marketdata")
-    // 다른 패키지의 tick 처리기는 이 하나만 올린다.
+    // 다른 패키지의 현재가 발행기는 이 하나만 올린다.
     @ComponentScan(basePackages = "dev.stockreading.collector.schedule", useDefaultFilters = false,
-            includeFilters = @ComponentScan.Filter(type = FilterType.REGEX, pattern = ".*\\.TickListener"))
+            includeFilters = @ComponentScan.Filter(type = FilterType.REGEX, pattern = ".*\\.QuotePublisher"))
     static class Wiring {
 
         @Bean
@@ -96,26 +96,21 @@ class PriceCheckFlowTest {
                         "BROKER_PRICE_CHECK_LOW_FIELD=" + PriceChecks.LOW);
     }
 
-    private static String tick() throws IOException {
-        // 오래된 tick 으로 건너뛰지 않게 지금 시각으로 바꾼다.
-        String now = OffsetDateTime.now(ZoneId.of("Asia/Seoul"))
-                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX"));
-        return ContractSchemas.sample("schedule.tick.sample.json")
-                .replace("\"scheduledFor\": \"2026-10-20T16:00:00+09:00\"", "\"scheduledFor\": \"" + now + "\"");
+    private static void collect(Object publisher) {
+        ReflectionTestUtils.invokeMethod(publisher, "publishCollected", "collect-" + NOW, NOW);
     }
 
     @SuppressWarnings("unchecked")
     @Test
     void mismatchedSymbolIsPublishedAsFieldMismatchFailureAndTheOthersAsSnapshots() throws IOException {
-        String tick = tick();
         runner().run(context -> {
             String broken = PriceChecks.body("12345", "10000", "100", "D", "-1.00", "10100", "9800");
             server.priceBody = PriceChecks.body("9900", "10000", "100", "D", "-1.00", "10100", "9800");
             server.priceBodyBySymbol.put("TEST02", broken);
             KafkaTemplate<String, String> kafka = context.getBean(KafkaTemplate.class);
-            Object listener = context.getBean("tickListener");
+            Object publisher = context.getBean("quotePublisher");
 
-            ReflectionTestUtils.invokeMethod(listener, "onTick", tick);
+            collect(publisher);
 
             ArgumentCaptor<String> snapshotKeys = ArgumentCaptor.forClass(String.class);
             verify(kafka, times(2)).send(eq(Topics.MARKET_SNAPSHOT), snapshotKeys.capture(), anyString());
@@ -136,12 +131,11 @@ class PriceCheckFlowTest {
     @SuppressWarnings("unchecked")
     @Test
     void turningTheCheckOffPublishesTheMismatchedQuoteAsASnapshot() throws IOException {
-        String tick = tick();
         runner().withPropertyValues("BROKER_PRICE_CHECK_ENABLED=false").run(context -> {
             server.priceBody = PriceChecks.body("12345", "10000", "100", "D", "-1.00", "10100", "9800");
             KafkaTemplate<String, String> kafka = context.getBean(KafkaTemplate.class);
 
-            ReflectionTestUtils.invokeMethod(context.getBean("tickListener"), "onTick", tick);
+            collect(context.getBean("quotePublisher"));
 
             verify(kafka, times(3)).send(eq(Topics.MARKET_SNAPSHOT), anyString(), anyString());
             verify(kafka, times(0)).send(eq(Topics.MARKET_SNAPSHOT_FAILED), anyString(), anyString());

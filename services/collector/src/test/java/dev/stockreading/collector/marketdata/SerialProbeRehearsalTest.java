@@ -58,7 +58,7 @@ class SerialProbeRehearsalTest {
         var broker = new BrokerProperties(server.baseUrl(), "TEST-key", "TEST-secret", 5, cap);
         var client = new BrokerClient(broker, mapper, Clock.systemDefaultZone(), CallRateLimiter.perSecond(10));
         CallRateLimit limiter = CallRateLimiter.perSecond(cap);
-        var marketData = new BrokerMarketData(client, new CollectorProperties(symbols, 1_000, 0), broker, limiter, check);
+        var marketData = new BrokerMarketData(client, new CollectorProperties(symbols, 1_000), broker, limiter, check);
         return new SerialProbe(client, marketData, limiter, check, settings);
     }
 

@@ -30,7 +30,7 @@ import tools.jackson.databind.ObjectMapper;
  */
 @Component
 @ConditionalOnProperty(name = "collector.market-data.source", havingValue = "broker")
-class InsightPublisher {
+public class InsightPublisher {
 
     static final String EVENT_TYPE = "market.insight";
     static final String DAILY_PRICE = "daily-price";
@@ -71,7 +71,7 @@ class InsightPublisher {
         this.clock = clock;
     }
 
-    void publishAll(String correlationId, String scheduledFor) {
+    public void publishAll(String correlationId, String scheduledFor) {
         int published = 0;
         int failed = 0;
         for (String symbol : collector.symbols()) {
@@ -110,7 +110,7 @@ class InsightPublisher {
     }
 
     /** 장 시작 전 조회: 세계지수 아메리카와 보유 미국 종목 해외 일봉. 이벤트와 키는 장 마감 후 조회와 같다. */
-    void publishPreOpen(String correlationId, String scheduledFor) {
+    public void publishPreOpen(String correlationId, String scheduledFor) {
         boolean published = publishOne(WORLD_INDEX, PRE_OPEN_CONTINENT,
                 () -> source.worldIndex(PRE_OPEN_CONTINENT), correlationId, scheduledFor);
         log.info("sent {} pre-open world index events corr={} failed={}",

@@ -37,7 +37,7 @@ class BrokerMarketDataTest {
         server = new FakeBrokerServer();
         var broker = new BrokerProperties(server.baseUrl(), KEY, SECRET, timeoutSeconds, maxCalls);
         var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10));
-        return new BrokerMarketData(client, new CollectorProperties(symbols, 1_000, 3_000), broker,
+        return new BrokerMarketData(client, new CollectorProperties(symbols, 1_000), broker,
                 CallRateLimiter.perSecond(maxCalls), PriceChecks.fake());
     }
 
@@ -98,7 +98,7 @@ class BrokerMarketDataTest {
         var broker = new BrokerProperties(server.baseUrl(), KEY, SECRET, 5, 10);
         var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10));
         CallRateLimit denyAll = maxWait -> false;
-        var marketData = new BrokerMarketData(client, new CollectorProperties(List.of("TEST01"), 1_000, 3_000), broker, denyAll, PriceChecks.fake());
+        var marketData = new BrokerMarketData(client, new CollectorProperties(List.of("TEST01"), 1_000), broker, denyAll, PriceChecks.fake());
 
         FetchResult result = marketData.fetch(List.of("TEST01"));
 

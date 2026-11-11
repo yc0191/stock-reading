@@ -29,7 +29,7 @@ import tools.jackson.databind.json.JsonMapper;
 @EnabledIfEnvironmentVariable(named = "QUOTE_LOAD", matches = "1")
 class QuoteFixedLoadTest {
 
-    // TickListener 의 기본 건너뜀 기준과 같다.
+    // 밀림으로 세는 기준(예전 tick 처리의 기본 건너뜀 기준 3초).
     private static final long STALE_MILLIS = 3_000;
 
     private record Run(int symbols, int repeat, int ticks, int staleSkipped, long okQuotes, long failures,
@@ -66,7 +66,7 @@ class QuoteFixedLoadTest {
             int cap = Integer.parseInt(env("QUOTE_LOAD_CAP", "0"));
             var broker = new BrokerProperties(server.baseUrl(), "load-key", "load-secret", 10, cap > 0 ? cap : n);
             var client = new BrokerClient(broker, JsonMapper.builder().build(), Clock.systemDefaultZone(), CallRateLimiter.perSecond(10));
-            var marketData = new BrokerMarketData(client, new CollectorProperties(symbols, 1_000, STALE_MILLIS), broker,
+            var marketData = new BrokerMarketData(client, new CollectorProperties(symbols, 1_000), broker,
                     CallRateLimiter.perSecond(broker.maxCallsPerSecond()),
                     PriceChecks.fake());
 

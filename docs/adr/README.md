@@ -14,6 +14,7 @@ ADR = Architecture Decision Record. "무엇을, 왜, 어떤 대안을 놓고 정
 | [008](008-redis.md) | Redis | 확정 |
 | [010](010-event-format.md) | 이벤트 포맷 (JSON + 스키마 파일) | 초안 |
 | [011](011-notification-channel.md) | 알림 채널: 이메일(AWS SES) | 초안 |
+| [012](012-collector-timers-and-command-topic.md) | 수집기 자기 수집은 서비스 안 타이머, 수동 실행은 명령 토픽(collector.command) | 초안 |
 
 ## 상태 표기
 - **확정**: 합의했고, 구현이 있으면 테스트로 검증됨

@@ -15,7 +15,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @ConditionalOnProperty(name = "collector.market-data.source", havingValue = "broker")
-class IntradayPublisher {
+public class IntradayPublisher {
 
     // 장중에는 막 열린 아시아 장과 직전에 끝난 미국 장의 지수만 본다. 유럽은 국내 장중에 열리지 않는다.
     static final List<String> INTRADAY_CONTINENTS = List.of("S", "C");
@@ -36,7 +36,7 @@ class IntradayPublisher {
     }
 
     // 4건을 한꺼번에 보내면 같은 1초에 시세 조회 자리를 여럿 빼앗으므로 시차를 둔다. 상한 장치는 조회마다 따로 거친다.
-    void publishIntraday(String correlationId, String scheduledFor) {
+    public void publishIntraday(String correlationId, String scheduledFor) {
         List<Call> calls = new ArrayList<>();
         calls.add(new Call(InsightPublisher.EXCHANGE_RATE_SUMMARY, null, source::exchangeRateSummary));
         calls.add(new Call(InsightPublisher.MARKET_SUMMARY, null, source::marketSummary));
