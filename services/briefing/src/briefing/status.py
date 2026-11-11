@@ -14,7 +14,7 @@ from typing import Any, Mapping, Protocol
 
 from briefing.compose import KST
 from briefing.events import parse_timestamp
-from briefing.job_log import REASON_MERGED_INTO_MORNING
+from briefing.job_log import REASON_MERGED_INTO_MORNING, REASON_NO_EVIDENCE
 
 log = logging.getLogger("briefing.status")
 
@@ -244,6 +244,8 @@ class _Moves:
     total: int = 0
     succeeded: int = 0
     failed: int = 0
+    # 근거 없어 결과 이벤트를 보내지 않은 급변동(작업은 succeeded로 끝나지만 성공에 세지 않는다)
+    no_evidence: int = 0
     running: int = 0
     rule_based: int = 0
     # 아침 판에 합쳐 따로 리포트를 만들지 않은 변동(성공으로 끝났지만 리포트가 없다)
@@ -259,6 +261,8 @@ def _tally_moves(runs: list[JobRunRow]) -> _Moves:
         moves.total += 1
         if r.status == STATUS_SUCCEEDED and r.failure_reason == REASON_MERGED_INTO_MORNING:
             moves.merged += 1
+        elif r.status == STATUS_SUCCEEDED and r.failure_reason == REASON_NO_EVIDENCE:
+            moves.no_evidence += 1
         elif r.status == STATUS_SUCCEEDED:
             moves.succeeded += 1
         elif r.status == STATUS_FAILED:
@@ -267,7 +271,9 @@ def _tally_moves(runs: list[JobRunRow]) -> _Moves:
             moves.reasons[reason] = moves.reasons.get(reason, 0) + 1
         elif r.status == STATUS_RUNNING:
             moves.running += 1
-        if r.generated_by == GENERATED_BY_RULE_BASED:
+        # 근거 없어 보내지 않은 급변동은 규칙 기반 건수에 세지 않는다
+        if r.generated_by == GENERATED_BY_RULE_BASED and not (
+                r.status == STATUS_SUCCEEDED and r.failure_reason == REASON_NO_EVIDENCE):
             moves.rule_based += 1
     return moves
 
@@ -300,7 +306,7 @@ def _briefing_line(runs: list[JobRunRow] | None) -> str:
     failed = f"실패 {m.failed}" + (f"[{_reasons_text(m.reasons)}]" if m.reasons else "")
     merged = f" · 아침 판에 합침 {m.merged}" if m.merged else ""
     return (f"- 브리핑: 급변동 {m.total}건(성공 {m.succeeded} · {failed} · 진행 중 {m.running} · 규칙 기반 {m.rule_based}{merged})"
-            f" · 아침 판 {_morning_text(_morning(runs))}")
+            f" · 근거 없어 보내지 않은 급변동 {m.no_evidence}건 · 아침 판 {_morning_text(_morning(runs))}")
 
 
 def _attention(ops: Operations | None, collections: list[CollectionRecord] | None, runs: list[JobRunRow] | None,

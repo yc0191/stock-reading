@@ -22,6 +22,8 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
+import dev.stockreading.market.MarketProperties;
+
 /**
  * 변동 상태(재발행 판단용)를 실제 Postgres에 저장하고 다시 읽어 확인한다. 세 환경변수가 모두 있을 때만 실행하며,
  * 대상은 market 스키마가 비어 있는 테스트 전용 DB라고 가정한다. 평소 gradlew test 에서는 건너뛴다.
@@ -84,13 +86,53 @@ class MoveStateIntegrationTest {
         when(detector.evaluate("ITM003", T0, 10_200, null)).thenReturn(List.of(Evaluation.detected(first)));
         when(detector.evaluate("ITM003", T0.plusMinutes(1), 10_250, null)).thenReturn(List.of(Evaluation.detected(small)));
 
-        new MoveTracker(detector, repository(), publisher).onSnapshot("ITM003", T0, 10_200, null, "it");
+        new MoveTracker(detector, repository(), publisher, properties()).onSnapshot("ITM003", T0, 10_200, null, "it");
         // 재시작: 새 연결의 저장소를 붙인 새 추적기. 마지막 발행 가격(10200) 대비 0.49%라 다시 발행하지 않는다.
-        new MoveTracker(detector, repository(), publisher).onSnapshot("ITM003", T0.plusMinutes(1), 10_250, null, "it");
+        new MoveTracker(detector, repository(), publisher, properties()).onSnapshot("ITM003", T0.plusMinutes(1), 10_250, null, "it");
 
         verify(publisher, times(1)).publish(eq("ITM003"), any(Detection.class), any(OffsetDateTime.class), any(OffsetDateTime.class), anyString());
         verify(publisher, never()).publish(eq("ITM003"), eq(small), any(OffsetDateTime.class), any(OffsetDateTime.class), anyString());
         assertState(repository().find("ITM003", DetectionType.WINDOW), 10_200, T0);
+    }
+
+    @Test
+    void lastPublishIsKeptPerSymbolAndSurvivesClearingTheTypeStates() {
+        MoveStateRepository repository = repository();
+        repository.save("ITM004", DetectionType.WINDOW, 10_300, T0, T0.plusMinutes(1));
+        assertThat(repository().findLastPublish("ITM004")).isEmpty();
+
+        repository.saveLastPublish("ITM004", 10_300, T0.plusMinutes(1));
+        repository.saveLastPublish("ITM004", 10_500, T0.plusMinutes(3));
+        repository.delete("ITM004", DetectionType.WINDOW);
+
+        // 새 연결로 읽는다. 종목마다 한 행이고 최신 값이며, 유형별 상태를 지워도 남는다.
+        Optional<LastPublish> last = repository().findLastPublish("ITM004");
+        assertThat(last).isPresent();
+        assertThat(last.get().price()).isEqualTo(10_500L);
+        assertThat(last.get().publishedAt().toInstant()).isEqualTo(T0.plusMinutes(3).toInstant());
+        assertThat(count("ITM004")).isEqualTo(1);
+        assertThat(repository().find("ITM004", DetectionType.WINDOW)).isEmpty();
+    }
+
+    @Test
+    void trackerStartedAgainKeepsTheIntervalBetweenMovesOfTheSameSymbol() {
+        MoveDetector detector = mock(MoveDetector.class);
+        MovePublisher publisher = mock(MovePublisher.class);
+        Detection first = new Detection(DetectionType.WINDOW, 10_000, 10_200, new BigDecimal("2.00"), new BigDecimal("1.00"), T0);
+        Detection second = new Detection(DetectionType.PREV_CLOSE, 10_000, 10_320, new BigDecimal("3.20"), new BigDecimal("3.00"), T0);
+        when(detector.evaluate("ITM005", T0, 10_200, null)).thenReturn(List.of(Evaluation.detected(first)));
+        when(detector.evaluate("ITM005", T0.plusMinutes(10), 10_320, null)).thenReturn(List.of(Evaluation.detected(second)));
+
+        new MoveTracker(detector, repository(), publisher, properties()).onSnapshot("ITM005", T0, 10_200, null, "it");
+        // 재시작한 새 추적기. 10분 뒤 다른 유형이 +1.18%(마지막 발행 가격 대비 2% 미만)로 감지돼도 30분 간격 안이라 내지 않는다.
+        new MoveTracker(detector, repository(), publisher, properties()).onSnapshot("ITM005", T0.plusMinutes(10), 10_320, null, "it");
+
+        verify(publisher, times(1)).publish(eq("ITM005"), any(Detection.class), any(OffsetDateTime.class), any(OffsetDateTime.class), anyString());
+    }
+
+    private static MarketProperties properties() {
+        return new MarketProperties(5, new BigDecimal("1.00"), List.of("fake.a"), new BigDecimal("3.00"), List.of(),
+                1, List.of("fake.volume", "fake.open"), 30, new BigDecimal("2.00"));
     }
 
     // DB는 시각을 UTC 오프셋으로 돌려주므로 같은 순간인지로 비교한다.

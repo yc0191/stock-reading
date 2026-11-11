@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
-from briefing.compose import DISCLAIMER, NO_EVIDENCE, compose
+import pytest
+
+from briefing.compose import DISCLAIMER, NO_EVIDENCE, compose, headline
 from briefing.evidence import NewsItem
 
 KST = timezone(timedelta(hours=9))
@@ -38,3 +40,9 @@ def test_without_evidence_the_briefing_says_so_instead_of_inventing_a_reason():
 def test_disclaimer_is_always_present():
     assert compose("TEST01", 10_000, 9_850, -1.5, AS_OF, []).endswith(DISCLAIMER)
     assert compose("TEST01", 10_000, 9_850, -1.5, AS_OF, [ITEM]).endswith(DISCLAIMER)
+
+
+@pytest.mark.parametrize("name, label", [("TEST 샘플 ETF", "TEST 샘플 ETF(TEST01)"), (" TEST 샘플 ETF ", "TEST 샘플 ETF(TEST01)"),
+                                         (None, "TEST01"), ("", "TEST01"), ("  ", "TEST01")])
+def test_headline_shows_name_with_symbol_only_when_the_name_is_known(name, label):
+    assert headline("TEST01", 10_000, 9_850, -1.5, AS_OF, name) == f"[{label}] 16:00 기준 하락 -1.50% (10,000 → 9,850)"

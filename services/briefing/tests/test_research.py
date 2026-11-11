@@ -12,7 +12,7 @@ from briefing.config import CoreSettings
 from briefing.jobs import BriefingCore
 from briefing.llm import LlmCallError
 from briefing.ports import FailureReason
-from briefing.job_log import EntryType, GeneratedBy, RunStatus
+from briefing.job_log import REASON_NO_EVIDENCE, EntryType, GeneratedBy, RunStatus
 from briefing.report import LLM_INSUFFICIENT, LlmWriter, ReportStage
 from briefing.research import (
     QUERY_SYSTEM_PROMPT,
@@ -169,6 +169,10 @@ class Flow:
     def briefings(self):
         return self.requests.of("briefing.generated")
 
+    def not_sent(self):
+        """근거 없어 결과 이벤트를 발행하지 않은 작업 결과"""
+        return [f for f in self.records.finishes if f.failure_reason == REASON_NO_EVIDENCE]
+
 
 # ---- 가짜 응답 ----
 
@@ -305,8 +309,10 @@ def test_research_articles_request_follows_seq_timeout_and_total_attempts_then_r
 
     seqs = [e.value["payload"]["seq"] for e in research_articles_requests(flow)]
     assert seqs == [1, 2, 3]
-    (briefing,) = flow.briefings()
-    assert LLM_INSUFFICIENT in briefing.value["payload"]["text"]
+    # 인용한 근거가 없어 메일을 보내지 않고, 결과와 본문은 작업 기록에 남긴다.
+    assert flow.briefings() == []
+    (skipped,) = flow.not_sent()
+    assert LLM_INSUFFICIENT in skipped.final_text
     # 새 실패 사유 없이 보고서를 낸다.
     assert flow.failures.failed == []
 
@@ -378,8 +384,10 @@ def test_query_llm_failing_every_attempt_reports_existing_evidence_and_records_e
 
     assert len(flow.query_llm.calls) == S.research_query_attempts
     assert flow.requests.of("news.research.requested") == []
-    (briefing,) = flow.briefings()
-    assert LLM_INSUFFICIENT in briefing.value["payload"]["text"]
+    # 인용한 근거가 없어 메일을 보내지 않고, 결과와 본문은 작업 기록에 남긴다.
+    assert flow.briefings() == []
+    (skipped,) = flow.not_sent()
+    assert LLM_INSUFFICIENT in skipped.final_text
     assert flow.failures.failed == []
 
     attempts = [r for r in flow.records.items if r.reason in (ResearchReason.QUERY_REJECTED,
@@ -407,7 +415,7 @@ def test_query_llm_with_no_queries_reports_existing_evidence_without_research():
 
     assert len(flow.query_llm.calls) == 1
     assert flow.requests.of("news.research.requested") == []
-    assert len(flow.briefings()) == 1
+    assert flow.briefings() == [] and len(flow.not_sent()) == 1
     (record,) = flow.records.of(ResearchReason.NO_QUERIES)
     assert (record.stage, record.reason, record.data["llm"]["rawOutput"], record.data["llm"]["rejectReason"]) == (
         ResearchStep.QUERY, ResearchReason.NO_QUERIES, queries("  ", ""), None)
@@ -483,7 +491,7 @@ def test_query_llm_input_carries_the_background_figures():
     assert [f["name"] for f in figures][:3] == ["원/달러 환율", "코스피종합", "코스닥종합"]
 
 
-def test_without_a_query_writer_insufficient_evidence_is_published_as_before():
+def test_without_a_query_writer_insufficient_evidence_is_not_published():
     clock, requests, records = Clock(T), Requests(), Records()
     stage = ResearchReportStage(ReportStage(LlmWriter(FakeLlm(INSUFFICIENT)), requests, records, clock=clock),
                                 SentenceResearch(None, requests, records, S))
@@ -497,7 +505,9 @@ def test_without_a_query_writer_insufficient_evidence_is_published_as_before():
     core.on_articles_responded(articles(2), T + S.recheck_interval)
 
     assert requests.of("news.research.requested") == []
-    assert len(requests.of("briefing.generated")) == 1
+    # 인용한 근거가 없으면 보내지 않는다(결과는 작업 기록에 남는다).
+    assert requests.of("briefing.generated") == []
+    assert [f.failure_reason for f in records.finishes] == [REASON_NO_EVIDENCE]
     assert records.items == []
 
 
@@ -510,8 +520,10 @@ def test_daily_limit_or_search_failure_reports_existing_evidence_without_queryin
     flow.complete_research(incomplete)
 
     assert research_articles_requests(flow) == []
-    (briefing,) = flow.briefings()
-    assert LLM_INSUFFICIENT in briefing.value["payload"]["text"]
+    # 인용한 근거가 없어 메일을 보내지 않고, 결과와 본문은 작업 기록에 남긴다.
+    assert flow.briefings() == []
+    (skipped,) = flow.not_sent()
+    assert LLM_INSUFFICIENT in skipped.final_text
     assert flow.failures.failed == []
     (record,) = flow.records.of(ResearchReason.COLLECTION_INCOMPLETE)
     assert (record.stage, record.reason, record.data["missing"], record.data["queries"]) == (
@@ -531,7 +543,7 @@ def test_research_completion_timeout_reports_existing_evidence():
     assert flow.briefings() == []
     research.on_tick(requested_at + S.research_wait_limit)
 
-    assert len(flow.briefings()) == 1
+    assert flow.briefings() == [] and len(flow.not_sent()) == 1
     assert flow.failures.failed == []
     (record,) = flow.records.of(ResearchReason.COMPLETION_TIMEOUT)
     assert (record.stage, record.reason) == (ResearchStep.COMPLETION, ResearchReason.COMPLETION_TIMEOUT)
@@ -570,8 +582,10 @@ def test_no_research_article_left_after_dropping_reports_existing_evidence_with_
     flow.stable_research([late, A1])
 
     assert len(flow.report_llm.calls) == 1
-    (briefing,) = flow.briefings()
-    assert LLM_INSUFFICIENT in briefing.value["payload"]["text"]
+    # 인용한 근거가 없어 메일을 보내지 않고, 결과와 본문은 작업 기록에 남긴다.
+    assert flow.briefings() == []
+    (skipped,) = flow.not_sent()
+    assert LLM_INSUFFICIENT in skipped.final_text
     (record,) = flow.records.of(ResearchReason.NO_USABLE_ARTICLES)
     assert (record.stage, record.data["excluded"], record.data["duplicates"]) == (ResearchStep.FILTER, 1, 1)
     assert [a["articleId"] for a in record.data["received"][0]["articles"]] == ["late", "a1"]
@@ -589,7 +603,7 @@ def test_research_articles_that_keep_changing_report_existing_evidence():
             flow.clock.now += S.recheck_interval
             research.on_tick(flow.clock.now)
 
-    assert len(flow.briefings()) == 1
+    assert flow.briefings() == [] and len(flow.not_sent()) == 1
     assert len(flow.records.of(ResearchReason.ARTICLES_CONFIRM_ROUND)) == S.max_rounds - 1
     (record,) = flow.records.of(ResearchReason.ARTICLES_UNSTABLE)
     assert (record.attempts, len(record.data["received"])) == (S.max_rounds, S.max_rounds)
@@ -610,8 +624,10 @@ def test_rewrite_citing_refs_outside_the_list_is_retried_and_three_failures_reco
     (record,) = flow.records.of(ResearchReason.REWRITE_FAILED)
     assert record.stage == ResearchStep.REWRITE
     # 다시 쓰기가 끝내 실패해도 이미 쓴 첫 보고서가 있으므로 작업을 실패로 닫지 않고 그것을 낸다.
-    (briefing,) = flow.briefings()
-    assert LLM_INSUFFICIENT in briefing.value["payload"]["text"]
+    # 인용한 근거가 없어 메일을 보내지 않고, 결과와 본문은 작업 기록에 남긴다.
+    assert flow.briefings() == []
+    (skipped,) = flow.not_sent()
+    assert LLM_INSUFFICIENT in skipped.final_text
     (result,) = flow.records.results()
     assert result.status == RunStatus.SUCCEEDED and result.research_count == 1
 
@@ -628,15 +644,16 @@ def test_rewrite_rejecting_one_unknown_ref_then_valid_is_published():
     assert flow.failures.failed == []
 
 
-def test_still_insufficient_after_rewrite_is_published_as_insufficient_and_recorded():
+def test_still_insufficient_after_rewrite_is_not_published_and_recorded():
     flow = Flow([INSUFFICIENT, INSUFFICIENT], [queries(*QUERIES)])
     flow.to_report()
     flow.complete_research()
     flow.stable_research([R1])
 
-    (briefing,) = flow.briefings()
-    assert LLM_INSUFFICIENT in briefing.value["payload"]["text"]
-    assert briefing.value["payload"]["evidence"] == []
+    # 인용한 근거가 없어 메일을 보내지 않고, 결과와 본문은 작업 기록에 남긴다.
+    assert flow.briefings() == []
+    (skipped,) = flow.not_sent()
+    assert LLM_INSUFFICIENT in skipped.final_text
     assert len(flow.query_llm.calls) == 1  # 다시 써도 부족하면 또 재검색하지 않는다
     assert len(flow.requests.of("news.research.requested")) == 1
     (record,) = flow.records.of(ResearchReason.STILL_INSUFFICIENT)

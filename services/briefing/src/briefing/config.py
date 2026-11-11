@@ -51,7 +51,11 @@ class CoreSettings:
     # 작업 하나의 재검색 전체 시간. 요청 합계를 넘는 문장은 찾지 않고 '근거 약함'을 남기고, 전체 시간이 지나면 그때의 본문으로 낸다.
     research_rounds_per_sentence: int = 2
     max_research_requests: int = 10
-    research_total_limit: timedelta = timedelta(minutes=15)
+    # 변동부터 메일 이벤트까지 약 10분 안에 끝내려고 4분으로 둔다(T+5분 재검색, 근거 조회, 첫 본문 뒤의 시간).
+    research_total_limit: timedelta = timedelta(minutes=4)
+    # 정기 뉴스 수집을 기다리지 않고, 변동 시각 T 뒤 이 시간이 되면 ETF 이름과 비중 상위 구성 종목 이름으로 먼저 재검색한다.
+    # 그 재검색 완료도 정기 수집 완료와 같이 '수집 완료'로 본다. 검색어 수는 max_research_queries를 쓴다.
+    early_research_delay: timedelta = timedelta(minutes=5)
 
 
 @dataclass(frozen=True)

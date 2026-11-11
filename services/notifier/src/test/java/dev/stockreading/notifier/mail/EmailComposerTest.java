@@ -16,8 +16,12 @@ import dev.stockreading.notifier.event.BriefingEnvelope.Payload;
 class EmailComposerTest {
 
     private static BriefingEnvelope briefing(String change) {
+        return briefing(change, null);
+    }
+
+    private static BriefingEnvelope briefing(String change, String name) {
         Payload payload = new Payload(
-                "TEST01", new BigDecimal(change), "2026-10-20T16:00:31+09:00",
+                "TEST01", name, new BigDecimal(change), "2026-10-20T16:00:31+09:00",
                 "[TEST01] 16:00 기준 하락 -1.50% (10,000 → 9,850)\n근거 후보:\n  1. Sample headline — sample",
                 "rule-based",
                 List.of(new Evidence("Sample headline", "sample", "2026-10-20T09:00:00+09:00")));
@@ -37,6 +41,21 @@ class EmailComposerTest {
                 .isEqualTo("[시뮬레이션] [TEST01] 하락 -1.50% 브리핑");
         assertThat(composer("[시뮬레이션]").compose(briefing("2.37")).subject())
                 .isEqualTo("[시뮬레이션] [TEST01] 상승 +2.37% 브리핑");
+    }
+
+    @Test
+    void subjectShowsNameWithSymbolWhenNameIsKnown() {
+        assertThat(composer("").compose(briefing("-1.34", "TEST 샘플 ETF")).subject())
+                .isEqualTo("[TEST 샘플 ETF(TEST01)] 하락 -1.34% 브리핑");
+        assertThat(composer("").compose(briefing("-1.34", "  TEST 샘플 ETF ")).subject())
+                .isEqualTo("[TEST 샘플 ETF(TEST01)] 하락 -1.34% 브리핑");
+    }
+
+    @Test
+    void missingOrBlankNameFallsBackToSymbolOnly() {
+        assertThat(composer("").compose(briefing("-1.34", null)).subject()).isEqualTo("[TEST01] 하락 -1.34% 브리핑");
+        assertThat(composer("").compose(briefing("-1.34", "")).subject()).isEqualTo("[TEST01] 하락 -1.34% 브리핑");
+        assertThat(composer("").compose(briefing("-1.34", "   ")).subject()).isEqualTo("[TEST01] 하락 -1.34% 브리핑");
     }
 
     @Test
@@ -72,7 +91,8 @@ class EmailComposerTest {
 
         EmailMessage email = composer("[시뮬레이션]").compose(sample);
 
-        assertThat(email.subject()).isEqualTo("[시뮬레이션] [TEST01] 하락 -1.50% 브리핑");
+        assertThat(email.subject()).isEqualTo("[시뮬레이션] [TEST 샘플 ETF(TEST01)] 하락 -1.50% 브리핑");
+        assertThat(email.body()).startsWith("[TEST 샘플 ETF(TEST01)] 16:00");
         assertThat(email.body()).contains("근거 후보");
     }
 }

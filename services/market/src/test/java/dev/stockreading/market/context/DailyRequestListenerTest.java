@@ -80,7 +80,8 @@ class DailyRequestListenerTest {
         return new DailyRequestListener(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
                 memberChanges, new ContextProperties(Duration.ofDays(4), 32_768, maxTickers, List.of("C", "S"), Duration.ofDays(7)),
                 new DailyProperties(maxEtfs, null), operationsReader, publisher, mapper, openFlowPort,
-                new MarketProperties(5, BigDecimal.ONE, List.of("f.a", "f.b", "f.c"), BigDecimal.ONE, List.of("f.open")));
+                new MarketProperties(5, BigDecimal.ONE, List.of("f.a", "f.b", "f.c"), BigDecimal.ONE, List.of("f.open"),
+                        1, List.of(), 0, new BigDecimal("2.00")));
     }
 
     private DailyRequestListener listener() {

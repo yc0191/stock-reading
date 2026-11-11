@@ -2,8 +2,11 @@ package dev.stockreading.market.snapshot;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -25,6 +28,9 @@ class MoveDetectorTest {
 
     private static final OffsetDateTime NOW = OffsetDateTime.parse("2026-10-20T16:05:00+09:00");
 
+    // 가짜 칸 이름이다. 실제 칸은 application.yml 의 market.first-trade-fields 로 정한다.
+    private static final List<String> FIRST_TRADE_FIELDS = List.of("fake.volume", "fake.open");
+
     private PriceSnapshotRepository repository;
     private MoveDetector detector;
 
@@ -33,7 +39,8 @@ class MoveDetectorTest {
         repository = mock(PriceSnapshotRepository.class);
         // 가짜 필드 이름이다. 실제 응답 필드는 사용자가 원문을 보고 정한다.
         MarketProperties properties = new MarketProperties(
-                5, new BigDecimal("1.00"), List.of("fake.a", "fake.b", "fake.c"), new BigDecimal("3.00"), List.of());
+                5, new BigDecimal("1.00"), List.of("fake.a", "fake.b", "fake.c"), new BigDecimal("3.00"), List.of(),
+                3, FIRST_TRADE_FIELDS, 30, new BigDecimal("2.00"));
         detector = new MoveDetector(repository, properties, JsonMapper.builder().build());
     }
 
@@ -60,16 +67,16 @@ class MoveDetectorTest {
 
     @Test
     void windowQueryAlwaysHasBothBoundsOfTheConfiguredLength() {
-        when(repository.findBetween(anyString(), any(), any())).thenReturn(List.of());
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of());
 
         window(10_000);
 
-        verify(repository).findBetween("TEST01", NOW.minusMinutes(5), NOW);
+        verify(repository).findBetween("TEST01", NOW.minusMinutes(5), NOW, FIRST_TRADE_FIELDS);
     }
 
     @Test
     void windowWithoutHistoryIsNotDetectedAndEndsAnyRunningMove() {
-        when(repository.findBetween(anyString(), any(), any())).thenReturn(List.of());
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of());
 
         assertThat(window(10_000).outcome()).isEqualTo(Outcome.CLEAR);
     }
@@ -83,14 +90,14 @@ class MoveDetectorTest {
             "10500, true"
     })
     void windowComparesAgainstTheOldestSnapshotAtTheThreshold(long price, boolean detected) {
-        when(repository.findBetween(anyString(), any(), any())).thenReturn(List.of(point("16:00:00", 10_000)));
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(point("16:00:00", 10_000)));
 
         assertThat(window(price).outcome()).isEqualTo(detected ? Outcome.DETECTED : Outcome.CLEAR);
     }
 
     @Test
     void windowDetectionCarriesBasePriceChangeAndThreshold() {
-        when(repository.findBetween(anyString(), any(), any())).thenReturn(List.of(point("16:00:00", 10_000)));
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(point("16:00:00", 10_000)));
 
         Detection detection = window(9_850).detection();
 
@@ -103,7 +110,7 @@ class MoveDetectorTest {
 
     @Test
     void windowMoveStartsAtTheLatestSnapshotBelowTheThreshold() {
-        when(repository.findBetween(anyString(), any(), any())).thenReturn(List.of(
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(
                 point("16:00:00", 10_000),
                 point("16:01:00", 10_050),
                 point("16:02:00", 10_090),   // 0.90% 미만, 가장 최근의 임계값 미만
@@ -118,7 +125,7 @@ class MoveDetectorTest {
 
     @Test
     void windowMoveStartFallsBackToTheOldestSnapshotWhenNoLaterSnapshotIsBelowTheThreshold() {
-        when(repository.findBetween(anyString(), any(), any())).thenReturn(List.of(
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(
                 point("16:00:00", 10_000),
                 point("16:01:00", 10_150),
                 point("16:02:00", 10_200)));
@@ -128,14 +135,14 @@ class MoveDetectorTest {
 
     @Test
     void windowMoveStartIsTheOldestSnapshotWhenItIsTheOnlyOne() {
-        when(repository.findBetween(anyString(), any(), any())).thenReturn(List.of(point("16:00:00", 10_000)));
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(point("16:00:00", 10_000)));
 
         assertThat(window(10_200).detection().moveStartedAt()).isEqualTo(OffsetDateTime.parse("2026-10-20T16:00:00+09:00"));
     }
 
     @Test
     void windowWithNonPositiveBaselineCannotBeJudged() {
-        when(repository.findBetween(anyString(), any(), any())).thenReturn(List.of(point("16:00:00", 0)));
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(point("16:00:00", 0)));
 
         assertThat(window(10_000).outcome()).isEqualTo(Outcome.UNKNOWN);
     }
@@ -232,13 +239,117 @@ class MoveDetectorTest {
     @org.junit.jupiter.params.provider.EmptySource
     void prevCloseIsOffWhenNoFieldIsSet(List<String> fields) {
         MarketProperties properties = new MarketProperties(
-                5, new BigDecimal("1.00"), fields, new BigDecimal("3.00"), List.of());
+                5, new BigDecimal("1.00"), fields, new BigDecimal("3.00"), List.of(),
+                3, FIRST_TRADE_FIELDS, 30, new BigDecimal("2.00"));
         MoveDetector off = new MoveDetector(repository, properties, JsonMapper.builder().build());
-        when(repository.findBetween(anyString(), any(), any())).thenReturn(List.of(point("16:00:00", 10_000)));
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(point("16:00:00", 10_000)));
 
         List<Evaluation> evaluations = off.evaluate("TEST01", NOW, 10_400, raw("10000"));
 
         assertThat(evaluations.get(1).outcome()).isEqualTo(Outcome.UNKNOWN);
         assertThat(evaluations.get(0).outcome()).isEqualTo(Outcome.DETECTED);
+    }
+
+    // ---- 기준값에서 뺄 이력: 첫 체결 전 응답, 연속 확인을 받지 못한 튄 점
+
+    private static PricePoint beforeTrade(String time, long price) {
+        return new PricePoint(OffsetDateTime.parse("2026-10-20T" + time + "+09:00"), price, true);
+    }
+
+    private void priorRows(PricePoint... points) {
+        when(repository.findLatestBetween(anyString(), any(), any(), anyInt(), anyList())).thenReturn(List.of(points));
+    }
+
+    @Test
+    void rowsBeforeTheFirstTradeAreNotUsedAsTheBaseline() {
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(
+                beforeTrade("16:00:00", 10_000), beforeTrade("16:00:01", 10_000),
+                point("16:00:02", 10_153), point("16:00:03", 10_153), point("16:00:04", 10_153)));
+
+        // 첫 체결 전 값(10000) 기준이면 +1.53%지만 첫 체결 값(10153) 기준이라 변동이 아니다.
+        Evaluation evaluation = window(10_156);
+
+        assertThat(evaluation.outcome()).isEqualTo(Outcome.CLEAR);
+    }
+
+    @Test
+    void historyOfOnlyRowsBeforeTheFirstTradeHasNoBaseline() {
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(
+                beforeTrade("16:00:00", 10_000), beforeTrade("16:00:01", 10_000)));
+
+        assertThat(window(10_500).outcome()).isEqualTo(Outcome.CLEAR);
+    }
+
+    @Test
+    void aSpikedOldestRowBetweenDifferentNeighboursIsNotTheBaseline() {
+        // 창 앞의 값(10000)과 뒤의 값(10000)이 모두 튄 행(10755)과 다르다.
+        priorRows(point("15:59:58", 10_000), point("15:59:59", 10_000));
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(
+                point("16:00:00", 10_755), point("16:00:01", 10_000), point("16:00:02", 10_000), point("16:00:03", 10_000)));
+
+        Evaluation evaluation = window(10_000);
+
+        assertThat(evaluation.outcome()).isEqualTo(Outcome.CLEAR);
+    }
+
+    @Test
+    void aSpikeOfTwoRowsIsStillNotTheBaselineButThreeRowsAre() {
+        priorRows(point("15:59:58", 10_000), point("15:59:59", 10_000));
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(
+                point("16:00:00", 10_755), point("16:00:01", 10_755), point("16:00:02", 10_000), point("16:00:03", 10_000)));
+        assertThat(window(10_000).outcome()).isEqualTo(Outcome.CLEAR);
+
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(
+                point("16:00:00", 10_755), point("16:00:01", 10_755), point("16:00:02", 10_755), point("16:00:03", 10_000)));
+        Evaluation evaluation = window(10_000);
+
+        assertThat(evaluation.outcome()).isEqualTo(Outcome.DETECTED);
+        assertThat(evaluation.detection().previousPrice()).isEqualTo(10_755L);
+    }
+
+    @Test
+    void anOldestRowThatContinuesTheValuesBeforeTheWindowIsKept() {
+        // 창 앞의 두 행이 같은 값(10000)이라 이 값은 세 건 이어졌다. 가장 오래된 행이 기준이다.
+        priorRows(point("15:59:58", 10_000), point("15:59:59", 10_000));
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(
+                point("16:00:00", 10_000), point("16:00:01", 10_200), point("16:00:02", 10_200), point("16:00:03", 10_200)));
+
+        Evaluation evaluation = window(10_200);
+
+        assertThat(evaluation.outcome()).isEqualTo(Outcome.DETECTED);
+        assertThat(evaluation.detection().previousPrice()).isEqualTo(10_000L);
+    }
+
+    @Test
+    void anOldestRowWithNothingBeforeTheWindowIsKeptBecauseItCannotBeJudged() {
+        priorRows();
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(
+                point("16:00:00", 10_755), point("16:00:01", 10_000), point("16:00:02", 10_000)));
+
+        Evaluation evaluation = window(10_000);
+
+        assertThat(evaluation.outcome()).isEqualTo(Outcome.DETECTED);
+        assertThat(evaluation.detection().previousPrice()).isEqualTo(10_755L);
+    }
+
+    @Test
+    void theValuesBeforeTheWindowAreNotReadWhenTheOldestRowIsAlreadyConfirmed() {
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(
+                point("16:00:00", 10_000), point("16:00:01", 10_000), point("16:00:02", 10_000), point("16:00:03", 10_300)));
+
+        window(10_300);
+
+        verify(repository, never()).findLatestBetween(anyString(), any(), any(), anyInt(), anyList());
+    }
+
+    @Test
+    void theValuesBeforeTheWindowAreReadFromTheStartOfTheWindowBackByOneWindowLength() {
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(
+                point("16:00:00", 10_755), point("16:00:01", 10_000)));
+        priorRows();
+
+        window(10_000);
+
+        verify(repository).findLatestBetween("TEST01", NOW.minusMinutes(10), NOW.minusMinutes(5), 2, FIRST_TRADE_FIELDS);
     }
 }

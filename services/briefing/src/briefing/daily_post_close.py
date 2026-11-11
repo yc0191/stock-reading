@@ -31,7 +31,7 @@ from briefing.daily_report import (
     section_title,
 )
 from briefing.daily_review import NOT_COMPARED, review_tally_line
-from briefing.job_log import REASON_MERGED_INTO_MORNING, MoveRun, RunStatus
+from briefing.job_log import REASON_MERGED_INTO_MORNING, REASON_NO_EVIDENCE, MoveRun, RunStatus
 from briefing.llm_output import weak_note_line
 from briefing.move_figures import (
     KOSDAQ_NAME,
@@ -164,6 +164,8 @@ def move_line(move: MoveRun, names: dict[str, str]) -> str:
     if move.status == RunStatus.SUCCEEDED.value and move.failure_reason == REASON_MERGED_INTO_MORNING:
         return f"{at:%H:%M} {names.get(move.symbol, move.symbol)} {change} · {MOVE_MERGED_TEXT}"
     result = MOVE_RESULT_TEXT.get(move.status, move.status)
+    if move.status == RunStatus.SUCCEEDED.value and move.failure_reason == REASON_NO_EVIDENCE:
+        return f"{at:%H:%M} {names.get(move.symbol, move.symbol)} {change} · 근거 없어 보내지 않음"
     return f"{at:%H:%M} {names.get(move.symbol, move.symbol)} {change} · 리포트 {result}"
 
 

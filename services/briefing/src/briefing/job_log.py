@@ -85,6 +85,8 @@ REASON_GROUPED = "grouped-by-symbol"
 REASON_INTERRUPTED = "interrupted_by_restart"
 # 장 시작~아침 판 시작 사이 급변동을 따로 보내지 않고 아침 판에 합쳤다(성공으로 끝난 작업의 사유이며 리포트는 없다)
 REASON_MERGED_INTO_MORNING = "merged_into_morning"
+# 최종 본문에 인용한 근거가 하나도 없어 결과 이벤트를 발행하지 않았다. 작업 상태는 succeeded, 발행 이벤트는 없다.
+REASON_NO_EVIDENCE = "no_evidence"
 
 
 @dataclass(frozen=True)

@@ -461,3 +461,14 @@ def test_the_morning_edition_has_no_review_sections():
                    review=ReviewInput((MorningCall("TEST01", "상승", "이유"),), None, ()))
     # 아침 판 글자판은 대조·급변동 칸을 만들지 않는다.
     assert "아침 예상 대조" not in daily_text(i, build_sections(i), None)
+
+
+def test_a_move_not_sent_for_lack_of_evidence_is_shown_as_such_not_as_a_success():
+    from briefing.daily_post_close import move_line
+    from briefing.job_log import MoveRun
+    at = datetime(2026, 10, 20, 10, 15, tzinfo=timezone(timedelta(hours=9)))
+    sent = MoveRun("j1", "TEST01", at, 2.1, "succeeded", "llm", None)
+    skipped = MoveRun("j2", "TEST01", at, 2.1, "succeeded", "llm", "no_evidence")
+
+    assert move_line(sent, {"TEST01": "TEST 하나(TEST01)"}).endswith("· 리포트 성공")
+    assert move_line(skipped, {"TEST01": "TEST 하나(TEST01)"}) == "10:15 TEST 하나(TEST01) +2.10% · 근거 없어 보내지 않음"

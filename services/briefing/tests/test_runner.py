@@ -277,6 +277,31 @@ def test_a_us_etf_move_sends_filings_after_context_and_flows_to_a_briefing(setup
     assert store.failures == []
 
 
+def test_the_early_research_completion_is_routed_to_the_move_job_and_starts_the_evidence_fetch(setup):
+    from briefing.jobs import early_research_id
+    make, _, store, _ = setup
+    runner, consumer, producer = make()
+    named = context_message(1)
+    body = json.loads(named.value())
+    body["payload"]["etf"] = {"name": "가짜 반도체 ETF", "membersTruncated": False, "members": []}
+    named = FakeMessage("market.context.responded", json.dumps(body))
+    done = FakeMessage("collection.completed", envelope("collection.completed", {
+        "jobType": "research-news", "scheduledFor": "2026-10-20T16:15:00+09:00",
+        "startedAt": "2026-10-20T16:15:44+09:00", "finishedAt": "2026-10-20T16:15:50+09:00",
+        "publishedCount": 3, "incompleteSymbols": [], "researchJobId": early_research_id(JOB_ID)}))
+
+    # 시계가 변동 T+5분보다 뒤라 변동을 받자마자 배경 자료를 먼저 요청한다. 정기 수집 완료는 오지 않는다.
+    feed(runner, consumer, move_message(), named)
+    (_, research), = sent(producer, "news.research.requested")
+    assert research["payload"]["queries"] == ["가짜 반도체 ETF"]
+    assert sent(producer, "market.history.requested") == []
+
+    feed(runner, consumer, done)
+
+    assert len(sent(producer, "market.history.requested")) == 1 and len(sent(producer, "news.articles.requested")) == 1
+    assert store.failures == []
+
+
 def test_every_message_offset_is_committed_before_it_is_handled(setup):
     make, _, _, _ = setup
     runner, consumer, producer = make()
@@ -347,7 +372,8 @@ def test_collection_wait_limit_is_detected_by_the_timer(setup):
     runner, consumer, producer = make()
     # 변동보다 먼저 시작한 수집은 쓸 수 없다.
     feed(runner, consumer, move_message(), completed_message(started_at="2026-10-20T16:00:00+09:00"))
-    assert producer.sent == []
+    # 나간 것은 T+5분이 지나 ETF 이름을 알려고 먼저 보낸 배경 자료 요청뿐이고, 근거 조회 요청은 없다.
+    assert [t for t, _, _ in producer.sent] == ["market.context.requested"]
 
     clock.advance(minutes=29, seconds=59)
     runner.run_once()

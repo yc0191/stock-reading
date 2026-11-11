@@ -65,7 +65,7 @@ T_ARTICLE = datetime.fromisoformat(R1["publishedAt"])
 def test_sentence_research_limits_are_settings_with_the_plan_values():
     assert S.research_rounds_per_sentence == 2
     assert S.max_research_requests == 10
-    assert S.research_total_limit == timedelta(minutes=15)
+    assert S.research_total_limit == timedelta(minutes=4)
 
 
 # ---- 공통 검사 ----

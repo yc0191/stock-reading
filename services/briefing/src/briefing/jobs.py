@@ -1,6 +1,7 @@
 """변동 한 건의 근거 조회 작업. Kafka를 모르며 메시지와 시각을 인자로 받아 상태만 움직인다.
 
-흐름: market.move 수신 -> 쓸 수 있는 collection.completed 대기 -> 시세 이력·배경 자료·기사 요청 ->
+흐름: market.move 수신 -> 쓸 수 있는 collection.completed 대기(변동 T+5분이 되면 ETF 이름과 구성 종목 이름으로 먼저 재검색하고,
+그 재검색 완료도 수집 완료로 본다. 둘 중 먼저 온 것으로 진행) -> 시세 이력·배경 자료·기사 요청 ->
 배경 자료 응답에 미국 종목 티커가 있으면 그 티커로 공시 요청 -> 모든 응답 수신(기사는 안정될 때까지 재확인)
 -> 받은 자료 재검사 -> 리포트 입력 완성, 또는 실패 기록(작업 기록 테이블).
 """
@@ -8,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -23,6 +25,7 @@ from briefing.events import (
     format_timestamp,
     parse_timestamp,
     request_event,
+    research_request_event,
 )
 from briefing.evidence import MARKET_WIDE, in_evidence_range
 from briefing.job_log import (
@@ -46,6 +49,7 @@ from briefing.job_log import (
     record_result,
 )
 from briefing.ports import FailureReason, RequestPort
+from briefing.research import MAX_QUERY_LENGTH, ResearchReason, ResearchStep
 from briefing.sources import (
     BACKGROUND_MISSING,
     BACKGROUND_OK,
@@ -127,6 +131,15 @@ class _Phase(Enum):
     DONE = "done"
 
 
+class _Early(Enum):
+    """정기 수집을 기다리는 동안 하는 T+5분 재검색의 진행."""
+
+    PENDING = "pending"            # 아직 시각이 안 됐다
+    CONTEXT_SENT = "context_sent"  # ETF 이름을 알려고 배경 자료를 먼저 요청함
+    REQUESTED = "requested"        # 재검색 요청을 보냄. 완료 알림을 기다린다
+    SKIPPED = "skipped"            # 이름을 모르거나 배경 자료가 오지 않아 정기 수집을 기다린다
+
+
 @dataclass(frozen=True)
 class _Context:
     tickers: tuple[str, ...]
@@ -149,6 +162,7 @@ class _Job:
     detected_at: datetime | None = None
     detection_type: str | None = None
     phase: _Phase = _Phase.WAITING_COLLECTION
+    early: _Early = _Early.PENDING
     # 시세·배경 자료·공시: 가장 최근에 보낸 요청의 순번과 보낸 시각
     market: Exchange = field(default_factory=Exchange)
     market_points: tuple[PricePoint, ...] | None = None
@@ -209,6 +223,8 @@ class BriefingCore:
     job_log: JobLogPort = field(default_factory=DiscardJobLog)
     _jobs: OrderedDict[str, _Job] = field(default_factory=OrderedDict, init=False)
     _completions: deque[Completion] = field(init=False)
+    # T+5분 재검색의 재검색 작업 id -> 급변동 작업 id
+    _early_ids: OrderedDict[str, str] = field(default_factory=OrderedDict, init=False)
 
     def __post_init__(self) -> None:
         self._completions = deque(maxlen=self.settings.recent_completions)
@@ -233,6 +249,39 @@ class BriefingCore:
         # 완료 알림이 변동 알림보다 먼저 도착했을 수 있어 보관분부터 확인한다.
         if any(c.covers(job.symbol, job.as_of, self.settings) for c in self._completions):
             self._start_fetching(job, now)
+        else:
+            self._tick_early(job, now)
+
+    def on_research_completed(self, message: str | bytes, now: datetime) -> bool:
+        """T+5분 재검색의 완료 알림이면 정기 수집 완료와 같이 '수집 완료'로 보고 True. 그 밖의 알림은 False로 돌려준다."""
+        try:
+            event = json.loads(message)
+            if event["eventType"] != "collection.completed":
+                raise ValueError(f"unexpected eventType: {event['eventType']}")
+            payload = event["payload"]
+            research_job_id = payload.get("researchJobId")
+            if research_job_id is None:
+                return False
+            incomplete = frozenset(payload["incompleteSymbols"])
+        except (KeyError, TypeError, AttributeError, json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise ValueError(f"malformed collection.completed event: {error!r}") from error
+
+        job = self._jobs.get(self._early_ids.get(research_job_id, ""))
+        if job is None:
+            return False
+        if job.phase is not _Phase.WAITING_COLLECTION:
+            log.info("early research completion for finished or fetching job %s ignored", job.job_id)
+            return True
+        if job.symbol in incomplete or MARKET_WIDE in incomplete:
+            # 하루 상한·검색 실패로 다 모으지 못했다. 정기 수집을 이어서 기다린다.
+            log.warning("early research for job %s did not collect everything", job.job_id)
+            self._record(job, ResearchStep.COMPLETION.value, EntryType.STEP_FAILED,
+                         ResearchReason.COLLECTION_INCOMPLETE.value, "CollectionIncomplete", 1, now,
+                         {"researchJobId": research_job_id, "incompleteSymbolCount": len(incomplete)})
+            return True
+        log.info("early research completed for job %s; fetching evidence without the regular collection", job.job_id)
+        self._start_fetching(job, now)
+        return True
 
     def on_collection_completed(self, message: str | bytes, now: datetime) -> None:
         try:
@@ -279,6 +328,10 @@ class BriefingCore:
 
     def on_context_responded(self, message: str | bytes, now: datetime) -> None:
         payload = response_payload(message, "market.context.responded")
+        early = self._jobs.get(payload["jobId"])
+        if early is not None and early.phase is _Phase.WAITING_COLLECTION and early.early is _Early.CONTEXT_SENT:
+            self._on_early_context(early, payload, now)
+            return
         job = self._fetching_job(payload)
         if job is None:
             return
@@ -286,8 +339,19 @@ class BriefingCore:
             log.info("stale context response ignored: job=%s seq=%s latest=%s",
                      job.job_id, payload["seq"], job.context.seq)
             return
+        context = self._parse_context(payload)
+        job.context.received = True
+        job.responses[STAGE_CONTEXT] = payload
+        job.context_data = context
+        # 미국 종목이 없으면 공시는 해당 없음이라 요청하지 않는다.
+        if context.tickers:
+            self._send_filings(job, now)
+        self._complete_if_ready(job)
+
+    @staticmethod
+    def _parse_context(payload: dict) -> _Context:
         try:
-            context = _Context(
+            return _Context(
                 tickers=tuple(payload["tickers"]),
                 tickers_truncated=bool(payload["truncated"]),
                 close_rates=parse_close_rates(payload["closeRates"]),
@@ -296,13 +360,6 @@ class BriefingCore:
             )
         except (KeyError, TypeError) as error:
             raise ValueError(f"malformed market.context.responded event: {error!r}") from error
-        job.context.received = True
-        job.responses[STAGE_CONTEXT] = payload
-        job.context_data = context
-        # 미국 종목이 없으면 공시는 해당 없음이라 요청하지 않는다.
-        if context.tickers:
-            self._send_filings(job, now)
-        self._complete_if_ready(job)
 
     def on_filings_responded(self, message: str | bytes, now: datetime) -> None:
         payload = response_payload(message, "news.filings.responded")
@@ -366,6 +423,8 @@ class BriefingCore:
                 if now - job.created_at >= self.settings.collection_wait_limit:
                     self._fail(job, FailureReason.COLLECTION_NOT_COVERED,
                                "no usable collection.completed within the wait limit", 0, now)
+                else:
+                    self._tick_early(job, now)
             elif job.phase is _Phase.FETCHING:
                 # 같은 시각에 여럿이 끝나도 실패는 한 번만 기록된다. 앞의 판정이 작업을 끝내면 나머지는 건너뛴다.
                 for tick in (self._tick_market, self._tick_news, self._tick_context, self._tick_filings):
@@ -379,6 +438,10 @@ class BriefingCore:
         for job in self._jobs.values():
             if job.phase is _Phase.WAITING_COLLECTION:
                 deadlines.append(job.created_at + self.settings.collection_wait_limit)
+                if job.early is _Early.PENDING:
+                    deadlines.append(job.as_of + self.settings.early_research_delay)
+                elif job.early is _Early.CONTEXT_SENT:
+                    deadlines.append(job.context.sent_at + self.settings.response_timeout)
             elif job.phase is _Phase.FETCHING:
                 for exchange in (job.market, job.context, job.filings):
                     if exchange.awaiting():
@@ -398,10 +461,54 @@ class BriefingCore:
             return None
         return job
 
+    def _tick_early(self, job: _Job, now: datetime) -> None:
+        """정기 수집을 기다리는 작업의 T+5분 재검색을 진행한다. 배경 자료가 안 오면 포기하고 정기 수집을 기다린다."""
+        if job.early is _Early.PENDING and now >= job.as_of + self.settings.early_research_delay:
+            job.early = _Early.CONTEXT_SENT
+            self._send_context(job, now)
+        elif job.early is _Early.CONTEXT_SENT and now - job.context.sent_at >= self.settings.response_timeout:
+            log.info("early research skipped for job %s: no context response", job.job_id)
+            job.early = _Early.SKIPPED
+
+    def _on_early_context(self, job: _Job, payload: dict, now: datetime) -> None:
+        """T+5분 재검색을 하려고 먼저 받은 배경 자료. ETF 이름을 알면 재검색을 요청하고, 모르면 정기 수집을 기다린다."""
+        if payload["seq"] != job.context.seq or job.context.received:
+            log.info("stale context response ignored: job=%s seq=%s latest=%s",
+                     job.job_id, payload["seq"], job.context.seq)
+            return
+        context = self._parse_context(payload)
+        job.context.received = True
+        job.responses[STAGE_CONTEXT] = payload
+        job.context_data = context
+        queries = early_queries(context.etf, self.settings.max_research_queries)
+        if not queries:
+            log.info("early research skipped for job %s: ETF name unknown", job.job_id)
+            job.early = _Early.SKIPPED
+            return
+        research_id = early_research_id(job.job_id)
+        event = research_request_event(research_id, 1, JobKind.MOVE.value, job.symbol, list(queries),
+                                       job.correlation_id, now)
+        self._early_ids[research_id] = job.job_id
+        while len(self._early_ids) > self.settings.remembered_jobs:
+            self._early_ids.popitem(last=False)
+        job.early = _Early.REQUESTED
+        self.requests.send(event)
+        self._record(job, ResearchStep.REQUEST.value, EntryType.RESEARCH_REQUESTED, ResearchReason.REQUESTED.value,
+                     None, 1, now, {"researchJobId": research_id, "queries": list(queries),
+                                  "request": event.value["payload"]})
+        log.info("early research requested job=%s queryCount=%d", job.job_id, len(queries))
+
     def _start_fetching(self, job: _Job, now: datetime) -> None:
         job.phase = _Phase.FETCHING
         self._send_market(job, now)
-        self._send_context(job, now)
+        if job.context_data is None:
+            # T+5분 재검색을 하려고 먼저 보낸 요청이 아직 답을 기다리는 중이면 그 요청을 이어 쓴다. 새 순번으로 다시 보내면
+            # 곧 도착할 그 응답이 낡은 응답이 된다.
+            if not job.context.awaiting():
+                self._send_context(job, now)
+        elif job.context_data.tickers:
+            # T+5분 재검색을 하려고 배경 자료를 이미 받았다. 다시 받지 않고 공시만 요청한다.
+            self._send_filings(job, now)
         job.news_round = 1
         self._send_news(job, now, attempt=1)
 
@@ -594,7 +701,7 @@ class BriefingCore:
         job.request_ranges[stage] = {k: v for k, v in payload.items() if k not in ("jobId", "seq")}
         return payload
 
-    def _record(self, job: _Job, stage: str, entry_type: EntryType, reason: str, error_type: str, attempts: int,
+    def _record(self, job: _Job, stage: str, entry_type: EntryType, reason: str, error_type: str | None, attempts: int,
                 now: datetime, extra: dict[str, Any]) -> None:
         received, not_received = _response_states(job)
         request_stage = STAGE_ARTICLES if stage == STAGE_ARTICLES_RECHECK else stage
@@ -624,6 +731,21 @@ class BriefingCore:
                          "previousArticleIds": sorted(job.news_previous_ids or ()),
                          "stable": not changed,
                      })
+
+
+def early_research_id(job_id: str) -> str:
+    """T+5분 재검색의 재검색 작업 id. 요청 계약이 uuid를 요구하므로 급변동 작업 id에서 정한다."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"research-early:{job_id}"))
+
+
+def early_queries(etf: EtfInfo | None, limit: int) -> tuple[str, ...]:
+    """ETF 이름과 비중 순위가 높은 구성 종목 이름으로 만든 검색어. ETF 이름을 모르면 빈 튜플(재검색하지 않는다)."""
+    name = (etf.name or "").strip() if etf is not None else ""
+    if not name:
+        return ()
+    names = [name] + [m.name.strip() for m in sorted(etf.members, key=lambda m: m.rank) if m.name and m.name.strip()]
+    unique = dict.fromkeys(n for n in names if len(n) <= MAX_QUERY_LENGTH)
+    return tuple(unique)[:limit]
 
 
 _FINAL_FAILURES: dict[FailureReason, tuple[str, str]] = {

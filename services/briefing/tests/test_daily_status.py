@@ -155,7 +155,7 @@ def test_the_four_lines_come_after_the_disclaimer_at_the_very_end_of_a_rule_base
         "- 수집: 장 시작 전 08:30 · 1초 현재가 09:00~15:30 · 장중 없음 · 장 마감 후 16:30",
         "- 시세: 받음 70,200 · 실패 8(0.01%) [빈 현재가 3 · 호출 상한 건너뜀 5]",
         "- 뉴스: 정기 수집 2회 · 일부 종목 빠짐 1회 · 기사 8건 · 재검색 1회",
-        "- 브리핑: 급변동 0건(성공 0 · 실패 0 · 진행 중 0 · 규칙 기반 0) · 아침 판 성공",
+        "- 브리핑: 급변동 0건(성공 0 · 실패 0 · 진행 중 0 · 규칙 기반 0) · 근거 없어 보내지 않은 급변동 0건 · 아침 판 성공",
         "- 주의: 호출 상한 건너뜀 5 · 마감 후 판 규칙 기반",
     ]
     assert payload["generatedBy"] == "rule-based"
@@ -188,7 +188,7 @@ def test_the_current_post_close_job_is_not_counted_in_the_briefing_line(make):
     stuck = JobRunRow("old", "move", "running", None, "llm", POST_CLOSE_AT - timedelta(hours=1))
     _, requests, _ = make(FakeStatus([], [morning_run(), current, stuck]))
     lines = status_lines(only_event(requests)["text"])
-    assert lines[3] == "- 브리핑: 급변동 1건(성공 0 · 실패 0 · 진행 중 1 · 규칙 기반 0) · 아침 판 성공"
+    assert lines[3] == "- 브리핑: 급변동 1건(성공 0 · 실패 0 · 진행 중 1 · 규칙 기반 0) · 근거 없어 보내지 않은 급변동 0건 · 아침 판 성공"
     assert "오래 진행 중인 작업 1건" in lines[4]
 
 

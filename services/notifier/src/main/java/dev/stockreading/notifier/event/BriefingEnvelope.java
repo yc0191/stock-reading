@@ -19,6 +19,7 @@ public record BriefingEnvelope(
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Payload(
             String symbol,
+            String name,
             BigDecimal changePercent,
             String asOf,
             String text,

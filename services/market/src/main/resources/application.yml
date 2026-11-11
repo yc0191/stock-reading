@@ -41,6 +41,16 @@ market:
   # 개장 흐름(아침 판)이 시세 응답 원문에서 시가를 읽는 칸. 앞에서부터 처음 읽히는 값을 쓰고, 읽히는 값이 없으면 09:00 이후 첫 스냅샷 가격을 시가로 쓴다.
   # MARKET_OPEN_PRICE_FIELDS를 쉼표로 이은 경로(원문 루트 기준 점 경로)로 주면 바꾼다.
   open-price-fields: ${MARKET_OPEN_PRICE_FIELDS:dataBody.opn_prc}
+  # 두 유형 모두 변동 조건이 받은 스냅샷 기준으로 이 건수만큼 연속 이어질 때만 발행한다(빠진 초는 세지 않는다).
+  # 현재가 한 건이 튀었다 돌아오는 가짜 변동을 거른다. 연속 확인을 받지 못한 튄 점은 유형 1의 기준값으로도 쓰지 않는다.
+  confirm-count: 3
+  # 장 시작 직후 첫 체결 전 응답(현재가가 전일 종가 그대로)을 알아보는 원문 칸. 모든 칸 값이 0이면 유형 1의 기준값에서 뺀다.
+  # MARKET_FIRST_TRADE_FIELDS를 쉼표로 이은 경로로 주면 바꾸고, 빈 값으로 주면 거르지 않는다.
+  first-trade-fields: ${MARKET_FIRST_TRADE_FIELDS:dataBody.acml_vlm,dataBody.opn_prc}
+  # 한 종목의 market.move를 발행한 뒤 이 시간(분) 동안은 유형과 상관없이 같은 종목을 다시 발행하지 않는다. 0이면 끈다.
+  # 단 마지막 발행 가격 대비 republish-exception-percent(%) 이상 더 움직이면 간격 안이라도 발행한다.
+  republish-interval-minutes: 30
+  republish-exception-percent: 2.00
   context:
     # 배경 자료 응답(market.context)의 안전 상한. 요청값의 원본은 브리핑 설정이고, 요청이 이보다 크면 이 값까지만 준다.
     # 받은 시각이 기준 시각보다 이 기간 넘게 이른 자료는 없음으로 본다(해외 등락률은 장 마감 시각 기준).

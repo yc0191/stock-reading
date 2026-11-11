@@ -133,7 +133,8 @@ def format_history(run: Mapping[str, Any], entries: list[Mapping[str, Any]], ful
         f"대상 {json.dumps(run.get('target'), ensure_ascii=False)}",
         f"  시작 {_time(started, True)}  끝 {_time(finished, True) if finished else '-'}  ({took})",
         f"  근거 약함 {run.get('weak_count')}문장  재검색 요청 {run.get('research_count')}건"
-        + (f"  실패 사유 {run['failure_reason']}" if run.get("failure_reason") else ""),
+        + (f"  {'발행 안 한 이유' if run['status'] == 'succeeded' else '실패 사유'} {run['failure_reason']}"
+           if run.get("failure_reason") else ""),
     ]
     if run.get("final_text"):
         lines += ["", "최종 본문:", *_indent(run["final_text"], "  ")]
