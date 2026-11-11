@@ -37,6 +37,8 @@ final class FakeBrokerServer implements AutoCloseable {
             + ",\"dataBody\":{\"access_token\":\"tok-secret-1\",\"token_type\":\"Bearer\",\"expires_in\":86400}}";
     volatile long tokenDelayMs;
     volatile int priceStatus = 200;
+    // priceStatus 를 이 번째 현재가 요청부터 적용하고 그 앞은 200으로 보낸다. 앞 요청은 성공하고 나중에 실패하는 서버를 흉내 낸다.
+    volatile int priceStatusFromCall = 1;
     volatile String priceBody = "{\"dataHeader\":" + OK_HEADER + ",\"dataBody\":{\"now_prc\":\"10250\"}}";
     volatile long priceDelayMs;
     // 종목 코드별 현재가 응답 본문. 없으면 priceBody 를 쓴다.
@@ -55,7 +57,7 @@ final class FakeBrokerServer implements AutoCloseable {
             reply(exchange, tokenStatus, tokenBody);
         });
         server.createContext("/api/v1/ivu10140", exchange -> {
-            priceCalls.incrementAndGet();
+            int call = priceCalls.incrementAndGet();
             authHeaders.add(exchange.getRequestHeaders().getFirst("Authorization"));
             int now = inFlight.incrementAndGet();
             maxInFlight.accumulateAndGet(now, Math::max);
@@ -68,7 +70,7 @@ final class FakeBrokerServer implements AutoCloseable {
                 if (overlap != null && inFlight.get() > 1) {
                     body = overlap;
                 }
-                reply(exchange, priceStatus, body);
+                reply(exchange, call >= priceStatusFromCall ? priceStatus : 200, body);
             } finally {
                 inFlight.decrementAndGet();
             }
