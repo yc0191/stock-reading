@@ -48,6 +48,17 @@ class SmtpMailSenderTest {
     }
 
     @Test
+    void showsTheKoreanSenderNameInsteadOfTheAddress() throws Exception {
+        var sender = new SmtpMailSender(smtpClient(), properties("from@example.com"));
+
+        sender.send("to@example.com", new EmailMessage("subject", "body", null, java.util.List.of(), "변동 감지"));
+
+        var from = (jakarta.mail.internet.InternetAddress) GREEN_MAIL.getReceivedMessages()[0].getFrom()[0];
+        assertThat(from.getPersonal()).isEqualTo("변동 감지");
+        assertThat(from.getAddress()).isEqualTo("from@example.com");
+    }
+
+    @Test
     void refusesToStartWithoutASender() {
         assertThatThrownBy(() -> new SmtpMailSender(smtpClient(), properties(null)))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("sender");

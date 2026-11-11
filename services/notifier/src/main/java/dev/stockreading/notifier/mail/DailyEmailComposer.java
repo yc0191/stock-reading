@@ -22,6 +22,8 @@ import dev.stockreading.notifier.mail.EmailMessage.InlineImage;
 public class DailyEmailComposer {
 
     private static final Logger log = LoggerFactory.getLogger(DailyEmailComposer.class);
+    /** 데일리 메일의 보낸 사람 이름. 급변동 메일과 받은편지함에서 구분되게 한다. */
+    static final String FROM_NAME = "데일리 브리핑";
 
     private static final Set<String> ALLOWED_TYPES = Set.of("image/png", "image/jpeg", "image/gif");
     // 공백·꺾쇠·줄바꿈이 있으면 메일 헤더(Content-ID)가 깨지거나 주입될 수 있다.
@@ -50,9 +52,10 @@ public class DailyEmailComposer {
                 + "\n추적 ID: " + daily.correlationId()
                 + "\n생성 방식: " + payload.generatedBy();
         if (payload.html() == null || payload.html().isBlank()) {
-            return new EmailMessage(subject, body);
+            return new EmailMessage(subject, body, null, List.of(), FROM_NAME);
         }
-        return new EmailMessage(subject, body, withFooter(payload.html(), daily), decodeImages(payload.images(), daily.eventId()));
+        return new EmailMessage(subject, body, withFooter(payload.html(), daily), decodeImages(payload.images(), daily.eventId()),
+                FROM_NAME);
     }
 
     /** 그림 바이트 목록. 잘못된 그림은 그 그림만 빼고, 메일은 나머지로 보낸다. */

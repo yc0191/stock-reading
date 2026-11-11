@@ -44,6 +44,11 @@ class EmailComposerTest {
     }
 
     @Test
+    void moveMailIsSentUnderItsOwnSenderName() {
+        assertThat(composer("").compose(briefing("-1.50")).fromName()).isEqualTo("변동 감지");
+    }
+
+    @Test
     void subjectShowsNameWithSymbolWhenNameIsKnown() {
         assertThat(composer("").compose(briefing("-1.34", "TEST 샘플 ETF")).subject())
                 .isEqualTo("[TEST 샘플 ETF(TEST01)] 하락 -1.34% 브리핑");

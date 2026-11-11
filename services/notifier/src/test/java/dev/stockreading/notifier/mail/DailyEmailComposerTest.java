@@ -63,6 +63,12 @@ class DailyEmailComposerTest {
     }
 
     @Test
+    void dailyMailIsSentUnderItsOwnSenderName() {
+        assertThat(composer("").compose(daily("morning", "2026-10-20T09:10:00+09:00", List.of())).fromName())
+                .isEqualTo("데일리 브리핑");
+    }
+
+    @Test
     void dateIsTheKoreanDateOfTheSendTimeNotTheUtcDate() {
         // 한국 시간 08:45는 UTC로 전날 23:45다. 제목은 한국 날짜를 써야 한다.
         assertThat(composer("").compose(daily("morning", "2026-10-20T08:45:00+09:00", List.of())).subject())
