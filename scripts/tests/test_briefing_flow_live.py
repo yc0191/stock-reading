@@ -44,10 +44,20 @@ def _read(path: str) -> str:
 
 def _failed_jobs(conn, since: str) -> list:
     with conn.cursor() as cur:
-        # 끝내 실패한 줄의 사유(정해진 값)만 읽는다. 관련 데이터에는 값이 섞일 수 있어 읽지 않는다.
-        # 앞 단계(실제 DB 테스트)가 같은 DB 에 남긴 행은 빼고 이 실행이 기록한 것만 본다.
+        # 작업 자체가 실패한 경우만 실패로 본다. 재검색이 근거를 끝내 못 찾고 접은 것(sentence_limit 등)은
+        # 단계 기록(step-failed)만 남고 작업은 리포트를 내므로 실패가 아니다. 사유(정해진 값)만 읽는다.
+        # 앞 단계(실제 DB 테스트)가 같은 DB 에 남긴 행(미래 날짜 포함)은 빼고 이 실행이 기록한 것만 본다.
+        cur.execute("SELECT failure_reason FROM briefing.job_run WHERE status = 'failed' "
+                    "AND created_at >= %s::timestamptz AND created_at <= now() ORDER BY created_at",
+                    (since,))
+        return [row[0] for row in cur.fetchall()]
+
+
+def _step_failures(conn, since: str) -> list:
+    with conn.cursor() as cur:
+        # 판정에는 쓰지 않고 결과에 이유로만 보인다.
         cur.execute("SELECT reason FROM briefing.job_log WHERE entry_type = 'step-failed' "
-                    "AND created_at >= %s::timestamptz ORDER BY created_at",
+                    "AND created_at >= %s::timestamptz AND created_at <= now() ORDER BY created_at",
                     (since,))
         return [row[0] for row in cur.fetchall()]
 
@@ -77,10 +87,11 @@ def test_llm_report_is_published_and_one_real_email_is_sent():
     consumer.subscribe([lb.BRIEFING_TOPIC])
     messages: list = []
     failed: list = []
+    steps: list = []
     try:
         with psycopg.connect(conninfo, autocommit=True) as conn:
             deadline = time.monotonic() + wait
-            # 리포트가 나오거나 실패가 기록될 때까지 기다린다.
+            # 리포트가 나오거나 작업 실패가 기록될 때까지 기다린다. 재검색 단계 기록에서는 멈추지 않는다.
             while time.monotonic() < deadline:
                 _poll_briefings(consumer, messages, 2)
                 failed = _failed_jobs(conn, since)
@@ -93,6 +104,7 @@ def test_llm_report_is_published_and_one_real_email_is_sent():
                 time.sleep(1)
             _poll_briefings(consumer, messages, SETTLE_SECONDS)
             failed = _failed_jobs(conn, since)
+            steps = _step_failures(conn, since)
     finally:
         consumer.close()
 
@@ -107,6 +119,7 @@ def test_llm_report_is_published_and_one_real_email_is_sent():
         "mail": mail,
         "dryRun": dry_run,
         "failedJobs": len(failed),
+        "stepFailures": steps,
     }
     counts_file = env.get("BRIEFING_FLOW_LIVE_COUNTS_FILE")
     if counts_file:
@@ -114,7 +127,7 @@ def test_llm_report_is_published_and_one_real_email_is_sent():
     if mine:
         lb.write_private(Path(env["BRIEFING_FLOW_LIVE_REPORT_FILE"]), lb.report_text(mine[0]))
 
-    assert failed == [], f"브리핑 실패로 기록됨(이유): {failed}"
+    assert failed == [], f"브리핑 작업 실패로 기록됨(이유): {failed}, 단계 기록: {steps}"
     assert len(mine) == 1, f"이 실행의 브리핑 {len(mine)}건, 기대 1건({wait}초 기다림)"
     assert others == 0, f"이 실행이 넣지 않은 브리핑 {others}건"
     assert generated_by == lb.GENERATED_BY_LLM, f"생성 방식 {generated_by!r}, 기대 'llm'(키가 없거나 자리표시 값이면 규칙 기반이 됨)"

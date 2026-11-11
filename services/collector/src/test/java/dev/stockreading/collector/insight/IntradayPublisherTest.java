@@ -15,11 +15,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Objects;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import org.junit.jupiter.api.AfterEach;
@@ -27,7 +23,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
-import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 
 import dev.stockreading.collector.CollectorProperties;
@@ -44,7 +39,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
-class IntradayTickListenerTest {
+class IntradayPublisherTest {
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-10-21T01:05:01Z"), ZoneId.of("Asia/Seoul"));
     private static final String SCHEMA = "market.insight.v1.schema.json";
@@ -58,7 +53,7 @@ class IntradayTickListenerTest {
     private final List<String> timeline = new ArrayList<>();
     private final ObjectMapper mapper = JsonMapper.builder().build();
     private InsightPublisher insight;
-    private IntradayTickListener listener;
+    private IntradayPublisher publisher;
 
     @SuppressWarnings("unchecked")
     @BeforeEach
@@ -73,11 +68,11 @@ class IntradayTickListenerTest {
         when(holdings.allTickers()).thenReturn(List.of("TESTA"));
         var insightProperties = new InsightProperties(new InsightProperties.Schedule(false, "0 30 16 * * MON-FRI"), "0", 30,
                 List.of("C", "S", "E"), 30, 100);
-        insight = new InsightPublisher(source, new CollectorProperties(List.of("TEST01"), 30000, 3_000), insightProperties,
+        insight = new InsightPublisher(source, new CollectorProperties(List.of("TEST01"), 30000), insightProperties,
                 holdings, mock(ExchangePort.class), kafka, mapper, CLOCK);
         var intraday = new IntradayProperties(true, "0 */5 9-15 * * MON-FRI", "09:00", "15:30", STAGGER_MS);
         InsightCallPause pause = millis -> timeline.add("pause:" + millis);
-        listener = new IntradayTickListener(new IntradayPublisher(insight, source, intraday, pause), mapper);
+        publisher = new IntradayPublisher(insight, source, intraday, pause);
         logs = new ListAppender<>();
         logs.start();
         ((Logger) LoggerFactory.getLogger(InsightPublisher.class)).addAppender(logs);
@@ -97,7 +92,7 @@ class IntradayTickListenerTest {
 
     @Test
     void intradayTickQueriesTheFourTargetsOneByOneWithAPauseBetween() throws IOException {
-        listener.onTick(intradayTick("2026-10-21T10:05:00+09:00"));
+        intraday("2026-10-21T10:05:00+09:00");
 
         assertThat(timeline).containsExactly(
                 "exchange-rate-summary", "pause:15000",
@@ -108,7 +103,7 @@ class IntradayTickListenerTest {
 
     @Test
     void publishesOneMarketInsightPerTargetThatPassesTheContract() throws IOException {
-        listener.onTick(intradayTick("2026-10-21T10:05:00+09:00"));
+        intraday("2026-10-21T10:05:00+09:00");
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
@@ -127,7 +122,7 @@ class IntradayTickListenerTest {
 
     @Test
     void doesNotQueryDailyPricesOtherContinentsOrOverseasPrices() throws IOException {
-        listener.onTick(intradayTick("2026-10-21T10:05:00+09:00"));
+        intraday("2026-10-21T10:05:00+09:00");
 
         verify(source, never()).dailyPrice(anyString());
         verify(source, never()).worldIndex("E");
@@ -142,7 +137,7 @@ class IntradayTickListenerTest {
         // 다시 스텁할 때 Mockito 가 앞서 둔 응답을 한 번 불러 기록이 남으므로 지운다.
         timeline.clear();
 
-        assertThatCode(() -> listener.onTick(intradayTick("2026-10-21T10:05:00+09:00"))).doesNotThrowAnyException();
+        assertThatCode(() -> intraday("2026-10-21T10:05:00+09:00")).doesNotThrowAnyException();
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
         verify(kafka, times(2)).send(eq(Topics.MARKET_INSIGHT), key.capture(), anyString());
@@ -160,7 +155,7 @@ class IntradayTickListenerTest {
     void rateLimitedTargetFailsOnlyThatTarget() throws IOException {
         when(source.marketSummary()).thenThrow(new BrokerApiException(FailureType.TICK_SKIPPED, "호출 상한 대기 시간 초과"));
 
-        listener.onTick(intradayTick("2026-10-21T10:05:00+09:00"));
+        intraday("2026-10-21T10:05:00+09:00");
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
         verify(kafka, times(3)).send(eq(Topics.MARKET_INSIGHT), key.capture(), anyString());
@@ -171,72 +166,17 @@ class IntradayTickListenerTest {
     void blankResponseIsNotPublished() throws IOException {
         when(source.worldIndex("C")).thenReturn("  ");
 
-        listener.onTick(intradayTick("2026-10-21T10:05:00+09:00"));
+        intraday("2026-10-21T10:05:00+09:00");
 
         verify(kafka, times(3)).send(eq(Topics.MARKET_INSIGHT), anyString(), anyString());
         verify(kafka, never()).send(anyString(), eq("world-index:C"), anyString());
-    }
-
-    @Test
-    void sameTickDeliveredTwiceIsProcessedOnceAndTheNextTickAgain() throws IOException {
-        listener.onTick(intradayTick("2026-10-21T10:05:00+09:00"));
-        listener.onTick(intradayTick("2026-10-21T10:05:00+09:00"));
-        listener.onTick(intradayTick("2026-10-21T10:10:00+09:00"));
-
-        verify(source, times(2)).exchangeRateSummary();
-        verify(kafka, times(8)).send(eq(Topics.MARKET_INSIGHT), anyString(), anyString());
-    }
-
-    @Test
-    void ignoresOtherJobTypes() throws IOException {
-        for (String jobType : List.of("collect", "collect-news", "collect-post-close", "collect-pre-open")) {
-            listener.onTick(ContractSchemas.sample("schedule.tick.sample.json")
-                    .replace("\"collect\"", "\"" + jobType + "\""));
-        }
-
-        verify(source, never()).exchangeRateSummary();
-        verify(kafka, never()).send(anyString(), anyString(), anyString());
-    }
-
-    @Test
-    void postCloseListenerIgnoresTheIntradayTick() throws IOException {
-        new InsightTickListener(insight, mapper).onTick(intradayTick("2026-10-21T10:05:00+09:00"));
-
-        verify(source, never()).exchangeRateSummary();
-        verify(source, never()).worldIndex(anyString());
-        verify(kafka, never()).send(anyString(), anyString(), anyString());
-    }
-
-    @Test
-    void everyScheduleTickListenerUsesItsOwnConsumerGroup() throws ReflectiveOperationException {
-        List<String> listeners = List.of(
-                "dev.stockreading.collector.insight.IntradayTickListener",
-                "dev.stockreading.collector.insight.InsightTickListener",
-                "dev.stockreading.collector.schedule.TickListener",
-                "dev.stockreading.collector.schedule.NewsTickListener",
-                "dev.stockreading.collector.schedule.FilingTickListener");
-        Set<String> groups = new HashSet<>();
-        for (String name : listeners) {
-            // 리스너 메서드 이름과 인자는 서비스마다 다를 수 있어(TickListener 는 묶음 수신) 어노테이션으로 찾는다.
-            KafkaListener annotation = Arrays.stream(Class.forName(name).getDeclaredMethods())
-                    .map(method -> method.getAnnotation(KafkaListener.class))
-                    .filter(Objects::nonNull)
-                    .findFirst().orElseThrow();
-            assertThat(annotation.topics()).containsExactly(Topics.SCHEDULE_TICK);
-            assertThat(groups.add(annotation.groupId())).as(name + " 의 그룹").isTrue();
-        }
-        assertThat(groups).contains("collector-intraday");
     }
 
     private List<String> messages() {
         return logs.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
     }
 
-    private static String intradayTick(String scheduledFor) throws IOException {
-        return ContractSchemas.sample("schedule.tick.sample.json")
-                .replace("\"collect\"", "\"collect-intraday\"")
-                .replace("\"correlationId\": \"collect-2026-10-20T16:00:00+09:00\"",
-                        "\"correlationId\": \"collect-intraday-" + scheduledFor + "\"")
-                .replace("\"scheduledFor\": \"2026-10-20T16:00:00+09:00\"", "\"scheduledFor\": \"" + scheduledFor + "\"");
+    private void intraday(String scheduledFor) {
+        publisher.publishIntraday("collect-intraday-" + scheduledFor, scheduledFor);
     }
 }

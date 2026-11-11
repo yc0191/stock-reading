@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stock-reading.local/contracts/collector.command.v1",
+  "title": "collector.command v1",
+  "description": "사람이 수집기의 수집 작업 하나를 지금 1회 실행하라고 보내는 명령(ADR-012). 보통 scripts/collector-command.sh 가 보낸다. 수집기는 받은 즉시 그 작업을 타이머와 같은 실행 입구로 실행하며, 시세 시간대와 타이머 켜기 설정을 보지 않는다. 같은 작업이 돌고 있으면 건너뛰고, 모르는 명령은 무시하며, 같은 eventId 는 한 번만 실행한다. 수집기가 꺼져 있던 동안 보낸 명령은 켜진 뒤 실행하지 않는다. 메시지 키는 command 이다. 임시 봉투 형식(ADR-010 초안).",
+  "type": "object",
+  "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid", "description": "수집기는 이 값으로 같은 명령을 한 번만 실행한다." },
+    "eventType": { "const": "collector.command" },
+    "schemaVersion": { "const": 1 },
+    "occurredAt": { "type": "string", "format": "date-time", "description": "명령을 만든 시각." },
+    "producedAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1 },
+    "payload": {
+      "type": "object",
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "enum": ["collect", "collect-news", "collect-pre-open", "collect-intraday", "collect-post-close"],
+          "description": "실행할 수집 작업. 수집기 타이머 작업의 jobType 과 같은 이름이다. collect(1초 현재가 한 회차), collect-news(뉴스), collect-pre-open(해외 일봉·세계지수 아메리카와 SEC 공시), collect-intraday(환율종합·시장종합·세계지수 아시아·아메리카), collect-post-close(마감 후 일봉·세계지수·환율종합·시장종합)."
+        }
+      }
+    }
+  }
+}

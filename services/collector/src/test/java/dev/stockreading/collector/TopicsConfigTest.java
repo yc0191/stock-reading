@@ -52,7 +52,8 @@ class TopicsConfigTest {
                             .containsEntry(Topics.FILING_COLLECTED, 3)
                             .containsEntry(Topics.NEWS_RESEARCH_REQUESTED, 3)
                             .containsEntry(Topics.MARKET_HOLDINGS, 1)
-                            .containsEntry(Topics.NEWS_SEARCH_QUERY_LIST, 1);
+                            .containsEntry(Topics.NEWS_SEARCH_QUERY_LIST, 1)
+                            .containsEntry(Topics.COLLECTOR_COMMAND, 1);
                     // 목록 토픽은 마지막 값만 남는 압축 토픽이어야 새로 시작한 소비자가 마지막 목록을 받는다.
                     assertThat(cleanup.get(Topics.MARKET_HOLDINGS)).isEqualTo("compact");
                     assertThat(cleanup.get(Topics.NEWS_SEARCH_QUERY_LIST)).isEqualTo("compact");
@@ -64,6 +65,7 @@ class TopicsConfigTest {
                     assertThat(Topics.NEWS_RESEARCH_REQUESTED).isEqualTo("news.research.requested");
                     assertThat(Topics.MARKET_HOLDINGS).isEqualTo("market.holdings");
                     assertThat(Topics.NEWS_SEARCH_QUERY_LIST).isEqualTo("news.search-queries");
+                    assertThat(Topics.COLLECTOR_COMMAND).isEqualTo("collector.command");
                 });
     }
 }

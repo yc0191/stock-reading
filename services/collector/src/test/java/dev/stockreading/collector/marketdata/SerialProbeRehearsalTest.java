@@ -58,7 +58,7 @@ class SerialProbeRehearsalTest {
         var broker = new BrokerProperties(server.baseUrl(), "TEST-key", "TEST-secret", 5, cap);
         var client = new BrokerClient(broker, mapper, Clock.systemDefaultZone());
         CallRateLimit limiter = CallRateLimiter.perSecond(cap);
-        var marketData = new BrokerMarketData(client, new CollectorProperties(symbols, 1_000, 0), broker, limiter, check);
+        var marketData = new BrokerMarketData(client, new CollectorProperties(symbols, 1_000), broker, limiter, check);
         return new SerialProbe(client, marketData, limiter, check, settings);
     }
 
@@ -92,7 +92,8 @@ class SerialProbeRehearsalTest {
                 assertThat(tally.nonPositive + tally.rateLimited + tally.abnormal).as(mode.label).isZero();
                 assertThat(tally.line(mode)).contains("brokenRate=40.00%");
             }
-            assertThat(server.priceCalls.get()).isEqualTo(90);
+            // 라운드 전에 토큰을 받아 두는 호출 1회가 더해진다.
+            assertThat(server.priceCalls.get()).isEqualTo(91);
             assertThat(server.tokenCalls.get()).isEqualTo(1);
         }
     }
@@ -187,6 +188,7 @@ class SerialProbeRehearsalTest {
     void stopsAtTheFirstAbnormalFailure() throws Exception {
         try (FakeBrokerServer server = new FakeBrokerServer()) {
             server.priceStatus = 500;
+            server.priceStatusFromCall = 2;
             List<String> symbols = symbols(3);
             SerialProbe.Result result = probe(server, symbols, 50, settings(5)).run(symbols);
 
@@ -194,7 +196,7 @@ class SerialProbeRehearsalTest {
             assertThat(result.stopReason()).contains("HTTP_ERROR");
             assertThat(result.tallies().get(SerialProbe.Mode.PARALLEL).abnormal).isEqualTo(3);
             assertThat(result.tallies().get(SerialProbe.Mode.SERIAL).calls).isZero();
-            assertThat(server.priceCalls.get()).isEqualTo(3);
+            assertThat(server.priceCalls.get()).isEqualTo(4);
         }
     }
 
@@ -217,14 +219,15 @@ class SerialProbeRehearsalTest {
             List<String> symbols = symbols(8);
             SerialProbe.Result result = probe(server, symbols, 5, settings(1)).run(symbols);
 
+            // 쉼이 0이라 라운드 전 토큰 준비 호출이 상한 5 중 한 자리를 쓴 채로 병렬이 시작한다.
             SerialProbe.Tally parallel = result.tallies().get(SerialProbe.Mode.PARALLEL);
-            assertThat(parallel.calls).isEqualTo(5);
-            assertThat(parallel.rateLimited).isEqualTo(3);
+            assertThat(parallel.calls).isEqualTo(4);
+            assertThat(parallel.rateLimited).isEqualTo(4);
             SerialProbe.Tally serial = result.tallies().get(SerialProbe.Mode.SERIAL);
             assertThat(serial.calls + serial.rateLimited).isEqualTo(8);
             SerialProbe.Tally limited = result.tallies().get(SerialProbe.Mode.LIMITED);
             assertThat(limited.calls + limited.rateLimited).isEqualTo(8);
-            assertThat(server.priceCalls.get()).isEqualTo(parallel.calls + serial.calls + limited.calls);
+            assertThat(server.priceCalls.get()).isEqualTo(result.warmUpCalls() + parallel.calls + serial.calls + limited.calls);
         }
     }
 
@@ -296,11 +299,121 @@ class SerialProbeRehearsalTest {
     void limitedModeStopsAtTheFirstAbnormalFailure() throws Exception {
         try (FakeBrokerServer server = new FakeBrokerServer()) {
             server.priceStatus = 500;
+            server.priceStatusFromCall = 2;
             List<String> symbols = symbols(5);
             SerialProbe.Result result = probe(server, symbols, 50, only(SerialProbe.Mode.LIMITED, 1, 3)).run(symbols);
 
             assertThat(result.roundsDone()).isEqualTo(1);
             assertThat(result.stopReason()).contains("HTTP_ERROR");
+            assertThat(server.priceCalls.get()).isEqualTo(2);
+        }
+    }
+
+    // 종목 9개, 응답 0.1초인 서버에서 동시 9(병렬)·3·1(직렬)의 회차 시간은 약 0.1초·0.3초·0.9초로 갈린다.
+    @Test
+    void measuresTheRoundTimeOfEachConcurrencyLevel() throws Exception {
+        try (FakeBrokerServer server = new FakeBrokerServer()) {
+            server.priceDelayMs = 100;
+            server.priceBody = NORMAL;
+            List<String> symbols = symbols(9);
+            var settings = new SerialProbe.Settings(2, 60_000, 0, 3, List.of(SerialProbe.Mode.values()));
+            SerialProbe.Result result = probe(server, symbols, 50, settings).run(symbols);
+
+            long parallel = result.tallies().get(SerialProbe.Mode.PARALLEL).roundMillis.get(1);
+            long limited = result.tallies().get(SerialProbe.Mode.LIMITED).roundMillis.get(1);
+            long serial = result.tallies().get(SerialProbe.Mode.SERIAL).roundMillis.get(1);
+            assertThat(result.tallies().values()).allSatisfy(t -> assertThat(t.roundMillis).hasSize(2));
+            assertThat(serial).isGreaterThanOrEqualTo(850);
+            // 같은 컴퓨터의 다른 작업에 밀려도 가끔 실패하지 않게 위쪽은 넉넉히 둔다.
+            assertThat(limited).isBetween(280L, 1500L);
+            assertThat(parallel).isLessThan(limited);
+            assertThat(limited).isLessThan(serial);
+
+            List<String> summary = SerialProbe.summary(result, settings, symbols.size(), 50, true);
+            assertThat(String.join("\n", summary)).contains("serial: calls=18").contains("roundMs(avg/p50/max)=");
+            assertThat(result.roundLines().get(0)).contains(" ms=");
+
+            Path out = tempDir.resolve("round-time.txt");
+            SerialProbe.write(out, summary);
+            assertThat(Files.readString(out)).contains("parallel: calls=18", "limited: calls=18", "roundMs(avg/p50/max)=");
+        }
+    }
+
+    // 짝수 개수의 중앙값은 가운데 두 값의 평균이다.
+    @Test
+    void medianOfAnEvenCountIsTheMeanOfTheMiddleTwo() {
+        assertThat(SerialProbe.Tally.median(List.of(10L, 20L))).isEqualTo(15);
+        assertThat(SerialProbe.Tally.median(List.of(10L, 20L, 40L, 90L))).isEqualTo(30);
+        assertThat(SerialProbe.Tally.median(List.of(10L, 20L, 40L))).isEqualTo(20);
+    }
+
+    // 이상 응답으로 멈춘 회차는 회차 시간 표본에 쌓지 않고 뺀 회차 수로만 센다.
+    @Test
+    void doesNotKeepTheRoundTimeOfARoundStoppedByAnAbnormalResponse() throws Exception {
+        try (FakeBrokerServer server = new FakeBrokerServer()) {
+            server.priceStatus = 500;
+            server.priceStatusFromCall = 2;
+            List<String> symbols = symbols(5);
+            var settings = only(SerialProbe.Mode.SERIAL, 1, 3);
+            SerialProbe.Result result = probe(server, symbols, 50, settings).run(symbols);
+
+            SerialProbe.Tally serial = result.tallies().get(SerialProbe.Mode.SERIAL);
+            assertThat(serial.abnormal).isPositive();
+            assertThat(serial.roundMillis).isEmpty();
+            assertThat(serial.roundMsExcluded).isEqualTo(1);
+            assertThat(String.join("\n", SerialProbe.summary(result, settings, 5, 50, true)))
+                    .contains("roundMsExcluded=1").doesNotContain("roundMs(avg");
+        }
+    }
+
+    // 상한 때문에 기다리거나 건너뛴 회차는 표본에서 빼고, 상한에 걸리지 않은 회차만 쌓는다.
+    @Test
+    void leavesOutRoundsThatWaitedOrSkippedForTheCallLimit() throws Exception {
+        try (FakeBrokerServer server = new FakeBrokerServer()) {
+            List<String> symbols = symbols(8);
+            var settings = new SerialProbe.Settings(1, 60_000, 0, 3, List.of(SerialProbe.Mode.values()));
+            SerialProbe.Result result = probe(server, symbols, 5, settings).run(symbols);
+
+            SerialProbe.Tally parallel = result.tallies().get(SerialProbe.Mode.PARALLEL);
+            assertThat(parallel.rateLimited).isEqualTo(4);
+            assertThat(parallel.roundMillis).isEmpty();
+            assertThat(parallel.roundMsExcluded).isEqualTo(1);
+            // 병렬이 상한 5를 채운 뒤라 직렬·동시 N개 제한은 상한 대기가 걸려 표본에 들어가지 않는다.
+            assertThat(result.tallies().get(SerialProbe.Mode.SERIAL).roundMillis).isEmpty();
+            assertThat(result.tallies().get(SerialProbe.Mode.LIMITED).roundMillis).isEmpty();
+        }
+    }
+
+    // 토큰 발급이 느려도 라운드 전에 받아 두므로 1회차 첫 방식(병렬)의 회차 시간에 섞이지 않는다.
+    @Test
+    void issuesTheTokenBeforeTheFirstRoundSoItsTimeIsNotMeasured() throws Exception {
+        try (FakeBrokerServer server = new FakeBrokerServer()) {
+            server.tokenDelayMs = 1_000;
+            List<String> symbols = symbols(3);
+            var settings = settings(1);
+            SerialProbe.Result result = probe(server, symbols, 50, settings).run(symbols);
+
+            assertThat(result.warmUpCalls()).isEqualTo(1);
+            assertThat(server.tokenCalls.get()).isEqualTo(1);
+            assertThat(result.roundLines().get(0)).startsWith("round 1: parallel(");
+            assertThat(result.tallies().get(SerialProbe.Mode.PARALLEL).roundMillis).singleElement()
+                    .satisfies(ms -> assertThat(ms).isLessThan(500L));
+            assertThat(result.tallies().get(SerialProbe.Mode.PARALLEL).calls).isEqualTo(3);
+            assertThat(SerialProbe.summary(result, settings, 3, 50, true).get(0)).contains("warmUpCalls=1");
+        }
+    }
+
+    // 토큰 준비 호출에서 이상 응답이 나오면 라운드를 시작하지 않는다.
+    @Test
+    void doesNotStartRoundsWhenTheWarmUpCallFails() throws Exception {
+        try (FakeBrokerServer server = new FakeBrokerServer()) {
+            server.priceStatus = 500;
+            List<String> symbols = symbols(3);
+            SerialProbe.Result result = probe(server, symbols, 50, settings(5)).run(symbols);
+
+            assertThat(result.roundsDone()).isZero();
+            assertThat(result.stopReason()).startsWith("warmUp abnormal").contains("HTTP_ERROR");
+            assertThat(result.tallies().values()).allSatisfy(t -> assertThat(t.calls).isZero());
             assertThat(server.priceCalls.get()).isEqualTo(1);
         }
     }
@@ -329,7 +442,7 @@ class SerialProbeRehearsalTest {
             SerialProbe.Result result = probe(server, symbols, 50, settings).run(symbols);
 
             assertThat(result.tallies()).containsOnlyKeys(SerialProbe.Mode.SERIAL, SerialProbe.Mode.LIMITED);
-            assertThat(server.priceCalls.get()).isEqualTo(6);
+            assertThat(server.priceCalls.get()).isEqualTo(7);
             List<String> summary = SerialProbe.summary(result, settings, symbols.size(), 50, true);
             assertThat(summary.get(0)).contains("concurrency=2");
             assertThat(String.join("\n", summary)).contains("serial: calls=3", "limited: calls=3")

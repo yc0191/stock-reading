@@ -202,6 +202,26 @@ def test_missing_map_file_and_helper_line_and_row_count_are_reported(tmp_path):
     assert any(e.startswith("docs/test-map/briefing.md:") and "행이 1개" in e for e in errors)
 
 
+def test_row_count_allows_up_to_twelve_rows(tmp_path):
+    root = make_repo(tmp_path)
+    main = root / "services/notifier/src/main/java/dev/x/notifier"
+    rows = list(java_rows("Notifier"))
+    for i in range(10):
+        write(main / f"NotifierExtra{i}.java", f"package dev.x;\n\nclass NotifierExtra{i} {{\n}}\n")
+        rows.append((f"기능 추가{i}", f"NotifierExtra{i}", "NotifierAlphaTest", "해당 없음 - 외부 의존 없음",
+                     "해당 없음 - 외부 의존 없음"))
+    notifier = root / "docs/test-map/notifier.md"
+
+    write(notifier, map_text(rows[:12], helper="NotifierFakeServer"))
+    (main / "NotifierExtra9.java").unlink()
+    assert ctm.check(root) == []
+
+    write(main / "NotifierExtra9.java", "package dev.x;\n\nclass NotifierExtra9 {\n}\n")
+    write(notifier, map_text(rows, helper="NotifierFakeServer"))
+    errors = ctm.check(root)
+    assert errors == [e for e in errors if "행이 13개" in e] and len(errors) == 1
+
+
 def test_main_returns_zero_on_pass_and_one_with_messages_on_failure(tmp_path, capsys):
     root = make_repo(tmp_path)
     assert ctm.main(["--root", str(root)]) == 0

@@ -82,7 +82,7 @@ class NewsPublisher {
             log.warn("news collect failed corr={} errorType={}", correlationId, e.getClass().getSimpleName());
             return;
         }
-        publish(collection, correlationId, scheduledFor, TickPublisher.JOB_COLLECT_NEWS, null);
+        publish(collection, correlationId, scheduledFor, CollectorJobs.Job.COLLECT_NEWS.jobType(), null);
     }
 
     /**

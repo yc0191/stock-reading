@@ -15,7 +15,7 @@ public record IntradayProperties(boolean enabled, String cron, String start, Str
 
     static final String DEFAULT_START = "09:00";
     static final String DEFAULT_END = "15:30";
-    // 조회 4건 사이 대기 3번이 Kafka 의 poll 간격 한도(기본 5분)를 넘지 않게 상한을 둔다.
+    // 조회 4건 사이 대기 3번이 장중 주기(기본 5분)를 넘지 않게 상한을 둔다.
     static final long MAX_STAGGER_MS = 60_000;
 
     public IntradayProperties {
@@ -33,11 +33,11 @@ public record IntradayProperties(boolean enabled, String cron, String start, Str
         }
     }
 
-    LocalTime startTime() {
+    public LocalTime startTime() {
         return LocalTime.parse(start);
     }
 
-    LocalTime endTime() {
+    public LocalTime endTime() {
         return LocalTime.parse(end);
     }
 

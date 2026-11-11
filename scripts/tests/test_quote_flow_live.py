@@ -25,16 +25,17 @@ pytestmark = pytest.mark.skipif(
 
 def _counts(conn, since):
     # 같은 테스트 DB 에 앞 단계(실제 DB 테스트)가 넣은 가짜 행이 남아 있으므로 이 실행이 저장한 행만 센다.
+    # 가짜 행에는 미래 날짜(예: 2033년)도 있어 시작 시각 뒤라는 조건만으로는 섞이므로 지금 이전으로도 자른다.
     with conn.cursor() as cur:
         cur.execute("SELECT count(*), count(*) FILTER (WHERE raw IS NOT NULL AND raw::text NOT IN ('null', '{}', '\"\"'))"
-                    " FROM market.price_snapshot WHERE received_at >= %s::timestamptz", (since,))
+                    " FROM market.price_snapshot WHERE received_at >= %s::timestamptz AND received_at <= now()", (since,))
         snapshots, with_raw = cur.fetchone()
-        cur.execute("SELECT failure_type, count(*) FROM market.quote_failure WHERE received_at >= %s::timestamptz"
+        cur.execute("SELECT failure_type, count(*) FROM market.quote_failure WHERE received_at >= %s::timestamptz AND received_at <= now()"
                     " GROUP BY failure_type", (since,))
         failures = {row[0]: row[1] for row in cur.fetchall()}
         # 원인을 가르는 값만 읽는다. 종목 코드와 응답 원문은 읽지 않는다(처리 코드는 수집기가 형식을 확인한 값).
         cur.execute("SELECT failure_type, http_status, response_code, exception_type FROM market.quote_failure"
-                    " WHERE received_at >= %s::timestamptz ORDER BY received_at", (since,))
+                    " WHERE received_at >= %s::timestamptz AND received_at <= now() ORDER BY received_at", (since,))
         details = [dict(zip(("type", "http", "code", "exception"), row)) for row in cur.fetchall()]
     return {"snapshots": snapshots, "with_raw": with_raw, "failures": failures, "failure_details": details}
 

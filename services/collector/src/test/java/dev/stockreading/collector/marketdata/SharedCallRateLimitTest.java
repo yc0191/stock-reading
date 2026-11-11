@@ -7,7 +7,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
-import java.lang.reflect.Method;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -31,10 +30,10 @@ import org.springframework.kafka.core.KafkaTemplate;
 
 import dev.stockreading.collector.CollectorProperties;
 import dev.stockreading.collector.edgar.ExchangePort;
-import dev.stockreading.collector.event.ContractSchemas;
 import dev.stockreading.collector.holdings.HoldingsPort;
 import dev.stockreading.collector.insight.InsightProperties;
 import dev.stockreading.collector.insight.IntradayProperties;
+import dev.stockreading.collector.insight.IntradayPublisher;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -135,7 +134,7 @@ class SharedCallRateLimitTest {
         };
         var broker = new BrokerProperties(server.baseUrl(), "k", "s", 5, maxCalls);
         var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK);
-        var quotes = new BrokerMarketData(client, new CollectorProperties(SYMBOLS, 1_000, 3_000), broker, shared, PriceChecks.fake());
+        var quotes = new BrokerMarketData(client, new CollectorProperties(SYMBOLS, 1_000), broker, shared, PriceChecks.fake());
         var overseas = new BrokerInsightSource(client, insightProperties(), shared);
 
         CompletableFuture<Void> quoteLoop = CompletableFuture.runAsync(() -> {
@@ -283,11 +282,8 @@ class SharedCallRateLimitTest {
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context).hasSingleBean(CallRateLimit.class);
-                    Object listener = context.getBean("intradayTickListener");
-                    Method onTick = listener.getClass().getDeclaredMethod("onTick", String.class);
-                    onTick.setAccessible(true);
-                    onTick.invoke(listener, ContractSchemas.sample("schedule.tick.sample.json")
-                            .replace("\"collect\"", "\"collect-intraday\""));
+                    context.getBean(IntradayPublisher.class)
+                            .publishIntraday("collect-intraday-2026-10-21T10:05:00+09:00", "2026-10-21T10:05:00+09:00");
                     FetchResult result = context.getBean(BrokerMarketData.class).fetch(List.of("TEST01"));
 
                     // 장중 4건이 1초 상한 4를 다 써서 바로 이어진 시세 호출은 자리를 얻지 못한다.
