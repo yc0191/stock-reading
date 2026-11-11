@@ -21,7 +21,7 @@ JAVA_SERVICES = ("collector", "market", "news", "notifier")
 MAP_FILES = tuple(f"{name}.md" for name in (*JAVA_SERVICES, "briefing", "scripts"))
 COLUMNS = ("기능", "대상", "단위", "가상", "실제")
 TEST_COLUMNS = ("단위", "가상", "실제")
-MIN_ROWS, MAX_ROWS = 3, 10
+MIN_ROWS, MAX_ROWS = 3, 12
 # 칸 끝의 공백이 잘려도 이유가 빈 '없음 -' 을 형식 오류가 아닌 빈 이유로 알린다.
 NONE_MARKER = re.compile(r"(?:해당 )?없음 -(?: |$)")
 HELPER_PREFIX = "테스트 도우미:"
