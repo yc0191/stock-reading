@@ -10,6 +10,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Map;
 
 import org.flywaydb.core.Flyway;
@@ -108,6 +109,47 @@ class SnapshotStorageIntegrationTest {
         assertThat(jdbc.sql("SELECT count(*) FROM price_snapshot WHERE symbol = 'ITS004'").query(Long.class).single())
                 .isEqualTo(1);
         verify(moveTracker, times(1)).onSnapshot(eq("ITS004"), any(OffsetDateTime.class), anyLong(), anyString(), anyString());
+    }
+
+    @Test
+    void rowsWhoseFirstTradeFieldsAreAllZeroAreMarkedAndTheRestAreNot() {
+        String[] raws = {
+                "{\"dataBody\":{\"acml_vlm\":\"0\",\"opn_prc\":\"0\"}}",       // 모두 0
+                "{\"dataBody\":{\"acml_vlm\":\"0\",\"opn_prc\":\"0.00\"}}",    // 소수 0도 0
+                "{\"dataBody\":{\"acml_vlm\":\"0\",\"opn_prc\":\"10000\"}}",   // 한쪽만 0
+                "{\"dataBody\":{\"opn_prc\":\"0\"}}",                              // 칸이 없음
+                "{\"dataBody\":{\"acml_vlm\":0,\"opn_prc\":0}}",                   // 숫자 0
+                "{\"dataBody\":{\"acml_vlm\":\"abc\",\"opn_prc\":\"0\"}}"      // 숫자가 아님
+        };
+        for (int i = 0; i < raws.length; i++) {
+            listener.onSnapshot(message("a5000000-0000-4000-8000-00000000000" + (i + 1), "ITS005", 10_000 + i,
+                    "2026-03-05T11:00:0" + i + "+09:00", raws[i]));
+        }
+        PriceSnapshotRepository repository = new PriceSnapshotRepository(jdbc);
+        OffsetDateTime from = OffsetDateTime.parse("2026-03-05T11:00:00+09:00");
+        OffsetDateTime to = OffsetDateTime.parse("2026-03-05T11:01:00+09:00");
+
+        List<PricePoint> points = repository.findBetween("ITS005", from, to, List.of("dataBody.acml_vlm", "dataBody.opn_prc"));
+
+        assertThat(points).extracting(PricePoint::beforeFirstTrade).containsExactly(true, true, false, false, true, false);
+        assertThat(points).extracting(PricePoint::price).containsExactly(10_000L, 10_001L, 10_002L, 10_003L, 10_004L, 10_005L);
+        // 칸 목록이 비면 아무것도 표시하지 않는다.
+        assertThat(repository.findBetween("ITS005", from, to, List.of())).extracting(PricePoint::beforeFirstTrade)
+                .containsOnly(false);
+    }
+
+    @Test
+    void latestRowsBeforeAPointAreReturnedInTimeOrder() {
+        for (int i = 0; i < 4; i++) {
+            listener.onSnapshot(message("a6000000-0000-4000-8000-00000000000" + (i + 1), "ITS006", 10_000 + i,
+                    "2026-03-05T12:00:0" + i + "+09:00", "{\"price\":\"1\"}"));
+        }
+
+        List<PricePoint> points = new PriceSnapshotRepository(jdbc).findLatestBetween("ITS006",
+                OffsetDateTime.parse("2026-03-05T11:59:00+09:00"), OffsetDateTime.parse("2026-03-05T12:00:03+09:00"), 2, List.of());
+
+        // 끝(12:00:03) 미만에서 가장 가까운 두 건
+        assertThat(points).extracting(PricePoint::price).containsExactly(10_001L, 10_002L);
     }
 
     private static boolean partitionExists(String name) {

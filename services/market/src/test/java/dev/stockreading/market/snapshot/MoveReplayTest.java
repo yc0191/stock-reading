@@ -3,6 +3,8 @@ package dev.stockreading.market.snapshot;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
@@ -97,7 +99,7 @@ class MoveReplayTest {
         // 시세 저장소 대역: 수집기가 보낸(빼지 않은) 행만 기억해 유형 1의 최근 이력으로 준다.
         Map<String, TreeMap<OffsetDateTime, List<PricePoint>>> history = new HashMap<>();
         PriceSnapshotRepository snapshots = mock(PriceSnapshotRepository.class);
-        when(snapshots.findBetween(anyString(), any(OffsetDateTime.class), any(OffsetDateTime.class))).thenAnswer(inv -> {
+        when(snapshots.findBetween(anyString(), any(OffsetDateTime.class), any(OffsetDateTime.class), anyList())).thenAnswer(inv -> {
             TreeMap<OffsetDateTime, List<PricePoint>> points = history.get(inv.<String>getArgument(0));
             List<PricePoint> found = new ArrayList<>();
             if (points != null) {
@@ -105,6 +107,16 @@ class MoveReplayTest {
             }
             return found;
         });
+        when(snapshots.findLatestBetween(anyString(), any(OffsetDateTime.class), any(OffsetDateTime.class), anyInt(), anyList()))
+                .thenAnswer(inv -> {
+                    TreeMap<OffsetDateTime, List<PricePoint>> points = history.get(inv.<String>getArgument(0));
+                    List<PricePoint> found = new ArrayList<>();
+                    if (points != null) {
+                        points.subMap(inv.getArgument(1), true, inv.getArgument(2), false).values().forEach(found::addAll);
+                    }
+                    int limit = inv.getArgument(3);
+                    return found.subList(Math.max(0, found.size() - limit), found.size());
+                });
         // 재발행 상태 대역. 시작할 때는 비어 있다(실제로는 범위 앞의 상태가 남아 있었을 수 있다).
         Map<String, MoveState> stored = new HashMap<>();
         MoveStateRepository states = mock(MoveStateRepository.class);
@@ -118,6 +130,12 @@ class MoveReplayTest {
             stored.remove(key(inv.getArgument(0), inv.getArgument(1)));
             return null;
         }).when(states).delete(anyString(), any(DetectionType.class));
+        Map<String, LastPublish> lastPublishes = new HashMap<>();
+        when(states.findLastPublish(anyString())).thenAnswer(inv -> Optional.ofNullable(lastPublishes.get(inv.<String>getArgument(0))));
+        doAnswer(inv -> {
+            lastPublishes.put(inv.getArgument(0), new LastPublish(inv.getArgument(1), inv.getArgument(2)));
+            return null;
+        }).when(states).saveLastPublish(anyString(), anyLong(), any(OffsetDateTime.class));
 
         Map<DetectionType, Integer> published = new EnumMap<>(DetectionType.class);
         for (DetectionType type : DetectionType.values()) {
@@ -148,7 +166,7 @@ class MoveReplayTest {
         }).when(publisher).publish(anyString(), any(Detection.class), any(OffsetDateTime.class), any(OffsetDateTime.class), any());
 
         MoveDetector detector = new MoveDetector(snapshots, properties, JsonMapper.builder().build());
-        MoveTracker tracker = new MoveTracker(detector, states, publisher);
+        MoveTracker tracker = new MoveTracker(detector, states, publisher, properties);
 
         int rows = 0;
         int excludedRows = 0;
@@ -174,7 +192,8 @@ class MoveReplayTest {
                 current.clear();
                 // 실제 리스너처럼 평가 전에 저장한다. 유형 1 조회는 현재 시각 미만만 보므로 결과는 같다.
                 history.computeIfAbsent(symbol, s -> new TreeMap<>())
-                        .computeIfAbsent(asOf, t -> new ArrayList<>()).add(new PricePoint(asOf, price));
+                        .computeIfAbsent(asOf, t -> new ArrayList<>())
+                        .add(new PricePoint(asOf, price, beforeFirstTrade(parts[4], properties.firstTradeFields())));
                 tracker.onSnapshot(symbol, asOf, price, parts[4], "replay");
                 if (current.contains(DetectionType.WINDOW) && current.contains(DetectionType.PREV_CLOSE)) {
                     both++;
@@ -186,6 +205,29 @@ class MoveReplayTest {
             }
         }
         return new Result(rows, excludedRows, published, prevCloseSymbols.size(), both, prevCloseUnknown, byDate);
+    }
+
+    // 저장소의 판별(SQL)과 같은 규칙이다. 목록의 모든 칸이 0 숫자이면 첫 체결 전 응답이다. 칸이 없거나 숫자가 아니면 아니다.
+    static boolean beforeFirstTrade(String raw, List<String> fields) {
+        if (fields.isEmpty()) {
+            return false;
+        }
+        JsonNode root;
+        try {
+            root = JsonMapper.builder().build().readTree(raw);
+        } catch (RuntimeException e) {
+            return false;
+        }
+        for (String field : fields) {
+            JsonNode node = root;
+            for (String name : field.split("\\.")) {
+                node = node.path(name);
+            }
+            if (node.isMissingNode() || node.isNull() || !node.asString().trim().matches("0+(\\.0*)?")) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
