@@ -462,7 +462,7 @@ docker rm -f market-it-pg
 TEST_ALL_AWS_PROFILE=<AWS 프로필> scripts/test-all.sh --live
 ```
 
-`--live`는 위 전체 실행에 더해 실제 외부를 부르는 두 흐름을 돌립니다. 시세 토큰 1회, 시세 1회, LLM 1회, 메일 1통을 씁니다.
+`--live`는 위 전체 실행에 더해 실제 외부를 부르는 두 흐름을 돌립니다. 시세 토큰 1회, 시세 1회, LLM 1회, 메일 1통을 씁니다. LLM이 리포트 문장에 근거 약함을 표시하면 브리핑이 재검색을 요청하고, 수집기가 실제 뉴스 검색(작업당 최대 30회)으로 답하며 LLM도 몇 회 더 부릅니다. 결과 표의 LLM 수는 리포트 호출만 셉니다.
 
 1. 시세 흐름: 일회용 Kafka와 테스트 전용 데이터베이스로 시세처리기와 수집기(실제 시세, 종목 1개, 타이머 꺼짐)를 띄우고 수동 실행 명령 `collect` 1건으로 저장까지 확인합니다.
 2. 브리핑·메일: news, 테스트용 발송기, 브리핑(실제 LLM)을 띄우고 가짜 변동·기사·수집 완료를 넣어 LLM 리포트와 메일 발송 1통을 확인합니다.
@@ -484,6 +484,7 @@ TEST_ALL_AWS_PROFILE=<AWS 프로필> scripts/test-all.sh --live
 | `BROKER_APP_KEY`, `BROKER_APP_SECRET` | `/stock-reading/dev/collector/` 아래의 시세 앱키·시크릿 |
 | `ANTHROPIC_API_KEY` | `/stock-reading/dev/briefing/anthropic-api-key` |
 | `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `NOTIFIER_SENDER`, `NOTIFIER_RECIPIENT` (선택 `SMTP_PORT`) | `/stock-reading/dev/notifier/` 아래의 메일 설정 |
+| `NEWS_SEARCH_BASE_URL`, `NEWS_SEARCH_CLIENT_ID`, `NEWS_SEARCH_CLIENT_SECRET`, `NEWS_SEARCH_ID_HEADER`, `NEWS_SEARCH_SECRET_HEADER` | `/stock-reading/dev/collector/` 아래의 뉴스 검색 주소·키·헤더 이름. 테스트용 수집기에만 넘깁니다 |
 
 `BRIEFING_LLM_MODEL`(선택)만은 실행 환경변수나 `.env`에서 읽습니다.
 

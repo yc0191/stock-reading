@@ -3,7 +3,8 @@
 # 돌린 뒤 테스트 지도(docs/test-map)의 기능별 '돌았음 / 건너뜀(이유) / 실패' 표를 출력한다. 하나라도 실패하면 1로 끝난다.
 #
 # 사용법: scripts/test-all.sh [--live] [--plan]
-#   --live  실제 외부를 부른다(시세 토큰 1 + 시세 1 + LLM 1 + 메일 1통). 사람이 직접 결정해서만 쓴다.
+#   --live  실제 외부를 부른다(시세 토큰 1 + 시세 1 + LLM 1 + 메일 1통, LLM이 근거 약함을 표시하면 재검색의 뉴스 검색
+#           최대 30회와 LLM 몇 회가 더 든다). 사람이 직접 결정해서만 쓴다.
 #   --plan  아무것도 띄우지 않고 실행 순서만 보여 준다.
 #
 # 실제 DB 테스트는 개발용 stock-postgres 안에 이 실행만의 stock_test_run_<시각>_<pid> 데이터베이스를 만들어 쓰고 지운다.
@@ -17,7 +18,8 @@
 #   TEST_ALL_AWS_PROFILE  --live 가 Parameter Store 를 읽을 AWS CLI 프로필. --live 에서는 필수이고,
 #                         엉뚱한 계정을 읽지 않도록 기본 자격증명 방식으로 넘어가지 않는다
 #   --live 전용: BROKER_BASE_URL, BROKER_APP_KEY, BROKER_APP_SECRET, TEST_ALL_LIVE_SYMBOL(6자리),
-#               ANTHROPIC_API_KEY, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, NOTIFIER_SENDER, NOTIFIER_RECIPIENT
+#               ANTHROPIC_API_KEY, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, NOTIFIER_SENDER, NOTIFIER_RECIPIENT,
+#               NEWS_SEARCH_BASE_URL, NEWS_SEARCH_CLIENT_ID, NEWS_SEARCH_CLIENT_SECRET, NEWS_SEARCH_ID_HEADER, NEWS_SEARCH_SECRET_HEADER
 #               (선택: SMTP_PORT, BRIEFING_LLM_MODEL)
 #               (BRIEFING_LLM_MODEL 을 뺀 위 키는) 실행할 때마다 Parameter Store 에서 새로 읽어 임시 폴더에만 두고,
 #               실행 환경변수와 .env 의 같은 키는 쓰지 않는다. 하나라도 비면 시세를 부르기 전에 실패로 끝낸다.
@@ -27,7 +29,7 @@
 set -uo pipefail
 
 usage() {
-  sed -n '5,7p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '5,8p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 LIVE=0
@@ -478,7 +480,7 @@ live_value() {
 }
 
 # 브리핑·메일 단계까지 필요한 키. 시세를 부르기 전에 모두 확인해 메일 설정이 빠졌는데 시세만 부르는 일이 없게 한다.
-LIVE_KEYS="BROKER_BASE_URL BROKER_APP_KEY BROKER_APP_SECRET TEST_ALL_LIVE_SYMBOL ANTHROPIC_API_KEY SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER NOTIFIER_RECIPIENT"
+LIVE_KEYS="BROKER_BASE_URL BROKER_APP_KEY BROKER_APP_SECRET TEST_ALL_LIVE_SYMBOL ANTHROPIC_API_KEY SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER NOTIFIER_RECIPIENT NEWS_SEARCH_BASE_URL NEWS_SEARCH_CLIENT_ID NEWS_SEARCH_CLIENT_SECRET NEWS_SEARCH_ID_HEADER NEWS_SEARCH_SECRET_HEADER"
 
 missing_live_keys() {
   local key missing=""
@@ -570,6 +572,10 @@ run_live() {
     export SPRING_KAFKA_BOOTSTRAP_SERVERS="localhost:$port"
     export COLLECTOR_MARKET_DATA_SOURCE=broker BROKER_BASE_URL="$base_url" BROKER_APP_KEY="$app_key" BROKER_APP_SECRET="$app_secret"
     export COLLECTOR_SYMBOLS="$symbol"
+    # 브리핑이 근거 약한 문장을 재검색하면 이 수집기가 실제 뉴스 검색으로 답한다. 키가 없으면 다 모으지 못함으로 끝나 브리핑 확인이 실패한다.
+    export NEWS_SEARCH_BASE_URL="$(live_value NEWS_SEARCH_BASE_URL)" NEWS_SEARCH_CLIENT_ID="$(live_value NEWS_SEARCH_CLIENT_ID)"
+    export NEWS_SEARCH_CLIENT_SECRET="$(live_value NEWS_SEARCH_CLIENT_SECRET)" NEWS_SEARCH_ID_HEADER="$(live_value NEWS_SEARCH_ID_HEADER)"
+    export NEWS_SEARCH_SECRET_HEADER="$(live_value NEWS_SEARCH_SECRET_HEADER)"
     # 타이머를 모두 꺼서 시세 호출은 아래 수동 실행 명령 1건뿐이게 한다.
     export COLLECTOR_SCHEDULE_ENABLED=false COLLECTOR_PRE_OPEN_ENABLED=false COLLECTOR_INSIGHT_SCHEDULE_ENABLED=false
     export COLLECTOR_INTRADAY_ENABLED=false COLLECTOR_MEMBERS_ENABLED=false COLLECTOR_DAILY_BRIEFING_ENABLED=false
