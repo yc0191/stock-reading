@@ -1,0 +1,10 @@
+[Unit]
+Description=Dump Postgres and upload it to S3 (data server)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=1h
+EnvironmentFile=-/etc/stock-reading/data.env
+ExecStart=/opt/stock-reading/infra/deploy/server/backup-postgres.sh

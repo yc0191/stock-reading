@@ -1,0 +1,173 @@
+# 서비스 서버(Lightsail 2GB)의 서비스 5개와 DB 표 만들기 단계. Kafka·Postgres 는 데이터 서버의 data.yml 이며 여기에 없다.
+# 배포 적용 스크립트(infra/deploy/server/apply-deploy.sh)가 아래처럼 부른다. DEPLOY_VERSION 이 이미지 태그다.
+#   DEPLOY_VERSION=<버전> docker compose -f services.yml --env-file <배포 설정> --env-file <비밀 설정> up -d
+# 값의 목록과 뜻은 infra/deploy/server/deploy.env.example. DB 비밀번호 8개는 비면 Compose 가 어떤 명령이든 실패한다. 로컬에서 이미지를 만들 때는 rehearsal/run-rehearsal.sh build.
+name: stock-services
+
+x-service: &service
+  restart: unless-stopped
+  platform: linux/amd64
+  # 서비스 서버에서 데이터 서버(Kafka·Postgres)는 사설 주소로 닿는다.
+  environment: &service-env
+    TZ: Asia/Seoul
+
+x-java-env: &java-env
+  <<: *service-env
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: ${DATA_PRIVATE_IP:-127.0.0.1}:9092
+
+services:
+  # DB 표와 계정 권한을 맞춘다(market -> personal 계정 -> personal -> briefing). 서비스는 이 단계가 끝난 뒤 뜬다.
+  flyway-migrate:
+    image: ${ECR_REGISTRY:-local}/stock-reading-migrate:${DEPLOY_VERSION:-dev}
+    build:
+      context: ../../..
+      dockerfile: infra/deploy/migrate/Dockerfile
+    platform: linux/amd64
+    restart: "no"
+    # 배포 때 서비스가 이미 도는 중에 한 번 더 뜨므로 JVM 기본 힙(기계 메모리의 1/4)이 서버를 누르지 않게 상한을 둔다.
+    mem_limit: ${MIGRATE_MEM_LIMIT:-384m}
+    environment:
+      DB_HOST: ${DATA_PRIVATE_IP:-127.0.0.1}
+      POSTGRES_DB: ${POSTGRES_DB:-stock}
+      POSTGRES_ADMIN_USER: ${POSTGRES_ADMIN_USER:-postgres}
+      POSTGRES_ADMIN_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD 값이 비어 있음}
+      MARKET_DB_USER: ${MARKET_DB_USER:-market_svc}
+      MARKET_DB_PASSWORD: ${MARKET_DB_PASSWORD:?MARKET_DB_PASSWORD 값이 비어 있음}
+      BRIEFING_DB_USER: ${BRIEFING_DB_USER:-briefing_svc}
+      BRIEFING_DB_PASSWORD: ${BRIEFING_DB_PASSWORD:?BRIEFING_DB_PASSWORD 값이 비어 있음}
+      PERSONAL_OWNER_DB_USER: ${PERSONAL_OWNER_DB_USER:-personal_owner}
+      PERSONAL_OWNER_DB_PASSWORD: ${PERSONAL_OWNER_DB_PASSWORD:?PERSONAL_OWNER_DB_PASSWORD 값이 비어 있음}
+      PERSONAL_WRITER_DB_USER: ${PERSONAL_WRITER_DB_USER:-personal_writer}
+      PERSONAL_WRITER_DB_PASSWORD: ${PERSONAL_WRITER_DB_PASSWORD:?PERSONAL_WRITER_DB_PASSWORD 값이 비어 있음}
+      COLLECTOR_DB_USER: ${COLLECTOR_DB_USER:-collector_svc}
+      COLLECTOR_DB_PASSWORD: ${COLLECTOR_DB_PASSWORD:?COLLECTOR_DB_PASSWORD 값이 비어 있음}
+      NOTIFIER_DB_USER: ${NOTIFIER_DB_USER:-notifier_svc}
+      NOTIFIER_DB_PASSWORD: ${NOTIFIER_DB_PASSWORD:?NOTIFIER_DB_PASSWORD 값이 비어 있음}
+      NEWS_DB_USER: ${NEWS_DB_USER:-news_svc}
+
+  collector:
+    <<: *service
+    image: ${ECR_REGISTRY:-local}/stock-reading-collector:${DEPLOY_VERSION:-dev}
+    build:
+      context: ../../..
+      dockerfile: services/collector/Dockerfile
+    mem_limit: ${COLLECTOR_MEM_LIMIT:-440m}
+    depends_on:
+      flyway-migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *java-env
+      # 컨테이너 메모리 상한 안에서 힙을 작게 고정하고, 힙 밖(메타스페이스·스레드·코드 캐시)에도 상한을 둔다. 값은 로컬 리허설의 측정으로 정했다.
+      JAVA_TOOL_OPTIONS: ${COLLECTOR_JAVA_OPTS:--Xms96m -Xmx224m -XX:+UseSerialGC -Xss512k -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=48m}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://${DATA_PRIVATE_IP:-127.0.0.1}:5432/${POSTGRES_DB:-stock}
+      POSTGRES_DB: ${POSTGRES_DB:-stock}
+      COLLECTOR_DB_USER: ${COLLECTOR_DB_USER:-collector_svc}
+      COLLECTOR_DB_PASSWORD: ${COLLECTOR_DB_PASSWORD:?COLLECTOR_DB_PASSWORD 값이 비어 있음}
+      # 수집 타이머와 시세 제공자 선택. 기본값은 꺼짐·시뮬레이터라 값을 채우지 않으면 외부를 부르지 않는다.
+      COLLECTOR_SCHEDULE_ENABLED: ${COLLECTOR_SCHEDULE_ENABLED:-false}
+      COLLECTOR_PRE_OPEN_ENABLED: ${COLLECTOR_PRE_OPEN_ENABLED:-false}
+      COLLECTOR_INTRADAY_ENABLED: ${COLLECTOR_INTRADAY_ENABLED:-false}
+      COLLECTOR_INSIGHT_SCHEDULE_ENABLED: ${COLLECTOR_INSIGHT_SCHEDULE_ENABLED:-false}
+      COLLECTOR_DAILY_BRIEFING_ENABLED: ${COLLECTOR_DAILY_BRIEFING_ENABLED:-false}
+      COLLECTOR_MEMBERS_ENABLED: ${COLLECTOR_MEMBERS_ENABLED:-false}
+      COLLECTOR_MARKET_DATA_SOURCE: ${COLLECTOR_MARKET_DATA_SOURCE:-simulator}
+      BROKER_BASE_URL: ${BROKER_BASE_URL:-}
+      BROKER_APP_KEY: ${BROKER_APP_KEY:-}
+      BROKER_APP_SECRET: ${BROKER_APP_SECRET:-}
+      BROKER_MARKET_STATUS_PATH: ${BROKER_MARKET_STATUS_PATH:-}
+      BROKER_MARKET_STATUS_TODAY_FIELD: ${BROKER_MARKET_STATUS_TODAY_FIELD:-}
+      BROKER_MARKET_STATUS_BUSINESS_DAY_FIELD: ${BROKER_MARKET_STATUS_BUSINESS_DAY_FIELD:-}
+      NEWS_SEARCH_BASE_URL: ${NEWS_SEARCH_BASE_URL:-}
+      NEWS_SEARCH_CLIENT_ID: ${NEWS_SEARCH_CLIENT_ID:-}
+      NEWS_SEARCH_CLIENT_SECRET: ${NEWS_SEARCH_CLIENT_SECRET:-}
+      NEWS_SEARCH_ID_HEADER: ${NEWS_SEARCH_ID_HEADER:-}
+      NEWS_SEARCH_SECRET_HEADER: ${NEWS_SEARCH_SECRET_HEADER:-}
+      DART_API_KEY: ${DART_API_KEY:-}
+      EDGAR_USER_AGENT: ${EDGAR_USER_AGENT:-}
+
+  market:
+    <<: *service
+    image: ${ECR_REGISTRY:-local}/stock-reading-market:${DEPLOY_VERSION:-dev}
+    build:
+      context: ../../..
+      dockerfile: services/market/Dockerfile
+    mem_limit: ${MARKET_MEM_LIMIT:-440m}
+    depends_on:
+      flyway-migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *java-env
+      JAVA_TOOL_OPTIONS: ${MARKET_JAVA_OPTS:--Xms96m -Xmx224m -XX:+UseSerialGC -Xss512k -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=48m}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://${DATA_PRIVATE_IP:-127.0.0.1}:5432/${POSTGRES_DB:-stock}?currentSchema=market
+      POSTGRES_DB: ${POSTGRES_DB:-stock}
+      MARKET_DB_USER: ${MARKET_DB_USER:-market_svc}
+      MARKET_DB_PASSWORD: ${MARKET_DB_PASSWORD:?MARKET_DB_PASSWORD 값이 비어 있음}
+      MEMBERS_URL_TEMPLATE: ${MEMBERS_URL_TEMPLATE:-}
+      MEMBERS_USER_AGENT: ${MEMBERS_USER_AGENT:-stock-reading-members/1.0}
+
+  news:
+    <<: *service
+    image: ${ECR_REGISTRY:-local}/stock-reading-news:${DEPLOY_VERSION:-dev}
+    build:
+      context: ../../..
+      dockerfile: services/news/Dockerfile
+    mem_limit: ${NEWS_MEM_LIMIT:-400m}
+    depends_on:
+      flyway-migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *java-env
+      JAVA_TOOL_OPTIONS: ${NEWS_JAVA_OPTS:--Xms64m -Xmx192m -XX:+UseSerialGC -Xss512k -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=48m}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://${DATA_PRIVATE_IP:-127.0.0.1}:5432/${POSTGRES_DB:-stock}?currentSchema=news
+      POSTGRES_DB: ${POSTGRES_DB:-stock}
+      NEWS_DB_USER: ${NEWS_DB_USER:-news_svc}
+      NEWS_DB_PASSWORD: ${NEWS_DB_PASSWORD:?NEWS_DB_PASSWORD 값이 비어 있음}
+
+  notifier:
+    <<: *service
+    image: ${ECR_REGISTRY:-local}/stock-reading-notifier:${DEPLOY_VERSION:-dev}
+    build:
+      context: ../../..
+      dockerfile: services/notifier/Dockerfile
+    mem_limit: ${NOTIFIER_MEM_LIMIT:-400m}
+    depends_on:
+      flyway-migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *java-env
+      JAVA_TOOL_OPTIONS: ${NOTIFIER_JAVA_OPTS:--Xms64m -Xmx160m -XX:+UseSerialGC -Xss512k -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=48m}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://${DATA_PRIVATE_IP:-127.0.0.1}:5432/${POSTGRES_DB:-stock}
+      POSTGRES_DB: ${POSTGRES_DB:-stock}
+      NOTIFIER_DB_USER: ${NOTIFIER_DB_USER:-notifier_svc}
+      NOTIFIER_DB_PASSWORD: ${NOTIFIER_DB_PASSWORD:?NOTIFIER_DB_PASSWORD 값이 비어 있음}
+      # 메일은 기본이 드라이런(로그만)이다. 켜는 것은 사람이 서버의 배포 설정에서 직접 바꾼다.
+      NOTIFIER_SEND_ENABLED: ${NOTIFIER_SEND_ENABLED:-false}
+      NOTIFIER_SENDER: ${NOTIFIER_SENDER:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+
+  briefing:
+    <<: *service
+    image: ${ECR_REGISTRY:-local}/stock-reading-briefing:${DEPLOY_VERSION:-dev}
+    build:
+      context: ../../..
+      dockerfile: services/briefing/Dockerfile
+    mem_limit: ${BRIEFING_MEM_LIMIT:-300m}
+    depends_on:
+      flyway-migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *service-env
+      KAFKA_BOOTSTRAP: ${DATA_PRIVATE_IP:-127.0.0.1}:9092
+      # 브리핑은 DB 를 localhost:5432 로 읽으므로 컨테이너 안 중계(docker-entrypoint.sh)가 이 주소로 넘긴다.
+      DB_HOST: ${DATA_PRIVATE_IP:-127.0.0.1}
+      POSTGRES_DB: ${POSTGRES_DB:-stock}
+      BRIEFING_DB_USER: ${BRIEFING_DB_USER:-briefing_svc}
+      BRIEFING_DB_PASSWORD: ${BRIEFING_DB_PASSWORD:?BRIEFING_DB_PASSWORD 값이 비어 있음}
+      # 키가 비면 LLM 없이 규칙 기반 리포트로 동작한다.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # 수집기와 같은 값. 브리핑이 이 값으로 09:00~09:10 급변동 합침을 켠다.
+      COLLECTOR_DAILY_BRIEFING_ENABLED: ${COLLECTOR_DAILY_BRIEFING_ENABLED:-false}
+      BRIEFING_LLM_MODEL: ${BRIEFING_LLM_MODEL:-claude-sonnet-5-5}

@@ -1,0 +1,18 @@
+# 이미지 빌드 컨텍스트(저장소 루트)에서 뺄 것. 비밀값과 큰 폴더가 컨텍스트로 올라가지 않게 한다.
+.git
+.gradle
+.flows
+**/build
+**/.venv
+**/__pycache__
+**/.pytest_cache
+.env
+.env.*
+!.env.example
+docs
+contracts
+.claude
+.idea
+.vscode
+.DS_Store
+*.log
