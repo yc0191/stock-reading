@@ -3,6 +3,8 @@ package dev.stockreading.market.context;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -209,33 +211,20 @@ class DailyContractTest {
     }
 
     @Test
-    void producerNeverFillsTheEtfRelationBecauseHeldOrWatchedBelongsToEachMembersPortfolio() throws IOException {
+    void etfCarriesNoHeldOrWatchedBecauseThatBelongsToEachMembersPortfolio() throws IOException {
         String json = serialize(new DailyPayload(JOB_ID, 1, List.of(
                 DailyPayload.Etf.withoutDaily("TEST01", DailyPayload.NO_DAILY_PRICE_IN_RANGE, List.of(), false, null),
-                DailyPayload.Etf.withoutDaily("TEST02", DailyPayload.NO_DAILY_PRICE_IN_RANGE, List.of(), false, null),
-                DailyPayload.Etf.withoutDaily("TEST03", DailyPayload.NO_DAILY_PRICE_IN_RANGE, List.of(), false, null)),
+                DailyPayload.Etf.withoutDaily("TEST02", DailyPayload.NO_DAILY_PRICE_IN_RANGE, List.of(), false, null)),
                 List.of(), List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false));
 
         assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", json)).isEmpty();
-        var etfs = mapper.readTree(json).get("payload").get("etfs");
-        assertThat(etfs.get(0).has("relation")).isFalse();
-        assertThat(etfs.get(1).has("relation")).isFalse();
-        assertThat(etfs.get(2).has("relation")).isFalse();
-    }
-
-    @Test
-    void schemaTakesOnlyHeldOrWatchAsRelationAndTheSampleCarriesIt() throws IOException {
+        assertThat(json).doesNotContain("\"relation\"");
         String sample = ContractSchemas.sample("v2", "market.daily.responded.sample.json");
-        assertThat(sample).contains("\"relation\": \"HELD\"").contains("\"relation\": \"WATCH\"");
+        assertThat(sample).doesNotContain("\"relation\"");
         assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", sample)).isEmpty();
-        for (String bad : new String[] {"NONE", "held", ""}) {
-            String broken = sample.replaceFirst("\"relation\": \"HELD\"", "\"relation\": \"" + bad + "\"");
-            assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", broken))
-                    .as("relation=%s", bad).isNotEmpty();
-        }
-        String without = sample.replaceAll("\"relation\": \"[A-Z]+\",\\s*", "");
-        assertThat(without).doesNotContain("\"relation\"");
-        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", without)).isEmpty();
+        // 스키마가 추가 칸을 막지 않으므로 칸 이름이 스키마에서 빠졌는지는 정의 쪽에서 확인한다.
+        assertThat(Files.readString(Path.of("../../contracts/events/market.daily.responded.v2.schema.json")))
+                .doesNotContain("\"relation\"");
     }
 
     @Test

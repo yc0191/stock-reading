@@ -169,7 +169,7 @@ class EtfDay:
     etf: EtfInfo | None = None
     # 값 칸이 빈 이유(market.daily.responded v2). 값이 있으면 None이고, v1 응답에도 없다.
     missing_reason: str | None = None
-    # 보유(HELD)·관심(WATCH) 구분(market.daily.responded v2 선택 칸). 칸이 없는 응답이면 None.
+    # 보유(HELD)·관심(WATCH) 구분. 멤버마다 달라 응답에는 없고, 멤버의 판을 짤 때 그 멤버의 포트폴리오 값으로 붙인다.
     relation: str | None = None
 
     def has_day(self) -> bool:
@@ -638,10 +638,8 @@ def build_llm_input(i: DailyInput, sections: tuple[Section, ...],
 
 
 def _outlook_etfs_input(i: DailyInput) -> list[dict[str, Any]]:
-    """아침 판이 방향을 예상할 ETF. 보유·관심 모두이고, 일봉이 비어 있어도 기사로 예상하므로 빼지 않는다."""
-    titles = dict(RELATION_TITLES)
-    return [{"symbol": e.symbol, "name": e.label(), "relation": titles.get(e.relation, RELATION_UNKNOWN_TITLE)}
-            for e in i.etfs or ()]
+    """아침 판이 방향을 예상할 ETF. 일봉이 비어 있어도 기사로 예상하므로 빼지 않는다. 보유·관심 구분은 멤버마다 달라 LLM에 주지 않는다."""
+    return [{"symbol": e.symbol, "name": e.label()} for e in i.etfs or ()]
 
 
 def _reviews_input(i: DailyInput) -> list[dict[str, Any]]:
@@ -834,11 +832,13 @@ def parse_post_close_output(text: str, allowed_refs: frozenset[str], forbidden_t
                             required_etfs: frozenset[str],
                             member_issues: Mapping[str, tuple[MemberIssue, ...]],
                             notables_given: bool = True,
-                            required_reviews: frozenset[str] = frozenset()) -> DailyOutput:
+                            required_reviews: frozenset[str] = frozenset(),
+                            etf_names: frozenset[str] = frozenset()) -> DailyOutput:
     """마감 후 판 LLM 응답을 검증한다. 아침 판 검사(형식, 목록 밖 근거 번호, 티커)에 더해 요약이 2줄이 아니거나,
     등락 자료가 있는 ETF가 빠지거나 겹치거나 모르는 ETF가 있거나, 이유가 '↳' 줄을 되풀이하면 InvalidDailyOutput.
     눈에 띄는 점 후보가 없는데(notables_given=False) 쓴 눈에 띄는 점은 버린다.
-    아침 예상을 대조할 ETF(required_reviews)는 대조 이유(reviews)가 빠지거나 겹치면 거부하고, 대조할 ETF가 아닌 항목은 버린다."""
+    아침 예상을 대조할 ETF(required_reviews)는 대조 이유(reviews)가 빠지거나 겹치면 거부하고, 대조할 ETF가 아닌 항목은 버린다.
+    요약은 멤버 모두에게 같은 글이라 ETF 이름·종목코드(etf_names)가 들어 있으면 거부한다(다른 멤버가 가진 ETF가 드러나지 않게)."""
     tickers = ticker_pattern(forbidden_tickers)
     data = parse_output_object(text, "etfs", InvalidDailyOutput)
     summary_raw, notables_raw = data.get("summary"), data.get("notables")
@@ -852,6 +852,8 @@ def parse_post_close_output(text: str, allowed_refs: frozenset[str], forbidden_t
     for raw in summary_raw:
         line = output_sentence({"summary": raw}, "summary", "summary", InvalidDailyOutput)
         check_no_ticker(line, tickers, "summary", InvalidDailyOutput)
+        if any(name in line for name in etf_names):
+            raise InvalidDailyOutput("summary mentions an etf name or code")
         summary.append(line)
     etf_points, seen = [], set()
     for raw in data["etfs"]:
@@ -1113,6 +1115,11 @@ def _issues_by_etf(i: DailyInput) -> dict[str, tuple[MemberIssue, ...]]:
     return {etf: tuple(issues) for etf, issues in grouped.items()}
 
 
+def _etf_names(i: DailyInput) -> frozenset[str]:
+    """요약에 쓰면 안 되는 ETF 이름과 종목코드. 한 글자 이름은 일반 낱말과 겹쳐 뺀다."""
+    return frozenset(n for etf in i.etfs or () for n in (etf.symbol, etf.label()) if len(n) >= 2)
+
+
 @dataclass(frozen=True)
 class DailyLlmWriter:
     client: LlmClient
@@ -1137,7 +1144,8 @@ class DailyLlmWriter:
             try:
                 raw = self.client.complete(prompt, user, schema)
                 output = parse_post_close_output(raw, allowed, tickers, _etfs_with_day(i), _issues_by_etf(i),
-                                                 bool(i.notables), _reviews_to_explain(i)) \
+                                                 bool(i.notables), _reviews_to_explain(i),
+                                                 _etf_names(i)) \
                     if post_close else parse_morning_output(raw, allowed, tickers, _etfs_to_forecast(i))
             except (LlmCallError, InvalidDailyOutput) as error:
                 rejected.append(LlmAttempt(attempt, type(error).__name__, str(error), user, raw))

@@ -11,6 +11,7 @@ from briefing.job_log import EntryType, GeneratedBy, JobKind, RunStatus
 MIGRATIONS = Path(__file__).resolve().parents[1] / "db" / "migration"
 V1 = (MIGRATIONS / "V1__create_briefing_tables.sql").read_text(encoding="utf-8")
 V1_CODE = re.sub(r"--[^\n]*", "", V1)  # 주석에는 JSONB 같은 말이 나올 수 있다
+V2 = (MIGRATIONS / "V2__add_member_briefing_entry_type.sql").read_text(encoding="utf-8")
 
 
 def table_sql(name):
@@ -29,7 +30,8 @@ def test_the_migration_creates_the_three_tables_without_if_not_exists():
     for name in ("job_run", "job_log", "collection_completed"):
         table_sql(name)
     assert "IF NOT EXISTS" not in V1_CODE.upper()
-    assert list(MIGRATIONS.glob("V*.sql")) == [MIGRATIONS / "V1__create_briefing_tables.sql"]
+    assert sorted(MIGRATIONS.glob("V*.sql")) == [MIGRATIONS / "V1__create_briefing_tables.sql",
+                                                MIGRATIONS / "V2__add_member_briefing_entry_type.sql"]
 
 
 def test_run_and_log_columns_follow_the_plan_and_keep_json_as_json():
@@ -51,7 +53,10 @@ def test_value_checks_match_the_code_enums():
     assert checked_values("job_run", "job_kind") == {m.value for m in JobKind}
     assert checked_values("job_run", "status") == {m.value for m in RunStatus}
     assert checked_values("job_run", "generated_by") == {m.value for m in GeneratedBy}
-    assert checked_values("job_log", "entry_type") == {m.value for m in EntryType}
+    # 기록 종류의 값 제한은 V2가 다시 걸어 코드 enum 전체와 같다(V1에는 member-briefing이 아직 없다).
+    v2_values = set(re.findall(r"'([^']+)'", re.search(r"CHECK \(entry_type IN \((.*?)\)\)", V2, re.S).group(1)))
+    assert v2_values == {m.value for m in EntryType}
+    assert checked_values("job_log", "entry_type") == {m.value for m in EntryType} - {EntryType.MEMBER_BRIEFING.value}
 
 
 def test_the_collection_table_matches_what_the_status_store_writes():

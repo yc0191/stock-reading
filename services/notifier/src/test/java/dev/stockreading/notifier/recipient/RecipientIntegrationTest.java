@@ -11,7 +11,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
  * 받는 사람 고르기를 실제 Postgres로 확인한다(읽기 전용 발송기 계정으로 읽는다). 급변동은 그 종목을 포트폴리오에 가진 멤버만,
- * 데일리 판은 그 판 수신을 켠 멤버, 멤버와 메일 줄이 모두 사용 중이어야 한다.
+ * 데일리 판은 이벤트가 가리킨 멤버 한 명(그 판 수신을 켰을 때), 멤버와 메일 줄이 모두 사용 중이어야 한다.
  */
 @EnabledIfEnvironmentVariable(named = "NOTIFIER_IT_DB_URL", matches = ".+")
 @EnabledIfEnvironmentVariable(named = "NOTIFIER_IT_DB_USER", matches = ".+")
@@ -108,7 +108,7 @@ class RecipientIntegrationTest {
     }
 
     @Test
-    void anEditionGoesToEnabledMembersWhoReceiveThatEditionInMailOrder() {
+    void aDailyEditionGoesOnlyToTheMemberInTheEventWhenThatMemberIsEnabledAndReceivesThatEdition() {
         long first = member("NOTI FIRST", true);
         mail(first, "first@example.com", true, true, false, true);
         long second = member("NOTI SECOND", true);
@@ -120,15 +120,40 @@ class RecipientIntegrationTest {
         long mailOff = member("NOTI MAIL OFF", true);
         mail(mailOff, "mailoff@example.com", true, true, true, false);
 
-        assertThat(addresses(repository.forEdition("morning"))).containsExactly("first@example.com", "both@example.com");
-        assertThat(addresses(repository.forEdition("post-close"))).containsExactly("second@example.com", "both@example.com");
-        assertThat(repository.forEdition("midnight")).isEmpty();
-        assertThat(repository.forEdition(null)).isEmpty();
+        assertThat(addresses(repository.forMember(first, "morning"))).containsExactly("first@example.com");
+        assertThat(repository.forMember(first, "post-close")).isEmpty();
+        assertThat(addresses(repository.forMember(second, "post-close"))).containsExactly("second@example.com");
+        assertThat(repository.forMember(second, "morning")).isEmpty();
+        assertThat(addresses(repository.forMember(both, "morning"))).containsExactly("both@example.com");
+        assertThat(addresses(repository.forMember(both, "post-close"))).containsExactly("both@example.com");
+        assertThat(repository.forMember(off, "morning")).isEmpty();
+        assertThat(repository.forMember(mailOff, "morning")).isEmpty();
+        assertThat(repository.forMember(both, "midnight")).isEmpty();
+        assertThat(repository.forMember(both, null)).isEmpty();
+        assertThat(repository.forMember(Long.MAX_VALUE, "morning")).isEmpty();
+    }
+
+    @Test
+    void aChangedReceiveSettingOrDisabledMemberIsPickedUpTheNextTimeWithoutRestart() {
+        long reader = member("NOTI READER", true);
+        mail(reader, "reader@example.com", true, true, true, true);
+        assertThat(addresses(repository.forMember(reader, "morning"))).containsExactly("reader@example.com");
+
+        writer.sql("UPDATE personal.member_mail SET receive_morning = FALSE WHERE member_id = :m").param("m", reader).update();
+        assertThat(repository.forMember(reader, "morning")).isEmpty();
+        assertThat(addresses(repository.forMember(reader, "post-close"))).containsExactly("reader@example.com");
+
+        writer.sql("UPDATE personal.member_mail SET receive_post_close = FALSE WHERE member_id = :m").param("m", reader).update();
+        assertThat(repository.forMember(reader, "post-close")).isEmpty();
+
+        writer.sql("UPDATE personal.member_mail SET receive_morning = TRUE WHERE member_id = :m").param("m", reader).update();
+        writer.sql("UPDATE personal.member SET enabled = FALSE WHERE id = :m").param("m", reader).update();
+        assertThat(repository.forMember(reader, "morning")).isEmpty();
     }
 
     @Test
     void nobodyChosenGivesAnEmptyListNotAnError() {
-        assertThat(repository.forEdition("morning")).isEmpty();
+        assertThat(repository.forMember(1L, "morning")).isEmpty();
         assertThat(repository.forMove("NOTI01")).isEmpty();
     }
 }

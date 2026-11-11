@@ -2,6 +2,7 @@ package dev.stockreading.notifier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -48,7 +49,7 @@ class DailyBriefingDryRunTest {
         @Bean
         RecipientPort recipientPort() {
             RecipientPort port = mock(RecipientPort.class);
-            when(port.forEdition(any())).thenReturn(List.of(new Recipient(1, "reader@example.com")));
+            when(port.forMember(anyLong(), any())).thenReturn(List.of(new Recipient(1, "reader@example.com")));
             return port;
         }
 
@@ -81,7 +82,7 @@ class DailyBriefingDryRunTest {
         runner.run(context -> {
             assertThat(context).hasNotFailed();
             context.getBean(DailyBriefingListener.class)
-                    .onDailyBriefing(ContractSchemas.sample("briefing.daily.generated.sample.json"));
+                    .onDailyBriefing(ContractSchemas.sample("v2", "briefing.daily.generated.sample.json"));
         });
 
         assertThat(logs.list).hasSize(1);

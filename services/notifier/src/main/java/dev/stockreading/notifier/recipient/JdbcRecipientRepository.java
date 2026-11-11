@@ -42,7 +42,7 @@ class JdbcRecipientRepository implements RecipientPort {
     }
 
     @Override
-    public List<Recipient> forEdition(String edition) {
+    public List<Recipient> forMember(long memberId, String edition) {
         // 열 이름은 고정된 두 값에서만 고르므로 SQL에 이어 붙여도 값이 섞이지 않는다.
         String column = switch (edition == null ? "" : edition) {
             case "morning" -> "receive_morning";
@@ -52,7 +52,8 @@ class JdbcRecipientRepository implements RecipientPort {
         if (column == null) {
             return List.of();
         }
-        return jdbc.sql(BASE + "AND mail." + column + " ORDER BY mail.id").query(JdbcRecipientRepository::row).list();
+        return jdbc.sql(BASE + "AND mail." + column + " AND member.id = :memberId ORDER BY mail.id")
+                .param("memberId", memberId).query(JdbcRecipientRepository::row).list();
     }
 
     private static Recipient row(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {

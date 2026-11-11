@@ -137,16 +137,16 @@ class DailyRequestListenerTest {
     }
 
     @Test
-    void eachEtfCarriesItsRelationFromTheHoldingsTableIncludingOnesWithoutADailyPrice() throws IOException {
+    void everyTrackedEtfIsListedIncludingOnesWithoutADailyPrice() throws IOException {
         when(holdings.trackedEtfs()).thenReturn(List.of("TEST01", "TEST02", "TEST03"));
         when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
                 daily("TEST01", "-1.50", AS_OF.minusMinutes(30)), daily("TEST02", "0.50", AS_OF.minusMinutes(29))));
 
         DailyPayload payload = answer(listener(), request());
 
-        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol, DailyPayload.Etf::relation,
-                DailyPayload.Etf::missingReason).containsExactly(tuple("TEST01", null, null),
-                tuple("TEST02", null, null), tuple("TEST03", null, DailyPayload.NO_DAILY_PRICE_IN_RANGE));
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol, DailyPayload.Etf::missingReason)
+                .containsExactly(tuple("TEST01", null), tuple("TEST02", null),
+                        tuple("TEST03", DailyPayload.NO_DAILY_PRICE_IN_RANGE));
     }
 
     @Test

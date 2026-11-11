@@ -110,6 +110,7 @@ services:
       PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD}
       MARKET_DB_USER: ${MARKET_DB_USER}
       NEWS_DB_USER: ${NEWS_DB_USER}
+      BRIEFING_DB_USER: ${BRIEFING_DB_USER}
       PERSONAL_OWNER_DB_USER: ${PERSONAL_OWNER_DB_USER}
       PERSONAL_OWNER_DB_PASSWORD: ${PERSONAL_OWNER_DB_PASSWORD}
       PERSONAL_WRITER_DB_USER: ${PERSONAL_WRITER_DB_USER}
@@ -129,7 +130,7 @@ services:
   personal-migrate:
     image: flyway/flyway:12.4.0
     container_name: stock-personal-migrate
-    command: ["migrate", "-placeholders.market_user=${MARKET_DB_USER}", "-placeholders.collector_user=${COLLECTOR_DB_USER}", "-placeholders.notifier_user=${NOTIFIER_DB_USER}", "-placeholders.writer_user=${PERSONAL_WRITER_DB_USER}"]
+    command: ["migrate", "-placeholders.market_user=${MARKET_DB_USER}", "-placeholders.collector_user=${COLLECTOR_DB_USER}", "-placeholders.notifier_user=${NOTIFIER_DB_USER}", "-placeholders.writer_user=${PERSONAL_WRITER_DB_USER}", "-placeholders.briefing_user=${BRIEFING_DB_USER}"]
     environment:
       FLYWAY_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
       FLYWAY_USER: ${PERSONAL_OWNER_DB_USER}

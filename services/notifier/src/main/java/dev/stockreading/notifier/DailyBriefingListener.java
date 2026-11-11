@@ -20,7 +20,7 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * briefing.daily.generated -> 판마다 이메일 한 통. 최소 한 번 처리: 발송이 성공한 뒤에만 오프셋을 커밋한다.
+ * briefing.daily.generated -> 이벤트가 가리킨 멤버에게 이메일 한 통(판은 멤버마다 따로 만들어진다). 최소 한 번 처리: 발송이 성공한 뒤에만 오프셋을 커밋한다.
  * 데일리 메일은 하루 정해진 통이라 시간당 한도로 막지도, 한도에 세지도 않는다(급변동 메일 한도와 무관).
  */
 @Component
@@ -66,11 +66,11 @@ class DailyBriefingListener {
             return;
         }
 
-        // 받는 사람은 보내기 직전에 고른다. 없으면 보내지 않는다(처리는 끝난 것으로 본다).
-        List<Recipient> targets = recipients.forEdition(daily.payload().edition());
+        // 받는 사람은 이벤트의 멤버 번호로 보내기 직전에 찾는다. 사용 중이 아니거나 그 판 수신을 껐으면 보내지 않는다(처리는 끝난 것으로 본다).
+        List<Recipient> targets = recipients.forMember(daily.payload().memberId(), daily.payload().edition());
         if (targets.isEmpty()) {
-            log.warn("no recipients for daily briefing; not emailed eventId={} edition={}", daily.eventId(),
-                    daily.payload().edition());
+            log.warn("no recipient for daily briefing; not emailed eventId={} memberId={} edition={}", daily.eventId(),
+                    daily.payload().memberId(), daily.payload().edition());
             return;
         }
         for (Recipient target : targets) {
@@ -91,7 +91,7 @@ class DailyBriefingListener {
     private static boolean hasRequiredFields(DailyBriefingEnvelope daily) {
         DailyBriefingEnvelope.Payload payload = daily.payload();
         return daily.eventId() != null && payload != null
-                && payload.edition() != null && payload.rangeEnd() != null
+                && payload.memberId() != null && payload.edition() != null && payload.rangeEnd() != null
                 && payload.text() != null && !payload.text().isBlank();
     }
 }

@@ -56,6 +56,7 @@ class EntryType(str, Enum):
     STEP_FAILED = "step-failed"                # 단계가 끝내 실패하거나 포기됨
     MOVES_GROUPED = "moves-grouped"            # 같은 종목의 변동 여럿을 모아 작업 하나로 만듦(모인 변동 전부)
     ETF_OUTLOOK = "etf-outlook"                # 아침 판이 쓴 ETF별 방향 예상(data.outlooks). 마감 후 판이 다시 읽는다
+    MEMBER_BRIEFING = "member-briefing"        # 이 작업의 판을 멤버 한 명 몫으로 발행함(data.memberId, 결과 이벤트 ID)
 
 
 # 급변동 단계: 근거 조회의 어느 요청인지, 또는 LLM 작성

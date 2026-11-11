@@ -478,6 +478,8 @@ run_db_tests() {
       # shellcheck disable=SC2086
       (
         export BRIEFING_IT_DB_URL="$PG_URL" BRIEFING_IT_DB_USER="$B_USER" BRIEFING_IT_DB_PASSWORD="$B_PW"
+        # 멤버 읽기 테스트는 personal 쓰기 계정과 market 주인 계정으로 값을 넣는다(브리핑 계정은 읽기만 한다).
+        export WRITER_IT_DB_USER="$PW_USER" WRITER_IT_DB_PASSWORD="$PW_PW" MARKET_IT_DB_USER="$M_USER" MARKET_IT_DB_PASSWORD="$M_PW"
         "$PY" -m pytest $briefing_files --junitxml="$TMP/results/db/py/briefing.xml"
       ) || rc=1
     else

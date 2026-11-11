@@ -1,5 +1,5 @@
 """Kafka 실행부: market.move -> 시세 이력·배경 자료·기사·공시 조회 -> briefing.generated,
-schedule.tick(데일리 판) -> 데일리 자료·공시 조회 -> briefing.daily.generated. 실행: python -m briefing.main
+schedule.tick(데일리 판) -> 데일리 자료·공시 조회 -> 멤버마다 briefing.daily.generated. 실행: python -m briefing.main
 
 Kafka를 import하는 곳은 이 파일뿐이다. 근거 조회(jobs), 리포트(report), 작업 기록(job_log_store)은
 메시지와 시각을 인자로 받기만 하고, 여기서 받은 메시지를 넘기고 그쪽이 낸 이벤트를 발행한다.
@@ -21,6 +21,7 @@ from confluent_kafka.admin import AdminClient, NewTopic
 from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DEFAULT_SETTINGS, CoreSettings, DailySettings
 from briefing.daily_jobs import DailyCore
+from briefing.daily_members import MemberPort
 from briefing.daily_report import DailyLlmWriter, build_daily_writer
 from briefing.events import (
     ARTICLES_REQUESTED_TOPIC,
@@ -38,6 +39,7 @@ from briefing.job_log import JobLogPort
 from briefing.job_log_store import PostgresJobLog, psycopg_connector
 from briefing.jobs import BriefingCore
 from briefing.llm import AnthropicClient
+from briefing.member_store import PostgresMemberStore
 from briefing.move_group import MoveGrouper
 from briefing.report import ReportStage, ReportWriter, build_report_writer
 from briefing.research import QueryWriter, build_query_writer
@@ -161,7 +163,8 @@ class BriefingRunner:
                  query_writer: QueryWriter | None = None,
                  daily_writer: DailyLlmWriter | None = None,
                  daily_settings: DailySettings = DEFAULT_DAILY_SETTINGS,
-                 status_store: StatusStore | None = None) -> None:
+                 status_store: StatusStore | None = None,
+                 member_store: MemberPort | None = None) -> None:
         self.bootstrap = bootstrap
         self.writer = writer
         self.job_log = job_log
@@ -173,6 +176,7 @@ class BriefingRunner:
         self.daily_writer = daily_writer
         self.daily_settings = daily_settings
         self.status_store = status_store
+        self.member_store = member_store
         self.daily: DailyCore | None = None
         self.tick_consumers: dict[str, Consumer] = {}
         self.query_writer = query_writer
@@ -237,7 +241,7 @@ class BriefingRunner:
         # 같은 종목의 급변동은 모아서 작업 하나로 넘긴다.
         self.grouper = MoveGrouper(self.core.on_move, self.job_log, self.settings)
         self.daily = DailyCore(publisher, self.daily_writer, self.job_log, self.daily_settings,
-                               sentences=self.sentences, status=self.status_store)
+                               sentences=self.sentences, status=self.status_store, members=self.member_store)
         for edition, group in TICK_CONSUMER_GROUPS.items():
             consumer = self._consumer_factory({
                 "bootstrap.servers": self.bootstrap,
@@ -427,7 +431,7 @@ def build_runner(env: Mapping[str, str]) -> BriefingRunner:
     store = PostgresJobLog(connect)
     return BriefingRunner(bootstrap, build_report_writer(env), store, daily_writer=build_daily_writer(env),
                           query_writer=build_query_writer(env, AnthropicClient),
-                          status_store=PostgresStatusStore(connect))
+                          status_store=PostgresStatusStore(connect), member_store=PostgresMemberStore(connect))
 
 
 def main() -> None:

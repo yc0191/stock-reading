@@ -45,7 +45,6 @@ class DailyPublisherTest {
         verify(kafka).send(eq(Topics.MARKET_DAILY_RESPONDED), eq(JOB_ID), message.capture());
         assertThat(mapper.readTree(message.getValue()).get("schemaVersion").asInt()).isEqualTo(2);
         assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", message.getValue())).isEmpty();
-        assertThat(mapper.readTree(message.getValue()).get("payload").get("etfs").get(0).has("relation"))
-                .isFalse();
+        assertThat(message.getValue()).doesNotContain("\"relation\"");
     }
 }

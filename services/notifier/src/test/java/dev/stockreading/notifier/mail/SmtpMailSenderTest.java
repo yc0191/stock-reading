@@ -130,7 +130,7 @@ class SmtpMailSenderTest {
     private static dev.stockreading.notifier.event.DailyBriefingEnvelope daily(
             java.util.List<dev.stockreading.notifier.event.DailyBriefingEnvelope.Image> images) {
         var payload = new dev.stockreading.notifier.event.DailyBriefingEnvelope.Payload(
-                "morning", "2026-10-19T08:45:00+09:00", "2026-10-20T08:45:00+09:00", "글자판", java.util.List.of(),
+                1L, "morning", "2026-10-19T08:45:00+09:00", "2026-10-20T08:45:00+09:00", "글자판", java.util.List.of(),
                 "llm", "<html><body><p>HTML</p></body></html>", images);
         return new dev.stockreading.notifier.event.DailyBriefingEnvelope(
                 "5c2e9a14-7b3d-4f61-a8e0-3d9b6c1f2a40", "briefing.daily.generated", 1,

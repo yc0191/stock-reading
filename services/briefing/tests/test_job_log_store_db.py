@@ -61,14 +61,14 @@ def entry(job_id, entry_type=EntryType.RESENT, data=None, **changes):
     return JobLogEntry(**values)
 
 
-def test_flyway_created_the_briefing_tables_and_recorded_version_1(store, connect):
+def test_flyway_created_the_briefing_tables_and_recorded_versions_1_and_2(store, connect):
     rows = fetch(connect, "SELECT table_name FROM information_schema.tables WHERE table_schema = 'briefing' "
                           "AND table_name IN ('job_run', 'job_log', 'collection_completed', 'failed_jobs') "
                           "ORDER BY table_name")
     applied = fetch(connect, "SELECT version, success FROM briefing.flyway_schema_history WHERE version IS NOT NULL")
 
     assert rows == [("collection_completed",), ("job_log",), ("job_run",)]
-    assert applied == [("1", True)]
+    assert applied == [("1", True), ("2", True)]
 
 
 def test_job_run_line_is_made_running_and_updated_when_the_job_ends(store, connect):
@@ -215,6 +215,18 @@ def test_a_moves_grouped_line_is_accepted_and_read_back_with_every_grouped_move(
     ((entry_type, attempts, data),) = fetch(
         connect, f"SELECT entry_type, attempts, data::text FROM {LOG_TABLE} WHERE job_id = 'it-group-1'")
     assert (entry_type, attempts) == ("moves-grouped", 2) and json.loads(data) == {"moves": moves}
+
+
+def test_a_member_briefing_line_says_which_member_the_board_was_for(store, connect):
+    # V2가 기록 종류에 member-briefing을 더했다. 멤버 번호와 결과 이벤트 ID가 JSON 칸에 그대로 남는다.
+    start(store, "it-member-1", kind=JobKind.POST_CLOSE)
+    data = {"memberId": 41, "resultEventId": "it-event-41", "etfCount": 2, "missingItems": []}
+    assert store.record(entry("it-member-1", EntryType.MEMBER_BRIEFING, stage="compose", reason="member_published",
+                              error_type=None, attempts=0, data=data)) is True
+
+    ((entry_type, stored),) = fetch(
+        connect, f"SELECT entry_type, data::text FROM {LOG_TABLE} WHERE job_id = 'it-member-1'")
+    assert entry_type == "member-briefing" and json.loads(stored) == data
 
 
 # ---- 마감 후 판이 읽는 그날 아침 예상과 급변동 ----

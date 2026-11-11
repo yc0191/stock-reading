@@ -22,6 +22,7 @@ from briefing.daily_report import (
     GENERATED_BY_RULE,
     ITEM_ETF_ARTICLES,
     ITEM_ETFS,
+    ITEM_ETFS_SPLIT_TITLE,
     ITEM_EXCHANGE,
     ITEM_FILINGS,
     ITEM_KR_REVIEW,
@@ -190,7 +191,7 @@ def core():
 def published(requests):
     events = requests.topic("briefing.daily.generated")
     for event in events:
-        assert validate("briefing.daily.generated.v1.schema.json", event.value) == []
+        assert validate("briefing.daily.generated.v2.schema.json", event.value) == []
     return events
 
 
@@ -306,7 +307,8 @@ def test_post_close_edition_requests_the_filings_of_the_us_stocks_in_its_range(c
     [event] = published(requests)
     payload = event.value["payload"]
     assert payload["edition"] == "post-close" and payload["missingItems"] == []
-    assert ITEM_ETFS in payload["text"] and f"{ITEM_KR_TODAY}: 코스피 " in payload["text"]
+    # 기본 멤버는 이 ETF를 보유하므로 절 제목이 보유·관심으로 나뉜 제목이다.
+    assert ITEM_ETFS_SPLIT_TITLE in payload["text"] and f"{ITEM_KR_TODAY}: 코스피 " in payload["text"]
     assert "TEST01 +0.50%" in payload["text"]
     assert ITEM_US_INDEX not in payload["text"]
 
@@ -447,7 +449,8 @@ def test_llm_writes_the_summary_and_cites_only_given_refs(core):
     assert "요약:" in payload["text"] and "[근거 1, 2]" in payload["text"]
     assert "투자 조언" in payload["text"]
     assert failures.records == []
-    assert [e.entry_type for e in details.records] == [EntryType.REPORT_WRITTEN, EntryType.ETF_OUTLOOK]
+    assert [e.entry_type for e in details.records] == [EntryType.REPORT_WRITTEN, EntryType.ETF_OUTLOOK,
+                                                       EntryType.MEMBER_BRIEFING]
     [result] = details.results()
     assert (result.status, result.generated_by, result.failure_reason) == (RunStatus.SUCCEEDED, GeneratedBy.LLM, None)
     _, user, schema = llm.calls[0]
@@ -591,7 +594,8 @@ def test_every_edition_leaves_one_result_line_with_body_cited_evidence_missing_i
     # 작업 한 줄(job_run)은 morning으로 시작해 본문·작성 방식·메일의 브리핑 ID와 함께 끝난다.
     [run] = details.starts
     assert (run.job_kind, result.job_id, result.status) == (JobKind.MORNING, TICK_ID, RunStatus.SUCCEEDED)
-    assert result.final_text == event.value["payload"]["text"]
+    # 작업 기록의 본문은 멤버를 가르지 않은 판 전체 글이라 멤버 메일의 [보유] 묶음 표시만 다르다.
+    assert result.final_text == event.value["payload"]["text"].replace("  [보유]\n", "")
     assert result.generated_by == GeneratedBy.LLM and result.result_event_id == event.value["eventId"]
     assert (result.weak_count, result.research_count, result.failure_reason) == (0, 0, None)
     # 빠진 항목이 없으면 missing-items 줄도 없고, 인용한 근거는 최종 본문의 근거 목록에 있다.

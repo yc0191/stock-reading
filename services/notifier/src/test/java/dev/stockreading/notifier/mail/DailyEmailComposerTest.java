@@ -42,7 +42,7 @@ class DailyEmailComposerTest {
 
     private static DailyBriefingEnvelope daily(String edition, String rangeEnd, List<String> missingItems) {
         Payload payload = new Payload(
-                edition, "2026-10-19T08:45:00+09:00", rangeEnd,
+                1L, edition, "2026-10-19T08:45:00+09:00", rangeEnd,
                 "[아침 판] 10-20\n\n해외 시장 요약: 샘플 지수 +0.40%\n밤사이 미국 공시: 자료 없음",
                 missingItems, "llm", null, null);
         return new DailyBriefingEnvelope(
@@ -122,7 +122,7 @@ class DailyEmailComposerTest {
     @Test
     void committedSampleCanBeComposed() throws IOException {
         DailyBriefingEnvelope sample = JsonMapper.builder().build()
-                .readValue(ContractSchemas.sample("briefing.daily.generated.sample.json"), DailyBriefingEnvelope.class);
+                .readValue(ContractSchemas.sample("v2", "briefing.daily.generated.sample.json"), DailyBriefingEnvelope.class);
 
         EmailMessage email = composer("[시뮬레이션]").compose(sample);
 
@@ -133,7 +133,7 @@ class DailyEmailComposerTest {
     private static DailyBriefingEnvelope withHtml(String html, List<Image> images) {
         DailyBriefingEnvelope base = daily("morning", "2026-10-20T08:45:00+09:00", List.of("us-filings"));
         Payload p = base.payload();
-        Payload payload = new Payload(p.edition(), p.rangeStart(), p.rangeEnd(), p.text(), p.missingItems(),
+        Payload payload = new Payload(p.memberId(), p.edition(), p.rangeStart(), p.rangeEnd(), p.text(), p.missingItems(),
                 p.generatedBy(), html, images);
         return new DailyBriefingEnvelope(base.eventId(), base.eventType(), base.schemaVersion(), base.occurredAt(),
                 base.producedAt(), base.correlationId(), payload);
@@ -180,7 +180,7 @@ class DailyEmailComposerTest {
     void footerValuesAreHtmlEscaped() {
         DailyBriefingEnvelope base = withHtml("<p>x</p>", null);
         Payload p = base.payload();
-        Payload payload = new Payload(p.edition(), p.rangeStart(), p.rangeEnd(), p.text(),
+        Payload payload = new Payload(p.memberId(), p.edition(), p.rangeStart(), p.rangeEnd(), p.text(),
                 List.of("<script>alert(1)</script>"), "a&b", p.html(), null);
         DailyBriefingEnvelope hostile = new DailyBriefingEnvelope(base.eventId(), base.eventType(), 1,
                 base.occurredAt(), base.producedAt(), base.correlationId(), payload);
@@ -255,7 +255,7 @@ class DailyEmailComposerTest {
     @Test
     void committedSampleWithHtmlComposesIntoAMultipartMessage() throws IOException {
         DailyBriefingEnvelope sample = JsonMapper.builder().build()
-                .readValue(ContractSchemas.sample("briefing.daily.generated.sample.json"), DailyBriefingEnvelope.class);
+                .readValue(ContractSchemas.sample("v2", "briefing.daily.generated.sample.json"), DailyBriefingEnvelope.class);
 
         EmailMessage email = composer("").compose(sample);
 

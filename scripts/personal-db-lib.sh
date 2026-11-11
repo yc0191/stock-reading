@@ -1,5 +1,5 @@
 # test-all.sh 와 manual-daily-briefing.sh 가 함께 쓰는 DB 준비 함수. 직접 실행하지 않고 source 한다.
-# 쓰는 변수: ROOT, PG_CONTAINER, DB_NAME, FLYWAY_IMAGE, M_USER, M_PW(시세처리기), N_USER(뉴스), PO_*(personal 소유), PW_*(쓰기), PC_*(수집기), PN_*(발송기).
+# 쓰는 변수: ROOT, PG_CONTAINER, DB_NAME, FLYWAY_IMAGE, M_USER, M_PW(시세처리기), N_USER(뉴스), B_USER(브리핑), PO_*(personal 소유), PW_*(쓰기), PC_*(수집기), PN_*(발송기).
 # 순서: market 표(migrate_market) → personal 계정·권한(init_personal) → personal 표(migrate_personal).
 # personal 표가 market.etf·market.stock 을 가리키는 외래 키를 가지므로 이 순서를 지킨다.
 
@@ -22,10 +22,10 @@ migrate_market() {
 init_personal() {
   PERSONAL_OWNER_DB_USER="$PO_USER" PERSONAL_OWNER_DB_PASSWORD="$PO_PW" PERSONAL_WRITER_DB_USER="$PW_USER" \
   PERSONAL_WRITER_DB_PASSWORD="$PW_PW" COLLECTOR_DB_USER="$PC_USER" COLLECTOR_DB_PASSWORD="$PC_PW" \
-  NOTIFIER_DB_USER="$PN_USER" NOTIFIER_DB_PASSWORD="$PN_PW" MARKET_DB_USER="$M_USER" NEWS_DB_USER="$N_USER" \
+  NOTIFIER_DB_USER="$PN_USER" NOTIFIER_DB_PASSWORD="$PN_PW" MARKET_DB_USER="$M_USER" NEWS_DB_USER="$N_USER" BRIEFING_DB_USER="$B_USER" \
     docker exec -i -e PERSONAL_OWNER_DB_USER -e PERSONAL_OWNER_DB_PASSWORD -e PERSONAL_WRITER_DB_USER \
       -e PERSONAL_WRITER_DB_PASSWORD -e COLLECTOR_DB_USER -e COLLECTOR_DB_PASSWORD -e NOTIFIER_DB_USER \
-      -e NOTIFIER_DB_PASSWORD -e MARKET_DB_USER -e NEWS_DB_USER "$PG_CONTAINER" \
+      -e NOTIFIER_DB_PASSWORD -e MARKET_DB_USER -e NEWS_DB_USER -e BRIEFING_DB_USER "$PG_CONTAINER" \
       sh -c 'psql -qAtX -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$1" -f -' sh "$DB_NAME" < "$ROOT/infra/db/personal/init.sql" >/dev/null
 }
 
@@ -37,7 +37,8 @@ migrate_personal() {
       -e FLYWAY_SCHEMAS=personal -e FLYWAY_DEFAULT_SCHEMA=personal -e FLYWAY_CREATE_SCHEMAS=false \
       -e FLYWAY_LOCATIONS=filesystem:/flyway/sql "$FLYWAY_IMAGE" migrate \
       "-placeholders.market_user=$M_USER" "-placeholders.collector_user=$PC_USER" \
-      "-placeholders.notifier_user=$PN_USER" "-placeholders.writer_user=$PW_USER" 2>&1); then
+      "-placeholders.notifier_user=$PN_USER" "-placeholders.writer_user=$PW_USER" \
+      "-placeholders.briefing_user=$B_USER" 2>&1); then
     printf '%s\n' "$out" | tail -15
     return 1
   fi

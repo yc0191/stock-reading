@@ -3,6 +3,7 @@ package dev.stockreading.notifier;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -41,9 +42,9 @@ class DailyBriefingListenerTest {
     void setUp() throws IOException {
         mailSender = mock(MailSenderPort.class);
         recipients = mock(RecipientPort.class);
-        when(recipients.forEdition(any())).thenReturn(List.of(new Recipient(1, "to@example.com")));
+        when(recipients.forMember(eq(1L), any())).thenReturn(List.of(new Recipient(1, "to@example.com")));
         when(recipients.forMove(any())).thenReturn(List.of(new Recipient(1, "to@example.com")));
-        sample = ContractSchemas.sample("briefing.daily.generated.sample.json");
+        sample = ContractSchemas.sample("v2", "briefing.daily.generated.sample.json");
         properties = new NotifierProperties(false, "from@example.com", "[시뮬레이션]");
     }
 
@@ -104,7 +105,7 @@ class DailyBriefingListenerTest {
 
     @Test
     void aRecipientLookupFailurePropagatesSoTheKafkaErrorHandlerRetries() {
-        when(recipients.forEdition(any())).thenThrow(new IllegalStateException("db down"));
+        when(recipients.forMember(anyLong(), any())).thenThrow(new IllegalStateException("db down"));
 
         assertThatThrownBy(() -> listener().onDailyBriefing(sample)).isInstanceOf(IllegalStateException.class);
 
@@ -140,23 +141,40 @@ class DailyBriefingListenerTest {
     }
 
     @Test
-    void theRecipientsAreChosenByTheEditionAndEachGetsAnEmail() {
-        when(recipients.forEdition("post-close")).thenReturn(
-                List.of(new Recipient(1, "to@example.com"), new Recipient(2, "other@example.com")));
-
+    void theRecipientIsLookedUpByTheMemberInTheEventAndTheEdition() {
         listener().onDailyBriefing(sample);
 
-        verify(recipients).forEdition("post-close");
+        verify(recipients).forMember(1L, "post-close");
         verify(mailSender).send(eq("to@example.com"), any());
-        verify(mailSender).send(eq("other@example.com"), any());
     }
 
     @Test
-    void withNoRecipientsNothingIsSentAndTheMessageIsConsumed() {
-        when(recipients.forEdition(any())).thenReturn(List.of());
+    void eachMembersEventGoesOnlyToThatMembersAddress() {
+        when(recipients.forMember(eq(2L), any())).thenReturn(List.of(new Recipient(2, "second@example.com")));
+        DailyBriefingListener listener = listener();
+
+        listener.onDailyBriefing(sample);
+        listener.onDailyBriefing(withEventId("33333333-3333-4333-8333-333333333333").replace("\"memberId\": 1", "\"memberId\": 2"));
+
+        verify(mailSender, times(1)).send(eq("to@example.com"), any());
+        verify(mailSender, times(1)).send(eq("second@example.com"), any());
+        verify(mailSender, times(2)).send(any(), any());
+    }
+
+    @Test
+    void aMemberWhoIsDisabledOrHasTheEditionOffGetsNothingAndTheMessageIsConsumed() {
+        when(recipients.forMember(anyLong(), any())).thenReturn(List.of());
 
         listener().onDailyBriefing(sample);
 
+        verify(mailSender, never()).send(any(), any());
+    }
+
+    @Test
+    void anEventWithoutAMemberIdIsSkippedBecauseNoOneIsAddressed() throws IOException {
+        listener().onDailyBriefing(ContractSchemas.sample("v1", "briefing.daily.generated.sample.json"));
+
+        verify(recipients, never()).forMember(anyLong(), any());
         verify(mailSender, never()).send(any(), any());
     }
 }

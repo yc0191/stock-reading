@@ -190,7 +190,7 @@ def tick_events(now: datetime) -> list[tuple[str, str, dict]]:
 def schema_errors(topic: str, event: dict) -> list[str]:
     from jsonschema import Draft202012Validator, FormatChecker
 
-    schema = json.loads((CONTRACTS / f"{topic}.v1.schema.json").read_text(encoding="utf-8"))
+    schema = json.loads((CONTRACTS / f"{topic}.v{event.get('schemaVersion', 1)}.schema.json").read_text(encoding="utf-8"))
     return [e.message for e in Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(event)]
 
 
