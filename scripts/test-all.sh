@@ -19,8 +19,10 @@
 #                         엉뚱한 계정을 읽지 않도록 기본 자격증명 방식으로 넘어가지 않는다
 #   --live 전용: BROKER_BASE_URL, BROKER_APP_KEY, BROKER_APP_SECRET, TEST_ALL_LIVE_SYMBOL(6자리),
 #               ANTHROPIC_API_KEY, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, NOTIFIER_SENDER, NOTIFIER_RECIPIENT,
-#               NEWS_SEARCH_BASE_URL, NEWS_SEARCH_CLIENT_ID, NEWS_SEARCH_CLIENT_SECRET, NEWS_SEARCH_ID_HEADER, NEWS_SEARCH_SECRET_HEADER
+#               NEWS_SEARCH_CLIENT_ID, NEWS_SEARCH_CLIENT_SECRET
 #               (선택: SMTP_PORT, BRIEFING_LLM_MODEL)
+#               (비밀이 아닌 뉴스 검색 설정 NEWS_SEARCH_BASE_URL, NEWS_SEARCH_ID_HEADER, NEWS_SEARCH_SECRET_HEADER 는 필수이며
+#                실행 환경변수나 .env 에서 읽는다. 하나라도 비면 시세를 부르기 전에 실패로 끝낸다)
 #               (BRIEFING_LLM_MODEL 을 뺀 위 키는) 실행할 때마다 Parameter Store 에서 새로 읽어 임시 폴더에만 두고,
 #               실행 환경변수와 .env 의 같은 키는 쓰지 않는다. 하나라도 비면 시세를 부르기 전에 실패로 끝낸다.
 #               메일 발송 스위치는 이 스크립트가 띄운 테스트용 notifier 프로세스에만 켜고(.env 는 바꾸지 않음),
@@ -480,13 +482,22 @@ live_value() {
 }
 
 # 브리핑·메일 단계까지 필요한 키. 시세를 부르기 전에 모두 확인해 메일 설정이 빠졌는데 시세만 부르는 일이 없게 한다.
-LIVE_KEYS="BROKER_BASE_URL BROKER_APP_KEY BROKER_APP_SECRET TEST_ALL_LIVE_SYMBOL ANTHROPIC_API_KEY SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER NOTIFIER_RECIPIENT NEWS_SEARCH_BASE_URL NEWS_SEARCH_CLIENT_ID NEWS_SEARCH_CLIENT_SECRET NEWS_SEARCH_ID_HEADER NEWS_SEARCH_SECRET_HEADER"
+LIVE_KEYS="BROKER_BASE_URL BROKER_APP_KEY BROKER_APP_SECRET TEST_ALL_LIVE_SYMBOL ANTHROPIC_API_KEY SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER NOTIFIER_RECIPIENT NEWS_SEARCH_CLIENT_ID NEWS_SEARCH_CLIENT_SECRET"
 
 missing_live_keys() {
   local key missing=""
   for key in $LIVE_KEYS; do
     [ -n "$(live_value "$key")" ] || missing="$missing${missing:+·}$key"
   done
+  printf '%s' "$missing"
+}
+
+# 비밀이 아닌 뉴스 검색 설정(제공자 주소, 인증 헤더 이름)은 Parameter Store 에 두지 않으므로 실행 환경변수나 .env 에서 읽는다.
+missing_live_settings() {
+  local missing=""
+  [ -n "$(env_or_dotenv NEWS_SEARCH_BASE_URL)" ] || missing="$missing${missing:+·}NEWS_SEARCH_BASE_URL"
+  [ -n "$(env_or_dotenv NEWS_SEARCH_ID_HEADER)" ] || missing="$missing${missing:+·}NEWS_SEARCH_ID_HEADER"
+  [ -n "$(env_or_dotenv NEWS_SEARCH_SECRET_HEADER)" ] || missing="$missing${missing:+·}NEWS_SEARCH_SECRET_HEADER"
   printf '%s' "$missing"
 }
 
@@ -503,6 +514,8 @@ run_live() {
   if ! fetch_live_params; then LIVE_FAIL_REASON="Parameter Store 읽기 실패($(keep_loader_log) 참고, 키 이름만 있음)"; return 1; fi
   missing=$(missing_live_keys)
   if [ -n "$missing" ]; then LIVE_FAIL_REASON="키 없음($missing)"; return 1; fi
+  missing=$(missing_live_settings)
+  if [ -n "$missing" ]; then LIVE_FAIL_REASON="설정 없음($missing, 실행 환경변수나 .env)"; return 1; fi
   base_url=$(live_value BROKER_BASE_URL)
   # 다른 파라미터 값(예: 메일 주소)이 잘못 들어가면 요청 주소를 만들다 조용히 실패하므로 시세를 부르기 전에 막는다.
   if ! [[ "$base_url" =~ ^https://[^/[:space:]]+$ ]]; then LIVE_FAIL_REASON="BROKER_BASE_URL 이 https://<호스트>[:포트] 형식이 아님"; return 1; fi
@@ -573,9 +586,9 @@ run_live() {
     export COLLECTOR_MARKET_DATA_SOURCE=broker BROKER_BASE_URL="$base_url" BROKER_APP_KEY="$app_key" BROKER_APP_SECRET="$app_secret"
     export COLLECTOR_SYMBOLS="$symbol"
     # 브리핑이 근거 약한 문장을 재검색하면 이 수집기가 실제 뉴스 검색으로 답한다. 키가 없으면 다 모으지 못함으로 끝나 브리핑 확인이 실패한다.
-    export NEWS_SEARCH_BASE_URL="$(live_value NEWS_SEARCH_BASE_URL)" NEWS_SEARCH_CLIENT_ID="$(live_value NEWS_SEARCH_CLIENT_ID)"
-    export NEWS_SEARCH_CLIENT_SECRET="$(live_value NEWS_SEARCH_CLIENT_SECRET)" NEWS_SEARCH_ID_HEADER="$(live_value NEWS_SEARCH_ID_HEADER)"
-    export NEWS_SEARCH_SECRET_HEADER="$(live_value NEWS_SEARCH_SECRET_HEADER)"
+    export NEWS_SEARCH_CLIENT_ID="$(live_value NEWS_SEARCH_CLIENT_ID)" NEWS_SEARCH_CLIENT_SECRET="$(live_value NEWS_SEARCH_CLIENT_SECRET)"
+    export NEWS_SEARCH_BASE_URL="$(env_or_dotenv NEWS_SEARCH_BASE_URL)" NEWS_SEARCH_ID_HEADER="$(env_or_dotenv NEWS_SEARCH_ID_HEADER)"
+    export NEWS_SEARCH_SECRET_HEADER="$(env_or_dotenv NEWS_SEARCH_SECRET_HEADER)"
     # 타이머를 모두 꺼서 시세 호출은 아래 수동 실행 명령 1건뿐이게 한다.
     export COLLECTOR_SCHEDULE_ENABLED=false COLLECTOR_PRE_OPEN_ENABLED=false COLLECTOR_INSIGHT_SCHEDULE_ENABLED=false
     export COLLECTOR_INTRADAY_ENABLED=false COLLECTOR_MEMBERS_ENABLED=false COLLECTOR_DAILY_BRIEFING_ENABLED=false

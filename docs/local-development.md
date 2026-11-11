@@ -484,9 +484,9 @@ TEST_ALL_AWS_PROFILE=<AWS 프로필> scripts/test-all.sh --live
 | `BROKER_APP_KEY`, `BROKER_APP_SECRET` | `/stock-reading/dev/collector/` 아래의 시세 앱키·시크릿 |
 | `ANTHROPIC_API_KEY` | `/stock-reading/dev/briefing/anthropic-api-key` |
 | `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `NOTIFIER_SENDER`, `NOTIFIER_RECIPIENT` (선택 `SMTP_PORT`) | `/stock-reading/dev/notifier/` 아래의 메일 설정 |
-| `NEWS_SEARCH_BASE_URL`, `NEWS_SEARCH_CLIENT_ID`, `NEWS_SEARCH_CLIENT_SECRET`, `NEWS_SEARCH_ID_HEADER`, `NEWS_SEARCH_SECRET_HEADER` | `/stock-reading/dev/collector/` 아래의 뉴스 검색 주소·키·헤더 이름. 테스트용 수집기에만 넘깁니다 |
+| `NEWS_SEARCH_CLIENT_ID`, `NEWS_SEARCH_CLIENT_SECRET` | `/stock-reading/dev/collector/` 아래의 뉴스 검색 키. 테스트용 수집기에만 넘깁니다 |
 
-`BRIEFING_LLM_MODEL`(선택)만은 실행 환경변수나 `.env`에서 읽습니다.
+`BRIEFING_LLM_MODEL`(선택)과 비밀이 아닌 뉴스 검색 설정 `NEWS_SEARCH_BASE_URL`, `NEWS_SEARCH_ID_HEADER`, `NEWS_SEARCH_SECRET_HEADER`(필수)는 실행 환경변수나 `.env`에서 읽습니다. 필수 설정이 비면 시세를 부르기 전에 실패로 끝납니다.
 
 ## 실행 기록 (테스트 기록)
 

@@ -427,14 +427,18 @@ def test_script_checks_every_live_key_before_calling_anything():
     keys = text.split('LIVE_KEYS="', 1)[1].split('"', 1)[0].split()
     assert {"BROKER_APP_KEY", "TEST_ALL_LIVE_SYMBOL", "ANTHROPIC_API_KEY", "SMTP_HOST", "NOTIFIER_RECIPIENT"} <= set(keys)
     # 브리핑 재검색에 수집기가 실제 뉴스 검색으로 답하도록 뉴스 검색 키도 미리 확인하고 수집기에만 넘긴다.
-    news = {"NEWS_SEARCH_BASE_URL", "NEWS_SEARCH_CLIENT_ID", "NEWS_SEARCH_CLIENT_SECRET", "NEWS_SEARCH_ID_HEADER",
-            "NEWS_SEARCH_SECRET_HEADER"}
-    assert news <= set(keys)
+    # 비밀값(ID·시크릿)은 Parameter Store, 비밀이 아닌 주소·헤더 이름은 실행 환경변수나 .env 에서 읽어 둘 다 미리 확인한다.
+    secrets = {"NEWS_SEARCH_CLIENT_ID", "NEWS_SEARCH_CLIENT_SECRET"}
+    settings = {"NEWS_SEARCH_BASE_URL", "NEWS_SEARCH_ID_HEADER", "NEWS_SEARCH_SECRET_HEADER"}
+    check = text.split("missing_live_settings() {", 1)[1].split("\n}\n", 1)[0]
+    assert secrets <= set(keys) and not settings & set(keys)
+    assert all(f"$(env_or_dotenv {key})" in check for key in settings)
     collector = text.split('echo "collector 기동', 1)[1].split("COLLECTOR_PID=$!", 1)[0]
-    assert all(f'{key}="$(live_value {key})"' in collector for key in news)
+    assert all(f'{key}="$(live_value {key})"' in collector for key in secrets)
+    assert all(f'{key}="$(env_or_dotenv {key})"' in collector for key in settings)
     # 키 확인이 bootJar·Kafka 기동보다 앞에 있어야 한다.
     body = text.split("run_live() {", 1)[1]
-    assert body.index("fetch_live_params") < body.index("missing_live_keys") < body.index("bootJar") < body.index("docker run")
+    assert body.index("fetch_live_params") < body.index("missing_live_keys") < body.index("missing_live_settings") < body.index("bootJar") < body.index("docker run")
 
 
 def _live_functions(text: str) -> str:
