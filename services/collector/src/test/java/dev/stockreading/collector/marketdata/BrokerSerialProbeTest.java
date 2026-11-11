@@ -67,7 +67,7 @@ class BrokerSerialProbeTest {
                             Integer.parseInt(env("BROKER_MAX_CALLS_PER_SECOND", "0")));
                     var client = new BrokerClient(broker, mapper, Clock.systemDefaultZone());
                     CallRateLimit limiter = CallRateLimiter.perSecond(broker.maxCallsPerSecond());
-                    var marketData = new BrokerMarketData(client, new CollectorProperties(symbols, 1_000, 0), broker,
+                    var marketData = new BrokerMarketData(client, new CollectorProperties(symbols, 1_000), broker,
                             limiter, priceCheck);
 
                     SerialProbe.Result result = new SerialProbe(client, marketData, limiter, priceCheck, settings)

@@ -14,9 +14,7 @@ import java.io.IOException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
-import java.util.Arrays;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
 import org.junit.jupiter.api.AfterEach;
@@ -24,7 +22,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
-import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 
 import dev.stockreading.collector.CollectorProperties;
@@ -43,7 +40,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
-class InsightTickListenerTest {
+class InsightPublisherTest {
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-10-20T07:30:01Z"), ZoneId.of("Asia/Seoul"));
     private static final String SCHEMA = "market.insight.v1.schema.json";
@@ -56,7 +53,7 @@ class InsightTickListenerTest {
     private KafkaTemplate<String, String> kafka;
     private ListAppender<ILoggingEvent> logs;
     private final ObjectMapper mapper = JsonMapper.builder().build();
-    private InsightTickListener listener;
+    private InsightPublisher publisher;
 
     @SuppressWarnings("unchecked")
     @BeforeEach
@@ -74,7 +71,7 @@ class InsightTickListenerTest {
         when(holdings.allTickers()).thenReturn(List.of());
         exchanges = mock(ExchangePort.class);
         when(exchanges.exchanges(anyString())).thenReturn(List.of("Nasdaq"));
-        listener = listener(List.of("TEST01", "TEST02"), List.of("C", "S"));
+        publisher = publisher(List.of("TEST01", "TEST02"), List.of("C", "S"));
         logs = new ListAppender<>();
         logs.start();
         ((Logger) LoggerFactory.getLogger(InsightPublisher.class)).addAppender(logs);
@@ -85,21 +82,20 @@ class InsightTickListenerTest {
         ((Logger) LoggerFactory.getLogger(InsightPublisher.class)).detachAppender(logs);
     }
 
-    private InsightTickListener listener(List<String> symbols, List<String> continents) {
-        return listener(symbols, continents, 100);
+    private InsightPublisher publisher(List<String> symbols, List<String> continents) {
+        return publisher(symbols, continents, 100);
     }
 
-    private InsightTickListener listener(List<String> symbols, List<String> continents, int overseasMaxTickers) {
+    private InsightPublisher publisher(List<String> symbols, List<String> continents, int overseasMaxTickers) {
         var properties = new InsightProperties(new InsightProperties.Schedule(false, "0 30 16 * * MON-FRI"), "0", 30, continents,
                 30, overseasMaxTickers);
-        var publisher = new InsightPublisher(source, new CollectorProperties(symbols, 30000, 3_000), properties,
+        return new InsightPublisher(source, new CollectorProperties(symbols, 30000), properties,
                 holdings, exchanges, kafka, mapper, CLOCK);
-        return new InsightTickListener(publisher, mapper);
     }
 
     @Test
     void publishesOneEventPerResponseInOrderWithContractKeys() throws IOException {
-        listener.onTick(tick("2026-10-20T16:30:00+09:00"));
+        postClose("2026-10-20T16:30:00+09:00");
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
@@ -114,7 +110,7 @@ class InsightTickListenerTest {
 
     @Test
     void eventCarriesTheRawResponseAndTickInformation() throws IOException {
-        listener.onTick(tick("2026-10-20T16:30:00+09:00"));
+        postClose("2026-10-20T16:30:00+09:00");
 
         ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
         verify(kafka, times(6)).send(eq(Topics.MARKET_INSIGHT), anyString(), value.capture());
@@ -136,30 +132,12 @@ class InsightTickListenerTest {
     }
 
     @Test
-    void sameTickDeliveredTwiceIsProcessedOnce() throws IOException {
-        listener.onTick(tick("2026-10-20T16:30:00+09:00"));
-        listener.onTick(tick("2026-10-20T16:30:00+09:00"));
-
-        verify(source, times(2)).dailyPrice(anyString());
-        verify(source, times(1)).marketSummary();
-        verify(kafka, times(6)).send(eq(Topics.MARKET_INSIGHT), anyString(), anyString());
-    }
-
-    @Test
-    void laterTickIsProcessedAgain() throws IOException {
-        listener.onTick(tick("2026-10-20T16:30:00+09:00"));
-        listener.onTick(tick("2026-10-21T16:30:00+09:00"));
-
-        verify(source, times(2)).marketSummary();
-    }
-
-    @Test
     void oneFailingApiDoesNotStopTheOthers() throws IOException {
         when(source.dailyPrice("TEST01")).thenThrow(new BrokerApiException(FailureType.HTTP_ERROR, "시세 API 오류 http=500 processCode=E777"));
         when(source.worldIndex("C")).thenThrow(new IllegalStateException("서버 문구가 섞인 예외"));
         when(source.exchangeRateSummary()).thenThrow(new BrokerApiException(FailureType.CONNECTION_FAILED, "시세 API 호출 실패: IOException"));
 
-        assertThatCode(() -> listener.onTick(tick("2026-10-20T16:30:00+09:00"))).doesNotThrowAnyException();
+        assertThatCode(() -> postClose("2026-10-20T16:30:00+09:00")).doesNotThrowAnyException();
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
         verify(kafka, times(3)).send(eq(Topics.MARKET_INSIGHT), key.capture(), anyString());
@@ -171,7 +149,7 @@ class InsightTickListenerTest {
         when(source.dailyPrice("TEST01")).thenThrow(new BrokerApiException(FailureType.TICK_SKIPPED, "호출 상한 대기 시간 초과"));
         when(source.marketSummary()).thenThrow(new BrokerApiException(FailureType.TICK_SKIPPED, "호출 상한 대기 시간 초과"));
 
-        assertThatCode(() -> listener.onTick(tick("2026-10-20T16:30:00+09:00"))).doesNotThrowAnyException();
+        assertThatCode(() -> postClose("2026-10-20T16:30:00+09:00")).doesNotThrowAnyException();
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
         verify(kafka, times(4)).send(eq(Topics.MARKET_INSIGHT), key.capture(), anyString());
@@ -183,7 +161,7 @@ class InsightTickListenerTest {
     void blankResponseIsNotPublished() throws IOException {
         when(source.marketSummary()).thenReturn("   ");
 
-        listener.onTick(tick("2026-10-20T16:30:00+09:00"));
+        postClose("2026-10-20T16:30:00+09:00");
 
         verify(kafka, times(5)).send(eq(Topics.MARKET_INSIGHT), anyString(), anyString());
         verify(kafka, never()).send(anyString(), eq("market-summary"), anyString());
@@ -191,9 +169,9 @@ class InsightTickListenerTest {
 
     @Test
     void symbolOutsideTheContractIsSkippedWithoutBeingQueried() throws IOException {
-        listener = listener(List.of("TEST01", "bad"), List.of());
+        publisher = publisher(List.of("TEST01", "bad"), List.of());
 
-        listener.onTick(tick("2026-10-20T16:30:00+09:00"));
+        postClose("2026-10-20T16:30:00+09:00");
 
         verify(source, never()).dailyPrice("bad");
         verify(source, times(1)).dailyPrice("TEST01");
@@ -204,7 +182,7 @@ class InsightTickListenerTest {
         // 해외 일봉은 장 시작 전 tick 에서만 받는다. 국내 장 마감 무렵에는 미국 장이 열리지 않아 같은 값을 다시 받게 된다.
         when(holdings.allTickers()).thenReturn(List.of("TESTA", "TESTB.X"));
 
-        listener.onTick(tick("2026-10-20T16:30:00+09:00"));
+        postClose("2026-10-20T16:30:00+09:00");
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
         verify(kafka, times(6)).send(eq(Topics.MARKET_INSIGHT), key.capture(), anyString());
@@ -218,9 +196,9 @@ class InsightTickListenerTest {
     @Test
     void tickersOverTheLimitAreNotQueriedAndOnlyTheirCountIsLogged() throws IOException {
         when(holdings.allTickers()).thenReturn(List.of("TESTA", "TESTB", "TESTC"));
-        listener = listener(List.of(), List.of(), 2);
+        publisher = publisher(List.of(), List.of(), 2);
 
-        listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"));
+        preOpen("2026-10-21T08:30:00+09:00");
 
         verify(source).overseasDailyPrice("NAS", "TESTA");
         verify(source).overseasDailyPrice("NAS", "TESTB");
@@ -240,7 +218,7 @@ class InsightTickListenerTest {
         when(source.overseasDailyPrice("NAS", "TESTD"))
                 .thenThrow(new BrokerApiException(FailureType.HTTP_ERROR, "시세 API 오류 http=500 processCode=E777"));
 
-        assertThatCode(() -> listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"))).doesNotThrowAnyException();
+        assertThatCode(() -> preOpen("2026-10-21T08:30:00+09:00")).doesNotThrowAnyException();
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
         verify(kafka, times(2)).send(eq(Topics.MARKET_INSIGHT), key.capture(), anyString());
@@ -262,9 +240,9 @@ class InsightTickListenerTest {
     void blankOverseasResponseIsCountedAsAFailure() throws IOException {
         when(holdings.allTickers()).thenReturn(List.of("TESTA"));
         when(source.overseasDailyPrice("NAS", "TESTA")).thenReturn("  ");
-        listener = listener(List.of(), List.of());
+        publisher = publisher(List.of(), List.of());
 
-        listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"));
+        preOpen("2026-10-21T08:30:00+09:00");
 
         verify(kafka, never()).send(anyString(), eq("overseas-daily-price:TESTA"), anyString());
         assertThat(messages()).anyMatch(m -> m.contains("position=1 reason=EMPTY_RESPONSE"));
@@ -275,7 +253,7 @@ class InsightTickListenerTest {
         when(holdings.allTickers()).thenReturn(List.of("TESTA", "TESTB.X"));
         when(exchanges.exchanges("TESTB.X")).thenReturn(List.of("NYSE"));
 
-        listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"));
+        preOpen("2026-10-21T08:30:00+09:00");
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
@@ -305,7 +283,7 @@ class InsightTickListenerTest {
         when(source.overseasDailyPrice("NAS", "TESTA"))
                 .thenThrow(new BrokerApiException(FailureType.HTTP_ERROR, "시세 API 오류 http=500 processCode=E777"));
 
-        assertThatCode(() -> listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"))).doesNotThrowAnyException();
+        assertThatCode(() -> preOpen("2026-10-21T08:30:00+09:00")).doesNotThrowAnyException();
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
         verify(kafka, times(1)).send(eq(Topics.MARKET_INSIGHT), key.capture(), anyString());
@@ -316,57 +294,15 @@ class InsightTickListenerTest {
         assertThat(String.join("\n", messages)).doesNotContain("TESTA", "TESTB");
     }
 
-    @Test
-    void preOpenAndPostCloseTicksOfTheSameDayAreBothProcessed() throws IOException {
-        listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"));
-        listener.onTick(tick("2026-10-21T16:30:00+09:00"));
-        listener.onTick(preOpenTick("2026-10-21T08:30:00+09:00"));
-
-        verify(source, times(2)).worldIndex("C");
-        verify(source, times(1)).marketSummary();
-    }
-
     private List<String> messages() {
         return logs.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
     }
 
-    @Test
-    void ignoresOtherJobTypes() throws IOException {
-        listener.onTick(ContractSchemas.sample("schedule.tick.sample.json"));
-        listener.onTick(ContractSchemas.sample("schedule.tick.sample.json").replace("\"collect\"", "\"collect-news\""));
-
-        verify(source, never()).marketSummary();
-        verify(kafka, never()).send(anyString(), anyString(), anyString());
+    private void preOpen(String scheduledFor) {
+        publisher.publishPreOpen("collect-pre-open-2026-10-21T08:30:00+09:00", scheduledFor);
     }
 
-    @Test
-    void usesItsOwnConsumerGroup() throws NoSuchMethodException, ClassNotFoundException {
-        KafkaListener insight = InsightTickListener.class.getDeclaredMethod("onTick", String.class)
-                .getAnnotation(KafkaListener.class);
-        for (String other : List.of("TickListener", "NewsTickListener")) {
-            // 리스너 메서드 이름과 인자는 서비스마다 다를 수 있어(TickListener 는 묶음 수신) 어노테이션으로 찾는다.
-            KafkaListener otherListener = Arrays.stream(
-                            Class.forName("dev.stockreading.collector.schedule." + other).getDeclaredMethods())
-                    .map(method -> method.getAnnotation(KafkaListener.class))
-                    .filter(Objects::nonNull)
-                    .findFirst().orElseThrow();
-            assertThat(insight.groupId()).isNotEqualTo(otherListener.groupId());
-        }
-    }
-
-    private static String preOpenTick(String scheduledFor) throws IOException {
-        return ContractSchemas.sample("schedule.tick.sample.json")
-                .replace("\"collect\"", "\"collect-pre-open\"")
-                .replace("\"correlationId\": \"collect-2026-10-20T16:00:00+09:00\"",
-                        "\"correlationId\": \"collect-pre-open-2026-10-21T08:30:00+09:00\"")
-                .replace("\"scheduledFor\": \"2026-10-20T16:00:00+09:00\"", "\"scheduledFor\": \"" + scheduledFor + "\"");
-    }
-
-    private static String tick(String scheduledFor) throws IOException {
-        return ContractSchemas.sample("schedule.tick.sample.json")
-                .replace("\"collect\"", "\"collect-post-close\"")
-                .replace("\"correlationId\": \"collect-2026-10-20T16:00:00+09:00\"",
-                        "\"correlationId\": \"collect-post-close-2026-10-20T16:30:00+09:00\"")
-                .replace("\"scheduledFor\": \"2026-10-20T16:00:00+09:00\"", "\"scheduledFor\": \"" + scheduledFor + "\"");
+    private void postClose(String scheduledFor) {
+        publisher.publishAll("collect-post-close-2026-10-20T16:30:00+09:00", scheduledFor);
     }
 }

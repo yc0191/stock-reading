@@ -1,0 +1,242 @@
+package dev.stockreading.collector.schedule;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.util.Arrays;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.InOrder;
+import org.mockito.stubbing.Answer;
+
+import dev.stockreading.collector.insight.InsightPublisher;
+import dev.stockreading.collector.insight.IntradayPublisher;
+import dev.stockreading.collector.schedule.CollectorJobs.Job;
+import dev.stockreading.collector.schedule.CollectorJobs.Outcome;
+
+class CollectorJobsTest {
+
+    // 화요일 16:00:00.700(한국 시간). 회차 기준 시각은 초 단위로 자른다.
+    private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-10-20T07:00:00.700Z"), ZoneId.of("Asia/Seoul"));
+    private static final String AT = "2026-10-20T16:00:00+09:00";
+
+    private final QuotePublisher quotes = mock(QuotePublisher.class);
+    private final NewsPublisher news = mock(NewsPublisher.class);
+    private final FilingPublisher filings = mock(FilingPublisher.class);
+    private final InsightPublisher insight = mock(InsightPublisher.class);
+    private final IntradayPublisher intraday = mock(IntradayPublisher.class);
+    // 막아 둔 작업을 테스트가 끝나면 풀어 준다.
+    private final CountDownLatch release = new CountDownLatch(1);
+
+    @AfterEach
+    void releaseBlockedJobs() {
+        release.countDown();
+    }
+
+    private CollectorJobs broker() {
+        return new CollectorJobs(quotes, news, filings, Optional.of(insight), Optional.of(intraday), CLOCK);
+    }
+
+    private CollectorJobs simulator() {
+        return new CollectorJobs(quotes, news, filings, Optional.empty(), Optional.empty(), CLOCK);
+    }
+
+    @Test
+    void jobNamesAreTheJobTypesAndUnknownNamesAreEmpty() {
+        assertThat(Arrays.stream(Job.values()).map(Job::jobType)).containsExactly(
+                "collect", "collect-news", "collect-pre-open", "collect-intraday", "collect-post-close");
+        for (Job job : Job.values()) {
+            assertThat(Job.of(job.jobType())).contains(job);
+        }
+        assertThat(Job.of("collect-members")).isEmpty();
+        assertThat(Job.of("daily-briefing-morning")).isEmpty();
+        assertThat(Job.of(null)).isEmpty();
+    }
+
+    @Test
+    void eachJobCallsItsCollectionWithTheRoundTimeAndCorrelationId() {
+        CollectorJobs jobs = broker();
+
+        for (Job job : Job.values()) {
+            assertThat(jobs.run(job)).isEqualTo(Outcome.STARTED);
+        }
+
+        verify(quotes).publishCollected("collect-" + AT, AT);
+        verify(news).publishCollected("collect-news-" + AT, AT);
+        verify(insight).publishPreOpen("collect-pre-open-" + AT, AT);
+        verify(filings).publishCollected("collect-pre-open-" + AT);
+        verify(intraday).publishIntraday("collect-intraday-" + AT, AT);
+        verify(insight).publishAll("collect-post-close-" + AT, AT);
+    }
+
+    @Test
+    void preOpenCollectsOverseasAndIndexFirstAndFilingsEvenWhenTheFirstPartFails() {
+        doThrow(new IllegalStateException("insight down")).when(insight).publishPreOpen(anyString(), anyString());
+
+        broker().run(Job.COLLECT_PRE_OPEN);
+
+        InOrder order = inOrder(insight, filings);
+        order.verify(insight).publishPreOpen("collect-pre-open-" + AT, AT);
+        order.verify(filings).publishCollected("collect-pre-open-" + AT);
+    }
+
+    @Test
+    void simulatorSourceSkipsTheMarketInsightPartsButStillCollectsFilings() {
+        CollectorJobs jobs = simulator();
+
+        jobs.run(Job.COLLECT_PRE_OPEN);
+        jobs.run(Job.COLLECT_INTRADAY);
+        jobs.run(Job.COLLECT_POST_CLOSE);
+
+        verify(filings).publishCollected("collect-pre-open-" + AT);
+        verifyNoInteractions(insight, intraday);
+    }
+
+    @ParameterizedTest
+    @EnumSource(Job.class)
+    void theSameJobDoesNotRunTwiceAtOnceAndRunsAgainAfterTheFirstEnds(Job job) throws Exception {
+        CollectorJobs jobs = broker();
+        CountDownLatch entered = new CountDownLatch(1);
+        Runnable block = () -> {
+            entered.countDown();
+            await(release);
+        };
+        blockOn(job, block);
+
+        CompletableFuture<Outcome> first = CompletableFuture.supplyAsync(() -> jobs.run(job));
+        assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        assertThat(jobs.run(job)).isEqualTo(Outcome.ALREADY_RUNNING);
+        assertThat(jobs.start(job)).isEqualTo(Outcome.ALREADY_RUNNING);
+
+        release.countDown();
+        assertThat(first.get(5, TimeUnit.SECONDS)).isEqualTo(Outcome.STARTED);
+        assertThat(jobs.run(job)).isEqualTo(Outcome.STARTED);
+    }
+
+    @Test
+    void aLongJobDoesNotBlockOtherJobs() throws Exception {
+        CollectorJobs jobs = broker();
+        CountDownLatch entered = new CountDownLatch(1);
+        doAnswer(call -> {
+            entered.countDown();
+            await(release);
+            return null;
+        }).when(insight).publishAll(anyString(), anyString());
+
+        CompletableFuture.runAsync(() -> jobs.run(Job.COLLECT_POST_CLOSE));
+        assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        assertThat(jobs.run(Job.COLLECT)).isEqualTo(Outcome.STARTED);
+        assertThat(jobs.run(Job.COLLECT_NEWS)).isEqualTo(Outcome.STARTED);
+        assertThat(jobs.run(Job.COLLECT_INTRADAY)).isEqualTo(Outcome.STARTED);
+    }
+
+    @Test
+    void startReturnsAtOnceAndASkippedQuoteRoundIsRecordedOncePerRound() throws Exception {
+        CollectorJobs jobs = broker();
+        CountDownLatch entered = new CountDownLatch(1);
+        doAnswer(call -> {
+            entered.countDown();
+            await(release);
+            return null;
+        }).when(quotes).publishCollected(anyString(), anyString());
+
+        assertThat(jobs.start(Job.COLLECT)).isEqualTo(Outcome.STARTED);
+        assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(jobs.start(Job.COLLECT)).isEqualTo(Outcome.ALREADY_RUNNING);
+        assertThat(jobs.start(Job.COLLECT)).isEqualTo(Outcome.ALREADY_RUNNING);
+
+        verify(quotes, times(2)).publishSkipped("collect-" + AT, AT);
+        release.countDown();
+        // 앞 회차가 끝나도 건너뛴 회차를 몰아서 조회하지 않는다.
+        verify(quotes, timeout(5_000).times(1)).publishCollected(anyString(), anyString());
+        awaitStarted(jobs, Job.COLLECT);
+        verify(quotes, timeout(5_000).times(2)).publishCollected(anyString(), anyString());
+    }
+
+    @Test
+    void onlyTheQuoteJobRecordsSkippedRoundsAsEvents() throws Exception {
+        CollectorJobs jobs = broker();
+        CountDownLatch entered = new CountDownLatch(1);
+        blockOn(Job.COLLECT_NEWS, () -> {
+            entered.countDown();
+            await(release);
+        });
+
+        CompletableFuture.runAsync(() -> jobs.run(Job.COLLECT_NEWS));
+        assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(jobs.run(Job.COLLECT_NEWS)).isEqualTo(Outcome.ALREADY_RUNNING);
+
+        verify(quotes, never()).publishSkipped(anyString(), anyString());
+    }
+
+    @Test
+    void aFailingJobFreesItsSlot() throws Exception {
+        CollectorJobs jobs = broker();
+        doThrow(new IllegalStateException("fetch failed")).doNothing()
+                .when(quotes).publishCollected(anyString(), anyString());
+
+        assertThat(jobs.start(Job.COLLECT)).isEqualTo(Outcome.STARTED);
+        verify(quotes, timeout(5_000).times(1)).publishCollected(anyString(), anyString());
+        awaitStarted(jobs, Job.COLLECT);
+        verify(quotes, timeout(5_000).times(2)).publishCollected(anyString(), anyString());
+
+        // run 은 실패를 부른 쪽으로 그대로 올리고, 자리는 푼다.
+        doThrow(new IllegalStateException("news failed")).doNothing()
+                .when(news).publishCollected(anyString(), anyString());
+        assertThatThrownBy(() -> jobs.run(Job.COLLECT_NEWS)).isInstanceOf(IllegalStateException.class);
+        assertThat(jobs.run(Job.COLLECT_NEWS)).isEqualTo(Outcome.STARTED);
+    }
+
+    // 작업 스레드가 자리를 막 풀었을 수 있으므로, 앞 회차가 끝날 때까지 잠깐 다시 시도한다.
+    private static void awaitStarted(CollectorJobs jobs, Job job) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (jobs.start(job) != Outcome.STARTED) {
+            assertThat(System.nanoTime()).as(job + " 의 자리가 풀리지 않았다").isLessThan(deadline);
+            Thread.sleep(10);
+        }
+    }
+
+    private void blockOn(Job job, Runnable block) {
+        Answer<Void> answer = call -> {
+            block.run();
+            return null;
+        };
+        switch (job) {
+            case COLLECT -> doAnswer(answer).when(quotes).publishCollected(anyString(), anyString());
+            case COLLECT_NEWS -> doAnswer(answer).when(news).publishCollected(anyString(), anyString());
+            case COLLECT_PRE_OPEN -> doAnswer(answer).when(filings).publishCollected(anyString());
+            case COLLECT_INTRADAY -> doAnswer(answer).when(intraday).publishIntraday(anyString(), anyString());
+            case COLLECT_POST_CLOSE -> doAnswer(answer).when(insight).publishAll(anyString(), anyString());
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            latch.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+}

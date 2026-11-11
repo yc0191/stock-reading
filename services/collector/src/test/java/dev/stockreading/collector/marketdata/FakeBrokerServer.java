@@ -15,8 +15,11 @@ import java.util.regex.Pattern;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
-/** 시세 제공자를 흉내 내는 로컬 가짜 서버. 응답 상태, 본문, 지연을 테스트가 바꾼다. 실제 서버는 호출하지 않는다. */
-final class FakeBrokerServer implements AutoCloseable {
+/**
+ * 시세 제공자를 흉내 내는 로컬 가짜 서버. 응답 상태, 본문, 지연을 테스트가 바꾼다. 실제 서버는 호출하지 않는다.
+ * 수집기 타이머 흐름 테스트(schedule 패키지)도 쓰므로 그 테스트가 쓰는 것만 공개한다.
+ */
+public final class FakeBrokerServer implements AutoCloseable {
 
     static final String OK_HEADER =
             "{\"resultCode\":\"200\",\"processCode\":\"0024\",\"processTime\":\"20261022101530123\"}";
@@ -24,7 +27,7 @@ final class FakeBrokerServer implements AutoCloseable {
     private static final Pattern SYMBOL = Pattern.compile("\"shrt_cd\"\\s*:\\s*\"([^\"]+)\"");
 
     final AtomicInteger tokenCalls = new AtomicInteger();
-    final AtomicInteger priceCalls = new AtomicInteger();
+    public final AtomicInteger priceCalls = new AtomicInteger();
     final AtomicInteger overseasCalls = new AtomicInteger();
     // 국내 일봉, 세계지수, 환율종합, 시장종합 호출을 합쳐 센다.
     final AtomicInteger insightCalls = new AtomicInteger();
@@ -38,7 +41,7 @@ final class FakeBrokerServer implements AutoCloseable {
     volatile long tokenDelayMs;
     volatile int priceStatus = 200;
     volatile String priceBody = "{\"dataHeader\":" + OK_HEADER + ",\"dataBody\":{\"now_prc\":\"10250\"}}";
-    volatile long priceDelayMs;
+    public volatile long priceDelayMs;
     // 종목 코드별 현재가 응답 본문. 없으면 priceBody 를 쓴다.
     final Map<String, String> priceBodyBySymbol = new ConcurrentHashMap<>();
     // 설정하면 다른 현재가 요청과 겹쳐 처리 중인 요청에는 종목과 상관없이 이 본문을 보낸다. 동시 호출 때만 깨지는 서버를 흉내 낸다.
@@ -46,7 +49,7 @@ final class FakeBrokerServer implements AutoCloseable {
 
     private final HttpServer server;
 
-    FakeBrokerServer() throws IOException {
+    public FakeBrokerServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.setExecutor(Executors.newCachedThreadPool());
         server.createContext("/oauth2/token", exchange -> {
@@ -86,7 +89,7 @@ final class FakeBrokerServer implements AutoCloseable {
         server.start();
     }
 
-    String baseUrl() {
+    public String baseUrl() {
         return "http://127.0.0.1:" + server.getAddress().getPort();
     }
 

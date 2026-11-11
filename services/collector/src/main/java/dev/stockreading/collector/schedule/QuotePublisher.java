@@ -1,0 +1,107 @@
+package dev.stockreading.collector.schedule;
+
+import java.time.Clock;
+import java.time.OffsetDateTime;
+import java.util.List;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.stereotype.Component;
+
+import dev.stockreading.collector.CollectorProperties;
+import dev.stockreading.collector.Topics;
+import dev.stockreading.collector.event.Envelope;
+import dev.stockreading.collector.event.EventFactory;
+import dev.stockreading.collector.event.FailurePayload;
+import dev.stockreading.collector.event.SnapshotPayload;
+import dev.stockreading.collector.marketdata.FetchResult;
+import dev.stockreading.collector.marketdata.MarketDataPort;
+import dev.stockreading.collector.marketdata.PriceQuote;
+import dev.stockreading.collector.marketdata.QuoteFailure;
+import tools.jackson.databind.ObjectMapper;
+
+/**
+ * 1초 현재가 한 회차: 종목 시세를 조회해 종목마다 market.snapshot 을, 실패와 건너뜀은 market.snapshot.failed 를 발행한다.
+ * 앞 회차 조회가 끝나지 않아 건너뛴 회차는 조회 없이 종목마다 건너뜀으로 남긴다.
+ */
+@Component
+class QuotePublisher {
+
+    private static final Logger log = LoggerFactory.getLogger(QuotePublisher.class);
+    /** 앞 회차 조회가 끝나지 않아 조회하지 않은 회차를 TICK_SKIPPED 의 다른 사유(RateLimited 등)와 구분하는 exceptionType 값. */
+    static final String SUPERSEDED = "SupersededByNewerTick";
+
+    private final MarketDataPort marketData;
+    private final CollectorProperties properties;
+    private final KafkaTemplate<String, String> kafka;
+    private final ObjectMapper mapper;
+    private final Clock clock;
+
+    QuotePublisher(MarketDataPort marketData, CollectorProperties properties,
+                   KafkaTemplate<String, String> kafka, ObjectMapper mapper, Clock clock) {
+        this.marketData = marketData;
+        this.properties = properties;
+        this.kafka = kafka;
+        this.mapper = mapper;
+        this.clock = clock;
+    }
+
+    void publishCollected(String correlationId, String scheduledFor) {
+        FetchResult result = marketData.fetch(properties.symbols());
+        for (PriceQuote quote : result.quotes()) {
+            Envelope<SnapshotPayload> snapshot = EventFactory.create(
+                    clock,
+                    "market.snapshot",
+                    quote.asOf(),
+                    correlationId,
+                    new SnapshotPayload(
+                            quote.symbol(), quote.price(), EventFactory.format(quote.asOf()), marketData.sourceName(),
+                            quote.raw()));
+            send(Topics.MARKET_SNAPSHOT, quote.symbol(), snapshot);
+        }
+        publishFailures(result.failures(), correlationId, scheduledFor, result.quotes().size());
+        log.info("published {} market.snapshot, {} market.snapshot.failed events corr={}",
+                result.quotes().size(), result.failures().size(), correlationId);
+    }
+
+    void publishSkipped(String correlationId, String scheduledFor) {
+        List<QuoteFailure> skipped = properties.symbols().stream()
+                .map(symbol -> QuoteFailure.skipped(symbol, SUPERSEDED)).toList();
+        publishFailures(skipped, correlationId, scheduledFor, 0);
+    }
+
+    private void publishFailures(List<QuoteFailure> failures, String correlationId, String scheduledFor, int succeeded) {
+        for (QuoteFailure failure : failures) {
+            Envelope<FailurePayload> event = EventFactory.create(
+                    clock,
+                    "market.snapshot.failed",
+                    OffsetDateTime.now(clock),
+                    correlationId,
+                    new FailurePayload(
+                            failure.symbol(),
+                            failure.type().name(),
+                            scheduledFor,
+                            failure.httpStatus(),
+                            failure.responseCode(),
+                            failure.elapsedMs(),
+                            failure.exceptionType(),
+                            failure.tokenAgeMs() == null ? null
+                                    : new FailurePayload.TokenState(failure.tokenAgeMs(), failure.tokenRemainingMs()),
+                            failure.concurrentCalls(),
+                            succeeded,
+                            failures.size(),
+                            failure.responseRaw()));
+            send(Topics.MARKET_SNAPSHOT_FAILED, failure.symbol(), event);
+        }
+    }
+
+    // 한 건의 발행 실패가 다른 종목의 발행을 막지 않게 한다. 본문에는 외부 원문이 있을 수 있어 예외 종류만 남긴다.
+    private void send(String topic, String key, Object event) {
+        try {
+            kafka.send(topic, key, mapper.writeValueAsString(event));
+        } catch (RuntimeException e) {
+            log.error("publish failed topic={} key={} exception={}", topic, key, e.getClass().getSimpleName());
+        }
+    }
+}

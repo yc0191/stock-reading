@@ -1,0 +1,171 @@
+package dev.stockreading.collector.schedule;
+
+import java.time.Clock;
+import java.time.OffsetDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.EnumMap;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+import dev.stockreading.collector.event.EventFactory;
+import dev.stockreading.collector.insight.InsightPublisher;
+import dev.stockreading.collector.insight.IntradayPublisher;
+
+/**
+ * 수집 작업 다섯 개의 실행 입구. 수집기 타이머와 수동 실행이 모두 여기를 부른다.
+ * 같은 작업은 겹쳐 돌지 않는다: 앞 회차가 끝나지 않았으면 이번 회차는 실행하지 않고 ALREADY_RUNNING 을 돌려준다.
+ * 회차마다 기준 시각(scheduledFor, 초 단위로 자른 지금)과 correlationId(jobType-scheduledFor)를 정한다.
+ */
+@Component
+public class CollectorJobs {
+
+    /** 작업 이름(jobType)은 이벤트의 jobType·correlationId 와 수동 실행 명령 이름으로 쓰인다. */
+    public enum Job {
+        COLLECT("collect"),
+        COLLECT_NEWS("collect-news"),
+        COLLECT_PRE_OPEN("collect-pre-open"),
+        COLLECT_INTRADAY("collect-intraday"),
+        COLLECT_POST_CLOSE("collect-post-close");
+
+        private final String jobType;
+
+        Job(String jobType) {
+            this.jobType = jobType;
+        }
+
+        public String jobType() {
+            return jobType;
+        }
+
+        public static Optional<Job> of(String jobType) {
+            for (Job job : values()) {
+                if (job.jobType.equals(jobType)) {
+                    return Optional.of(job);
+                }
+            }
+            return Optional.empty();
+        }
+    }
+
+    public enum Outcome { STARTED, ALREADY_RUNNING }
+
+    private static final Logger log = LoggerFactory.getLogger(CollectorJobs.class);
+
+    private final QuotePublisher quotes;
+    private final NewsPublisher news;
+    private final FilingPublisher filings;
+    // 증권사 출처일 때만 있다. 시뮬레이터에는 장 시작 전·장중·마감 후 시세 정보 조회가 없다.
+    private final Optional<InsightPublisher> insight;
+    private final Optional<IntradayPublisher> intraday;
+    private final Clock clock;
+    private final Map<Job, AtomicBoolean> running = new EnumMap<>(Job.class);
+
+    CollectorJobs(QuotePublisher quotes, NewsPublisher news, FilingPublisher filings,
+                  Optional<InsightPublisher> insight, Optional<IntradayPublisher> intraday, Clock clock) {
+        this.quotes = quotes;
+        this.news = news;
+        this.filings = filings;
+        this.insight = insight;
+        this.intraday = intraday;
+        this.clock = clock;
+        for (Job job : Job.values()) {
+            running.put(job, new AtomicBoolean());
+        }
+    }
+
+    /** 부른 스레드에서 작업을 끝까지 실행한다. */
+    public Outcome run(Job job) {
+        Round round = round(job);
+        if (!tryEnter(job, round)) {
+            return Outcome.ALREADY_RUNNING;
+        }
+        try {
+            execute(job, round);
+        } finally {
+            running.get(job).set(false);
+        }
+        return Outcome.STARTED;
+    }
+
+    /**
+     * 실행 자리는 부른 스레드에서 잡고, 작업은 새 스레드에서 실행한다. 부른 쪽은 작업이 끝나기를 기다리지 않는다.
+     * 1초 현재가 타이머가 이 방식을 쓴다. 타이머 스레드에서 직접 실행하면 조회가 1초를 넘길 때 밀린 회차가
+     * 끝난 직후 몰아서 실행되므로, 타이머는 제때 돌며 앞 회차가 아직 돌고 있는 회차를 건너뜀으로 남긴다.
+     */
+    public Outcome start(Job job) {
+        Round round = round(job);
+        if (!tryEnter(job, round)) {
+            return Outcome.ALREADY_RUNNING;
+        }
+        Runnable task = () -> {
+            try {
+                execute(job, round);
+            } catch (RuntimeException e) {
+                log.error("job failed jobType={} corr={} errorType={}",
+                        job.jobType(), round.correlationId(), e.getClass().getSimpleName());
+            } finally {
+                running.get(job).set(false);
+            }
+        };
+        try {
+            Thread.ofVirtual().name("collector-" + job.jobType()).start(task);
+        } catch (RuntimeException | Error e) {
+            running.get(job).set(false);
+            throw e;
+        }
+        return Outcome.STARTED;
+    }
+
+    private boolean tryEnter(Job job, Round round) {
+        if (running.get(job).compareAndSet(false, true)) {
+            return true;
+        }
+        log.warn("job skipped, previous run still running jobType={} scheduledFor={}", job.jobType(), round.scheduledFor());
+        if (job == Job.COLLECT) {
+            quotes.publishSkipped(round.correlationId(), round.scheduledFor());
+        }
+        return false;
+    }
+
+    private Round round(Job job) {
+        String scheduledFor = EventFactory.format(OffsetDateTime.now(clock).truncatedTo(ChronoUnit.SECONDS));
+        return new Round(scheduledFor, job.jobType() + "-" + scheduledFor);
+    }
+
+    private void execute(Job job, Round round) {
+        String corr = round.correlationId();
+        String at = round.scheduledFor();
+        switch (job) {
+            case COLLECT -> quotes.publishCollected(corr, at);
+            case COLLECT_NEWS -> news.publishCollected(corr, at);
+            case COLLECT_PRE_OPEN -> {
+                // 해외 일봉·세계지수와 SEC 공시를 한 회차에서 함께 받는다. 앞쪽이 실패해도 공시는 받는다.
+                ifBroker(job, insight, publisher -> publisher.publishPreOpen(corr, at));
+                filings.publishCollected(corr);
+            }
+            case COLLECT_INTRADAY -> ifBroker(job, intraday, publisher -> publisher.publishIntraday(corr, at));
+            case COLLECT_POST_CLOSE -> ifBroker(job, insight, publisher -> publisher.publishAll(corr, at));
+        }
+    }
+
+    private static <T> void ifBroker(Job job, Optional<T> publisher, Consumer<T> action) {
+        if (publisher.isEmpty()) {
+            log.info("market insight skipped, market data source is not the broker jobType={}", job.jobType());
+            return;
+        }
+        try {
+            action.accept(publisher.get());
+        } catch (RuntimeException e) {
+            log.warn("market insight failed jobType={} errorType={}", job.jobType(), e.getClass().getSimpleName());
+        }
+    }
+
+    private record Round(String scheduledFor, String correlationId) {
+    }
+}
