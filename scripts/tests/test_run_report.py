@@ -532,11 +532,13 @@ def test_live_checks_count_only_rows_saved_after_this_run_started():
     assert body.index('LIVE_SINCE=$(echo "SELECT now();" | admin_sql)') < body.index('echo "tick 1건 발행"')
     assert 'QUOTE_FLOW_LIVE_SINCE="$LIVE_SINCE"' in text and 'BRIEFING_FLOW_LIVE_SINCE="$LIVE_SINCE"' in text
     quote = (REPO_ROOT / "scripts" / "tests" / "test_quote_flow_live.py").read_text(encoding="utf-8")
-    assert quote.count("FROM market.") == quote.count("received_at >= %s::timestamptz") >= 2 and 'os.environ["QUOTE_FLOW_LIVE_SINCE"]' in quote
+    # 앞 단계 실제 DB 테스트가 미래 날짜로 넣은 가짜 행이 섞이지 않게 시작 시각 뒤, 지금 이전만 센다.
+    bounded = "received_at >= %s::timestamptz AND received_at <= now()"
+    assert quote.count("FROM market.") == quote.count(bounded) >= 2 and 'os.environ["QUOTE_FLOW_LIVE_SINCE"]' in quote
     brief = (REPO_ROOT / "scripts" / "tests" / "test_briefing_flow_live.py").read_text(encoding="utf-8")
     assert "created_at >= %s::timestamptz" in brief and 'env["BRIEFING_FLOW_LIVE_SINCE"]' in brief
     seed = (REPO_ROOT / "scripts" / "live_briefing.py").read_text(encoding="utf-8")
-    assert seed.count("FROM market.price_snapshot") == seed.count("received_at >= %s::timestamptz") == 2
+    assert seed.count("FROM market.price_snapshot") == seed.count(bounded) == 2
     assert 'LIVE_BRIEFING_SINCE="$LIVE_SINCE"' in text
 
 
