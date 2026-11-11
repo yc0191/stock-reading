@@ -176,6 +176,28 @@ class CollectorJobsTest {
     }
 
     @Test
+    void onDemandStartRunsOnceAndASkippedQuoteRunIsNotRecordedAsAnEvent() throws Exception {
+        CollectorJobs jobs = broker();
+        CountDownLatch entered = new CountDownLatch(1);
+        doAnswer(call -> {
+            entered.countDown();
+            await(release);
+            return null;
+        }).when(quotes).publishCollected(anyString(), anyString());
+
+        assertThat(jobs.startOnDemand(Job.COLLECT)).isEqualTo(Outcome.STARTED);
+        assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+        // 수동 실행과 타이머는 같은 자리를 쓴다. 어느 쪽이 먼저 잡았든 다른 쪽은 건너뛴다.
+        assertThat(jobs.startOnDemand(Job.COLLECT)).isEqualTo(Outcome.ALREADY_RUNNING);
+        assertThat(jobs.run(Job.COLLECT)).isEqualTo(Outcome.ALREADY_RUNNING);
+
+        // 타이머 쪽(run)이 건너뛴 한 번만 건너뜀 이벤트로 남는다.
+        verify(quotes, times(1)).publishSkipped("collect-" + AT, AT);
+        release.countDown();
+        verify(quotes, timeout(5_000).times(1)).publishCollected("collect-" + AT, AT);
+    }
+
+    @Test
     void onlyTheQuoteJobRecordsSkippedRoundsAsEvents() throws Exception {
         CollectorJobs jobs = broker();
         CountDownLatch entered = new CountDownLatch(1);

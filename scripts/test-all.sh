@@ -51,7 +51,7 @@ if [ "$PLAN" = 1 ]; then
   echo "4. 실제 DB 준비: stock-postgres 확인(꺼져 있으면 켬), stock_test_run_<시각>_<pid> 데이터베이스와 market·news·briefing 스키마 생성"
   echo "5. 실제 DB 테스트: 지도에서 고른 market·news·브리핑 실제 DB 테스트"
   if [ "$LIVE" = 1 ]; then
-    echo "6. 시세 흐름 실제: 일회용 Kafka, market(테스트 전용 데이터베이스), collector(실제 시세, 종목 1개), tick 1건, 저장 확인"
+    echo "6. 시세 흐름 실제: 일회용 Kafka, market(테스트 전용 데이터베이스), collector(실제 시세, 종목 1개), 수동 실행 명령 collect 1건, 저장 확인"
     echo "6b. 브리핑·메일 실제: news·notifier(발송 켬, [테스트], 1통)·briefing(실제 LLM) 기동, 가짜 변동·기사·수집 완료 넣기,"
     echo "    리포트(generatedBy=llm)와 메일 발송 1통 확인, 본문은 build/test-all-live/ 에 저장"
   else
@@ -525,7 +525,7 @@ run_live() {
   KAFKA_PORT=$port
   echo "일회용 Kafka 기동: $KAFKA_NAME (127.0.0.1:$port)"
   KAFKA_STARTED=1
-  # 컨테이너 안팎에서 같은 포트를 써서 publish-tick.sh 도 같은 주소로 붙게 한다. 볼륨이 없어 지우면 데이터도 사라진다.
+  # 컨테이너 안팎에서 같은 포트를 써서 collector-command.sh 도 같은 주소로 붙게 한다. 볼륨이 없어 지우면 데이터도 사라진다.
   if ! docker run -d --name "$KAFKA_NAME" --label "$KAFKA_LABEL=$RUN_ID" -p "127.0.0.1:$port:$port" \
       -e KAFKA_NODE_ID=1 -e KAFKA_PROCESS_ROLES=broker,controller \
       -e "KAFKA_LISTENERS=PLAINTEXT://:$port,CONTROLLER://:9093" \
@@ -570,14 +570,14 @@ run_live() {
     export SPRING_KAFKA_BOOTSTRAP_SERVERS="localhost:$port"
     export COLLECTOR_MARKET_DATA_SOURCE=broker BROKER_BASE_URL="$base_url" BROKER_APP_KEY="$app_key" BROKER_APP_SECRET="$app_secret"
     export COLLECTOR_SYMBOLS="$symbol"
+    # 타이머를 모두 꺼서 시세 호출은 아래 수동 실행 명령 1건뿐이게 한다.
     export COLLECTOR_SCHEDULE_ENABLED=false COLLECTOR_PRE_OPEN_ENABLED=false COLLECTOR_INSIGHT_SCHEDULE_ENABLED=false
-    # 콘솔 프로듀서 기동에 몇 초 걸려 기본 3초 기준이면 tick 이 오래된 것으로 버려질 수 있다.
-    export COLLECTOR_MAX_TICK_AGE_MS=30000
+    export COLLECTOR_INTRADAY_ENABLED=false COLLECTOR_MEMBERS_ENABLED=false COLLECTOR_DAILY_BRIEFING_ENABLED=false
     cd "$svc_dir/collector" && exec "$JAVA_HOME_21/bin/java" -jar "$COLLECTOR_JAR"
   ) > "$svc_dir/collector.log" 2>&1 &
   COLLECTOR_PID=$!
-  # collector 그룹은 latest 부터 읽으므로 파티션을 받기 전에 보낸 tick 은 놓친다.
-  wait_for_log "$svc_dir/collector.log" "groupId=collector] Adding newly assigned partitions: [schedule.tick" "$COLLECTOR_PID" 120
+  # 명령 리스너는 파티션을 받을 때 끝으로 옮기므로(꺼져 있던 동안의 명령은 실행하지 않음) 받기 전에 보낸 명령은 놓친다.
+  wait_for_log "$svc_dir/collector.log" "groupId=collector-command] Adding newly assigned partitions: [collector.command" "$COLLECTOR_PID" 120
   case $? in
     0) ;;
     2) LIVE_FAIL_REASON="collector 가 시작 중에 끝남"; return 1 ;;
@@ -587,9 +587,9 @@ run_live() {
 
   # 같은 테스트 DB 에 실제 DB 테스트가 넣은 가짜 행이 남아 있어, 이 시각 뒤에 저장된 행만 이번 실행의 결과로 센다.
   LIVE_SINCE=$(echo "SELECT now();" | admin_sql) || { LIVE_FAIL_REASON="DB 시각을 읽지 못함"; return 1; }
-  echo "tick 1건 발행"
-  KAFKA_CONTAINER="$KAFKA_NAME" KAFKA_BOOTSTRAP="localhost:$port" bash scripts/publish-tick.sh collect >/dev/null \
-    || { LIVE_FAIL_REASON="tick 을 보내지 못함"; return 1; }
+  echo "수동 실행 명령 collect 1건 발행"
+  KAFKA_CONTAINER="$KAFKA_NAME" KAFKA_BOOTSTRAP="localhost:$port" bash scripts/collector-command.sh collect >/dev/null \
+    || { LIVE_FAIL_REASON="수동 실행 명령을 보내지 못함"; return 1; }
 
   echo "테스트 전용 데이터베이스에서 다시 읽어 확인(개수만 출력)"
   (

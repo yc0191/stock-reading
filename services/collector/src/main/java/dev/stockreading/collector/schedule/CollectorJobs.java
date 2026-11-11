@@ -18,7 +18,7 @@ import dev.stockreading.collector.insight.InsightPublisher;
 import dev.stockreading.collector.insight.IntradayPublisher;
 
 /**
- * 수집 작업 다섯 개의 실행 입구. 수집기 타이머와 수동 실행이 모두 여기를 부른다.
+ * 수집 작업 다섯 개의 실행 입구. 수집기 타이머와 수동 실행 명령(CollectorCommandListener)이 모두 여기를 부른다.
  * 같은 작업은 겹쳐 돌지 않는다: 앞 회차가 끝나지 않았으면 이번 회차는 실행하지 않고 ALREADY_RUNNING 을 돌려준다.
  * 회차마다 기준 시각(scheduledFor, 초 단위로 자른 지금)과 correlationId(jobType-scheduledFor)를 정한다.
  */
@@ -82,7 +82,7 @@ public class CollectorJobs {
     /** 부른 스레드에서 작업을 끝까지 실행한다. */
     public Outcome run(Job job) {
         Round round = round(job);
-        if (!tryEnter(job, round)) {
+        if (!tryEnter(job, round, true)) {
             return Outcome.ALREADY_RUNNING;
         }
         try {
@@ -99,8 +99,21 @@ public class CollectorJobs {
      * 끝난 직후 몰아서 실행되므로, 타이머는 제때 돌며 앞 회차가 아직 돌고 있는 회차를 건너뜀으로 남긴다.
      */
     public Outcome start(Job job) {
+        return start(job, true);
+    }
+
+    /**
+     * 수동 실행 명령의 입구. start 와 같이 새 스레드에서 1회 실행하고, 같은 작업이 돌고 있으면 건너뛴다.
+     * 건너뛰어도 1초 현재가의 건너뜀 이벤트는 남기지 않는다. 밀린 타이머 회차가 아니라 사람이 더 보낸 명령이라,
+     * 데일리 메일 서버 상태의 SupersededByNewerTick 개수에 섞이면 안 된다.
+     */
+    public Outcome startOnDemand(Job job) {
+        return start(job, false);
+    }
+
+    private Outcome start(Job job, boolean recordSkip) {
         Round round = round(job);
-        if (!tryEnter(job, round)) {
+        if (!tryEnter(job, round, recordSkip)) {
             return Outcome.ALREADY_RUNNING;
         }
         Runnable task = () -> {
@@ -122,12 +135,12 @@ public class CollectorJobs {
         return Outcome.STARTED;
     }
 
-    private boolean tryEnter(Job job, Round round) {
+    private boolean tryEnter(Job job, Round round, boolean recordSkip) {
         if (running.get(job).compareAndSet(false, true)) {
             return true;
         }
         log.warn("job skipped, previous run still running jobType={} scheduledFor={}", job.jobType(), round.scheduledFor());
-        if (job == Job.COLLECT) {
+        if (recordSkip && job == Job.COLLECT) {
             quotes.publishSkipped(round.correlationId(), round.scheduledFor());
         }
         return false;

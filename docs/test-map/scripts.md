@@ -13,6 +13,7 @@
 | 브리핑 작업 하나의 기록 보기(job_run 한 줄과 job_log 줄을 시간 순서로, 작업 id·메일의 브리핑 ID 모두로 찾기) | job_history.py | test_job_history.py | test_job_history.py | 해당 없음 - 읽기만 하는 도구이며 실제 테이블 읽기는 사람이 job_run·job_log를 쌓은 DB에서 직접 확인(job_log 저장 자체의 실제 DB 테스트는 briefing 지도에 있음) |
 | 차트 한글 글꼴 내려받기(버전 고정 주소, SHA-256 검사, 이미 있으면 건너뜀) | install_font.py | test_install_font.py | test_install_font.py | 없음 - 실제 내려받기는 사람이 python3 scripts/install_font.py 로 확인하며 자동 테스트로 묶지 않음 [외부 API] |
 | 새 작업 폴더의 로컬 준비(.env·JDK 21 확인, 브리핑 venv 만들기·의존성 설치, 차트 글꼴, --check 는 확인만) | setup-dev.sh | test_setup_dev.py | test_setup_dev.py | 없음 - 실제 venv 설치와 글꼴 내려받기는 사람이 scripts/setup-dev.sh 로 확인하며 자동 테스트로 묶지 않음 [외부 API] |
+| 수집기 수동 실행 명령 보내기(collector.command 한 건, 명령 5개만, 모르는 명령은 보내지 않음, 실행마다 새 eventId) | collector-command.sh | test_collector_command.py | test_collector_command.py | test_quote_flow_live.py [서비스 흐름, 외부 API, 켜는 조건: test-all.sh --live] |
 | 테스트 지도 검사, 바꾼 파일로 확인할 테스트 찾기 | check_test_map.py | test_check_test_map.py | 해당 없음 - 저장소 파일과 로컬 git 만 읽음 | 해당 없음 - 외부 의존을 부르지 않음 |
 
 테스트 도우미: 없음
