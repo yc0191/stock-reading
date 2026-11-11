@@ -13,7 +13,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
-import dev.stockreading.collector.CollectorProperties;
+import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 
 @Component
 @ConditionalOnProperty(name = "collector.market-data.source", havingValue = "broker")
@@ -33,13 +33,13 @@ class BrokerMarketData implements MarketDataPort {
     private final int maxCallsPerSecond;
     private final AtomicInteger inFlight = new AtomicInteger();
 
-    BrokerMarketData(BrokerClient client, CollectorProperties collector, BrokerProperties broker, CallRateLimit limiter,
+    BrokerMarketData(BrokerClient client, QuoteSymbolsPort quoteSymbols, BrokerProperties broker, CallRateLimit limiter,
                      PriceFieldCheck priceCheck) {
         this.client = client;
         this.priceCheck = priceCheck;
         this.maxCallsPerSecond = broker.maxCallsPerSecond();
         this.limiter = limiter;
-        int symbolCount = collector.symbols() == null ? 0 : collector.symbols().size();
+        int symbolCount = quoteSymbols.symbols().size();
         if (symbolCount > maxCallsPerSecond) {
             log.warn("symbols={} exceed max calls per second={}; the excess symbols are recorded as skipped every tick",
                     symbolCount, maxCallsPerSecond);

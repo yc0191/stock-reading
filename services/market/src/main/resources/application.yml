@@ -38,9 +38,6 @@ market:
   # MARKET_PREV_CLOSE_FIELDS를 쉼표로 이은 경로(원문 루트 기준 점 경로)로 주면 바꾸고, 빈 값으로 주면 유형 2를 끈다.
   prev-close-fields: ${MARKET_PREV_CLOSE_FIELDS:dataBody.bdy_cls_prc,dataBody.sprc,dataBody.krx_bdy_clpr}
   prev-close-threshold-percent: 3.00
-  holdings:
-    # 종목 표(etf, stock, etf_stock_map)나 개인 포트폴리오가 바뀌었는지 확인하는 간격. 바뀌었을 때만 market.holdings 이벤트로 전체 목록을 낸다.
-    check-interval: PT30S
   context:
     # 배경 자료 응답(market.context)의 안전 상한. 요청값의 원본은 브리핑 설정이고, 요청이 이보다 크면 이 값까지만 준다.
     # 받은 시각이 기준 시각보다 이 기간 넘게 이른 자료는 없음으로 본다(해외 등락률은 장 마감 시각 기준).

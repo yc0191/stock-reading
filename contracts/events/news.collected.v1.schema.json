@@ -26,7 +26,7 @@
           "minItems": 1,
           "uniqueItems": true,
           "items": { "type": "string", "pattern": "^(\\*|[A-Z0-9]{1,6}([.-][A-Z0-9]{1,2})?)$" },
-          "description": "기사 주제인 종목(검색어에 걸린 종목). 국내 종목코드, 미국 티커(종류 구분은 \"-\"), \"*\"(시장 전체)다. 형식은 market.holdings의 symbol과 같다. ETF가 담은 구성 종목 관계는 여기에 풀어 적지 않고 꺼낼 때(news.articles.requested) 넓힌다."
+          "description": "기사 주제인 종목(검색어에 걸린 종목). 국내 종목코드, 미국 티커(종류 구분은 \"-\"), \"*\"(시장 전체)다. 형식은 DB의 종목 표(market.etf·market.stock)의 symbol과 같다. ETF가 담은 구성 종목 관계는 여기에 풀어 적지 않고 꺼낼 때(news.articles.requested) 넓힌다."
         },
         "matchedQueries": {
           "type": "array",

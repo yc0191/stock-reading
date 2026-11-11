@@ -58,13 +58,6 @@ def test_send_switch_is_never_loaded_even_if_present():
     assert "NOTIFIER_SEND_ENABLED" not in lc.ENV_NAMES.values()
 
 
-def test_max_per_hour_stays_a_code_default():
-    # 한도는 application.yml 기본값을 쓰므로 파라미터로 덮어쓰지 않는다.
-    updates, ignored = lc.to_env_updates([param("max-per-hour", "100")])
-    assert "NOTIFIER_MAX_PER_HOUR" not in updates
-    assert ignored == ["max-per-hour"]
-
-
 def test_value_with_newline_is_rejected():
     with pytest.raises(ValueError):
         lc.to_env_updates([param("smtp-host", "a\nSMTP_PASSWORD=x")])

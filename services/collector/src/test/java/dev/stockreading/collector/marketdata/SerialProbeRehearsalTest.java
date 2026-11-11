@@ -13,7 +13,7 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import dev.stockreading.collector.CollectorProperties;
+import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -58,7 +58,7 @@ class SerialProbeRehearsalTest {
         var broker = new BrokerProperties(server.baseUrl(), "TEST-key", "TEST-secret", 5, cap);
         var client = new BrokerClient(broker, mapper, Clock.systemDefaultZone(), CallRateLimiter.perSecond(10));
         CallRateLimit limiter = CallRateLimiter.perSecond(cap);
-        var marketData = new BrokerMarketData(client, new CollectorProperties(symbols, 1_000), broker, limiter, check);
+        var marketData = new BrokerMarketData(client, (QuoteSymbolsPort) () -> symbols, broker, limiter, check);
         return new SerialProbe(client, marketData, limiter, check, settings);
     }
 

@@ -21,6 +21,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 @EnabledIfEnvironmentVariable(named = "WRITER_IT_DB_PASSWORD", matches = ".+")
 @EnabledIfEnvironmentVariable(named = "COLLECTOR_IT_DB_USER", matches = ".+")
 @EnabledIfEnvironmentVariable(named = "COLLECTOR_IT_DB_PASSWORD", matches = ".+")
+@EnabledIfEnvironmentVariable(named = "NEWS_IT_DB_USER", matches = ".+")
+@EnabledIfEnvironmentVariable(named = "NEWS_IT_DB_PASSWORD", matches = ".+")
 @EnabledIfEnvironmentVariable(named = "MARKET_IT_DB_USER", matches = ".+")
 @EnabledIfEnvironmentVariable(named = "MARKET_IT_DB_PASSWORD", matches = ".+")
 class PersonalSchemaIntegrationTest {
@@ -28,6 +30,7 @@ class PersonalSchemaIntegrationTest {
     private final JdbcClient writer = PersonalDb.writer();
     private final JdbcClient notifier = PersonalDb.notifier();
     private final JdbcClient collector = PersonalDb.collector();
+    private final JdbcClient news = PersonalDb.news();
     private final JdbcClient market = PersonalDb.market();
 
     @BeforeEach
@@ -85,7 +88,28 @@ class PersonalSchemaIntegrationTest {
                 .isNotNull();
         assertDenied(() -> collector.sql("SELECT count(*) FROM personal.member_portfolio").query(Long.class).single());
         assertDenied(() -> collector.sql("SELECT count(*) FROM personal.member").query(Long.class).single());
-        assertDenied(() -> collector.sql("SELECT count(*) FROM market.etf").query(Long.class).single());
+        assertDenied(() -> collector.sql("SELECT count(*) FROM market.price_snapshot").query(Long.class).single());
+    }
+
+    // 수집기는 미국 티커를 담은 ETF를 찾으려고, 뉴스는 ETF 기사를 구성 종목 기사로 넓히려고 구성 종목 표를 읽는다. 읽기만 주고 쓰기와 개인정보는 막는다.
+    @Test
+    void theCollectorAndNewsAccountsReadTheConstituentTablesButCannotWriteThemOrReadPersonalData() {
+        for (JdbcClient reader : List.of(collector, news)) {
+            assertThat(reader.sql("SELECT count(*) FROM market.etf WHERE symbol = 'NOTI01'").query(Long.class).single())
+                    .isEqualTo(1L);
+            assertThat(reader.sql("SELECT count(*) FROM market.stock WHERE symbol LIKE 'NOTI%'").query(Long.class).single())
+                    .isEqualTo(4L);
+            assertThat(reader.sql("SELECT count(*) FROM market.etf_stock_map m JOIN market.etf e ON e.id = m.etf_id "
+                    + "WHERE e.symbol = 'NOTI01'").query(Long.class).single()).isEqualTo(2L);
+
+            assertDenied(() -> reader.sql("INSERT INTO market.stock (market, symbol) VALUES ('US', 'NOTIX')").update());
+            assertDenied(() -> reader.sql("UPDATE market.etf SET name = 'x'").update());
+            assertDenied(() -> reader.sql("DELETE FROM market.etf_stock_map").update());
+            assertDenied(() -> reader.sql("SELECT email FROM personal.member_mail").query(String.class).list());
+            assertDenied(() -> reader.sql("SELECT count(*) FROM personal.member_portfolio").query(Long.class).single());
+        }
+        // 뉴스 계정은 수집 대상 뷰도 읽지 못한다(개인 포트폴리오에서 나온 값이라 수집기 몫이다).
+        assertDenied(() -> news.sql("SELECT count(*) FROM personal.collect_target").query(Long.class).single());
     }
 
     @Test

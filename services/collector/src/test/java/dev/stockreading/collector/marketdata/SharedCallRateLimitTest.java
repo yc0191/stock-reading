@@ -29,6 +29,7 @@ import org.springframework.context.annotation.ComponentScan;
 import org.springframework.kafka.core.KafkaTemplate;
 
 import dev.stockreading.collector.CollectorProperties;
+import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import dev.stockreading.collector.edgar.ExchangePort;
 import dev.stockreading.collector.holdings.HoldingsPort;
 import dev.stockreading.collector.insight.InsightProperties;
@@ -58,6 +59,11 @@ class SharedCallRateLimitTest {
             PriceCheckProperties.class})
     @ComponentScan(basePackages = "dev.stockreading.collector.marketdata")
     static class Wiring {
+
+        @Bean
+        QuoteSymbolsPort quoteSymbols() {
+            return () -> SYMBOLS;
+        }
 
         @Bean
         Clock clock() {
@@ -134,7 +140,7 @@ class SharedCallRateLimitTest {
         };
         var broker = new BrokerProperties(server.baseUrl(), "k", "s", 5, maxCalls);
         var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10));
-        var quotes = new BrokerMarketData(client, new CollectorProperties(SYMBOLS, 1_000), broker, shared, PriceChecks.fake());
+        var quotes = new BrokerMarketData(client, (QuoteSymbolsPort) () -> SYMBOLS, broker, shared, PriceChecks.fake());
         var overseas = new BrokerInsightSource(client, insightProperties(), shared);
 
         CompletableFuture<Void> quoteLoop = CompletableFuture.runAsync(() -> {
@@ -240,6 +246,11 @@ class SharedCallRateLimitTest {
             IntradayProperties.class, PriceCheckProperties.class})
     @ComponentScan(basePackages = {"dev.stockreading.collector.marketdata", "dev.stockreading.collector.insight"})
     static class IntradayWiring {
+
+        @Bean
+        QuoteSymbolsPort quoteSymbols() {
+            return () -> SYMBOLS;
+        }
 
         @Bean
         Clock clock() {

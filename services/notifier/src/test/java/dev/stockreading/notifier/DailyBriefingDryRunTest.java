@@ -38,7 +38,7 @@ class DailyBriefingDryRunTest {
     @Configuration
     @EnableConfigurationProperties(NotifierProperties.class)
     @ComponentScan(basePackageClasses = MailSenderPort.class)
-    @Import({DailyBriefingListener.class, SendRateLimiter.class})
+    @Import(DailyBriefingListener.class)
     static class Wiring {
         @Bean
         ObjectMapper objectMapper() {
@@ -60,7 +60,7 @@ class DailyBriefingDryRunTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withUserConfiguration(Wiring.class)
-            .withPropertyValues("notifier.subject-prefix=[시뮬레이션]", "notifier.max-per-hour=6");
+            .withPropertyValues("notifier.subject-prefix=[시뮬레이션]");
 
     private ListAppender<ILoggingEvent> logs;
 

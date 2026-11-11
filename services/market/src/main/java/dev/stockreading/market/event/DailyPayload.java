@@ -59,12 +59,6 @@ public record DailyPayload(
                 boolean tickersTruncated, ContextPayload.EtfInfo etf) {
             return new Etf(symbol, null, null, null, null, null, missingReason, tickers, tickersTruncated, etf, null);
         }
-
-        /** 보유(HELD)·관심(WATCH) 구분을 더한 사본. */
-        public Etf withRelation(String relation) {
-            return new Etf(symbol, date, close, prevClose, rate, fetchedAt, missingReason, tickers, tickersTruncated,
-                    etf, relation);
-        }
     }
 
     /**

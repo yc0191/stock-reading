@@ -12,7 +12,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
-import java.time.Instant;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -32,14 +31,11 @@ import tools.jackson.databind.json.JsonMapper;
 class DailyBriefingListenerTest {
 
     private static final String SAMPLE_ID = "5c2e9a14-7b3d-4f61-a8e0-3d9b6c1f2a40";
-    private static final String BRIEFING_SAMPLE_ID = "9b7d1f20-3a4c-4e8b-b5d6-2c1a0f9e8d77";
 
     private MailSenderPort mailSender;
     private RecipientPort recipients;
     private String sample;
-    private String briefingSample;
     private NotifierProperties properties;
-    private SendRateLimiter limiter;
 
     @BeforeEach
     void setUp() throws IOException {
@@ -48,30 +44,15 @@ class DailyBriefingListenerTest {
         when(recipients.forEdition(any())).thenReturn(List.of(new Recipient(1, "to@example.com")));
         when(recipients.forMove(any())).thenReturn(List.of(new Recipient(1, "to@example.com")));
         sample = ContractSchemas.sample("briefing.daily.generated.sample.json");
-        briefingSample = ContractSchemas.sample("briefing.generated.sample.json");
-        limit(6);
-    }
-
-    private void limit(int maxPerHour) {
-        properties = new NotifierProperties(false, "from@example.com", "[시뮬레이션]", maxPerHour);
-        limiter = new SendRateLimiter(properties, new TestClock(Instant.parse("2026-10-20T08:00:00Z")));
+        properties = new NotifierProperties(false, "from@example.com", "[시뮬레이션]");
     }
 
     private DailyBriefingListener listener() {
         return new DailyBriefingListener(JsonMapper.builder().build(), new DailyEmailComposer(properties), mailSender, recipients);
     }
 
-    // 건별 메일과 같은 한도 장치를 함께 쓰는지 보려고 같은 limiter로 만든다.
-    private BriefingListener moveListener() {
-        return new BriefingListener(JsonMapper.builder().build(), new EmailComposer(properties), mailSender, limiter, recipients);
-    }
-
     private String withEventId(String id) {
         return sample.replace(SAMPLE_ID, id);
-    }
-
-    private String briefingWithEventId(String id) {
-        return briefingSample.replace(BRIEFING_SAMPLE_ID, id);
     }
 
     @Test
@@ -107,28 +88,6 @@ class DailyBriefingListenerTest {
         assertThat(email.getAllValues()).extracting(EmailMessage::subject).containsExactly(
                 "[시뮬레이션] 마감 후 판 데일리 브리핑 2026-10-20",
                 "[시뮬레이션] 아침 판 데일리 브리핑 2026-10-20");
-    }
-
-    @Test
-    void aDailyBriefingIsEmailedEvenWhenTheRecipientsMoveLimitIsAlreadyReached() {
-        limit(1);
-        moveListener().onBriefing(briefingWithEventId("11111111-1111-4111-8111-111111111111")); // 한도를 채운다
-
-        listener().onDailyBriefing(sample);
-
-        verify(mailSender, times(2)).send(any(), any());
-        assertThat(limiter.hasCapacity(1)).isFalse();
-    }
-
-    @Test
-    void aSentDailyBriefingDoesNotCountTowardTheMoveLimit() {
-        limit(1);
-
-        listener().onDailyBriefing(sample);
-        moveListener().onBriefing(briefingSample);
-
-        verify(mailSender, times(2)).send(eq("to@example.com"), any());
-        assertThat(limiter.hasCapacity(1)).isFalse(); // 건별 메일 한 통이 한도를 채웠다
     }
 
     @Test

@@ -34,6 +34,7 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 import dev.stockreading.collector.CollectorProperties;
+import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.ContractSchemas;
 import dev.stockreading.collector.insight.InsightProperties;
@@ -65,6 +66,11 @@ class CollectTimerFlowTest {
             includeFilters = @ComponentScan.Filter(type = FilterType.REGEX,
                     pattern = ".*\\.(CollectorJobs|QuotePublisher|CollectTimer|PostCloseTimer)"))
     static class Wiring {
+
+        @Bean
+        QuoteSymbolsPort quoteSymbols() {
+            return () -> SYMBOLS;
+        }
 
         @Bean
         Clock clock() {
@@ -119,8 +125,7 @@ class CollectTimerFlowTest {
                         "BROKER_APP_KEY=k",
                         "BROKER_APP_SECRET=s",
                         "BROKER_PRICE_CHECK_ENABLED=false",
-                        "COLLECTOR_SCHEDULE_ENABLED=true",
-                        "collector.symbols=" + String.join(",", SYMBOLS));
+                        "COLLECTOR_SCHEDULE_ENABLED=true");
     }
 
     @SuppressWarnings("unchecked")

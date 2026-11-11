@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Clock;
 import java.time.ZoneId;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -12,8 +13,10 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.FilterType;
 
 import dev.stockreading.collector.disclosure.DartProperties;
+import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import dev.stockreading.collector.disclosure.DisclosurePort;
 import dev.stockreading.collector.insight.InsightProperties;
 import dev.stockreading.collector.insight.InsightSourcePort;
@@ -23,6 +26,7 @@ import dev.stockreading.collector.marketdata.MarketStatusProperties;
 import dev.stockreading.collector.marketdata.PriceCheckProperties;
 import dev.stockreading.collector.news.NewsCollector;
 import dev.stockreading.collector.news.NewsSearchPort;
+import dev.stockreading.collector.news.SearchQueriesPort;
 import dev.stockreading.collector.news.NewsSearchProperties;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -33,11 +37,23 @@ class DataSourceWiringTest {
     @Configuration
     @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, MarketStatusProperties.class, NewsSearchProperties.class, DartProperties.class,
             InsightProperties.class, PriceCheckProperties.class})
+    // 검색어는 DB에서 읽는 빈(DbSearchQueries)이라 이 배선 테스트에서는 빼고 빈 목록으로 대신한다.
     @ComponentScan(basePackages = {
             "dev.stockreading.collector.marketdata",
             "dev.stockreading.collector.news",
-            "dev.stockreading.collector.disclosure"})
+            "dev.stockreading.collector.disclosure"},
+            excludeFilters = @ComponentScan.Filter(type = FilterType.REGEX, pattern = ".*\\.DbSearchQueries"))
     static class Wiring {
+
+        @Bean
+        SearchQueriesPort searchQueries() {
+            return List::of;
+        }
+
+        @Bean
+        QuoteSymbolsPort quoteSymbols() {
+            return () -> List.of("TEST01", "TEST02", "TEST03");
+        }
 
         @Bean
         Clock clock() {

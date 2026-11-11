@@ -26,7 +26,7 @@
 #               (BRIEFING_LLM_MODEL 을 뺀 위 키는) 실행할 때마다 Parameter Store 에서 새로 읽어 임시 폴더에만 두고,
 #               실행 환경변수와 .env 의 같은 키는 쓰지 않는다. 하나라도 비면 시세를 부르기 전에 실패로 끝낸다.
 #               메일 발송 스위치는 이 스크립트가 띄운 테스트용 notifier 프로세스에만 켜고(.env 는 바꾸지 않음),
-#               제목 앞에 [테스트]를 붙이고 시간당 1통으로 묶는다. LLM 리포트 본문은 받은 메일과
+#               제목 앞에 [테스트]를 붙인다. LLM 리포트 본문은 받은 메일과
 #               build/test-all-live/briefing-<실행 이름>.txt(권한 600, git 제외)에만 남는다.
 set -uo pipefail
 
@@ -92,7 +92,7 @@ JAVA_SERVICES="collector market news notifier"
 
 # 바깥에서 들어온 켜는 변수가 기본 단계에 섞이면 엉뚱한 데이터베이스로 실제 DB 테스트가 돈다. 필요한 단계에서만 넣는다.
 unset MARKET_IT_DB_URL MARKET_IT_DB_USER MARKET_IT_DB_PASSWORD MARKET_IT_DB_MIGRATION_SCHEMA NEWS_IT_DB_URL NEWS_IT_DB_USER NEWS_IT_DB_PASSWORD \
-  WRITER_IT_DB_USER WRITER_IT_DB_PASSWORD COLLECTOR_IT_DB_USER COLLECTOR_IT_DB_PASSWORD NOTIFIER_IT_DB_URL NOTIFIER_IT_DB_USER NOTIFIER_IT_DB_PASSWORD \
+  WRITER_IT_DB_USER WRITER_IT_DB_PASSWORD COLLECTOR_IT_DB_URL COLLECTOR_IT_DB_USER COLLECTOR_IT_DB_PASSWORD NOTIFIER_IT_DB_URL NOTIFIER_IT_DB_USER NOTIFIER_IT_DB_PASSWORD \
   BRIEFING_IT_DB_URL BRIEFING_IT_DB_USER BRIEFING_IT_DB_PASSWORD \
   QUOTE_FLOW_LIVE_DB_URL QUOTE_FLOW_LIVE_DB_USER QUOTE_FLOW_LIVE_DB_PASSWORD \
   BRIEFING_FLOW_LIVE_KAFKA BRIEFING_FLOW_LIVE_RUN_ID BRIEFING_FLOW_LIVE_DB_URL BRIEFING_FLOW_LIVE_DB_USER \
@@ -427,20 +427,20 @@ JDBC_URL="jdbc:postgresql://127.0.0.1:5432/$DB_NAME"
 PG_URL="postgresql://127.0.0.1:5432/$DB_NAME"
 
 run_db_tests() {
-  local line group names name gradle_args="" notifier_args="" java_groups="" briefing_files="" rc=0 path
+  local line group names name gradle_args="" serial_args="" java_groups="" briefing_files="" rc=0 path
   # 지도(docs/test-map)에서 켜는 조건이 *_IT_DB_* 인 테스트를 고른다. 새 실제 DB 테스트를 지도에 올리면 여기에 들어온다.
   while read -r group names; do
     [ -n "$group" ] || continue
     case "$group" in
-      market|news)
+      market)
         java_groups="$java_groups $group"
         gradle_args="$gradle_args :services:$group:cleanTest :services:$group:test"
         for name in $names; do gradle_args="$gradle_args --tests $name"; done ;;
-      notifier)
-        # 같은 테스트 DB 의 personal 표를 market 테스트와 함께 쓰므로 market 이 끝난 뒤 따로 돌린다(gradle 이 프로젝트를 병렬로 돌리기 때문).
+      news|collector|notifier)
+        # 같은 테스트 DB 의 market·personal 표를 market 테스트와 함께 쓰므로 market 이 끝난 뒤 서비스마다 따로 돌린다(gradle 이 프로젝트를 병렬로 돌리기 때문).
         java_groups="$java_groups $group"
-        notifier_args=":services:notifier:cleanTest :services:notifier:test"
-        for name in $names; do notifier_args="$notifier_args --tests $name"; done ;;
+        serial_args="$serial_args|:services:$group:cleanTest :services:$group:test"
+        for name in $names; do serial_args="$serial_args --tests $name"; done ;;
       briefing)
         for name in $names; do
           path=$(find services/briefing/tests -name "$name" -o -name "$name.py" | head -1)
@@ -459,9 +459,14 @@ run_db_tests() {
         export NEWS_IT_DB_URL="$JDBC_URL" NEWS_IT_DB_USER="$N_USER" NEWS_IT_DB_PASSWORD="$N_PW"
         export WRITER_IT_DB_USER="$PW_USER" WRITER_IT_DB_PASSWORD="$PW_PW"
         export COLLECTOR_IT_DB_USER="$PC_USER" COLLECTOR_IT_DB_PASSWORD="$PC_PW"
+        export COLLECTOR_IT_DB_URL="$JDBC_URL"
         export NOTIFIER_IT_DB_URL="$JDBC_URL" NOTIFIER_IT_DB_USER="$PN_USER" NOTIFIER_IT_DB_PASSWORD="$PN_PW"
         if [ -n "$gradle_args" ]; then ./gradlew $gradle_args --no-build-cache || exit 1; fi
-        if [ -n "$notifier_args" ]; then ./gradlew $notifier_args --no-build-cache || exit 1; fi
+        run_args=""
+        IFS='|' read -r -a serial_runs <<<"${serial_args#|}"
+        for run_args in "${serial_runs[@]}"; do
+          [ -n "$run_args" ] && { ./gradlew $run_args --no-build-cache || exit 1; }
+        done
       ) || rc=1
       collect_java db "$java_groups"
     else
@@ -626,11 +631,14 @@ run_live() {
     *) LIVE_FAIL_REASON="market 이 120초 안에 준비되지 않음"; return 1 ;;
   esac
 
+  # 수집 대상은 DB 에서 읽으므로(재시작 때 반영) 수집기를 띄우기 전에 테스트 멤버의 포트폴리오에 시세 종목 1개를 넣는다.
+  echo "테스트 멤버의 포트폴리오에 종목 1개 넣기(수집 대상은 DB 에서 읽음)"
+  seed_live_portfolio || { LIVE_FAIL_REASON="테스트 멤버 포트폴리오를 넣지 못함"; return 1; }
   echo "collector 기동(실제 시세, 종목 1개)"
   (
     export SPRING_KAFKA_BOOTSTRAP_SERVERS="localhost:$port"
+    export SPRING_DATASOURCE_URL="$JDBC_URL" SPRING_DATASOURCE_USERNAME="$PC_USER" SPRING_DATASOURCE_PASSWORD="$PC_PW"
     export COLLECTOR_MARKET_DATA_SOURCE=broker BROKER_BASE_URL="$base_url" BROKER_APP_KEY="$app_key" BROKER_APP_SECRET="$app_secret"
-    export COLLECTOR_SYMBOLS="$symbol"
     # 브리핑이 근거 약한 문장을 재검색하면 이 수집기가 실제 뉴스 검색으로 답한다. 키가 없으면 다 모으지 못함으로 끝나 브리핑 확인이 실패한다.
     export NEWS_SEARCH_CLIENT_ID="$(live_value NEWS_SEARCH_CLIENT_ID)" NEWS_SEARCH_CLIENT_SECRET="$(live_value NEWS_SEARCH_CLIENT_SECRET)"
     export NEWS_SEARCH_BASE_URL="$(env_or_dotenv NEWS_SEARCH_BASE_URL)" NEWS_SEARCH_ID_HEADER="$(env_or_dotenv NEWS_SEARCH_ID_HEADER)"
@@ -669,24 +677,32 @@ run_live() {
 LIVE_BRIEF_FAIL_REASON=""
 LIVE_REPORT_FILE="$LIVE_OUT_DIR/briefing-${RUN_ID}.txt"
 
-# 시세 흐름 단계가 쓰는 종목(TEST_ALL_LIVE_SYMBOL)을 ETF 로 넣고, 그 종목을 담은 멤버와 받는 주소를 테스트 DB 에 넣는다.
-seed_live_member() {
-  local symbol address
+# 시세 흐름 단계가 쓰는 종목(TEST_ALL_LIVE_SYMBOL)을 ETF 로 넣고, 테스트 멤버가 그 종목을 포트폴리오에 담게 한다.
+# 수집기가 이 포트폴리오(수집 대상 뷰)에서 1초 시세 종목을 읽는다.
+seed_live_portfolio() {
+  local symbol
   symbol=$(live_value TEST_ALL_LIVE_SYMBOL)
-  address=$(live_value TEST_ALL_LIVE_RECIPIENT)
   [[ "$symbol" =~ ^[0-9]{6}$ ]] || return 1
+  docker exec -i "$PG_CONTAINER" sh -c 'psql -qAtX -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$1"' sh "$DB_NAME" >/dev/null <<SQL
+INSERT INTO market.etf (market, symbol, name) VALUES ('KR', '$symbol', 'TEST LIVE ETF') ON CONFLICT (market, symbol) DO NOTHING;
+INSERT INTO personal.member (name) VALUES ('TEST LIVE MEMBER');
+INSERT INTO personal.member_portfolio (member_id, etf_id, relation)
+SELECT (SELECT max(id) FROM personal.member WHERE name = 'TEST LIVE MEMBER'), id, 'HELD'
+FROM market.etf WHERE symbol = '$symbol' AND market = 'KR';
+SQL
+}
+
+# 테스트 멤버에게 받는 주소를 더한다(받는 사람은 발송기가 DB 에서 고름).
+seed_live_member() {
+  local address
+  address=$(live_value TEST_ALL_LIVE_RECIPIENT)
   # 주소는 명령줄이 아니라 환경변수로 넘긴다(\getenv). SQL 에 넣기 전에 따옴표·공백이 없는 주소 모양인지 확인한다.
   [[ "$address" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]] || return 1
   LIVE_MEMBER_ADDRESS="$address" docker exec -i -e LIVE_MEMBER_ADDRESS "$PG_CONTAINER" \
     sh -c 'psql -qAtX -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$1"' sh "$DB_NAME" >/dev/null <<SQL
 \\getenv address LIVE_MEMBER_ADDRESS
-INSERT INTO market.etf (market, symbol, name) VALUES ('KR', '$symbol', 'TEST LIVE ETF') ON CONFLICT (market, symbol) DO NOTHING;
-INSERT INTO personal.member (name) VALUES ('TEST LIVE MEMBER');
 INSERT INTO personal.member_mail (member_id, email)
 SELECT max(id), :'address' FROM personal.member WHERE name = 'TEST LIVE MEMBER';
-INSERT INTO personal.member_portfolio (member_id, etf_id, relation)
-SELECT (SELECT max(id) FROM personal.member WHERE name = 'TEST LIVE MEMBER'), id, 'HELD'
-FROM market.etf WHERE symbol = '$symbol' AND market = 'KR';
 SQL
 }
 
@@ -712,15 +728,15 @@ run_live_briefing() {
   esac
 
   # 받는 사람은 DB 에서 고르므로 테스트 DB 에 멤버·메일·포트폴리오를 한 줄씩 넣는다. 주소는 임시 폴더 파일(권한 600)로만 넘기고 출력하지 않는다.
-  echo "테스트 멤버 1명 넣기(받는 사람은 DB 에서 고름)"
+  echo "테스트 멤버에게 받는 주소 넣기(받는 사람은 DB 에서 고름)"
   seed_live_member || { LIVE_BRIEF_FAIL_REASON="테스트 멤버를 넣지 못함"; return 1; }
 
-  echo "notifier 기동(테스트용: 실제 발송, 제목 앞 [테스트], 시간당 1통)"
+  echo "notifier 기동(테스트용: 실제 발송, 제목 앞 [테스트])"
   (
     export SPRING_KAFKA_BOOTSTRAP_SERVERS="$bootstrap"
     export SPRING_DATASOURCE_URL="$JDBC_URL" SPRING_DATASOURCE_USERNAME="$PN_USER" SPRING_DATASOURCE_PASSWORD="$PN_PW"
     # 발송 스위치는 이 프로세스 환경에만 둔다. .env 는 읽지도 쓰지도 않는다(임시 폴더에서 띄움).
-    export NOTIFIER_SEND_ENABLED=true NOTIFIER_SUBJECT_PREFIX="[테스트]" NOTIFIER_MAX_PER_HOUR=1
+    export NOTIFIER_SEND_ENABLED=true NOTIFIER_SUBJECT_PREFIX="[테스트]"
     SMTP_HOST=$(live_value SMTP_HOST) SMTP_USERNAME=$(live_value SMTP_USERNAME)
     SMTP_PASSWORD=$(live_value SMTP_PASSWORD) SMTP_PORT=$(live_value SMTP_PORT)
     NOTIFIER_SENDER=$(live_value NOTIFIER_SENDER)

@@ -7,8 +7,9 @@
 -- 계정과 권한:
 --   owner     personal 스키마의 주인. 마이그레이션(Flyway)이 이 계정으로 표를 만든다.
 --   writer    값을 넣고 고치는 계정(작업자 SQL, 나중에 CUD 기능). personal 전체를 읽고 쓴다.
---   collector 수집기. 수집 대상 뷰(personal.collect_target)와 뉴스 검색 대상 뷰(market.news_search_target)만 읽는다.
+--   collector 수집기. 수집 대상 뷰(personal.collect_target)와 뉴스 검색 대상 뷰(market.news_search_target), market의 구성 종목 표(etf, stock, etf_stock_map)만 읽는다.
 --   notifier  발송기. 받는 사람을 고르려고 personal의 표를 읽는다(member_mail 포함).
+--   news      뉴스 서비스(기존 계정). market의 구성 종목 표(etf, stock, etf_stock_map)만 읽는다. personal은 읽지 못한다.
 --   market    시세처리기(기존 계정). personal.active_portfolio 뷰만 읽는다(보유·관심 구분 계산). member, member_mail, member_portfolio는 읽지 못한다.
 \set ON_ERROR_STOP on
 
@@ -21,6 +22,7 @@
 \getenv notifier_user NOTIFIER_DB_USER
 \getenv notifier_password NOTIFIER_DB_PASSWORD
 \getenv market_user MARKET_DB_USER
+\getenv news_user NEWS_DB_USER
 
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'owner_user', :'owner_password')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'owner_user') \gexec
@@ -55,3 +57,6 @@ GRANT SELECT ON market.etf_stock_map TO :"owner_user";
 -- writer는 포트폴리오를 넣을 때 종목코드로 id를 찾고, notifier는 종목코드로 급변동 수신자를 고른다.
 GRANT SELECT ON market.etf, market.stock TO :"writer_user", :"notifier_user";
 GRANT SELECT ON market.news_search_target TO :"collector_user";
+-- 구성 종목 읽기. 뉴스는 ETF 기사를 구성 종목 기사로 넓히려고, 수집기는 미국 티커를 담은 ETF를 찾으려고 읽는다. 읽기만 주고 쓰기는 주지 않는다.
+GRANT USAGE ON SCHEMA market TO :"news_user";
+GRANT SELECT ON market.etf, market.stock, market.etf_stock_map TO :"news_user", :"collector_user";

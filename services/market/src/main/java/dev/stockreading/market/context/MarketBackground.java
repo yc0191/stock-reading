@@ -9,7 +9,7 @@ import java.util.Optional;
 
 import dev.stockreading.market.event.ContextPayload;
 import dev.stockreading.market.event.EventFactory;
-import dev.stockreading.market.holdings.EtfInfo;
+import dev.stockreading.market.constituent.EtfInfo;
 import dev.stockreading.market.insight.OverseasCloseRate;
 
 /**

@@ -4,7 +4,7 @@
 
 | 기능 | 대상 | 단위 | 가상 | 실제 |
 |---|---|---|---|---|
-| 근거 조회 작업(상태, 이벤트 모양, 설정값, 데일리 응답의 memberChanges 칸 읽기)과 같은 종목의 급변동 묶기(조용한 시간 10분, 첫 변동부터 최대 30분, 종목별로 따로, 같은 eventId는 한 번, 가장 늦은 변동으로 작업 하나, 정상 종료 때 대기 묶음을 재시작으로 중단된 실패 작업으로 남김) | `__init__.py`, config.py, events.py, jobs.py, move_group.py, ports.py, sources.py | test_jobs.py, test_contracts.py, test_sources.py, test_report_input.py, test_move_group.py | test_move_group.py, test_runner.py | 해당 없음 - 모으는 중인 변동은 메모리에만 있고 저장소를 부르지 않음(묶음 기록 줄의 저장은 아래 작업 기록 행의 실제 DB 테스트) |
+| 근거 조회 작업(상태, 이벤트 모양, 설정값, 데일리 응답의 memberChanges 칸 읽기)과 같은 종목의 급변동 묶기(조용한 시간 기본 0분, 첫 변동부터 최대 30분, 종목별로 따로, 같은 eventId는 한 번, 가장 늦은 변동으로 작업 하나, 정상 종료 때 대기 묶음을 재시작으로 중단된 실패 작업으로 남김) | `__init__.py`, config.py, events.py, jobs.py, move_group.py, ports.py, sources.py | test_jobs.py, test_contracts.py, test_sources.py, test_report_input.py, test_move_group.py | test_move_group.py, test_runner.py | 해당 없음 - 모으는 중인 변동은 메모리에만 있고 저장소를 부르지 않음(묶음 기록 줄의 저장은 아래 작업 기록 행의 실제 DB 테스트) |
 | 근거 뉴스 선택(시간 범위) | evidence.py | test_evidence.py | 해당 없음 - 뉴스와 시각을 인자로 받을 뿐 외부 의존을 부르지 않음 | 해당 없음 - 외부 의존을 부르지 않음 |
 | 변동을 브리핑 문장으로 바꾸기 | compose.py, service.py | test_compose.py, test_service.py | 해당 없음 - 메시지와 뉴스를 인자로 받을 뿐 외부 의존을 부르지 않음 | 해당 없음 - 외부 의존을 부르지 않음 |
 | 급변동 배경 숫자와 비교 숫자(환율·지수 꺼내기, 시장 대비 차이, 미국 종목 집계) | move_figures.py | test_move_figures.py | 해당 없음 - 배경 원문과 등락률을 인자로 받을 뿐 외부 의존을 부르지 않음 | 해당 없음 - 외부 의존을 부르지 않음 |

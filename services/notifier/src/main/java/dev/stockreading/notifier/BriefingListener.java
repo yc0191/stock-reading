@@ -28,19 +28,17 @@ class BriefingListener {
     private final ObjectMapper mapper;
     private final EmailComposer composer;
     private final MailSenderPort mailSender;
-    private final SendRateLimiter rateLimiter;
     private final RecipientPort recipients;
 
     // v0: 메모리 기반 중복 방지(실행 중에만 유지). 이후 DB 기록으로 대체한다. 키는 이벤트와 받는 사람의 조합이라,
     // 여러 사람 중 일부만 보낸 채 실패해 다시 처리해도 이미 받은 사람에게는 다시 보내지 않는다.
     private final Set<String> sentBriefings = ConcurrentHashMap.newKeySet();
 
-    BriefingListener(ObjectMapper mapper, EmailComposer composer, MailSenderPort mailSender, SendRateLimiter rateLimiter,
+    BriefingListener(ObjectMapper mapper, EmailComposer composer, MailSenderPort mailSender,
             RecipientPort recipients) {
         this.mapper = mapper;
         this.composer = composer;
         this.mailSender = mailSender;
-        this.rateLimiter = rateLimiter;
         this.recipients = recipients;
     }
 
@@ -64,29 +62,18 @@ class BriefingListener {
         }
 
         EmailMessage email = composer.compose(briefing);
-        int skippedByLimit = 0;
         for (Recipient target : targets) {
             String key = briefing.eventId() + ":" + target.mailId();
             if (sentBriefings.contains(key)) {
                 log.info("duplicate briefing ignored eventId={} mailId={}", briefing.eventId(), target.mailId());
                 continue;
             }
-            // 한도는 받는 사람마다 센다. 한 사람이 찼다고 다른 사람을 막지 않는다.
-            if (!rateLimiter.hasCapacity(target.mailId())) {
-                skippedByLimit++;
-                continue;
-            }
             mailSender.send(target.address(), email); // 실패하면 예외를 던진다 -> Kafka 에러 핸들러가 재시도한다
-            rateLimiter.recordSent(target.mailId());
 
             if (sentBriefings.size() >= MAX_REMEMBERED) {
                 sentBriefings.clear();
             }
             sentBriefings.add(key);
-        }
-        if (skippedByLimit > 0) {
-            log.warn("hourly email limit reached; briefing not emailed to {} recipient(s) eventId={} symbol={}",
-                    skippedByLimit, briefing.eventId(), briefing.payload().symbol());
         }
     }
 }

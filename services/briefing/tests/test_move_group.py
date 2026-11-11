@@ -17,7 +17,7 @@ from fake_job_log import FakeJobLog
 
 KST = timezone(timedelta(hours=9))
 T0 = datetime(2026, 10, 20, 16, 0, 31, tzinfo=KST)
-QUIET = timedelta(minutes=10)
+LONG_WAIT = timedelta(minutes=10)  # 조용한 시간을 길게 둔 묶음 규칙 시험용 값(기본값은 0분)
 MAX_WAIT = timedelta(minutes=30)
 
 
@@ -39,25 +39,25 @@ class Sink:
 @pytest.fixture
 def parts():
     sink, job_log = Sink(), FakeJobLog()
-    grouper = MoveGrouper(sink, job_log, CoreSettings())
+    grouper = MoveGrouper(sink, job_log, CoreSettings(move_quiet_period=LONG_WAIT))
     return grouper, sink, job_log
 
 
-def test_defaults_are_ten_quiet_minutes_and_thirty_minutes_at_most():
+def test_defaults_are_zero_quiet_minutes_and_thirty_minutes_at_most():
     settings = CoreSettings()
-    assert settings.move_quiet_period == QUIET and settings.move_max_wait == MAX_WAIT
+    assert settings.move_quiet_period == timedelta(0) and settings.move_max_wait == MAX_WAIT
 
 
 def test_a_move_does_not_start_a_job_until_the_quiet_time_has_passed(parts):
     grouper, sink, _ = parts
     grouper.on_move(move("m1"), T0)
 
-    grouper.on_tick(T0 + QUIET - timedelta(seconds=1))
+    grouper.on_tick(T0 + LONG_WAIT - timedelta(seconds=1))
     assert sink.calls == []
-    assert grouper.next_deadline() == T0 + QUIET
+    assert grouper.next_deadline() == T0 + LONG_WAIT
 
-    grouper.on_tick(T0 + QUIET)  # 경계: 정확히 10분이 되면 내보낸다
-    assert sink.calls == [("m1", T0 + QUIET)]
+    grouper.on_tick(T0 + LONG_WAIT)  # 경계: 정확히 10분이 되면 내보낸다
+    assert sink.calls == [("m1", T0 + LONG_WAIT)]
     assert grouper.next_deadline() is None
 
 
@@ -94,18 +94,18 @@ def test_moves_that_keep_coming_are_cut_at_thirty_minutes_from_the_first_and_lat
     assert [eid for eid, _ in sink.calls] == ["m25"]
     [first] = job_log.of_type(EntryType.MOVES_GROUPED)
     assert [m["eventId"] for m in first.data["moves"]] == ["m0", "m5", "m10", "m15", "m20", "m25"]
-    assert grouper.next_deadline() == T0 + MAX_WAIT + QUIET
-    grouper.on_tick(T0 + MAX_WAIT + QUIET)
+    assert grouper.next_deadline() == T0 + MAX_WAIT + LONG_WAIT
+    grouper.on_tick(T0 + MAX_WAIT + LONG_WAIT)
     assert [eid for eid, _ in sink.calls] == ["m25", "m30"]
 
 
 def test_a_move_arriving_after_the_quiet_time_started_a_new_group_even_if_no_tick_ran(parts):
     grouper, sink, _ = parts
     grouper.on_move(move("m1"), T0)
-    grouper.on_move(move("m2"), T0 + QUIET)
+    grouper.on_move(move("m2"), T0 + LONG_WAIT)
 
     assert [eid for eid, _ in sink.calls] == ["m1"]
-    grouper.on_tick(T0 + 2 * QUIET)
+    grouper.on_tick(T0 + 2 * LONG_WAIT)
     assert [eid for eid, _ in sink.calls] == ["m1", "m2"]
 
 
@@ -176,7 +176,7 @@ def test_runner_waits_for_the_quiet_time_and_then_starts_one_move_job_with_the_g
         created.setdefault("consumers", []).append(FakeConsumer(config))
         return created["consumers"][-1]
 
-    runner = main.BriefingRunner("localhost:9092", None, store, clock=clock, consumer_factory=consumer_factory,
+    runner = main.BriefingRunner("localhost:9092", None, store, settings=CoreSettings(move_quiet_period=LONG_WAIT), clock=clock, consumer_factory=consumer_factory,
                                  producer_factory=FakeProducer, declare_topics=lambda _bootstrap: None)
     runner.open()
     consumer = created["consumers"][-1]  # 마지막이 market.move를 받는 소비자다
@@ -201,7 +201,7 @@ def test_core_receives_the_latest_move_of_the_group_as_its_job():
 
     rec = Recorder()
     core = BriefingCore(rec, rec, job_log=rec.log)
-    grouper = MoveGrouper(core.on_move, rec.log, CoreSettings())
+    grouper = MoveGrouper(core.on_move, rec.log, CoreSettings(move_quiet_period=LONG_WAIT))
     grouper.on_move(move("m1", price=10000), T0)
     grouper.on_move(move("m2", price=10300, as_of=T0 + timedelta(minutes=3)), T0 + timedelta(minutes=3))
     grouper.on_tick(T0 + timedelta(minutes=13))
@@ -242,9 +242,9 @@ def test_abandoning_with_no_pending_group_records_nothing(parts):
 def test_a_group_already_sent_as_a_job_is_not_recorded_again_at_shutdown(parts):
     grouper, sink, job_log = parts
     grouper.on_move(move("m1"), T0)
-    grouper.on_tick(T0 + QUIET)
+    grouper.on_tick(T0 + LONG_WAIT)
 
-    assert grouper.abandon_pending(T0 + QUIET) == []
+    assert grouper.abandon_pending(T0 + LONG_WAIT) == []
     assert [eid for eid, _ in sink.calls] == ["m1"]
     assert len(job_log.of_type(EntryType.MOVES_GROUPED)) == 1 and job_log.finishes == []
 
@@ -258,7 +258,7 @@ def test_runner_shutdown_records_pending_groups_before_closing_and_a_record_fail
         def close(self):
             order.append(("close", len(store.finishes)))  # 닫을 때 이미 실패 기록이 끝나 있어야 한다
 
-    runner = main.BriefingRunner("localhost:9092", None, store, clock=clock, consumer_factory=Closing,
+    runner = main.BriefingRunner("localhost:9092", None, store, settings=CoreSettings(move_quiet_period=LONG_WAIT), clock=clock, consumer_factory=Closing,
                                  producer_factory=FakeProducer, declare_topics=lambda _bootstrap: None)
     runner.open()
     runner._consumer.queue.append(FakeMessage("market.move", move("s1", symbol="TEST01")))
@@ -277,7 +277,7 @@ def test_runner_shutdown_records_pending_groups_before_closing_and_a_record_fail
     # 기록 저장이 끝내 실패해도 종료는 끝까지 간다
     broken = FakeStore()
     broken.start = lambda run: (_ for _ in ()).throw(RuntimeError("db down"))
-    runner = main.BriefingRunner("localhost:9092", None, broken, clock=clock, consumer_factory=Closing,
+    runner = main.BriefingRunner("localhost:9092", None, broken, settings=CoreSettings(move_quiet_period=LONG_WAIT), clock=clock, consumer_factory=Closing,
                                  producer_factory=FakeProducer, declare_topics=lambda _bootstrap: None)
     runner.open()
     runner._consumer.queue.append(FakeMessage("market.move", move("s3")))

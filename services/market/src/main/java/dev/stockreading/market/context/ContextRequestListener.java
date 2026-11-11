@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component;
 
 import dev.stockreading.market.Topics;
 import dev.stockreading.market.event.ContextPayload;
-import dev.stockreading.market.holdings.HoldingsPort;
+import dev.stockreading.market.constituent.HoldingsPort;
 import dev.stockreading.market.insight.OverseasCloseRateQuery;
 import tools.jackson.databind.ObjectMapper;
 

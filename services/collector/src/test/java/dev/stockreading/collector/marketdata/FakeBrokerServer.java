@@ -31,7 +31,7 @@ public final class FakeBrokerServer implements AutoCloseable {
     final AtomicInteger overseasCalls = new AtomicInteger();
     // 국내 일봉, 세계지수, 환율종합, 시장종합 호출을 합쳐 센다.
     final AtomicInteger insightCalls = new AtomicInteger();
-    final AtomicInteger marketStatusCalls = new AtomicInteger();
+    public final AtomicInteger marketStatusCalls = new AtomicInteger();
     final AtomicInteger inFlight = new AtomicInteger();
     final AtomicInteger maxInFlight = new AtomicInteger();
     final List<String> authHeaders = new CopyOnWriteArrayList<>();
@@ -56,7 +56,7 @@ public final class FakeBrokerServer implements AutoCloseable {
     // 앞으로 장 운영 상태 조회를 500 으로 실패시킬 횟수. 그 뒤에는 marketStatusStatus 를 따른다.
     final AtomicInteger failMarketStatusCalls = new AtomicInteger();
     // 평일(영업일) 응답. 두 일자가 같으면 영업일이다.
-    volatile String marketStatusBody = marketStatus("20261110", "20261110");
+    public volatile String marketStatusBody = marketStatus("20261110", "20261110");
     // 인증이 필요한 호출(시세, 장 운영 상태)에 앞으로 401 을 줄 횟수. 토큰이 거부된 상황을 흉내 낸다.
     final AtomicInteger rejectAuthorizedCalls = new AtomicInteger();
     volatile String rejectBody = "Unauthorized";
@@ -67,7 +67,7 @@ public final class FakeBrokerServer implements AutoCloseable {
     // 설정하면 다른 현재가 요청과 겹쳐 처리 중인 요청에는 종목과 상관없이 이 본문을 보낸다. 동시 호출 때만 깨지는 서버를 흉내 낸다.
     volatile String overlapPriceBody;
 
-    static String marketStatus(String nowDt, String standardBusinessDt) {
+    public static String marketStatus(String nowDt, String standardBusinessDt) {
         return "{\"dataHeader\":" + OK_HEADER + ",\"dataBody\":{\"today_field\":\"" + nowDt
                 + "\",\"business_day_field\":\"" + standardBusinessDt + "\",\"state_field\":\"open\"}}";
     }

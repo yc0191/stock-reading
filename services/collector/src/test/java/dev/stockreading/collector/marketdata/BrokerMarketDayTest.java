@@ -14,6 +14,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Scheduled;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -134,6 +135,34 @@ class BrokerMarketDayTest {
         server.marketStatusBody = FakeBrokerServer.marketStatus("20261111", "20261110");
         assertThat(marketDay.isBusinessDay()).isFalse();
         assertThat(server.marketStatusCalls).hasValue(2);
+    }
+
+    // 휴장일 판정은 평일 08:00에 미리 하고 그날은 그 답을 쓴다. 이른 tick 과 장중 타이머가 같은 답을 받는다.
+    @Test
+    void theMorningDecisionSettlesTheHolidayForTheWholeDay() throws Exception {
+        server.marketStatusBody = FakeBrokerServer.marketStatus("20261107", "20261106");
+        BrokerMarketDay marketDay = marketDay();
+
+        marketDay.decideToday();
+        // 하루 동안 아무리 물어도 서버를 다시 부르지 않고, 휴장일이라는 같은 답이 나온다.
+        for (int i = 0; i < 5; i++) {
+            assertThat(marketDay.isBusinessDay()).isFalse();
+        }
+
+        assertThat(server.marketStatusCalls).hasValue(1);
+    }
+
+    @Test
+    void theMorningDecisionRunsOnWeekdaysAtEightKoreanTimeFromSettings() throws Exception {
+        Scheduled scheduled = BrokerMarketDay.class.getDeclaredMethod("decideToday").getAnnotation(Scheduled.class);
+
+        assertThat(scheduled.cron()).isEqualTo("${collector.market-status.decide-cron}");
+        assertThat(scheduled.zone()).isEqualTo("Asia/Seoul");
+        // 기본값은 application.yml 이 원본이다. 08:00 은 가장 이른 tick(구성 종목 조회)과 같거나 앞이다.
+        var yml = new org.springframework.boot.test.context.runner.ApplicationContextRunner()
+                .withInitializer(new org.springframework.boot.test.context.ConfigDataApplicationContextInitializer());
+        yml.run(context -> assertThat(context.getEnvironment().getProperty("collector.market-status.decide-cron"))
+                .isEqualTo("0 0 8 * * MON-FRI"));
     }
 
     @Test
@@ -263,5 +292,30 @@ class BrokerMarketDayTest {
         marketDay.isBusinessDay();
 
         assertThat(server.marketStatusCalls).hasValue(1);
+    }
+
+    // 08:00 판정 로그는 실제로 판정한 경우와 조회 실패로 영업일로 본 경우를 구분해 남긴다.
+    @Test
+    void morningDecisionLogSaysDecidedWhenTheLookupSucceeded() {
+        server.marketStatusBody = FakeBrokerServer.marketStatus("20261107", "20261106");
+
+        marketDay().decideToday();
+
+        assertThat(logs.list.stream().map(ILoggingEvent::getFormattedMessage))
+                .contains("market day decided in advance businessDay=false")
+                .noneMatch(m -> m.contains("not decided"));
+    }
+
+    @Test
+    void morningDecisionLogSaysNotDecidedWhenTheLookupFailedAndTheDayIsTreatedAsABusinessDay() {
+        server.marketStatusStatus = 500;
+        BrokerMarketDay marketDay = marketDay();
+
+        marketDay.decideToday();
+
+        assertThat(logs.list.stream().map(ILoggingEvent::getFormattedMessage))
+                .contains("market day not decided, treated as business day")
+                .noneMatch(m -> m.startsWith("market day decided"));
+        assertThat(marketDay.isBusinessDay()).isTrue();
     }
 }

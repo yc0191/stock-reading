@@ -37,4 +37,3 @@ notifier:
   send-enabled: ${NOTIFIER_SEND_ENABLED:false}
   sender: ${NOTIFIER_SENDER:}
   subject-prefix: ${NOTIFIER_SUBJECT_PREFIX:[시뮬레이션]}
-  max-per-hour: ${NOTIFIER_MAX_PER_HOUR:6}

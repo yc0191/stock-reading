@@ -27,8 +27,8 @@ import org.mockito.ArgumentCaptor;
 
 import dev.stockreading.market.event.ContextPayload;
 import dev.stockreading.market.event.EventFactory;
-import dev.stockreading.market.holdings.EtfInfo;
-import dev.stockreading.market.holdings.HoldingsPort;
+import dev.stockreading.market.constituent.EtfInfo;
+import dev.stockreading.market.constituent.HoldingsPort;
 import dev.stockreading.market.insight.OverseasCloseRate;
 import dev.stockreading.market.insight.OverseasCloseRateQuery;
 import tools.jackson.databind.ObjectMapper;

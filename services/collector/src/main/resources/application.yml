@@ -9,6 +9,11 @@ spring:
     scheduling:
       pool:
         size: 8
+  # 수집 대상과 뉴스 검색어를 읽기 전용 계정으로 읽는다(시작할 때 한 번). 쓰기는 하지 않는다.
+  datasource:
+    url: jdbc:postgresql://localhost:5432/${POSTGRES_DB:stock}
+    username: ${COLLECTOR_DB_USER:collector_svc}
+    password: ${COLLECTOR_DB_PASSWORD:}
   kafka:
     bootstrap-servers: localhost:9092
     consumer:
@@ -22,8 +27,6 @@ spring:
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
 collector:
-  # 가짜 종목 코드만 쓴다. 실제 종목은 커밋하지 않는다.
-  symbols: TEST01,TEST02,TEST03
   # 1초 현재가 조회 주기. 1초 미만이면 회차의 기준 시각(scheduledFor, 초 단위)과 correlationId 가 겹친다.
   # 앞 회차 조회가 끝나지 않았으면 이번 회차는 조회하지 않고 종목마다 건너뜀(SupersededByNewerTick)으로 기록한다.
   tick-interval-ms: ${COLLECTOR_TICK_INTERVAL_MS:1000}
@@ -44,11 +47,11 @@ collector:
     # 한국 시간 기준 cron(초 분 시 일 월 요일)
     cron: ${COLLECTOR_PRE_OPEN_CRON:0 30 8 * * MON-FRI}
   members:
-    # 꺼 두면 ETF 구성 종목 조회 tick(collect-members)을 발행하지 않는다. 휴장일은 판정하지 않는다.
+    # 꺼 두면 ETF 구성 종목 조회 tick(collect-members)을 발행하지 않는다. 휴장일에는 발행하지 않는다(시세 제공자의 장 운영 상태로 판정, 판정하지 못하면 영업일로 본다).
     # 이 tick을 받은 시세처리기가 그날 받을 차례인 ETF(평소 주 1회, 지수 교체 달 매일)만 구성을 받는다.
     enabled: ${COLLECTOR_MEMBERS_ENABLED:false}
     # 한국 시간 기준 cron(초 분 시 일 월 요일)
-    cron: ${COLLECTOR_MEMBERS_CRON:0 30 7 * * MON-FRI}
+    cron: ${COLLECTOR_MEMBERS_CRON:0 0 8 * * MON-FRI}
   intraday:
     # 꺼 두면 수집기 타이머가 장중 수집을 하지 않는다. 휴장일에는 수집하지 않는다(시세 제공자의 장 운영 상태로 판정, 판정하지 못하면 영업일로 본다).
     # 한 회차에서 환율종합, 시장종합, 세계지수 아시아(S)·아메리카(C)를 시차를 두고 차례로 받는다.
@@ -88,6 +91,8 @@ collector:
   market-status:
     # 시세 제공자의 장 운영 상태 조회로 휴장일을 판정한다. 경로와 응답 칸 이름은 제공자 문서에서 확인해 환경변수로 넣는다.
     # 하나라도 비어 있으면 시작할 때 경고를 한 번 남기고 휴장일을 판정하지 않는다(늘 영업일로 본다).
+    # 평일 이 시각(한국 시간 cron)에 그날의 장 운영 상태를 미리 판정해 하루 동안 쓴다. 가장 이른 tick(collect-members)보다 앞서거나 같아야 한다.
+    decide-cron: "0 0 8 * * MON-FRI"
     path: ${BROKER_MARKET_STATUS_PATH:}
     # 응답에서 현재 일자를 담은 칸과 기준 영업일을 담은 칸. 두 값이 같으면 영업일이다.
     today-field: ${BROKER_MARKET_STATUS_TODAY_FIELD:}

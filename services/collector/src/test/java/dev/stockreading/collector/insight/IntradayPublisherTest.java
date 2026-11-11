@@ -25,7 +25,7 @@ import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 
-import dev.stockreading.collector.CollectorProperties;
+import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.edgar.ExchangePort;
 import dev.stockreading.collector.event.ContractSchemas;
@@ -68,7 +68,7 @@ class IntradayPublisherTest {
         when(holdings.allTickers()).thenReturn(List.of("TESTA"));
         var insightProperties = new InsightProperties(new InsightProperties.Schedule(false, "0 30 16 * * MON-FRI"), "0", 30,
                 List.of("C", "S", "E"), 30, 100);
-        insight = new InsightPublisher(source, new CollectorProperties(List.of("TEST01"), 30000), insightProperties,
+        insight = new InsightPublisher(source, (QuoteSymbolsPort) () -> List.of("TEST01"), insightProperties,
                 holdings, mock(ExchangePort.class), kafka, mapper, CLOCK);
         var intraday = new IntradayProperties(true, "0 */5 9-15 * * MON-FRI", "09:00", "15:30", STAGGER_MS);
         InsightCallPause pause = millis -> timeline.add("pause:" + millis);

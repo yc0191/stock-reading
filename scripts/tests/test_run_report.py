@@ -493,7 +493,7 @@ def test_script_turns_on_real_mail_only_inside_the_test_notifier():
     assert text.count("NOTIFIER_SEND_ENABLED=true") == 1
     notifier_block = text.split('echo "notifier 기동', 1)[1].split("NOTIFIER_PID=$!", 1)[0]
     assert "NOTIFIER_SEND_ENABLED=true" in notifier_block
-    assert 'NOTIFIER_SUBJECT_PREFIX="[테스트]"' in notifier_block and "NOTIFIER_MAX_PER_HOUR=1" in notifier_block
+    assert 'NOTIFIER_SUBJECT_PREFIX="[테스트]"' in notifier_block and "PER_HOUR" not in notifier_block
     # .env 에 쓰는 명령이 없어야 한다(읽기만 한다).
     assert ">> \"$ENV_FILE\"" not in text and "> \"$ENV_FILE\"" not in text
 

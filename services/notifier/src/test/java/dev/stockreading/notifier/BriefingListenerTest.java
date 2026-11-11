@@ -13,7 +13,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
-import java.time.Instant;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -43,10 +42,9 @@ class BriefingListenerTest {
         sample = ContractSchemas.sample("briefing.generated.sample.json");
     }
 
-    private BriefingListener listener(int maxPerHour) {
-        NotifierProperties properties = new NotifierProperties(false, "from@example.com", "[시뮬레이션]", maxPerHour);
-        SendRateLimiter limiter = new SendRateLimiter(properties, new TestClock(Instant.parse("2026-10-20T07:00:00Z")));
-        return new BriefingListener(JsonMapper.builder().build(), new EmailComposer(properties), mailSender, limiter, recipients);
+    private BriefingListener listener() {
+        NotifierProperties properties = new NotifierProperties(false, "from@example.com", "[시뮬레이션]");
+        return new BriefingListener(JsonMapper.builder().build(), new EmailComposer(properties), mailSender, recipients);
     }
 
     private String withEventId(String id) {
@@ -55,7 +53,7 @@ class BriefingListenerTest {
 
     @Test
     void sendsOneEmailPerBriefingWithTheComposedSubject() {
-        listener(6).onBriefing(sample);
+        listener().onBriefing(sample);
 
         ArgumentCaptor<EmailMessage> email = ArgumentCaptor.forClass(EmailMessage.class);
         verify(mailSender).send(eq("to@example.com"), email.capture());
@@ -64,7 +62,7 @@ class BriefingListenerTest {
 
     @Test
     void theSameBriefingDeliveredTwiceIsEmailedOnce() {
-        BriefingListener listener = listener(6);
+        BriefingListener listener = listener();
 
         listener.onBriefing(sample);
         listener.onBriefing(sample);
@@ -74,7 +72,7 @@ class BriefingListenerTest {
 
     @Test
     void differentBriefingsAreEachEmailed() {
-        BriefingListener listener = listener(6);
+        BriefingListener listener = listener();
 
         listener.onBriefing(withEventId("11111111-1111-4111-8111-111111111111"));
         listener.onBriefing(withEventId("22222222-2222-4222-8222-222222222222"));
@@ -83,18 +81,8 @@ class BriefingListenerTest {
     }
 
     @Test
-    void anExcessBriefingIsNotEmailedOnceTheHourlyLimitIsReached() {
-        BriefingListener listener = listener(1);
-
-        listener.onBriefing(withEventId("11111111-1111-4111-8111-111111111111"));
-        listener.onBriefing(withEventId("22222222-2222-4222-8222-222222222222"));
-
-        verify(mailSender, times(1)).send(any(), any());
-    }
-
-    @Test
     void aFailedSendIsRetriedLaterAndStillEmailedOnce() {
-        BriefingListener listener = listener(6);
+        BriefingListener listener = listener();
         doThrow(new IllegalStateException("smtp down")).doNothing().when(mailSender).send(any(), any());
 
         assertThatThrownBy(() -> listener.onBriefing(sample)).isInstanceOf(IllegalStateException.class);
@@ -104,19 +92,8 @@ class BriefingListenerTest {
     }
 
     @Test
-    void aFailedSendDoesNotUseUpTheHourlyAllowance() {
-        BriefingListener listener = listener(1);
-        doThrow(new IllegalStateException("smtp down")).doNothing().when(mailSender).send(any(), any());
-
-        assertThatThrownBy(() -> listener.onBriefing(sample)).isInstanceOf(IllegalStateException.class);
-        listener.onBriefing(sample);
-
-        verify(mailSender, times(2)).send(any(), any()); // 한도가 1이어도 재시도는 허용되었다
-    }
-
-    @Test
     void aMalformedMessageIsSkippedWithoutSendingOrThrowing() {
-        BriefingListener listener = listener(6);
+        BriefingListener listener = listener();
 
         listener.onBriefing("not json at all");
 
@@ -128,7 +105,7 @@ class BriefingListenerTest {
         when(recipients.forMove("TEST01")).thenReturn(
                 List.of(new Recipient(1, "to@example.com"), new Recipient(2, "other@example.com")));
 
-        listener(6).onBriefing(sample);
+        listener().onBriefing(sample);
 
         verify(mailSender).send(eq("to@example.com"), any());
         verify(mailSender).send(eq("other@example.com"), any());
@@ -138,7 +115,7 @@ class BriefingListenerTest {
     void withNoRecipientsNothingIsSentAndTheMessageIsConsumed() {
         when(recipients.forMove("TEST01")).thenReturn(List.of());
 
-        listener(6).onBriefing(sample);
+        listener().onBriefing(sample);
 
         verify(mailSender, never()).send(any(), any());
     }
@@ -147,7 +124,7 @@ class BriefingListenerTest {
     void aRetryAfterAPartialFailureOnlySendsToThoseNotYetSent() {
         when(recipients.forMove("TEST01")).thenReturn(
                 List.of(new Recipient(1, "to@example.com"), new Recipient(2, "other@example.com")));
-        BriefingListener listener = listener(6);
+        BriefingListener listener = listener();
         doNothing().doThrow(new IllegalStateException("smtp down")).doNothing().when(mailSender).send(any(), any());
 
         assertThatThrownBy(() -> listener.onBriefing(sample)).isInstanceOf(IllegalStateException.class);
@@ -158,23 +135,9 @@ class BriefingListenerTest {
     }
 
     @Test
-    void theHourlyLimitSkipsOnlyTheRecipientWhoIsAlreadyFull() {
-        BriefingListener listener = listener(1);
-        when(recipients.forMove("TEST01")).thenReturn(List.of(new Recipient(1, "to@example.com")));
-        listener.onBriefing(withEventId("11111111-1111-4111-8111-111111111111")); // 1번 수신자의 한도를 채운다
-        when(recipients.forMove("TEST01")).thenReturn(
-                List.of(new Recipient(1, "to@example.com"), new Recipient(2, "other@example.com")));
-
-        listener.onBriefing(withEventId("22222222-2222-4222-8222-222222222222"));
-
-        verify(mailSender, times(1)).send(eq("to@example.com"), any());
-        verify(mailSender, times(1)).send(eq("other@example.com"), any());
-    }
-
-    @Test
     void aRecipientLookupFailurePropagatesSoTheKafkaErrorHandlerRetries() {
         when(recipients.forMove("TEST01")).thenThrow(new IllegalStateException("db down"));
-        BriefingListener listener = listener(6);
+        BriefingListener listener = listener();
 
         assertThatThrownBy(() -> listener.onBriefing(sample)).isInstanceOf(IllegalStateException.class);
 

@@ -27,7 +27,7 @@ class SmtpMailSenderTest {
     }
 
     private static NotifierProperties properties(String sender) {
-        return new NotifierProperties(true, sender, "", 6);
+        return new NotifierProperties(true, sender, "");
     }
 
     @Test

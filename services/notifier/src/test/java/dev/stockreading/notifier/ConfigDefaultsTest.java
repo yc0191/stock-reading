@@ -32,9 +32,4 @@ class ConfigDefaultsTest {
         // 깨진 기본값은 실제 이메일 제목마다 붙게 된다.
         assertThat(applicationYmlOnly().getProperty("notifier.subject-prefix")).isEqualTo("[시뮬레이션]");
     }
-
-    @Test
-    void theHourlyLimitDefaultsToSix() throws IOException {
-        assertThat(applicationYmlOnly().getProperty("notifier.max-per-hour")).isEqualTo("6");
-    }
 }

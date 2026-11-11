@@ -25,6 +25,10 @@ final class PersonalDb {
         return client(System.getenv("COLLECTOR_IT_DB_USER"), System.getenv("COLLECTOR_IT_DB_PASSWORD"));
     }
 
+    static JdbcClient news() {
+        return client(System.getenv("NEWS_IT_DB_USER"), System.getenv("NEWS_IT_DB_PASSWORD"));
+    }
+
     static JdbcClient market() {
         return client(System.getenv("MARKET_IT_DB_USER"), System.getenv("MARKET_IT_DB_PASSWORD"));
     }

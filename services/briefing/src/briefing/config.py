@@ -33,8 +33,8 @@ class CoreSettings:
     max_etf_members: int = 10
     # 같은 종목의 market.move는 바로 처리하지 않고 모은다. 마지막 변동 뒤 이 시간 동안 같은 종목 변동이 더 없으면 모인 변동으로
     # 작업 하나를 만든다. 변동이 계속 와도 첫 변동부터 최대 이 시간이 지나면 그때까지 모인 것으로 만든다(영영 밀리지 않게).
-    # 0이면 변동마다 바로 작업을 만든다.
-    move_quiet_period: timedelta = timedelta(minutes=10)
+    # 0이면 변동마다 바로 작업을 만든다(기본). 급변동 메일을 변동 뒤 약 10분 안에 보내려는 것이며, 같은 종목 중복은 시세처리기가 막는다.
+    move_quiet_period: timedelta = timedelta(0)
     move_max_wait: timedelta = timedelta(minutes=30)
     # 같은 eventId 중복 처리를 위해 기억하는 작업 키 수. 메모리가 무한히 늘지 않게 한다.
     remembered_jobs: int = 10000

@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import tools.jackson.databind.JsonNode;
@@ -111,6 +112,22 @@ class BrokerMarketDay implements MarketDayPort {
         failedAt = clock.instant();
         log.warn("market status lookup failed {} times; treating today as a business day", MAX_ATTEMPTS);
         return true;
+    }
+
+    /**
+     * 평일 아침에 그날의 장 운영 상태를 미리 판정해 하루 동안 쓴다. 그날 처음 묻는 타이머가 아침 일찍 도는
+     * 구성 종목 조회 tick(08:00)이라, 이 판정이 먼저 있어야 같은 날 모든 타이머가 같은 답을 받는다.
+     * 판정하지 못하면 영업일로 보고 이후 첫 질문 때 다시 조회한다(쿨다운 뒤).
+     */
+    @Scheduled(cron = "${collector.market-status.decide-cron}", zone = "Asia/Seoul")
+    void decideToday() {
+        boolean businessDay = isBusinessDay();
+        // 조회가 실패해 영업일로 본 경우는 판정한 것이 아니므로 로그로 구분한다.
+        if (LocalDate.now(clock.withZone(KOREA)).equals(knownDate)) {
+            log.info("market day decided in advance businessDay={}", businessDay);
+        } else {
+            log.warn("market day not decided, treated as business day");
+        }
     }
 
     private boolean lookup(Duration remaining) {

@@ -22,7 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.kafka.core.KafkaTemplate;
 
-import dev.stockreading.collector.CollectorProperties;
+import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.ContractSchemas;
 import dev.stockreading.collector.marketdata.FailureType;
@@ -53,7 +53,7 @@ class QuotePublisherTest {
     }
 
     private QuotePublisher publisher(MarketDataPort port) {
-        return new QuotePublisher(port, new CollectorProperties(SYMBOLS, 1_000), kafka, mapper, CLOCK);
+        return new QuotePublisher(port, (QuoteSymbolsPort) () -> SYMBOLS, kafka, mapper, CLOCK);
     }
 
     private QuotePublisher publisherWith(FetchResult result) {
@@ -154,6 +154,41 @@ class QuotePublisherTest {
             assertThat(e.path("payload").path("tickSucceeded").asInt()).isZero();
             assertThat(e.path("payload").path("tickFailed").asInt()).isEqualTo(3);
         });
+    }
+
+    // 시세 종목이 비면 1초 회차마다 경고가 쏟아지지 않게, 처음 한 번과 그 뒤 10분마다만 남긴다.
+    @Test
+    void emptyQuoteSymbolsWarnOnceThenOnlyEveryTenMinutes() {
+        var now = new java.util.concurrent.atomic.AtomicReference<>(Instant.parse("2026-10-20T07:00:00Z"));
+        Clock clock = new Clock() {
+            @Override public ZoneId getZone() { return ZoneId.of("Asia/Seoul"); }
+            @Override public Clock withZone(ZoneId zone) { return this; }
+            @Override public Instant instant() { return now.get(); }
+        };
+        var logs = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        logs.start();
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(QuotePublisher.class);
+        logger.addAppender(logs);
+        try {
+            QuotePublisher publisher = new QuotePublisher(new SimulatorMarketData(CLOCK),
+                    (QuoteSymbolsPort) List::of, kafka, mapper, clock);
+
+            for (int i = 0; i < 5; i++) {
+                publisher.publishCollected(CORR, AT);
+                now.set(now.get().plusSeconds(1));
+            }
+            assertThat(warnCount(logs)).isEqualTo(1);
+
+            now.set(now.get().plus(QuotePublisher.EMPTY_WARN_INTERVAL));
+            publisher.publishCollected(CORR, AT);
+            assertThat(warnCount(logs)).isEqualTo(2);
+        } finally {
+            logger.detachAppender(logs);
+        }
+    }
+
+    private static long warnCount(ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs) {
+        return logs.list.stream().filter(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN).count();
     }
 
     @Test

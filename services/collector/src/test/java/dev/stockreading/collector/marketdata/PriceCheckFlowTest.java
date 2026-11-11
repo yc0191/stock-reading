@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import java.io.IOException;
 import java.time.Clock;
 import java.time.ZoneId;
+import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -24,6 +25,7 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import dev.stockreading.collector.CollectorProperties;
+import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.ContractSchemas;
 import dev.stockreading.collector.insight.InsightProperties;
@@ -47,6 +49,11 @@ class PriceCheckFlowTest {
     @ComponentScan(basePackages = "dev.stockreading.collector.schedule", useDefaultFilters = false,
             includeFilters = @ComponentScan.Filter(type = FilterType.REGEX, pattern = ".*\\.QuotePublisher"))
     static class Wiring {
+
+        @Bean
+        QuoteSymbolsPort quoteSymbols() {
+            return () -> List.of("TEST01", "TEST02", "TEST03");
+        }
 
         @Bean
         Clock clock() {
@@ -84,7 +91,6 @@ class PriceCheckFlowTest {
                         "BROKER_BASE_URL=" + server.baseUrl(),
                         "BROKER_APP_KEY=key-secret-value",
                         "BROKER_APP_SECRET=app-secret-value",
-                        "collector.symbols=TEST01,TEST02,TEST03",
                         "BROKER_PRICE_CHECK_BASE_FIELDS=" + PriceChecks.BASE + "," + PriceChecks.BASE_ALT,
                         "BROKER_PRICE_CHECK_CHANGE_FIELD=" + PriceChecks.CHANGE,
                         "BROKER_PRICE_CHECK_CHANGE_SIGN_FIELD=" + PriceChecks.SIGN,

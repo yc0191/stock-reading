@@ -19,7 +19,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import dev.stockreading.news.event.ArticlesPayload;
-import dev.stockreading.news.holdings.ReceivedHoldings;
+import dev.stockreading.news.etfmap.EtfStockMembers;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -97,7 +97,7 @@ class ArticleQueryIntegrationTest {
     @Test
     void requestWithAResearchJobIdIsAnsweredWithThatJobsArticlesUnderTheRequestSymbol() {
         ArticlesPublisher publisher = mock(ArticlesPublisher.class);
-        ArticlesRequestListener listener = new ArticlesRequestListener(repository, publisher, JsonMapper.builder().build(), mock(ReceivedHoldings.class));
+        ArticlesRequestListener listener = new ArticlesRequestListener(repository, publisher, JsonMapper.builder().build(), mock(EtfStockMembers.class));
 
         listener.onRequest(request(100).replace("\"maxArticles\":100", "\"maxArticles\":100,\"researchJobId\":\""
                 + RESEARCH_JOB + "\""));
@@ -155,7 +155,7 @@ class ArticleQueryIntegrationTest {
     @Test
     void responseIsCutAtMaxArticlesAndMarkedTruncated() {
         ArticlesPublisher publisher = mock(ArticlesPublisher.class);
-        ArticlesRequestListener listener = new ArticlesRequestListener(repository, publisher, JsonMapper.builder().build(), mock(ReceivedHoldings.class));
+        ArticlesRequestListener listener = new ArticlesRequestListener(repository, publisher, JsonMapper.builder().build(), mock(EtfStockMembers.class));
 
         listener.onRequest(request(3));
 

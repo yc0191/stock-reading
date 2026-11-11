@@ -18,7 +18,7 @@ import dev.stockreading.market.Topics;
 import dev.stockreading.market.event.ContextPayload;
 import dev.stockreading.market.event.DailyPayload;
 import dev.stockreading.market.event.EventFactory;
-import dev.stockreading.market.holdings.HoldingsPort;
+import dev.stockreading.market.constituent.HoldingsPort;
 import dev.stockreading.market.members.MemberChanges;
 import dev.stockreading.market.members.MemberChangesPort;
 import dev.stockreading.market.insight.OverseasCloseRateQuery;
@@ -101,11 +101,10 @@ class DailyRequestListener {
         List<DailyPayload.Etf> etfs = new ArrayList<>();
         int noDaily = 0;
         int unreadable = 0;
-        List<HoldingsPort.TrackedEtf> tracked = holdings.trackedEtfs();
+        List<String> tracked = holdings.trackedEtfs();
         // 잘릴 ETF는 미국 종목과 ETF 정보를 조회하지 않도록 상한을 먼저 적용한다.
         boolean truncated = tracked.size() > maxEtfs;
-        for (HoldingsPort.TrackedEtf trackedEtf : tracked.stream().limit(maxEtfs).toList()) {
-            String symbol = trackedEtf.code();
+        for (String symbol : tracked.stream().limit(maxEtfs).toList()) {
             BackgroundRepository.StoredResponse stored = dailyBySymbol.get(symbol);
             Optional<DailyPriceReader.Record> record =
                     stored == null ? Optional.empty() : dailyPriceReader.latest(stored.response());
@@ -116,8 +115,7 @@ class DailyRequestListener {
             }
             etfs.add(etf(symbol, record.orElse(null), stored, stored == null
                     ? DailyPayload.NO_DAILY_PRICE_IN_RANGE : DailyPayload.DAILY_PRICE_UNREADABLE, maxTickers, since,
-                    asOf)
-                    .withRelation(trackedEtf.relation()));
+                    asOf));
         }
         if (noDaily > 0 || unreadable > 0) {
             // 종목코드는 보유 종목이 드러나므로 건수만 남긴다.

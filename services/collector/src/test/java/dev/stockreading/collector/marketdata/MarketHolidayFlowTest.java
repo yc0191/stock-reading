@@ -78,6 +78,7 @@ class MarketHolidayFlowTest {
                 new IntradayProperties(true, "0 */5 9-15 * * MON-FRI", "09:00", "15:30", 15_000), marketDay, CLOCK),
                 "collectIntraday");
         fire(publisher(SCHEDULE + "PostCloseTimer", jobs, marketDay), "collectPostClose");
+        fire(publisher(SCHEDULE + "MemberTickPublisher", marketDay, kafka, mapper, CLOCK), "publishMembersTick");
         Object daily = publisher(SCHEDULE + "DailyBriefingTickPublisher", marketDay, kafka, mapper, CLOCK);
         fire(daily, "publishMorningTick");
         fire(daily, "publishPostCloseTick");
@@ -88,13 +89,13 @@ class MarketHolidayFlowTest {
         for (Job job : new Job[] {Job.COLLECT_NEWS, Job.COLLECT_PRE_OPEN, Job.COLLECT_INTRADAY, Job.COLLECT_POST_CLOSE}) {
             verify(jobs).run(job);
         }
-        for (String jobType : new String[] {"daily-briefing-morning", "daily-briefing-post-close"}) {
+        for (String jobType : new String[] {"collect-members", "daily-briefing-morning", "daily-briefing-post-close"}) {
             verify(kafka).send(eq(Topics.SCHEDULE_TICK), eq(jobType), anyString());
         }
     }
 
     @Test
-    void holidayStopsEveryMarketJobAndTickAndKeepsTheNews() throws Exception {
+    void holidayStopsEveryMarketJobAndTickIncludingTheMembersTickAndKeepsTheNews() throws Exception {
         server.marketStatusBody = FakeBrokerServer.marketStatus("20261110", "20261109");
 
         fireEverySchedule();
@@ -104,7 +105,7 @@ class MarketHolidayFlowTest {
         for (Job job : new Job[] {Job.COLLECT_PRE_OPEN, Job.COLLECT_INTRADAY, Job.COLLECT_POST_CLOSE}) {
             verify(jobs, never()).run(job);
         }
-        for (String jobType : new String[] {"daily-briefing-morning", "daily-briefing-post-close"}) {
+        for (String jobType : new String[] {"collect-members", "daily-briefing-morning", "daily-briefing-post-close"}) {
             verify(kafka, never()).send(eq(Topics.SCHEDULE_TICK), eq(jobType), anyString());
         }
         // 여러 곳이 물었지만 서버 조회는 하루 한 번이다.
