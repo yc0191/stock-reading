@@ -75,6 +75,8 @@ REASON_LLM_CALL_FAILED = "llm-call-failed"
 REASON_LLM_ACCEPTED = "llm-output-accepted"
 REASON_PUBLISHED = "published"
 REASON_NOT_SAVED = "log-not-saved"
+# 최종 본문에 인용한 근거가 하나도 없어 결과 이벤트를 발행하지 않았다. 작업 상태는 succeeded, 발행 이벤트는 없다.
+REASON_NO_EVIDENCE = "no_evidence"
 
 
 @dataclass(frozen=True)

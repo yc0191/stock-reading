@@ -38,6 +38,16 @@ market:
   # MARKET_PREV_CLOSE_FIELDS를 쉼표로 이은 경로(원문 루트 기준 점 경로)로 주면 바꾸고, 빈 값으로 주면 유형 2를 끈다.
   prev-close-fields: ${MARKET_PREV_CLOSE_FIELDS:dataBody.bdy_cls_prc,dataBody.sprc,dataBody.krx_bdy_clpr}
   prev-close-threshold-percent: 3.00
+  # 두 유형 모두 변동 조건이 받은 스냅샷 기준으로 이 건수만큼 연속 이어질 때만 발행한다(빠진 초는 세지 않는다).
+  # 현재가 한 건이 튀었다 돌아오는 가짜 변동을 거른다. 연속 확인을 받지 못한 튄 점은 유형 1의 기준값으로도 쓰지 않는다.
+  confirm-count: 3
+  # 장 시작 직후 첫 체결 전 응답(현재가가 전일 종가 그대로)을 알아보는 원문 칸. 모든 칸 값이 0이면 유형 1의 기준값에서 뺀다.
+  # MARKET_FIRST_TRADE_FIELDS를 쉼표로 이은 경로로 주면 바꾸고, 빈 값으로 주면 거르지 않는다.
+  first-trade-fields: ${MARKET_FIRST_TRADE_FIELDS:dataBody.acml_vlm,dataBody.opn_prc}
+  # 한 종목의 market.move를 발행한 뒤 이 시간(분) 동안은 유형과 상관없이 같은 종목을 다시 발행하지 않는다. 0이면 끈다.
+  # 단 마지막 발행 가격 대비 republish-exception-percent(%) 이상 더 움직이면 간격 안이라도 발행한다.
+  republish-interval-minutes: 30
+  republish-exception-percent: 2.00
   holdings:
     # 보유 ETF와 구성 종목이 담긴 UTF-8 JSON 파일의 경로. 파일은 저장소 밖에 두고 경로만 환경변수로 준다.
     # 종목 테이블(instrument)이 비어 있을 때 시작하면서 한 번만 이 파일로 채운다. 행이 있으면 파일은 읽지 않고,

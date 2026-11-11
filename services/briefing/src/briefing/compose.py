@@ -16,8 +16,15 @@ def direction_of(change_percent: float) -> str:
     return "상승" if change_percent > 0 else "하락"
 
 
-def headline(symbol: str, previous_price: int, price: int, change_percent: float, as_of: datetime) -> str:
-    return (f"[{symbol}] {as_of.astimezone(KST):%H:%M} 기준 {direction_of(change_percent)} {change_percent:+.2f}% "
+def label_of(symbol: str, name: str | None) -> str:
+    """이름을 알면 '이름(코드)', 모르거나 비었으면 코드만."""
+    stripped = name.strip() if name else ""
+    return f"{stripped}({symbol})" if stripped else symbol
+
+
+def headline(symbol: str, previous_price: int, price: int, change_percent: float, as_of: datetime,
+             name: str | None = None) -> str:
+    return (f"[{label_of(symbol, name)}] {as_of.astimezone(KST):%H:%M} 기준 {direction_of(change_percent)} {change_percent:+.2f}% "
             f"({previous_price:,} → {price:,})")
 
 

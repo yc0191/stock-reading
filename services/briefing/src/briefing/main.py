@@ -328,7 +328,9 @@ class BriefingRunner:
                 log.warning("collection.completed not saved for server status: %s", type(error).__name__)
             else:
                 self.status_store.save_collection(record)
-        self.sentences.on_collection_completed(message, now) or self.core.on_collection_completed(message, now)
+        # T+5분 재검색의 완료 알림은 급변동 작업이 먼저 가져간다. 문장 단위 재검색의 알림이면 그쪽이 가져가고, 아니면 정기 수집 완료다.
+        (self.core.on_research_completed(message, now) or self.sentences.on_collection_completed(message, now)
+         or self.core.on_collection_completed(message, now))
 
     def _on_articles_responded(self, message: str | bytes, now: datetime) -> None:
         # 재검색 기사 응답은 재검색 쪽이 먼저 가져가고, 아니면 급변동 작업과 마감 후 판 작업이 각자 모르는 jobId는 넘긴다.

@@ -14,6 +14,7 @@ from typing import Any, Mapping, Protocol
 
 from briefing.compose import KST
 from briefing.events import parse_timestamp
+from briefing.job_log import REASON_NO_EVIDENCE
 
 log = logging.getLogger("briefing.status")
 
@@ -242,6 +243,8 @@ class _Moves:
     total: int = 0
     succeeded: int = 0
     failed: int = 0
+    # 근거 없어 결과 이벤트를 보내지 않은 급변동(작업은 succeeded로 끝나지만 성공에 세지 않는다)
+    no_evidence: int = 0
     running: int = 0
     rule_based: int = 0
     reasons: dict[str, int] = field(default_factory=dict)
@@ -253,7 +256,9 @@ def _tally_moves(runs: list[JobRunRow]) -> _Moves:
         if r.job_kind != JOB_KIND_MOVE:
             continue
         moves.total += 1
-        if r.status == STATUS_SUCCEEDED:
+        if r.status == STATUS_SUCCEEDED and r.failure_reason == REASON_NO_EVIDENCE:
+            moves.no_evidence += 1
+        elif r.status == STATUS_SUCCEEDED:
             moves.succeeded += 1
         elif r.status == STATUS_FAILED:
             moves.failed += 1
@@ -261,7 +266,9 @@ def _tally_moves(runs: list[JobRunRow]) -> _Moves:
             moves.reasons[reason] = moves.reasons.get(reason, 0) + 1
         elif r.status == STATUS_RUNNING:
             moves.running += 1
-        if r.generated_by == GENERATED_BY_RULE_BASED:
+        # 근거 없어 보내지 않은 급변동은 규칙 기반 건수에 세지 않는다
+        if r.generated_by == GENERATED_BY_RULE_BASED and not (
+                r.status == STATUS_SUCCEEDED and r.failure_reason == REASON_NO_EVIDENCE):
             moves.rule_based += 1
     return moves
 
@@ -293,7 +300,7 @@ def _briefing_line(runs: list[JobRunRow] | None) -> str:
     m = _tally_moves(runs)
     failed = f"실패 {m.failed}" + (f"[{_reasons_text(m.reasons)}]" if m.reasons else "")
     return (f"- 브리핑: 급변동 {m.total}건(성공 {m.succeeded} · {failed} · 진행 중 {m.running} · 규칙 기반 {m.rule_based})"
-            f" · 아침 판 {_morning_text(_morning(runs))}")
+            f" · 근거 없어 보내지 않은 급변동 {m.no_evidence}건 · 아침 판 {_morning_text(_morning(runs))}")
 
 
 def _attention(ops: Operations | None, collections: list[CollectionRecord] | None, runs: list[JobRunRow] | None,

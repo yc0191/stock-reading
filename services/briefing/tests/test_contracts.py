@@ -18,6 +18,19 @@ def test_committed_briefing_sample_matches_its_schema():
     assert validate("briefing.generated.v1.schema.json", sample("briefing.generated.sample.json")) == []
 
 
+def test_briefing_name_is_optional_and_an_empty_name_is_rejected():
+    named = sample("briefing.generated.sample.json")
+    assert named["payload"]["name"]
+    assert validate("briefing.generated.v1.schema.json", named) == []
+
+    unnamed = sample("briefing.generated.sample.json")
+    del unnamed["payload"]["name"]
+    assert validate("briefing.generated.v1.schema.json", unnamed) == []
+
+    unnamed["payload"]["name"] = ""
+    assert validate("briefing.generated.v1.schema.json", unnamed) != []
+
+
 def test_timestamp_without_seconds_is_rejected_proving_format_checks_are_on():
     broken = sample("briefing.generated.sample.json")
     broken["occurredAt"] = "2026-10-20T16:00+09:00"

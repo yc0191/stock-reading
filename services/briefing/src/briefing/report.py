@@ -20,6 +20,7 @@ from briefing.job_log import (
     REASON_LLM_ACCEPTED,
     REASON_LLM_CALL_FAILED,
     REASON_LLM_REJECTED,
+    REASON_NO_EVIDENCE,
     REASON_PUBLISHED,
     STAGE_LLM,
     STAGE_PUBLISH,
@@ -299,7 +300,7 @@ def comparison_facts(report_input: ReportInput) -> list[str]:
 def move_headline(report_input: ReportInput) -> str:
     """머리말: 종목, 시각, 방향과 변동률, 몇 분 사이 움직였는지."""
     i = report_input
-    line = headline(i.symbol, i.previous_price, i.price, i.change_percent, i.as_of)
+    line = headline(i.symbol, i.previous_price, i.price, i.change_percent, i.as_of, i.etf.name if i.etf else None)
     if i.detection_type == "prevClose":
         return f"{line}, 전일 종가 대비"
     if i.detected_at is None or i.detection_type != "window":
@@ -792,9 +793,16 @@ def briefing_event(report_input: ReportInput, report: Report, now: datetime) -> 
                 "text": report.text,
                 "generatedBy": report.generated_by,
                 "evidence": [_evidence_entry(e) for e in report.evidence],
+                **_name_entry(i),
             },
         },
     )
+
+
+def _name_entry(report_input: ReportInput) -> dict[str, str]:
+    """ETF 이름을 알 때만 name 칸을 담는다. 모르거나 비었으면 칸을 뺀다."""
+    name = report_input.etf.name.strip() if report_input.etf and report_input.etf.name else ""
+    return {"name": name} if name else {}
 
 
 @dataclass
@@ -858,6 +866,9 @@ class ReportStage:
     def publish(self, report_input: ReportInput, report: Report, research_count: int = 0) -> None:
         """최종 결과를 job_run에 적고, 이 작업의 줄이 모두 저장됐을 때만 발행한다."""
         now = self.clock()
+        if not report.evidence:
+            self._skip_without_evidence(report_input, report, research_count, now)
+            return
         event = briefing_event(report_input, report, now)
         i = report_input
         missing = unchecked_items(i)
@@ -871,6 +882,19 @@ class ReportStage:
             result_event_id=event.value["eventId"])
         if record_result(self.job_log, result):
             self.publisher.send(event)
+
+    def _skip_without_evidence(self, i: ReportInput, report: Report, research_count: int, now: datetime) -> None:
+        """본문에 인용한 근거가 하나도 없으면 메일을 보내지 않는다. 결과와 이유는 작업 기록에 남긴다."""
+        log.info("job %s has no cited evidence; result event not published", i.job_id)
+        self._record(i, EntryType.MISSING_ITEMS, REASON_NO_EVIDENCE, None, 0, now, {
+            "receivedCounts": {"articles": len(i.articles), "researchArticles": len(i.research_articles),
+                               "filings": len(i.filings), "closeRates": len(i.close_rates),
+                               "priceHistory": len(i.price_points)},
+            "finalText": report.text}, stage=STAGE_PUBLISH)
+        record_result(self.job_log, JobResult(
+            i.job_id, RunStatus.SUCCEEDED, now, failure_reason=REASON_NO_EVIDENCE,
+            generated_by=GeneratedBy(report.generated_by), final_text=report.text,
+            weak_count=len(report.weak_shortfalls), research_count=research_count))
 
     def _record_attempts(self, report_input: ReportInput, attempts: tuple[LlmAttempt, ...], now: datetime,
                          sentence_no: int | None = None, round: int | None = None) -> None:
