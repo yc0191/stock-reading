@@ -506,6 +506,40 @@ def test_without_an_etf_name_no_research_is_requested_and_the_regular_collection
     assert len(rec.of("market.history.requested")) == 1 and len(rec.of("news.articles.requested")) == 1
 
 
+def test_a_stock_move_researches_the_stock_name_alone_at_t_plus_five_minutes(core, rec):
+    core.on_move(move(), T)
+    core.on_tick(T + S.early_research_delay)
+    event = json.loads(context_response(1))
+    event["payload"]["name"] = " TEST 주식 "
+    core.on_context_responded(json.dumps(event), T + S.early_research_delay + SEC)
+
+    (request,) = rec.of("news.research.requested")
+    assert validate("news.research.requested.v1.schema.json", request.value) == []
+    assert request.value["payload"]["queries"] == ["TEST 주식"]
+
+
+def test_a_stock_whose_name_is_oversized_is_not_researched(core, rec):
+    from briefing.research import MAX_QUERY_LENGTH
+    core.on_move(move(), T)
+    core.on_tick(T + S.early_research_delay)
+    event = json.loads(context_response(1))
+    event["payload"]["name"] = "가" * (MAX_QUERY_LENGTH + 1)
+    core.on_context_responded(json.dumps(event), T + S.early_research_delay + SEC)
+
+    assert rec.of("news.research.requested") == []
+
+
+def test_an_etf_move_ignores_the_context_name_for_research_queries(core, rec):
+    core.on_move(move(), T)
+    core.on_tick(T + S.early_research_delay)
+    event = json.loads(etf_context(1))
+    event["payload"]["name"] = "다른 이름"
+    core.on_context_responded(json.dumps(event), T + S.early_research_delay + SEC)
+
+    (request,) = rec.of("news.research.requested")
+    assert request.value["payload"]["queries"] == ["가짜 반도체 ETF", "첫째회사", "둘째회사"]
+
+
 def test_early_research_completion_starts_the_evidence_fetch_without_the_regular_collection(core, rec):
     early_started(core, rec)
     done_at = T + S.early_research_delay + 20 * SEC
@@ -601,6 +635,8 @@ def test_early_queries_are_capped_deduplicated_and_skip_nameless_or_oversized_me
     assert early_queries(EtfInfo(members, False, name="이름"), 1) == ("이름",)
     assert early_queries(EtfInfo(members, False, name=None), 3) == ()
     assert early_queries(None, 3) == ()
+    assert early_queries(None, 3, " 주식 ") == ("주식",)
+    assert early_queries(None, 3, "  ") == ()
 
 
 def test_an_early_context_request_still_waiting_when_the_regular_completion_arrives_is_reused(core, rec):

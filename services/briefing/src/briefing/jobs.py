@@ -488,9 +488,9 @@ class BriefingCore:
         job.context.received = True
         job.responses[STAGE_CONTEXT] = payload
         job.context_data = context
-        queries = early_queries(context.etf, self.settings.max_research_queries)
+        queries = early_queries(context.etf, self.settings.max_research_queries, context.name)
         if not queries:
-            log.info("early research skipped for job %s: ETF name unknown", job.job_id)
+            log.info("early research skipped for job %s: ETF and stock name unknown", job.job_id)
             job.early = _Early.SKIPPED
             return
         research_id = early_research_id(job.job_id)
@@ -746,11 +746,14 @@ def early_research_id(job_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"research-early:{job_id}"))
 
 
-def early_queries(etf: EtfInfo | None, limit: int) -> tuple[str, ...]:
-    """ETF 이름과 비중 순위가 높은 구성 종목 이름으로 만든 검색어. ETF 이름을 모르면 빈 튜플(재검색하지 않는다)."""
+def early_queries(etf: EtfInfo | None, limit: int, stock_name: str | None = None) -> tuple[str, ...]:
+    """ETF 이름과 비중 순위가 높은 구성 종목 이름으로 만든 검색어. ETF 정보가 없는 주식이면 그 주식 이름 하나.
+    둘 다 모르면 빈 튜플(재검색하지 않는다)."""
     name = (etf.name or "").strip() if etf is not None else ""
     if not name:
-        return ()
+        # 주식 급변동은 맥락 응답에 ETF 정보가 없고 name만 있다. 이 이름 하나로 찾는다.
+        stock = (stock_name or "").strip() if etf is None else ""
+        return (stock,) if stock and len(stock) <= MAX_QUERY_LENGTH else ()
     names = [name] + [m.name.strip() for m in sorted(etf.members, key=lambda m: m.rank) if m.name and m.name.strip()]
     unique = dict.fromkeys(n for n in names if len(n) <= MAX_QUERY_LENGTH)
     return tuple(unique)[:limit]
