@@ -110,6 +110,6 @@ sequenceDiagram
 
 ## 더 보기
 
-로컬 실행: [`docs/local-development.md`](docs/local-development.md) · 기능별 테스트: [`docs/test-map/`](docs/test-map/README.md) · 배경: [`docs/background.md`](docs/background.md)
+로컬 실행: [`docs/local-development.md`](docs/local-development.md) · 기능별 테스트: [`docs/test-map/`](docs/test-map/README.md) · 배경: [`docs/background.md`](docs/background.md) · 운영 문제 기록: [`docs/incidents/`](docs/incidents/README.md)
 
 코드는 읽기용으로 공개합니다. 라이선스를 두지 않으므로 재사용은 허가하지 않습니다.
