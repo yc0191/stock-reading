@@ -97,7 +97,7 @@ run_apply urgent 2026-11-10T20:05:00+09:00
 { [ "$RC" -eq 0 ] && [ "$(current)" = V1 ] && ! grep -q ' up' "$W/docker.log"; } \
   && ok "U5 나중에 대기 버전이 U9 가 되어도 무시했던 긴급 값으로 낮에 바로 적용하지 않음" || bad "U5 (rc=$RC, current=$(current))"
 run_apply scheduled 2026-11-11T00:00:05+09:00
-{ [ "$RC" -eq 0 ] && [ "$(current)" = U9 ]; } && ok "U5b 그 버전은 00:00 정기 배포가 적용" || bad "U5b (rc=$RC, current=$(current))"
+{ [ "$RC" -eq 0 ] && [ "$(current)" = U9 ]; } && ok "U5b 그 버전은 정기 배포가 적용" || bad "U5b (rc=$RC, current=$(current))"
 printf 'V10' >"$W/param/_t_standby"
 run_apply scheduled 2026-11-12T00:00:05+09:00
 { [ "$RC" -eq 0 ] && [ "$(current)" = V10 ]; } && ok "U6 이후 정기 배포는 대기 버전을 적용(되돌림 없음: 대기 버전이 곧 최신)" || bad "U6 (rc=$RC, current=$(current))"

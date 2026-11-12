@@ -1,9 +1,9 @@
 [Unit]
-Description=Daily 00:00 KST deploy of the standby version (does nothing when the version is unchanged)
+Description=Daily 07:00 KST deploy of the standby version (does nothing when the version is unchanged)
 
 [Timer]
-# 한국 시간 자정. 서버 시간대와 상관없다.
-OnCalendar=*-*-* 00:00:00 Asia/Seoul
+# 한국 시간 07:00. 장 시작(09:00) 전에 배포 결과를 확인할 수 있는 시각. 서버 시간대와 상관없다.
+OnCalendar=*-*-* 07:00:00 Asia/Seoul
 # 서버가 꺼져 있어 놓쳤으면 켜질 때 한 번 돈다. 이때도 적용 스크립트가 금지 시간이면 적용하지 않는다.
 Persistent=true
 AccuracySec=10s
