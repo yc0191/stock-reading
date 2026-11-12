@@ -1,10 +1,10 @@
 #!/bin/bash
 # 서비스 서버의 배포 적용 스크립트. 서비스(services.yml)만 새 이미지로 바꾸고 데이터 서버(Kafka·Postgres)는 건드리지 않는다.
-#   apply-deploy.sh scheduled   매일 00:00(한국 시간) 정기 경로: Parameter Store 의 대기 버전을 읽는다.
+#   apply-deploy.sh scheduled   매일 07:00(한국 시간) 정기 경로: Parameter Store 의 대기 버전을 읽는다.
 #   apply-deploy.sh urgent      몇 분마다 도는 긴급 경로: Parameter Store 의 긴급 버전을 읽는다.
 # 두 경로가 같은 금지 시간을 쓴다: 매일(주말 포함) 09:00:00~15:30:59 한국 시간에는 어떤 경로로도 적용하지 않는다.
 # 금지 시간에 처음 본 긴급 값은 버린다(시간이 지나도 저절로 적용하지 않음). 서버는 Parameter Store 값을 읽기만 한다.
-# 긴급은 "대기 버전을 00:00 까지 기다리지 않고 지금 적용"만 한다. 긴급 값이 대기 버전과 다르면 적용하지 않는다(이후 00:00 정기 배포가 되돌리지 않게).
+# 긴급은 "대기 버전을 07:00 까지 기다리지 않고 지금 적용"만 한다. 긴급 값이 대기 버전과 다르면 적용하지 않는다(이후 07:00 정기 배포가 되돌리지 않게).
 #
 # 시험용 환경변수(없으면 실제 값): DEPLOY_NOW(ISO 8601), DEPLOY_STATE_DIR, DEPLOY_STANDBY_PARAM, DEPLOY_URGENT_PARAM, DEPLOY_ENV_FILE.
 set -euo pipefail
@@ -216,8 +216,8 @@ if [ "$target" = "$current" ]; then
   log "건너뜀: 긴급 버전이 지금 버전과 같음 ($current)"
   exit 0
 fi
-# 긴급은 대기 버전을 앞당겨 적용하는 것뿐이다. 대기 버전과 다르면 다음 00:00 정기 배포가 되돌리므로 적용하지 않는다.
-# 본 요청으로 기록해, 나중에 대기 버전이 우연히 이 값이 되어도 낮에 바로 적용하지 않는다(그때는 00:00 정기 배포가 적용).
+# 긴급은 대기 버전을 앞당겨 적용하는 것뿐이다. 대기 버전과 다르면 다음 07:00 정기 배포가 되돌리므로 적용하지 않는다.
+# 본 요청으로 기록해, 나중에 대기 버전이 우연히 이 값이 되어도 낮에 바로 적용하지 않는다(그때는 07:00 정기 배포가 적용).
 standby=$(read_param "$standby_param")
 if [ "$target" != "$standby" ]; then
   printf '%s\n' "$target" >"$state_dir/urgent_seen"

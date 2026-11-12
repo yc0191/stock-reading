@@ -13,7 +13,7 @@ resource "aws_ssm_parameter" "standby_version" {
   name        = local.standby_version_param
   type        = "String"
   value       = "placeholder-not-deployed"
-  description = "다음 00:00 정기 배포 때 서비스 서버가 적용할 이미지 버전(커밋). main 푸시의 이미지 6개가 모두 올라간 뒤 CI 가 쓴다."
+  description = "다음 07:00 정기 배포 때 서비스 서버가 적용할 이미지 버전(커밋). main 푸시의 이미지 6개가 모두 올라간 뒤 CI 가 쓴다."
 
   lifecycle {
     ignore_changes = [value]
