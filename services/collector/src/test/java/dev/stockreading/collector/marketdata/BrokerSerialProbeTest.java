@@ -64,7 +64,7 @@ class BrokerSerialProbeTest {
                     // 상한 값이 0 이면 BrokerProperties 가 수집기 기본값으로 바꾼다.
                     var broker = new BrokerProperties(System.getenv("BROKER_BASE_URL"), System.getenv("BROKER_APP_KEY"),
                             System.getenv("BROKER_APP_SECRET"), 10,
-                            Integer.parseInt(env("BROKER_MAX_CALLS_PER_SECOND", "0")));
+                            Integer.parseInt(env("BROKER_MAX_CALLS_PER_SECOND", "0")), BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS);
                     var client = new BrokerClient(broker, mapper, Clock.systemDefaultZone(), CallRateLimiter.perSecond(10));
                     CallRateLimit limiter = CallRateLimiter.perSecond(broker.maxCallsPerSecond());
                     var marketData = new BrokerMarketData(client, (QuoteSymbolsPort) () -> symbols, broker,

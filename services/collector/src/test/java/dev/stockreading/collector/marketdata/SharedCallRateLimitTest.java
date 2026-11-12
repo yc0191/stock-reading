@@ -138,7 +138,7 @@ class SharedCallRateLimitTest {
             }
             return granted;
         };
-        var broker = new BrokerProperties(server.baseUrl(), "k", "s", 5, maxCalls);
+        var broker = new BrokerProperties(server.baseUrl(), "k", "s", 5, maxCalls, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS);
         var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10));
         var quotes = new BrokerMarketData(client, (QuoteSymbolsPort) () -> SYMBOLS, broker, shared, PriceChecks.fake());
         var overseas = new BrokerInsightSource(client, insightProperties(), shared);
@@ -315,7 +315,7 @@ class SharedCallRateLimitTest {
     }
 
     private BrokerInsightSource source(CallRateLimit limiter) {
-        var broker = new BrokerProperties(server.baseUrl(), "k", "s", 5, 10);
+        var broker = new BrokerProperties(server.baseUrl(), "k", "s", 5, 10, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS);
         var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10));
         return new BrokerInsightSource(client, insightProperties(), limiter);
     }

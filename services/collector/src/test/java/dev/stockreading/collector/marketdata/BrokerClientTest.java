@@ -54,7 +54,7 @@ class BrokerClientTest {
             reply(exchange, 200, priceBody);
         });
         server.start();
-        var properties = new BrokerProperties("http://127.0.0.1:" + server.getAddress().getPort(), appKey, appSecret, 5, 10);
+        var properties = new BrokerProperties("http://127.0.0.1:" + server.getAddress().getPort(), appKey, appSecret, 5, 10, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS);
         return new BrokerClient(properties, JsonMapper.builder().build(), clock, CallRateLimiter.perSecond(10));
     }
 
@@ -234,7 +234,7 @@ class BrokerClientTest {
 
     @Test
     void propertiesToStringHidesSecrets() {
-        assertThat(new BrokerProperties("u", "secret-key", "secret-secret", 5, 10).toString())
+        assertThat(new BrokerProperties("u", "secret-key", "secret-secret", 5, 10, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS).toString())
                 .doesNotContain("secret-key", "secret-secret");
     }
 }

@@ -55,7 +55,7 @@ class SerialProbeRehearsalTest {
 
     private SerialProbe probe(FakeBrokerServer server, List<String> symbols, int cap, PriceFieldCheck check,
             SerialProbe.Settings settings) {
-        var broker = new BrokerProperties(server.baseUrl(), "TEST-key", "TEST-secret", 5, cap);
+        var broker = new BrokerProperties(server.baseUrl(), "TEST-key", "TEST-secret", 5, cap, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS);
         var client = new BrokerClient(broker, mapper, Clock.systemDefaultZone(), CallRateLimiter.perSecond(10));
         CallRateLimit limiter = CallRateLimiter.perSecond(cap);
         var marketData = new BrokerMarketData(client, (QuoteSymbolsPort) () -> symbols, broker, limiter, check);
