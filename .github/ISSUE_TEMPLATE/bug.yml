@@ -1,0 +1,60 @@
+name: 버그
+description: 동작이 기대와 다를 때 (잘못된 값, 빠진 메일, 오류 등)
+title: ""
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        제목은 동사로 시작하는 쉬운 영어 문장으로 씁니다(예: `Production mail subjects still start with the simulation tag`).
+        이 저장소는 공개됩니다. 비밀값, 개인정보, 계정·서버 식별 정보, 보유 종목 같은 개인 투자 정보는 실제 값을 쓰지 않고 유형으로만 적습니다.
+  - type: dropdown
+    id: environment
+    attributes:
+      label: 어디서 났나요
+      options:
+        - 운영
+        - 로컬 개발
+        - 둘 다
+    validations:
+      required: true
+  - type: checkboxes
+    id: services
+    attributes:
+      label: 관련 서비스
+      options:
+        - label: collector (수집기)
+        - label: market (시세처리기)
+        - label: news (뉴스)
+        - label: notifier (발송기)
+        - label: briefing (브리핑)
+        - label: 배포·인프라 (infra, CI)
+  - type: textarea
+    id: symptom
+    attributes:
+      label: 증상
+      description: 무엇이 어떻게 보였고, 원래는 어떻게 되어야 하는지 적습니다. 처음 본 시각도 함께 적습니다.
+    validations:
+      required: true
+  - type: textarea
+    id: cause
+    attributes:
+      label: 원인
+      description: 확인한 원인은 근거(파일, 로그)와 함께, 추정이면 "추정"이라고 적습니다. 모르면 비워 둡니다.
+  - type: textarea
+    id: fix
+    attributes:
+      label: 고칠 내용
+      description: 무엇을 어떻게 바꿀지와 확인할 테스트를 적습니다.
+  - type: textarea
+    id: rollout
+    attributes:
+      label: 반영할 때 주의
+      description: 배포 순서, 서버에서 손으로 할 일, 다른 서비스나 계약에 미치는 영향이 있으면 적습니다.
+  - type: checkboxes
+    id: public-check
+    attributes:
+      label: 공개 점검
+      options:
+        - label: 비밀값, 개인정보, 계정·서버 식별 정보, 개인 투자 정보를 실제 값으로 넣지 않았습니다
+          required: true

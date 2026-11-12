@@ -1,0 +1,53 @@
+name: 할 일
+description: 새 기능, 개선, 정리, 문서처럼 버그가 아닌 작업
+title: ""
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        제목은 동사로 시작하는 쉬운 영어 문장으로 씁니다(예: `Call each quote symbol at most once per second with more symbols`).
+        이 저장소는 공개됩니다. 비밀값, 개인정보, 계정·서버 식별 정보, 보유 종목 같은 개인 투자 정보는 실제 값을 쓰지 않고 유형으로만 적습니다.
+  - type: checkboxes
+    id: services
+    attributes:
+      label: 관련 서비스
+      options:
+        - label: collector (수집기)
+        - label: market (시세처리기)
+        - label: news (뉴스)
+        - label: notifier (발송기)
+        - label: briefing (브리핑)
+        - label: 배포·인프라 (infra, CI)
+        - label: 문서 (README, ADR, 가이드)
+  - type: textarea
+    id: why
+    attributes:
+      label: 왜 필요한가
+      description: 지금 무엇이 불편하거나 모자라는지 적습니다.
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: 할 일
+      description: 바꿀 동작과 범위를 적습니다. 정해지지 않은 결정은 따로 적습니다.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: 끝났다고 보는 기준
+      description: 확인할 동작과 테스트를 적습니다.
+  - type: textarea
+    id: refs
+    attributes:
+      label: 관련 문서
+      description: 관련 ADR, 이슈, PR을 적습니다. 계약(contracts/events)이나 DB를 바꾸면 함께 적습니다.
+  - type: checkboxes
+    id: public-check
+    attributes:
+      label: 공개 점검
+      options:
+        - label: 비밀값, 개인정보, 계정·서버 식별 정보, 개인 투자 정보를 실제 값으로 넣지 않았습니다
+          required: true
