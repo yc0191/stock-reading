@@ -1,7 +1,6 @@
 variable "aws_region" {
   description = "Lightsail·ECR·S3·Parameter Store를 만들 리전. 서버 설정(AWS_REGION)과 같아야 한다."
   type        = string
-  default     = "ap-southeast-2"
 }
 
 variable "aws_profile" {

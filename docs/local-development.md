@@ -398,7 +398,7 @@ BROKER_SERIAL_PROBE=1 BROKER_SERIAL_PROBE_OUT=<저장소 밖 경로>/serial-prob
 
 ## 설정 값 가져오기 (Parameter Store, 선택)
 
-메일 설정(SMTP 호스트·포트·계정, 발신·수신 주소) 6개를 AWS Systems Manager Parameter Store(시드니, `ap-southeast-2`)에 두고 `.env`로 가져옵니다. 수집기의 키(`/stock-reading/dev/collector/` 아래, 이름 대응은 `scripts/load_config.py`의 `COLLECTOR_ENV_NAMES`)와 브리핑의 LLM 키(`/stock-reading/dev/briefing/anthropic-api-key` → `ANTHROPIC_API_KEY`)도 같은 방식으로 가져옵니다. 두 그룹은 선택이라 없어도 메일 설정 반영은 막지 않으며, LLM 키가 없으면 브리핑은 규칙 기반 리포트를 만듭니다. 서비스는 계속 환경변수만 읽습니다.
+메일 설정(SMTP 호스트·포트·계정, 발신·수신 주소) 6개를 AWS Systems Manager Parameter Store에 두고 `.env`로 가져옵니다. 수집기의 키(`/stock-reading/dev/collector/` 아래, 이름 대응은 `scripts/load_config.py`의 `COLLECTOR_ENV_NAMES`)와 브리핑의 LLM 키(`/stock-reading/dev/briefing/anthropic-api-key` → `ANTHROPIC_API_KEY`)도 같은 방식으로 가져옵니다. 두 그룹은 선택이라 없어도 메일 설정 반영은 막지 않으며, LLM 키가 없으면 브리핑은 규칙 기반 리포트를 만듭니다. 서비스는 계속 환경변수만 읽습니다.
 
 ```bash
 # 읽을 값 확인 (파일은 쓰지 않고 키 이름만 출력)

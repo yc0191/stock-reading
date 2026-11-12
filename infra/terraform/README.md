@@ -7,7 +7,7 @@ Lightsail 서버 2대, 방화벽, ECR 저장소 6개, S3 백업 버킷, 배포 �
 | 대상 | 내용 |
 |---|---|
 | Lightsail 2대 | `<접두사>-data`(Kafka·Postgres), `<접두사>-service`(서비스 5개). 기본 묶음 `small_3_2`(2GB, 공개 IPv4) |
-| 방화벽 | 두 서버 모두 22번은 Lightsail 브라우저 SSH(`lightsail-connect`)에만. 데이터 서버의 Kafka(9092)·Postgres(5432)는 서비스 서버 사설 주소(/32)에만. 그 밖은 모두 닫힘 |
+| 방화벽 | 서버마다 꼭 필요한 접속만 연다(`lightsail.tf`) |
 | ECR 6개 | `stock-reading-{collector,market,news,notifier,briefing,migrate}`. 최근 3개만 보관 |
 | S3 버킷 | Postgres 백업. 35일(5주) 지나면 삭제, 공개 차단, TLS만 허용 |
 | Parameter Store | `/stock-reading/prod/deploy/standby-version`, `.../urgent-version`. 이름만 만들고 값은 CI가 씀(Terraform은 값을 되돌리지 않음) |
@@ -20,10 +20,11 @@ Lightsail 서버 2대, 방화벽, ECR 저장소 6개, S3 백업 버킷, 배포 �
 계정 번호, 버킷 이름, 저장소 이름은 변수로 받고 값은 `*.tfvars`(gitignore)에 둡니다. 상태 파일도 저장소 밖에 둡니다.
 
 ```sh
-mkdir -p ~/.config/stock-reading/terraform
+STATE_DIR=<저장소 밖의 폴더>   # 상태 파일을 둘 곳
+mkdir -p "$STATE_DIR"
 cd infra/terraform
 cp terraform.tfvars.example terraform.tfvars      # 값을 채운다
-terraform init -backend-config="path=$HOME/.config/stock-reading/terraform/prod.tfstate"
+terraform init -backend-config="path=$STATE_DIR/prod.tfstate"
 terraform plan
 ```
 
@@ -38,10 +39,10 @@ terraform plan
 
 1. **Terraform 실행용 AWS 프로필을 준비합니다**(`aws_profile`에 이름을 씀). 권한은 Lightsail·ECR·S3·SSM·IAM 생성입니다.
 2. `terraform plan`을 읽고 `terraform apply`를 합니다. 확인할 것:
-   - 방화벽 규칙이 22번 `lightsail-connect`뿐이어야 합니다. **적용 뒤 `aws lightsail get-instance-port-states --instance-name <접두사>-service`에서 22번이 `0.0.0.0/0`으로 열려 있지 않은지 직접 확인합니다.** 열려 있으면 멈추고 알립니다(별칭만 줄 때의 기본값은 이 코드로 시험하지 못했습니다).
+   - 적용 뒤 서버의 방화벽 규칙(`aws lightsail get-instance-port-states`)이 `lightsail.tf`와 같은지 직접 확인합니다. 다르면 멈춥니다.
    - 묶음 ID(`small_3_2`)와 이미지 ID(`ubuntu_24_04`)는 적용 때 검증됩니다. AWS가 묶음 이름 끝 번호를 바꾸므로 거절되면 `aws lightsail get-bundles`, `get-blueprints`로 확인해 변수를 고칩니다.
 3. `terraform output`에서 다음을 얻습니다.
-   - **GitHub 저장소 변수 `AWS_REGION`(기본 `ap-southeast-2`)을 넣습니다.** (Settings → Secrets and variables → Actions → Variables. 비밀이 아니라 변수입니다.)
+   - **GitHub 저장소 변수 `AWS_REGION`을 넣습니다.** (Settings → Secrets and variables → Actions → Variables. 비밀이 아니라 변수입니다.)
    - `oidc`이면 `github_actions_role_arn` → **변수 `AWS_ROLE_ARN`에 넣습니다.**
    - `access_key`이면 `github_actions_iam_user` → **콘솔에서 이 사용자의 접근 키를 발급해 Secrets(같은 화면의 Secrets 탭)의 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`에 넣습니다.** 변수 `AWS_ROLE_ARN`은 두지 않습니다.
    - `ecr_registry`, `data_server_private_ip`, `backup_bucket` → 서버 설정 파일에 넣습니다.

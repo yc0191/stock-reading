@@ -5,7 +5,7 @@ public final class MailAddresses {
 
     private static final java.util.regex.Pattern EMAIL =
             java.util.regex.Pattern.compile("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}");
-    // "arn:aws:ses:ap-southeast-2:123456789012:identity/..." -> 12자리 계정 번호를 가린다.
+    // "arn:aws:ses:us-east-1:123456789012:identity/..." -> 12자리 계정 번호를 가린다.
     private static final java.util.regex.Pattern ARN_ACCOUNT =
             java.util.regex.Pattern.compile("(arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:)\\d{12}");
 

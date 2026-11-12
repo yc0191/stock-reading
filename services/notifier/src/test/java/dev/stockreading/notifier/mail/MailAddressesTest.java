@@ -37,12 +37,12 @@ class MailAddressesTest {
 
     @org.junit.jupiter.api.Test
     void redactHidesTheAwsAccountNumberInArns() {
-        String arn = "User 'arn:aws:iam::123456789012:user/ses-smtp-user' cannot use 'arn:aws:ses:ap-southeast-2:123456789012:identity/alice@example.com'";
+        String arn = "User 'arn:aws:iam::123456789012:user/ses-smtp-user' cannot use 'arn:aws:ses:us-east-1:123456789012:identity/alice@example.com'";
 
         assertThat(MailAddresses.redact(arn))
                 .doesNotContain("123456789012")
                 .contains("arn:aws:iam::************:user/ses-smtp-user")
-                .contains("arn:aws:ses:ap-southeast-2:************:identity/a****@example.com");
+                .contains("arn:aws:ses:us-east-1:************:identity/a****@example.com");
     }
 
     @org.junit.jupiter.api.Test
