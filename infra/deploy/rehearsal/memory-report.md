@@ -1,10 +1,10 @@
 # 로컬 리허설 메모리 측정
 
-`run-rehearsal.sh all`로 측정했습니다(2026-11-11). 서버 2대는 각각 메모리·스왑 상한 2GB의 Docker 컨테이너(Docker 안의 Docker)이고, 이미지는 `linux/amd64`입니다(x86이 아닌 컴퓨터에서 x86 에뮬레이션으로 돌렸으므로 실제 Lightsail과 완전히 같지는 않습니다). 시세는 시뮬레이터, 메일은 드라이런, LLM 키는 없음(규칙 기반 리포트)입니다. 외부 호출은 없습니다.
+`run-rehearsal.sh all`로 측정했습니다(2026-11-11). 서버 2대는 각각 메모리·스왑 상한 2GB의 Docker 컨테이너(Docker 안의 Docker)이고, 이미지는 `linux/amd64`입니다(에뮬레이션으로 돌렸을 수 있어 실제 서버와 완전히 같지는 않습니다). 시세는 시뮬레이터, 메일은 드라이런, LLM 키는 없음(규칙 기반 리포트)입니다. 외부 호출은 없습니다.
 
 ## 한 일
 
-1. 데이터 서버(`data.yml`)와 서비스 서버(`services.yml`)를 띄움. Kafka(9092)·Postgres(5432)는 사설 주소에서만 닿고 데이터 서버의 127.0.0.1에서는 닫혀 있음을 확인.
+1. 데이터 서버(`data.yml`)와 서비스 서버(`services.yml`)를 띄움.
 2. `flyway-migrate`가 market, personal 계정·권한, personal, briefing 순서로 표를 만든 뒤 서비스 5개가 뜸.
 3. 가짜 종목·멤버 2명(서로 다른 포트폴리오)을 넣고 수집기·뉴스를 다시 띄움.
 4. 수집기 수동 명령(`collect`, `collect-pre-open`, `collect-intraday`, `collect-post-close`, `collect-news`)과 tick(`collect-members`, `daily-briefing-morning`, `daily-briefing-post-close`)을 발행하고 150초 기다림.
