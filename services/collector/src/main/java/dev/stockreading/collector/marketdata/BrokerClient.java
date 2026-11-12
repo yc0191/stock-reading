@@ -66,7 +66,10 @@ class BrokerClient {
         this.limiter = limiter;
         this.mapper = mapper;
         this.clock = clock;
-        this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(properties.timeoutSeconds())).build();
+        // 기본값은 상대가 받으면 HTTP/2로 협상해 동시 조회가 연결 하나를 같이 쓰고, 그 연결이 멈추면 모두 함께 멈추므로 HTTP/1.1로 고정한다.
+        // HttpClient 하나를 모든 요청이 같이 쓰므로 연결 맺기 제한은 현재가와 같은 짧은 값이 모든 요청에 걸린다.
+        this.http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(Duration.ofSeconds(properties.quoteTimeoutSeconds())).build();
     }
 
     // 응답 본문에 시세 시각이 없어서 응답 헤더의 처리 시각을 asOf 로 쓴다.
@@ -74,7 +77,7 @@ class BrokerClient {
         ObjectNode body = mapper.createObjectNode();
         body.put("excg_clsf", "0");
         body.put("shrt_cd", symbol);
-        Reply reply = post("/api/v1/ivu10140", body, true);
+        Reply reply = post("/api/v1/ivu10140", body, true, Duration.ofSeconds(properties.quoteTimeoutSeconds()));
 
         JsonNode data = reply.json().path("dataBody");
         JsonNode header = reply.json().path("dataHeader");
@@ -137,7 +140,7 @@ class BrokerClient {
         body.put("appKey", properties.appKey());
         body.put("appSecret", properties.appSecret());
         body.put("grantType", "client_credentials");
-        JsonNode data = post("/oauth2/token", body, false).json().path("dataBody");
+        JsonNode data = post("/oauth2/token", body, false, defaultTimeout()).json().path("dataBody");
 
         String value = data.path("access_token").asString("");
         long expiresIn = data.path("expires_in").asLong(0);
@@ -153,11 +156,20 @@ class BrokerClient {
     private record Reply(JsonNode json, String raw, int status) {
     }
 
-    private Reply post(String path, ObjectNode dataBody, boolean authorized) {
+    // 테스트에서 만들어진 HttpClient 설정을 확인하는 용도다.
+    HttpClient httpClient() {
+        return http;
+    }
+
+    private Duration defaultTimeout() {
+        return Duration.ofSeconds(properties.timeoutSeconds());
+    }
+
+    private Reply post(String path, ObjectNode dataBody, boolean authorized, Duration timeout) {
         if (authorized) {
-            return withTokenRetry(bearer -> send(path, dataBody, bearer));
+            return withTokenRetry(bearer -> send(path, dataBody, bearer, timeout));
         }
-        return send(path, dataBody, null);
+        return send(path, dataBody, null, timeout);
     }
 
     // 토큰이 거부되면(HTTP 401) 메모리의 토큰을 버리고 새로 발급해 한 번만 다시 시도한다.
@@ -203,7 +215,7 @@ class BrokerClient {
         }
     }
 
-    private Reply send(String path, ObjectNode dataBody, String bearer) {
+    private Reply send(String path, ObjectNode dataBody, String bearer, Duration timeout) {
         if (isBlank(properties.baseUrl()) || isBlank(properties.appKey()) || isBlank(properties.appSecret())) {
             throw new BrokerApiException(FailureType.TOKEN_ISSUE_FAILED,
                     "BROKER_BASE_URL / BROKER_APP_KEY / BROKER_APP_SECRET 이 설정되지 않았습니다");
@@ -215,7 +227,7 @@ class BrokerClient {
         request.set("dataBody", dataBody);
 
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(properties.baseUrl() + path))
-                .timeout(Duration.ofSeconds(properties.timeoutSeconds()))
+                .timeout(timeout)
                 .header("Content-Type", "application/json");
         if (bearer != null) {
             builder.header("Authorization", "Bearer " + bearer);
@@ -367,7 +379,7 @@ class BrokerClient {
 
     // post() 와 같은 요청 형식이며, 성공 여부만 확인하고 응답 본문은 그대로 돌려준다.
     private String postRaw(String path, ObjectNode dataBody) {
-        return withTokenRetry(bearer -> sendRaw(path, dataBody, bearer, Duration.ofSeconds(properties.timeoutSeconds())));
+        return withTokenRetry(bearer -> sendRaw(path, dataBody, bearer, defaultTimeout()));
     }
 
     private String sendRaw(String path, ObjectNode dataBody, String bearer, Duration timeout) {

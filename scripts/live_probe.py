@@ -111,7 +111,8 @@ def build_env(base_env, credentials, args, out_path):
 def main(argv=None, run=subprocess.run, now=None, base_env=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--profile", help="AWS CLI 프로필. 없으면 기본 자격증명 방식을 쓴다")
-    parser.add_argument("--region", default=lc.DEFAULT_REGION)
+    parser.add_argument("--region", default=os.environ.get("AWS_REGION"),
+                        help="리전. 없으면 AWS_REGION, 그것도 없으면 프로필에 정한 리전을 쓴다")
     parser.add_argument("--base-url", default=os.environ.get("BROKER_BASE_URL", ""), help="시세 제공자 운영 주소")
     parser.add_argument("--symbols", required=True, help="시험할 종목(쉼표 구분, 첫 종목만 씀). 저장소에 적지 않는다")
     parser.add_argument("--probe", choices=["rate", "smoke"], default="rate",

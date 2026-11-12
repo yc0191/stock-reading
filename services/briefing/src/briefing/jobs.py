@@ -96,6 +96,8 @@ class ReportInput:
     background: tuple[Background, ...] = ()
     # 변동 종목이 ETF일 때 응답에 담긴 ETF 정보. 이전 형식 응답에는 없다.
     etf: EtfInfo | None = None
+    # 응답에 담긴 변동 종목 이름(ETF 또는 주식). 이전 형식 응답에는 없다.
+    name: str | None = None
     # market.move를 감지한 시각(봉투의 occurredAt)과 감지 유형. 머리말의 "몇 분 사이"에 쓴다. 이전 형식에는 없을 수 있다.
     detected_at: datetime | None = None
     detection_type: str | None = None
@@ -147,6 +149,7 @@ class _Context:
     close_rates: tuple[CloseRate, ...]
     background: tuple[Background, ...]
     etf: EtfInfo | None = None
+    name: str | None = None
 
 
 @dataclass
@@ -350,6 +353,10 @@ class BriefingCore:
 
     @staticmethod
     def _parse_context(payload: dict) -> _Context:
+        def _name_or_none(value: object) -> str | None:
+            # 문자열이 아니거나 비면 이름 없음으로 본다(AttributeError로 실행 루프가 멈추지 않게).
+            return value.strip() or None if isinstance(value, str) else None
+
         try:
             return _Context(
                 tickers=tuple(payload["tickers"]),
@@ -357,6 +364,7 @@ class BriefingCore:
                 close_rates=parse_close_rates(payload["closeRates"]),
                 background=tuple(parse_background(b) for b in payload["background"]),
                 etf=parse_etf_info(payload.get("etf")),
+                name=_name_or_none(payload.get("name")),
             )
         except (KeyError, TypeError) as error:
             raise ValueError(f"malformed market.context.responded event: {error!r}") from error
@@ -480,9 +488,9 @@ class BriefingCore:
         job.context.received = True
         job.responses[STAGE_CONTEXT] = payload
         job.context_data = context
-        queries = early_queries(context.etf, self.settings.max_research_queries)
+        queries = early_queries(context.etf, self.settings.max_research_queries, context.name)
         if not queries:
-            log.info("early research skipped for job %s: ETF name unknown", job.job_id)
+            log.info("early research skipped for job %s: ETF and stock name unknown", job.job_id)
             job.early = _Early.SKIPPED
             return
         research_id = early_research_id(job.job_id)
@@ -664,7 +672,7 @@ class BriefingCore:
             articles_truncated=job.news_truncated, tickers=context.tickers,
             tickers_truncated=context.tickers_truncated, close_rates=tuple(close_rates),
             filings=tuple(filings), filings_truncated=job.filings_truncated, background=tuple(background),
-            etf=context.etf, detected_at=job.detected_at, detection_type=job.detection_type,
+            etf=context.etf, name=context.name, detected_at=job.detected_at, detection_type=job.detection_type,
             news_seq=job.news_seq)
         _log_collection(report_input, _Excluded(
             articles=len(job.news_articles or ()) - len(articles),
@@ -738,11 +746,14 @@ def early_research_id(job_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"research-early:{job_id}"))
 
 
-def early_queries(etf: EtfInfo | None, limit: int) -> tuple[str, ...]:
-    """ETF 이름과 비중 순위가 높은 구성 종목 이름으로 만든 검색어. ETF 이름을 모르면 빈 튜플(재검색하지 않는다)."""
+def early_queries(etf: EtfInfo | None, limit: int, stock_name: str | None = None) -> tuple[str, ...]:
+    """ETF 이름과 비중 순위가 높은 구성 종목 이름으로 만든 검색어. ETF 정보가 없는 주식이면 그 주식 이름 하나.
+    둘 다 모르면 빈 튜플(재검색하지 않는다)."""
     name = (etf.name or "").strip() if etf is not None else ""
     if not name:
-        return ()
+        # 주식 급변동은 맥락 응답에 ETF 정보가 없고 name만 있다. 이 이름 하나로 찾는다.
+        stock = (stock_name or "").strip() if etf is None else ""
+        return (stock,) if stock and len(stock) <= MAX_QUERY_LENGTH else ()
     names = [name] + [m.name.strip() for m in sorted(etf.members, key=lambda m: m.rank) if m.name and m.name.strip()]
     unique = dict.fromkeys(n for n in names if len(n) <= MAX_QUERY_LENGTH)
     return tuple(unique)[:limit]

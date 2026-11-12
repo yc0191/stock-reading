@@ -1,4 +1,4 @@
-# PR 과 develop-collector·main 푸시마다 실제 DB·실제 서비스 흐름을 뺀 테스트를 돌린다.
+# PR 과 develop·main 푸시마다 실제 DB·실제 서비스 흐름을 뺀 테스트를 돌린다.
 # 그 테스트들은 켜는 환경변수가 없어 건너뛰며, 커밋 전에 scripts/test-all.sh 로 따로 돌린다.
 name: test
 
@@ -6,7 +6,7 @@ on:
   pull_request:
   push:
     branches:
-      - develop-collector
+      - develop
       - main
 
 permissions:

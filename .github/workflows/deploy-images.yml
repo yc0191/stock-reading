@@ -33,6 +33,11 @@ jobs:
           - { image: migrate, dockerfile: infra/deploy/migrate/Dockerfile }
     steps:
       - uses: actions/checkout@v4.2.2
+      # 공개 저장소라 실행 로그에 서버 위치(리전)와 계정 번호가 남지 않게 가린다.
+      - name: 리전 가리기
+        env:
+          AWS_REGION_VALUE: ${{ vars.AWS_REGION }}
+        run: echo "::add-mask::$AWS_REGION_VALUE"
       - uses: aws-actions/configure-aws-credentials@v4.1.0
         with:
           # OIDC(역할)가 기본. 역할 변수가 비고 키 비밀값이 있으면 접근 키로 들어간다(infra/terraform 의 github_auth).
@@ -40,6 +45,7 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
+          mask-aws-account-id: true
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2.0.1
       - uses: docker/setup-buildx-action@v3.10.0
@@ -59,6 +65,11 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # 공개 저장소라 실행 로그에 서버 위치(리전)와 계정 번호가 남지 않게 가린다.
+      - name: 리전 가리기
+        env:
+          AWS_REGION_VALUE: ${{ vars.AWS_REGION }}
+        run: echo "::add-mask::$AWS_REGION_VALUE"
       - uses: aws-actions/configure-aws-credentials@v4.1.0
         with:
           # OIDC(역할)가 기본. 역할 변수가 비고 키 비밀값이 있으면 접근 키로 들어간다(infra/terraform 의 github_auth).
@@ -66,6 +77,7 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
+          mask-aws-account-id: true
       - name: 대기 버전 기록
         run: |
           aws ssm put-parameter \

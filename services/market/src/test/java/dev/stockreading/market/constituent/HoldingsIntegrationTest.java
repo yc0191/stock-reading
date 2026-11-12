@@ -118,6 +118,19 @@ class HoldingsIntegrationTest {
     }
 
     @Test
+    void stockNameIsReadFromTheKrStockTableAndMissingOrBlankNamesAreEmpty() {
+        stock("KR", "TEST07", "TEST STOCK SEVEN");
+        stock("KR", "TEST08", "  ");
+
+        assertThat(repository.stockName("TEST07")).contains("TEST STOCK SEVEN");
+        assertThat(repository.stockName("TEST08")).isEmpty();
+        // 이름 칸이 비어 있는 행, 없는 코드, 미국 종목은 국내 종목 이름으로 찾지 않는다.
+        assertThat(repository.stockName("TEST09")).isEmpty();
+        assertThat(repository.stockName("TEST99")).isEmpty();
+        assertThat(repository.stockName("FAKEA")).isEmpty();
+    }
+
+    @Test
     void etfInfoAndTickersAreReadBackInRankOrder() {
         assertThat(repository.topTickers("TEST01")).containsExactly("FAKEA", "FAKE-B");
         assertThat(repository.topTickers("TEST99")).isEmpty();

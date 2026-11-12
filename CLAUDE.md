@@ -12,6 +12,7 @@
 | `build-logic/` | 모든 서비스가 공유하는 Gradle 규약 플러그인 (루트 `build.gradle.kts`는 일부러 비어 있음) |
 | `scripts/` | 설정 로더 (Python) |
 | `docs/adr/` | 설계 결정 기록 (인덱스: `docs/adr/README.md`) |
+| `docs/incidents/` | 운영 문제의 조사·원인·고친 과정 기록 (인덱스: `docs/incidents/README.md`) |
 | `infra/` | 로컬 인프라 (Docker Compose), IAM 템플릿 |
 
 ## 검증
@@ -41,3 +42,4 @@
 - ADR·README 등 설계 문서 변경: `.claude/rules/adr.md`
 - 커밋 메시지 작성: `.claude/rules/commit.md`
 - PR 생성·머지: `.claude/rules/pr.md`
+- 이슈·마일스톤·프로젝트 보드 생성·수정 (모두 공개됨): `.claude/rules/issue.md`

@@ -9,6 +9,7 @@
     "jobId": "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13",
     "seq": 1,
     "symbol": "TEST01",
+    "name": "TEST ETF ONE",
     "tickers": ["TESTA", "FAKEB"],
     "closeRates": [
       {

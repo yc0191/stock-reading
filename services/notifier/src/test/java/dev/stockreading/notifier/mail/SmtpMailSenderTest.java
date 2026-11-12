@@ -71,7 +71,7 @@ class SmtpMailSenderTest {
             public void send(MimeMessage mimeMessage) {
                 throw new org.springframework.mail.MailSendException(
                         "554 Access denied: User 'arn:aws:iam::123456789012:user/x' is not authorized to perform "
-                                + "'ses:SendRawEmail' on 'arn:aws:ses:ap-southeast-2:123456789012:identity/to@example.com'");
+                                + "'ses:SendRawEmail' on 'arn:aws:ses:us-east-1:123456789012:identity/to@example.com'");
             }
         };
         failing.setHost("localhost");

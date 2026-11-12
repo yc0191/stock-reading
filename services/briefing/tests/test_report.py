@@ -42,12 +42,12 @@ def article(article_id, minutes_before, title="Sample headline"):
 ARTICLES = (article("a1", 90, "Rate decision"), article("a2", 30, "Fund outflow"), article("a3", -3, "Late note"))
 
 
-def report_input(articles=ARTICLES, etf=None):
+def report_input(articles=ARTICLES, etf=None, name=None):
     return ReportInput(
         job_id=JOB_ID, symbol="TEST01", correlation_id="collect-1", as_of=AS_OF,
         previous_price=10_000, price=9_850, change_percent=-1.5,
         price_points=(PricePoint(AS_OF - timedelta(minutes=1), 10_000), PricePoint(AS_OF, 9_850)),
-        articles=articles, etf=etf)
+        articles=articles, etf=etf, name=name)
 
 
 def cause(title, detail, refs, meaning, meaning_refs):
@@ -635,6 +635,26 @@ def test_headline_and_event_carry_the_etf_name_only_when_known(writer, name, hea
     assert payload["text"].splitlines()[0] == headline
     assert payload.get("name") == event_name
     assert ("name" in payload) == (event_name is not None)
+    assert validate("briefing.generated.v1.schema.json", published[0].value) == []
+
+
+@pytest.mark.parametrize("name, etf_name, shown", [
+    ("TEST 주식", None, "TEST 주식"),            # 주식 급변동: ETF 정보 없이 응답의 name만 있다
+    (" TEST 주식 ", "TEST ETF", "TEST 주식"),     # name이 ETF 이름보다 먼저다
+    (None, "TEST ETF", "TEST ETF"),              # name이 없으면 지금처럼 ETF 이름
+    ("  ", "TEST ETF", "TEST ETF"),
+    (None, None, None),                          # 둘 다 없으면 코드만
+])
+@pytest.mark.parametrize("writer", [lambda: LlmWriter(FakeLlm(VALID)), RuleBasedWriter])
+def test_the_response_name_comes_before_the_etf_name_in_the_headline_and_event(writer, name, etf_name, shown):
+    s, published, _ = stage(writer())
+
+    s.on_ready(report_input(name=name, etf=etf_named(etf_name) if etf_name else None))
+
+    payload = published[0].value["payload"]
+    first = f"[{shown}(TEST01)]" if shown else "[TEST01]"
+    assert payload["text"].splitlines()[0].startswith(first)
+    assert payload.get("name") == shown
     assert validate("briefing.generated.v1.schema.json", published[0].value) == []
 
 

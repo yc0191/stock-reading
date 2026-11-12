@@ -141,9 +141,10 @@ class CollectTimerFlowTest {
             timer.collect();
             timer.collect();
 
-            verify(kafka, timeout(10_000).times(9)).send(eq(Topics.MARKET_SNAPSHOT), anyString(), anyString());
+            // 종목 9개에 회차당 8개라 첫 회차는 8종목을 부르고, 건너뛴 회차는 다음 차례 8종목만 기록한다.
+            verify(kafka, timeout(10_000).times(8)).send(eq(Topics.MARKET_SNAPSHOT), anyString(), anyString());
             ArgumentCaptor<String> failures = ArgumentCaptor.forClass(String.class);
-            verify(kafka, times(18)).send(eq(Topics.MARKET_SNAPSHOT_FAILED), anyString(), failures.capture());
+            verify(kafka, times(16)).send(eq(Topics.MARKET_SNAPSHOT_FAILED), anyString(), failures.capture());
             assertThat(failures.getAllValues()).allSatisfy(json -> {
                 assertThat(ContractSchemas.validate("market.snapshot.failed.v1.schema.json", json)).isEmpty();
                 assertThat(json).contains("\"failureType\":\"TICK_SKIPPED\"")
@@ -151,7 +152,7 @@ class CollectTimerFlowTest {
                         .doesNotContain("RateLimited");
             });
             // 건너뛴 회차를 앞 회차가 끝난 뒤 몰아서 조회하지 않는다. 몰아서 조회하면 같은 1초에 호출이 몰려 상한에 걸린다.
-            assertThat(server.priceCalls.get()).isEqualTo(9);
+            assertThat(server.priceCalls.get()).isEqualTo(8);
         });
     }
 

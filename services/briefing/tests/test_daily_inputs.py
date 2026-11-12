@@ -95,8 +95,8 @@ def test_a_filing_in_the_range_makes_a_member_an_issue_even_with_a_small_move():
 
 
 def test_a_member_without_a_rate_or_filing_and_non_us_members_are_not_issues():
-    members = [member("TESTA", 1), member("005930", 2, market="KR")]
-    issues, _ = member_issues([etf_day(members=members)], [close("005930", "9.00")], [])
+    members = [member("TESTA", 1), member("TEST01", 2, market="KR")]
+    issues, _ = member_issues([etf_day(members=members)], [close("TEST01", "9.00")], [])
     assert issues == ()
 
 

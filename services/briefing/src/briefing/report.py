@@ -300,7 +300,7 @@ def comparison_facts(report_input: ReportInput) -> list[str]:
 def move_headline(report_input: ReportInput) -> str:
     """머리말: 종목, 시각, 방향과 변동률, 몇 분 사이 움직였는지."""
     i = report_input
-    line = headline(i.symbol, i.previous_price, i.price, i.change_percent, i.as_of, i.etf.name if i.etf else None)
+    line = headline(i.symbol, i.previous_price, i.price, i.change_percent, i.as_of, display_name(i))
     if i.detection_type == "prevClose":
         return f"{line}, 전일 종가 대비"
     if i.detected_at is None or i.detection_type != "window":
@@ -799,9 +799,17 @@ def briefing_event(report_input: ReportInput, report: Report, now: datetime) -> 
     )
 
 
+def display_name(report_input: ReportInput) -> str | None:
+    """응답의 종목 이름을 먼저 쓰고, 없거나 비었으면 ETF 이름을 쓴다. 둘 다 없으면 None."""
+    for name in (report_input.name, report_input.etf.name if report_input.etf else None):
+        if name and name.strip():
+            return name.strip()
+    return None
+
+
 def _name_entry(report_input: ReportInput) -> dict[str, str]:
-    """ETF 이름을 알 때만 name 칸을 담는다. 모르거나 비었으면 칸을 뺀다."""
-    name = report_input.etf.name.strip() if report_input.etf and report_input.etf.name else ""
+    """이름을 알 때만 name 칸을 담는다. 모르거나 비었으면 칸을 뺀다."""
+    name = display_name(report_input)
     return {"name": name} if name else {}
 
 

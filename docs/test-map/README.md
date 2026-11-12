@@ -35,7 +35,7 @@
 | `없음 - 이유` | `없음 - ` 뒤에 왜 없는지, 언제 채우는지 | 있어야 하지만 아직 없을 때 |
 | `해당 없음 - 이유` | `해당 없음 - ` 뒤에 왜 필요 없는지 | 이 종류의 테스트가 뜻이 없을 때(예: 외부 의존이 없는 기능의 가상·실제) |
 
-- 테스트와 `없음 - 이유`를 한 칸에 함께 쓸 때는 `; `로 나눕니다. 예: `InsightIntegrationTest [DB]; 없음 - 데일리 브리핑 작업에서 채움 [서비스 흐름]`
+- 테스트와 `없음 - 이유`를 한 칸에 함께 쓸 때는 `; `로 나눕니다. 예: `InsightIntegrationTest [DB]; 없음 - 아직 없음 [서비스 흐름]`
 - 한 테스트가 여러 기능을 지키면 그 기능 행마다 적습니다.
 - 다른 지도의 테스트가 이 기능을 지키면 `<지도 이름>/<테스트 이름>`으로 씁니다. 예: `scripts/test_briefing_flow_live.py [서비스 흐름, 켜는 조건: test-all.sh --live]`. 그 테스트는 원래 지도(위 예에서는 `scripts.md`)의 기능 칸에도 적어야 합니다.
 - 적는 이름은 실제로 있는 테스트여야 합니다. 이름을 바꾸거나 지우면 지도도 함께 고칩니다.
@@ -108,7 +108,7 @@ services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests
 
 ```
 python3 scripts/check_test_map.py --changed                    # 커밋 안 된 변경, 스테이징, 아직 추가하지 않은 새 파일
-python3 scripts/check_test_map.py --changed develop-collector  # 기준 브랜치에서 갈라진 뒤의 변경(커밋 안 된 것 포함)
+python3 scripts/check_test_map.py --changed develop            # 기준 브랜치에서 갈라진 뒤의 변경(커밋 안 된 것 포함)
 python3 scripts/check_test_map.py --changed --staged           # 스테이징한 변경만(커밋 훅이 씀)
 ```
 
@@ -128,7 +128,7 @@ python3 scripts/check_test_map.py --changed --staged           # 스테이징한
 
 지도 검사는 스테이징 여부와 상관없이 작업 폴더의 파일을 봅니다. 커밋하지 않을 새 파일이 지도에 없어도 커밋이 막히므로, 그런 파일은 지우거나 옮겨 두고 커밋합니다.
 
-PR과 `develop-collector`·`main` 푸시 때는 GitHub Actions(`.github/workflows/test.yml`)가 Java 전체, 브리핑, 설정 로더·지도 검사 테스트를 돌립니다. 실제 DB와 실제 서비스 흐름 테스트는 켜는 환경변수가 없어 건너뛰므로 커밋 전에 `scripts/test-all.sh`로 돌립니다. PR 실행에서는 기준 브랜치와의 차이로 `--changed`를 돌린 목록이 실행 결과 요약에 붙습니다(실패로 만들지 않음).
+PR과 `develop`·`main` 푸시 때는 GitHub Actions(`.github/workflows/test.yml`)가 Java 전체, 브리핑, 설정 로더·지도 검사 테스트를 돌립니다. 실제 DB와 실제 서비스 흐름 테스트는 켜는 환경변수가 없어 건너뛰므로 커밋 전에 `scripts/test-all.sh`로 돌립니다. PR 실행에서는 기준 브랜치와의 차이로 `--changed`를 돌린 목록이 실행 결과 요약에 붙습니다(실패로 만들지 않음).
 
 ## 지도를 고치는 방법
 

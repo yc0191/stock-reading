@@ -9,7 +9,6 @@ import sys
 PREFIX = "/stock-reading/dev/notifier/"
 COLLECTOR_PREFIX = "/stock-reading/dev/collector/"
 BRIEFING_PREFIX = "/stock-reading/dev/briefing/"
-DEFAULT_REGION = "ap-southeast-2"
 
 # 파라미터 이름 -> 환경변수 이름. 여기에 없는 이름은 읽어도 반영하지 않는다.
 # 발송 스위치(NOTIFIER_SEND_ENABLED)는 일부러 넣지 않는다: 실수로 켜지지 않도록 .env 에서만 사람이 바꾼다.
@@ -27,14 +26,14 @@ ENV_NAMES = {
 # collector 는 선택 그룹이다: 없어도 notifier 설정 반영을 막지 않는다.
 COLLECTOR_ENV_NAMES = {
     "dart-api-key": "DART_API_KEY",
-    "kb-app-key": "BROKER_APP_KEY",
-    "kb-app-secret": "BROKER_APP_SECRET",
+    "broker-app-key": "BROKER_APP_KEY",
+    "broker-app-secret": "BROKER_APP_SECRET",
     "broker-base-url": "BROKER_BASE_URL",
     # 전체 실행 스크립트(test-all.sh --live)가 실제 시세를 부를 기준 종목 하나.
     "test-live-symbol": "TEST_ALL_LIVE_SYMBOL",
 
-    "naver-client-id": "NEWS_SEARCH_CLIENT_ID",
-    "naver-client-secret": "NEWS_SEARCH_CLIENT_SECRET",
+    "news-search-client-id": "NEWS_SEARCH_CLIENT_ID",
+    "news-search-client-secret": "NEWS_SEARCH_CLIENT_SECRET",
     "news-search-base-url": "NEWS_SEARCH_BASE_URL",
     "news-search-id-header": "NEWS_SEARCH_ID_HEADER",
     "news-search-secret-header": "NEWS_SEARCH_SECRET_HEADER",
@@ -128,7 +127,7 @@ def unmapped_credential_names(text, updates):
 
 def fetch_parameters(profile, region, run=subprocess.run, prefix=PREFIX):
     command = ["aws", "ssm", "get-parameters-by-path", "--path", prefix.rstrip("/"), "--with-decryption",
-               "--output", "json", "--region", region]
+               "--output", "json"] + (["--region", region] if region else [])
     # 프로필을 주지 않으면 AWS CLI 기본 자격증명 방식(AWS_PROFILE 등)을 그대로 따른다.
     if profile:
         command += ["--profile", profile]
@@ -151,7 +150,8 @@ def main(argv=None, run=subprocess.run):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--profile", help="AWS CLI 프로필. 없으면 기본 자격증명 방식(AWS_PROFILE 등)을 쓴다")
-    parser.add_argument("--region", default=DEFAULT_REGION)
+    parser.add_argument("--region", default=os.environ.get("AWS_REGION"),
+                        help="리전. 없으면 AWS_REGION, 그것도 없으면 프로필에 정한 리전을 쓴다")
     # 뉴스 검증처럼 한 그룹의 키만 필요할 때, 다른 그룹의 비밀이 .env 에 들어오지 않게 한다.
     parser.add_argument("--only", choices=["notifier", "collector", "briefing"],
                         help="한 그룹만 가져온다. 없으면 모두 가져온다")

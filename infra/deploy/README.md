@@ -4,7 +4,7 @@ Lightsail 서버 2대에서 전체를 돌리는 데 쓰는 이미지·Compose·�
 
 | 서버 | 돌리는 것 | 파일 |
 |---|---|---|
-| 데이터 서버 (2GB) | Kafka, Postgres. 서비스 서버의 사설 주소에서만 접속 | `compose/data.yml`, `server/data.env.example`, `server/backup-postgres.sh`, `server/systemd/stock-backup.*` |
+| 데이터 서버 (2GB) | Kafka, Postgres | `compose/data.yml`, `server/data.env.example`, `server/backup-postgres.sh`, `server/systemd/stock-backup.*` |
 | 서비스 서버 (2GB) | collector, market, news, notifier, briefing와 DB 표 만들기 단계(`flyway-migrate`) | `compose/services.yml`, `server/deploy.env.example`, `server/apply-deploy.sh`, `server/systemd/stock-deploy-*` |
 
 ## 이미지
@@ -33,10 +33,10 @@ Lightsail 서버 2대에서 전체를 돌리는 데 쓰는 이미지·Compose·�
 
 - **배포 금지 시간:** 매일(주말 포함) 한국 시간 09:00:00~15:30:59에는 어떤 경로로도 적용하지 않습니다. 서버가 꺼져 있다 늦게 돈 정기 실행도 같습니다. 이미지를 받는 사이에 금지 시간이 되면 다시 띄우기 직전에 멈춥니다.
 - **금지 시간에 들어온 긴급 요청은 버립니다.** 금지 시간에 처음 본 긴급 값은 "본 요청"으로 기록해 두므로 15:31이 되어도 저절로 적용하지 않습니다. 다시 배포하려면 새 긴급 값을 써야 합니다.
-- **긴급 배포는 "대기 버전을 00:00까지 기다리지 않고 지금 적용"만 합니다.** 긴급 값이 대기 버전과 다르면 적용하지 않고 이유(`긴급 버전이 대기 버전과 다름`)를 로그에 남깁니다. 다르면 다음 00:00 정기 배포가 대기 버전으로 되돌려 긴급 수정이 하루 만에 사라지기 때문입니다. 무시한 값은 "본 요청"으로 기록하지 않으므로 대기 버전이 그 값으로 바뀌면 다음 확인(5분 안)에 적용합니다.
-  - **GitHub Actions(버튼) 쪽이 따를 규칙:** 긴급 버튼은 대기 버전과 긴급 버전에 **같은 값(대기 버전으로 이미 올라간 커밋)**만 씁니다. 대기 버전보다 새 커밋을 바로 적용하려면 대기 버전도 같은 값으로 함께 써야 합니다(대기 버전을 먼저, 긴급 버전을 나중에 쓰면 중간 상태에서 무시되는 일이 없습니다). 이 규칙은 `infra/terraform`·`.github/workflows` 구간의 몫입니다.
+- **긴급 배포는 "대기 버전을 00:00까지 기다리지 않고 지금 적용"만 합니다.** 긴급 값이 대기 버전과 다르면 적용하지 않고 이유(`긴급 버전이 대기 버전과 다름`)를 로그에 남깁니다. 다르면 다음 00:00 정기 배포가 대기 버전으로 되돌려 긴급 수정이 하루 만에 사라지기 때문입니다. 무시한 값도 "본 요청"으로 기록하므로, 나중에 대기 버전이 그 값이 되면 낮에 바로 적용하지 않고 다음 00:00 정기 배포가 적용합니다.
+  - **GitHub Actions(버튼) 쪽이 따를 규칙:** 긴급 버튼은 대기 버전과 긴급 버전에 **같은 값(대기 버전으로 이미 올라간 커밋)**만 씁니다. 대기 버전보다 새 커밋을 바로 적용하려면 대기 버전도 같은 값으로 함께 써야 합니다(대기 버전을 먼저, 긴급 버전을 나중에 쓰면 중간 상태에서 무시되는 일이 없습니다).
 - 정기 경로가 15분 안에 배포 잠금(`lock`)을 얻지 못하면(긴급 배포가 오래 쥔 경우) 종료 코드 1로 끝나 systemd에서 실패로 보입니다. 그날 정기 배포는 다음 00:00으로 미뤄집니다.
-- 새 버전을 띄운 뒤 7일 넘게 안 쓴 이미지를 지웁니다(`docker image prune -af --filter until=168h`). 롤백용 최근 이미지는 남습니다.
+- 새 버전을 띄운 뒤 이 프로젝트 이미지 중 새 버전과 바로 전 버전(되돌리기용)만 남기고 지웁니다(`prune_old_images`).
 - 다시 띄우는 데 실패하면 지금 버전 기록(`DEPLOY_STATE_DIR/current`)을 바꾸지 않고 종료 코드 1로 끝납니다. 정기 경로는 다음 00:00에, 긴급 경로는 5분 뒤 확인 때 같은 값을 다시 시도합니다.
 - 적용·건너뜀·버림마다 이유를 로그(journald)에 남깁니다. 이미지·설정 값은 남기지 않습니다.
 - 서비스를 다시 띄우면 수집기의 뉴스 검색 하루 호출 횟수(메모리에만 있음)가 0으로 돌아갑니다.
@@ -59,11 +59,11 @@ Lightsail 서버 2대에서 전체를 돌리는 데 쓰는 이미지·Compose·�
 - systemd 유닛 설치: `server/systemd/*`를 `/etc/systemd/system/`에 두고 서비스 서버에서 `systemctl enable --now stock-deploy-scheduled.timer stock-deploy-urgent.timer`, 데이터 서버에서 `systemctl enable --now stock-backup.timer`.
 - **처음 한 번 할 일(두 서버 모두):** 스왑 파일 1GB를 만듭니다. `sudo infra/deploy/server/setup-swap.sh`(이미 스왑이 있으면 아무것도 하지 않음). 재부팅 뒤에도 켜지도록 `/etc/fstab`에 적습니다.
 - 서비스 서버가 처음 뜰 때는 먼저 데이터 서버를 `docker compose -f compose/data.yml --env-file /etc/stock-reading/data.env up -d`로 띄운 뒤, `DEPLOY_VERSION=<버전> docker compose -f compose/services.yml --env-file ... up -d`로 서비스를 띄웁니다(이후는 타이머가 합니다).
-- 메일 발송(`NOTIFIER_SEND_ENABLED`)은 기본이 꺼짐(드라이런)이며 사람이 서버 설정에서 직접 켭니다.
+- 메일 발송(`NOTIFIER_SEND_ENABLED`)은 기본이 꺼짐(드라이런)이며 서버 설정에서 직접 켭니다.
 
 ## 로컬 리허설과 시험
 
 - `rehearsal/run-rehearsal.sh`: 서버 2대(각 메모리 상한 2GB, Docker 안의 Docker)를 흉내 내 `data.yml`·`services.yml` 전체를 띄우고, 가짜 종목·멤버를 넣고, 가짜 tick으로 한 바퀴 돌린 뒤 서비스별 메모리를 잽니다. 외부 API·AWS·메일을 부르지 않습니다. 결과는 `rehearsal/memory-report.md`.
-- `rehearsal/test-server-scripts.sh`: 배포 적용·백업 스크립트의 실패 경로(가짜 `aws`·`docker`)와 비밀 설정 값 처리(`$`·`#`·빈 설정·빈 필수 값), 긴급=대기일 때만 적용, 이미지 정리, 잠금 실패. 정상 경로와 금지 시간 경계는 수락 기준의 `deploy-window.sh`가 확인합니다.
+- `rehearsal/test-server-scripts.sh`: 배포 적용·백업 스크립트의 실패 경로(가짜 `aws`·`docker`)와 비밀 설정 값 처리(`$`·`#`·빈 설정·빈 필수 값), 긴급=대기일 때만 적용, 이미지 정리, 잠금 실패. 정상 경로와 금지 시간 경계는 이 시험에 없습니다.
 - 두 번째 배포 측정: 리허설 마지막에 서비스가 도는 중 새 버전 태그로 `up -d`를 해 DB 표 만들기 단계와 옛·새 서비스가 겹치는 순간의 서버 전체 메모리를 잽니다(`run-rehearsal.sh redeploy`).
 - 셸 스크립트는 `shellcheck -S warning`을 통과해야 합니다.

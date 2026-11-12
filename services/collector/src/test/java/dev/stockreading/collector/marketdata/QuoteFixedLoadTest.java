@@ -16,7 +16,6 @@ import java.util.concurrent.locks.LockSupport;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import tools.jackson.databind.json.JsonMapper;
 
 // 종목 n개를 1초마다 n회씩 조회할 때 수집기가 버티는지 재는 수동 도구다. QUOTE_LOAD=1 일 때만 동작한다.
@@ -64,9 +63,9 @@ class QuoteFixedLoadTest {
                 symbols.add(String.format("T%05d", i));
             }
             int cap = Integer.parseInt(env("QUOTE_LOAD_CAP", "0"));
-            var broker = new BrokerProperties(server.baseUrl(), "load-key", "load-secret", 10, cap > 0 ? cap : n);
+            var broker = new BrokerProperties(server.baseUrl(), "load-key", "load-secret", 10, cap > 0 ? cap : n, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS);
             var client = new BrokerClient(broker, JsonMapper.builder().build(), Clock.systemDefaultZone(), CallRateLimiter.perSecond(10));
-            var marketData = new BrokerMarketData(client, (QuoteSymbolsPort) () -> symbols, broker,
+            var marketData = new BrokerMarketData(client, broker,
                     CallRateLimiter.perSecond(broker.maxCallsPerSecond()),
                     PriceChecks.fake());
 

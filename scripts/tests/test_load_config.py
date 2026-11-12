@@ -43,6 +43,24 @@ def test_profile_is_passed_when_given(tmp_path):
     assert calls[0][calls[0].index("--profile") + 1] == "demo"
 
 
+def test_region_is_left_to_the_profile_unless_given(tmp_path, monkeypatch):
+    # 저장소에 리전을 적지 않으므로, 주지 않으면 AWS CLI가 프로필의 리전을 쓰게 둔다.
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    run, calls = capturing_run(full_parameters())
+    lc.main(["--env-file", str(tmp_path / ".env"), "--dry-run"], run=run)
+    assert "--region" not in calls[0]
+
+
+def test_region_comes_from_aws_region_or_the_option(tmp_path, monkeypatch):
+    monkeypatch.setenv("AWS_REGION", "test-region-1")
+    from_env, env_calls = capturing_run(full_parameters())
+    lc.main(["--env-file", str(tmp_path / ".env"), "--dry-run"], run=from_env)
+    from_option, option_calls = capturing_run(full_parameters())
+    lc.main(["--env-file", str(tmp_path / ".env"), "--dry-run", "--region", "test-region-2"], run=from_option)
+    assert {c[c.index("--region") + 1] for c in env_calls} == {"test-region-1"}
+    assert {c[c.index("--region") + 1] for c in option_calls} == {"test-region-2"}
+
+
 def test_all_parameters_map_to_env_names():
     updates, ignored = lc.to_env_updates(full_parameters())
     assert updates["SMTP_HOST"] == "v-smtp-host"

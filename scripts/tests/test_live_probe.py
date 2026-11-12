@@ -63,7 +63,7 @@ SMOKE_OK = "call price: OK ok 40ms\ncall market-summary: OK len=900 50ms\ncall d
 def test_classify_smoke_tells_the_three_endings_apart():
     assert lp.classify_smoke(SMOKE_OK) == lp.OUTCOME_OK
     assert lp.classify_smoke(SMOKE_OK + "call daily-price: FAIL type=HTTP_ERROR http=500 code=E777\n") == lp.OUTCOME_ABNORMAL
-    assert lp.classify_smoke("call price: FAIL type=TOKEN_ISSUE_FAILED http=500 code=E021\n") == lp.OUTCOME_TOKEN_REJECTED
+    assert lp.classify_smoke("call price: FAIL type=TOKEN_ISSUE_FAILED http=500 code=E999\n") == lp.OUTCOME_TOKEN_REJECTED
     assert lp.classify_smoke("") == lp.OUTCOME_TOKEN_REJECTED
 
 

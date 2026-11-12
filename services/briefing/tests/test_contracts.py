@@ -105,7 +105,7 @@ def test_evidence_samples_match_their_schemas(schema_file, sample_file):
 
 
 # 계약에서 선택 칸인 payload 필드. 없어도 유효해야 하므로 "빠지면 거부" 검사에서 뺀다.
-OPTIONAL_PAYLOAD_FIELDS = {"market.context.responded.sample.json": {"etf"}}
+OPTIONAL_PAYLOAD_FIELDS = {"market.context.responded.sample.json": {"etf", "name"}}
 
 
 @pytest.mark.parametrize("schema_file, sample_file", EVIDENCE_CONTRACTS)

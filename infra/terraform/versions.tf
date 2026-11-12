@@ -9,7 +9,7 @@ terraform {
   }
 
   # 상태 파일 경로는 변수를 쓸 수 없어 init 때 -backend-config 로 넘긴다(README 참고).
-  # 상태 파일에는 비밀이 섞일 수 있어 저장소 밖(~/.config/stock-reading/terraform/)에 둔다.
+  # 상태 파일에는 비밀이 섞일 수 있어 저장소 밖에 둔다.
   backend "local" {}
 }
 
