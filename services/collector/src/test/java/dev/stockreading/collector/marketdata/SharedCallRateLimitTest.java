@@ -83,7 +83,7 @@ class SharedCallRateLimitTest {
                 .withInitializer(new ConfigDataApplicationContextInitializer())
                 .withUserConfiguration(Wiring.class)
                 .withPropertyValues("COLLECTOR_MARKET_DATA_SOURCE=broker", "BROKER_BASE_URL=" + server.baseUrl(),
-                        "BROKER_APP_KEY=k", "BROKER_APP_SECRET=s", "BROKER_MAX_CALLS_PER_SECOND=3")
+                        "BROKER_APP_KEY=k", "BROKER_APP_SECRET=s", "BROKER_MAX_CALLS_PER_SECOND=3", "COLLECTOR_QUOTE_PER_TICK=3")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context).hasSingleBean(CallRateLimit.class);
@@ -138,9 +138,9 @@ class SharedCallRateLimitTest {
             }
             return granted;
         };
-        var broker = new BrokerProperties(server.baseUrl(), "k", "s", 5, maxCalls);
+        var broker = new BrokerProperties(server.baseUrl(), "k", "s", 5, maxCalls, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS);
         var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10));
-        var quotes = new BrokerMarketData(client, (QuoteSymbolsPort) () -> SYMBOLS, broker, shared, PriceChecks.fake());
+        var quotes = new BrokerMarketData(client, broker, shared, PriceChecks.fake());
         var overseas = new BrokerInsightSource(client, insightProperties(), shared);
 
         CompletableFuture<Void> quoteLoop = CompletableFuture.runAsync(() -> {
@@ -221,7 +221,7 @@ class SharedCallRateLimitTest {
                 .withInitializer(new ConfigDataApplicationContextInitializer())
                 .withUserConfiguration(Wiring.class)
                 .withPropertyValues("COLLECTOR_MARKET_DATA_SOURCE=broker", "BROKER_BASE_URL=" + server.baseUrl(),
-                        "BROKER_APP_KEY=k", "BROKER_APP_SECRET=s", "BROKER_MAX_CALLS_PER_SECOND=4")
+                        "BROKER_APP_KEY=k", "BROKER_APP_SECRET=s", "BROKER_MAX_CALLS_PER_SECOND=4", "COLLECTOR_QUOTE_PER_TICK=4")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     BrokerInsightSource source = context.getBean(BrokerInsightSource.class);
@@ -288,7 +288,7 @@ class SharedCallRateLimitTest {
                 .withInitializer(new ConfigDataApplicationContextInitializer())
                 .withUserConfiguration(IntradayWiring.class)
                 .withPropertyValues("COLLECTOR_MARKET_DATA_SOURCE=broker", "BROKER_BASE_URL=" + server.baseUrl(),
-                        "BROKER_APP_KEY=k", "BROKER_APP_SECRET=s", "BROKER_MAX_CALLS_PER_SECOND=4",
+                        "BROKER_APP_KEY=k", "BROKER_APP_SECRET=s", "BROKER_MAX_CALLS_PER_SECOND=4", "COLLECTOR_QUOTE_PER_TICK=4",
                         "COLLECTOR_INTRADAY_STAGGER_MS=0")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
@@ -315,7 +315,7 @@ class SharedCallRateLimitTest {
     }
 
     private BrokerInsightSource source(CallRateLimit limiter) {
-        var broker = new BrokerProperties(server.baseUrl(), "k", "s", 5, 10);
+        var broker = new BrokerProperties(server.baseUrl(), "k", "s", 5, 10, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS);
         var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10));
         return new BrokerInsightSource(client, insightProperties(), limiter);
     }

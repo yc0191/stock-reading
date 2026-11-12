@@ -40,7 +40,7 @@ class BrokerTokenRejectionTest {
     void start() throws IOException {
         server = new FakeBrokerServer();
         server.rotateTokens = true;
-        client = new BrokerClient(new BrokerProperties(server.baseUrl(), KEY, SECRET, 5, 10),
+        client = new BrokerClient(new BrokerProperties(server.baseUrl(), KEY, SECRET, 5, 10, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS),
                 JsonMapper.builder().build(), CLOCK, maxWait -> {
                     limiterCalls.incrementAndGet();
                     return limiterOpen;

@@ -86,7 +86,7 @@ class BrokerMarketDayTest {
             limiterCalls.incrementAndGet();
             return limiterOpen;
         };
-        BrokerClient client = new BrokerClient(new BrokerProperties(server.baseUrl(), "ak", "as", 5, 10),
+        BrokerClient client = new BrokerClient(new BrokerProperties(server.baseUrl(), "ak", "as", 5, 10, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS),
                 JsonMapper.builder().build(), clock, limiter);
         return new BrokerMarketDay(client, limiter, status, JsonMapper.builder().build(), clock, Duration.ZERO);
     }

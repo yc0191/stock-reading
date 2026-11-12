@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -11,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
+import dev.stockreading.collector.CollectorProperties;
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.Envelope;
 import dev.stockreading.collector.event.EventFactory;
@@ -21,11 +23,13 @@ import dev.stockreading.collector.marketdata.FetchResult;
 import dev.stockreading.collector.marketdata.MarketDataPort;
 import dev.stockreading.collector.marketdata.PriceQuote;
 import dev.stockreading.collector.marketdata.QuoteFailure;
+import dev.stockreading.collector.marketdata.QuotePerTick;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * 1초 현재가 한 회차: 종목 시세를 조회해 종목마다 market.snapshot 을, 실패와 건너뜀은 market.snapshot.failed 를 발행한다.
- * 앞 회차 조회가 끝나지 않아 건너뛴 회차는 조회 없이 종목마다 건너뜀으로 남긴다.
+ * 1초 현재가 한 회차: 회차마다 목록을 돌며 회차당 수만큼의 종목 시세를 조회해 종목마다 market.snapshot 을,
+ * 실패와 건너뜀은 market.snapshot.failed 를 발행한다. 차례가 아닌 종목은 아무것도 남기지 않는다.
+ * 앞 회차 조회가 끝나지 않아 건너뛴 회차는 조회 없이 그 회차 차례 종목만 건너뜀으로 남기고 차례는 넘기지 않는다.
  */
 @Component
 class QuotePublisher {
@@ -42,20 +46,31 @@ class QuotePublisher {
     private final KafkaTemplate<String, String> kafka;
     private final ObjectMapper mapper;
     private final Clock clock;
+    private final int quotePerTick;
     private Instant lastEmptyWarnAt;
+    // 다음 회차가 부를 첫 종목의 위치. 종목 목록이 바뀌어도 나머지 연산으로 맞춘다.
+    private int cursor;
 
     QuotePublisher(MarketDataPort marketData, QuoteSymbolsPort quoteSymbols,
-                   KafkaTemplate<String, String> kafka, ObjectMapper mapper, Clock clock) {
+                   KafkaTemplate<String, String> kafka, ObjectMapper mapper, Clock clock,
+                   CollectorProperties collector, QuotePerTick perTick) {
         this.marketData = marketData;
         this.quoteSymbols = quoteSymbols;
         this.kafka = kafka;
         this.mapper = mapper;
         this.clock = clock;
+        this.quotePerTick = perTick.value();
+        int symbolCount = quoteSymbols.symbols().size();
+        if (symbolCount > 0) {
+            long rounds = (symbolCount + quotePerTick - 1L) / quotePerTick;
+            log.info("quote rotation symbols={} perTick={} each symbol is fetched about every {} ms",
+                    symbolCount, quotePerTick, rounds * collector.tickIntervalMs());
+        }
     }
 
     void publishCollected(String correlationId, String scheduledFor) {
         warnIfEmpty();
-        FetchResult result = marketData.fetch(quoteSymbols.symbols());
+        FetchResult result = marketData.fetch(takeTurn(true));
         for (PriceQuote quote : result.quotes()) {
             Envelope<SnapshotPayload> snapshot = EventFactory.create(
                     clock,
@@ -84,8 +99,27 @@ class QuotePublisher {
         }
     }
 
+    // advance 가 거짓이면 차례를 넘기지 않아, 건너뛴 회차의 종목을 다음 회차가 그대로 부른다.
+    private synchronized List<String> takeTurn(boolean advance) {
+        List<String> symbols = quoteSymbols.symbols();
+        int size = symbols.size();
+        if (size == 0) {
+            return List.of();
+        }
+        int count = Math.min(quotePerTick, size);
+        int start = cursor % size;
+        List<String> turn = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            turn.add(symbols.get((start + i) % size));
+        }
+        if (advance) {
+            cursor = (start + count) % size;
+        }
+        return turn;
+    }
+
     void publishSkipped(String correlationId, String scheduledFor) {
-        List<QuoteFailure> skipped = quoteSymbols.symbols().stream()
+        List<QuoteFailure> skipped = takeTurn(false).stream()
                 .map(symbol -> QuoteFailure.skipped(symbol, SUPERSEDED)).toList();
         publishFailures(skipped, correlationId, scheduledFor, 0);
     }
