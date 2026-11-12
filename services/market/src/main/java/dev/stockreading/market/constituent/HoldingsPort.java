@@ -15,6 +15,9 @@ public interface HoldingsPort {
     /** 사용 중인 멤버의 포트폴리오에 담긴 국내 ETF 코드(코드 순, 중복 없음). 아무도 담지 않은 ETF는 빠진다. */
     List<String> trackedEtfs();
 
+    /** 주식 표에서 찾은 국내 종목 이름. 표에 없거나 이름 칸이 비어 있으면 비어 있다. */
+    Optional<String> stockName(String code);
+
     /** ETF 하나의 이름·추종 대상·업종과 구성 종목. 목록에 없는 ETF 코드면 비어 있다. */
     Optional<EtfInfo> etfInfo(String etfCode);
 }

@@ -19,6 +19,7 @@
         "jobId": { "type": "string", "format": "uuid", "description": "요청의 jobId." },
         "seq": { "type": "integer", "minimum": 1, "description": "요청의 seq." },
         "symbol": { "type": "string", "pattern": "^[0-9A-Z]{6}$" },
+        "name": { "type": "string", "minLength": 1, "description": "선택. 변동 종목의 이름. ETF 표에서 먼저 찾고 없으면 주식 표에서 찾는다. 둘 다 없거나 이름이 비면 빠진다. 브리핑이 메일 첫 줄과 발송기로 가는 이름 칸에 쓴다." },
         "tickers": {
           "type": "array",
           "uniqueItems": true,
