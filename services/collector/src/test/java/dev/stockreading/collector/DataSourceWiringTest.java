@@ -105,7 +105,25 @@ class DataSourceWiringTest {
         runner().run(context -> {
             assertThat(context.getBean(CollectorProperties.class).tickIntervalMs()).isEqualTo(1_000);
             assertThat(context.getBean(BrokerProperties.class).maxCallsPerSecond()).isEqualTo(10);
+            assertThat(context.getBean(CollectorProperties.class).quotePerTick()).isEqualTo(8);
         });
+    }
+
+    @Test
+    void quotePerTickComesFromTheEnvironmentVariable() {
+        runner().withPropertyValues("COLLECTOR_QUOTE_PER_TICK=5").run(context ->
+                assertThat(context.getBean(CollectorProperties.class).quotePerTick()).isEqualTo(5));
+    }
+
+    @Test
+    void quotePerTickOutsideOneToTheCallLimitStopsTheStartup() {
+        for (String bad : new String[] {"0", "11"}) {
+            runner().withPropertyValues("COLLECTOR_QUOTE_PER_TICK=" + bad).run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure()).hasRootCauseMessage(
+                        "collector.quote-per-tick=" + bad + " must be between 1 and broker.max-calls-per-second=10");
+            });
+        }
     }
 
     @Test

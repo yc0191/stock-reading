@@ -21,7 +21,6 @@ import org.slf4j.LoggerFactory;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import tools.jackson.databind.json.JsonMapper;
 
 class BrokerClientRawAndTokenTest {
@@ -197,7 +196,7 @@ class BrokerClientRawAndTokenTest {
             server = new FakeBrokerServer();
             var broker = new BrokerProperties(server.baseUrl(), KEY, SECRET, 5, 10);
             var marketData = new BrokerMarketData(new BrokerClient(broker, JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10)),
-                    (QuoteSymbolsPort) () -> List.of("TEST01"), broker, CallRateLimiter.perSecond(10),
+                    broker, CallRateLimiter.perSecond(10),
                     PriceChecks.fake());
             marketData.fetch(List.of("TEST01"));
             server.priceStatus = 500;
