@@ -6,7 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public record BrokerProperties(String baseUrl, String appKey, String appSecret, int timeoutSeconds,
                                int maxCallsPerSecond) {
 
-    // 실제 서버에서 초당 12회는 5분을 버텼고 13회부터는 1분 안에 한도 초과가 났다(docs/test-history/S04). 여유를 두어 10으로 둔다.
+    // 실제 서버에서 초당 12회는 5분을 버텼고 13회부터는 1분 안에 한도 초과가 났다(실측). 여유를 두어 10으로 둔다.
     static final int DEFAULT_MAX_CALLS_PER_SECOND = 10;
 
     public BrokerProperties {

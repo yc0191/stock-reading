@@ -1,62 +1,73 @@
 # stock-reading
 
-관심 ETF의 가격이 움직인 **이유**를 근거와 함께 정리해 이메일로 알려 주는 주식 비서입니다.
-Kafka 기반 이벤트 구동 MSA와 RAG를 직접 구현하며 배우는 프로젝트입니다.
+관심 ETF의 가격이 움직인 **이유**를 근거 기사·공시와 함께 정리해 이메일로 알려 주는 서비스입니다.
+Kafka 기반 이벤트 구동 MSA와 근거를 인용하는 LLM 브리핑을 직접 설계하고 구현했습니다.
 
-> **상태:** MVP. 수집 → 변동 감지 → 근거 조회 → LLM 브리핑 → 이메일 흐름이 실제 Kafka·PostgreSQL·LLM에서 끝까지 도는 것을 확인했습니다. 하루 두 번 보내는 데일리 브리핑은 본문 작성과 메일(드라이런)까지 있고, 실제 수집·실제 발송으로 끝까지 도는 확인은 아직 하지 않았습니다.
-> 투자 조언이 아니며, 어떤 매매도 자동으로 수행하지 않습니다.
+> **상태:** 운영 중. 장중 급변동 메일과 하루 두 번(아침 판·마감 후 판) 데일리 브리핑을 실제 시세·뉴스로 보냅니다.
+> 투자 조언이 아니며, 어떤 매매도 자동으로 하지 않습니다.
 
 ## 무엇을 해결하나
 
-가격 알림은 "얼마 올랐다"까지만 알려 줍니다. 이 프로젝트는 **왜 움직였는지**를 뉴스·공시 같은 근거 후보와 함께 묶어 보여 주는 것을 목표로 합니다. 원인을 단정하지 않고, 근거가 부족하면 부족하다고 말합니다.
+가격 알림은 "얼마 올랐다"까지만 알려 줍니다. 이 서비스는 **왜 움직였는지**를 근거 후보와 함께 보여 줍니다. 원인을 단정하지 않고, 근거가 부족하면 부족하다고 씁니다.
 
-## 아키텍처
+<p align="center">
+  <img alt="마감 후 판 데일리 브리핑 메일 예시(가짜 값): 결론, 그날 한국 증시, 요약, 환율·금리 이슈, 하루 등락 차트, ETF별 이유와 출처 번호" src="docs/images/mail-post-close.png" width="560">
+  <br><sub>마감 후 판 메일 예시(아침 예상 대조·출처 목록 아래는 생략). 실제 작성 코드에 가짜 값을 넣어 만들었습니다.</sub>
+</p>
+
+## 구성
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.svg">
+  <img alt="Kafka를 가운데 두고 서비스에서 서비스로 가는 이벤트(시세→급변동→브리핑→메일, 판 시작 신호→데일리 브리핑, 기사)와 서비스마다 하는 일을 보여 주는 구성도" src="docs/images/architecture-light.svg">
+</picture>
+
+서비스끼리는 Kafka 이벤트로만 주고받고, 각 서비스는 PostgreSQL에서 자기 스키마를 씁니다. 종목·멤버 같은 업무 데이터는 DB 표가 원본이고, 필요한 서비스만 읽기 전용으로 읽습니다.
+
+## 어떻게 동작하나
+
+1. **수집:** 수집기가 1초마다 시세를, 주기마다 뉴스·공시·지수·환율을 받아 이벤트로 냅니다.
+2. **감지:** 시세처리기가 짧은 시간의 급변동과 전일 종가 대비 변동을 찾습니다. 한 번 튄 값은 걸러 내고, 같은 종목은 일정 시간 다시 알리지 않습니다.
+3. **근거 모으기:** 브리핑이 변동 시각 전후의 기사·공시·배경 자료만 모읍니다. 근거가 약한 문장은 검색어를 만들어 다시 찾습니다.
+4. **작성·검증:** LLM은 문장만 씁니다. 숫자 계산과 "인용한 근거 번호가 실제 목록에 있는지" 검사는 코드가 합니다.
+5. **발송:** 멤버마다 자기 ETF만 담은 메일을 보냅니다. 인용할 근거가 없으면 급변동 메일은 보내지 않습니다.
+
+<details>
+<summary>급변동 한 건의 순서</summary>
 
 ```mermaid
-flowchart LR
-    classDef svc fill:#eef4ff,stroke:#3b6fd4,stroke-width:1.5px,color:#111
-    classDef ext fill:#f4f4f4,stroke:#888,color:#111
-
-    C["① 수집기<br/>Java · Spring Boot"]:::svc
-    M["② 시세처리기<br/>Java · Spring Boot"]:::svc
-    NW["② news<br/>Java · Spring Boot"]:::svc
-    B["③ 브리핑<br/>Python"]:::svc
-    N["④ 발송기<br/>Java · Spring Boot"]:::svc
-    DB[("PostgreSQL<br/>서비스별 스키마")]:::ext
-    LLM(["LLM<br/>Claude API"]):::ext
-    MAIL(["이메일<br/>AWS SES"]):::ext
-    OP(["사람<br/>수동 실행"]):::ext
-
-    C -->|"시세, 시장 자료<br/>market.snapshot<br/>market.insight"| M
-    C -->|"기사, 미국 공시<br/>news.collected<br/>filing.collected"| NW
-    C -->|"뉴스 수집 끝<br/>collection.completed"| B
-    M -->|"급변동<br/>market.move"| B
-    M <-->|"시세 이력, 배경 자료, 판 자료<br/>market.history.*<br/>market.context.*<br/>market.daily.*"| B
-    NW <-->|"기사, 공시<br/>news.articles.*<br/>news.filings.*"| B
-    M --- DB
-    NW --- DB
-    C -.->|"종목·검색어 읽기"| DB
-    B -.->|"멤버·포트폴리오 읽기"| DB
-    N -.->|"받는 사람 읽기"| DB
-    B -->|"뉴스 재검색<br/>news.research.requested"| C
-    B -.->|"리포트 문장"| LLM
-    B -->|"변동 리포트<br/>briefing.generated"| N
-    C -->|"판 시작 신호<br/>schedule.tick"| B
-    B -->|"데일리 브리핑<br/>briefing.daily.generated"| N
-    N --> MAIL
-    OP -.->|"수동 실행 명령<br/>collector.command"| C
+sequenceDiagram
+    participant C as 수집기
+    participant M as 시세처리기
+    participant B as 브리핑
+    participant N as 뉴스처리기
+    participant L as Claude API
+    participant S as 발송기
+    C->>M: 시세 (market.snapshot)
+    M->>B: 급변동 (market.move)
+    B->>M: 시세 이력·배경 자료 요청
+    M-->>B: 응답
+    B->>N: 변동 시각 전후 기사·공시 요청
+    N-->>B: 응답
+    B->>L: 근거 번호를 붙인 자료로 문장 요청
+    L-->>B: 문장 (코드가 근거 번호 검사)
+    opt 근거가 약한 문장
+        B->>C: 다시 검색 (news.research.requested)
+        C->>N: 찾은 기사 저장
+        B->>N: 다시 조회 후 그 문장만 다시 씀
+    end
+    B->>S: 브리핑 (briefing.generated)
+    S->>S: 멤버별 메일 발송
 ```
 
-서비스끼리의 요청과 결과는 Kafka 이벤트로만 주고받고, 종목·멤버 같은 업무 데이터 표만 읽기 전용으로 함께 읽습니다. 수집은 수집기 안 타이머가 정해진 시각에 직접 시작하며, 사람이 수동 실행 명령(`collector.command`)으로 작업 하나를 지금 1회 돌릴 수도 있습니다([ADR-012](docs/adr/012-collector-timers-and-command-topic.md)). 브리핑은 변동 한 건마다 그 변동 이후의 뉴스를 모은 뒤, 시세처리기에 시세 이력과 배경 자료(지수, 환율, 시장종합, 일봉, 해외 등락률)를, news 서비스에 기사와 공시를 요청해 근거를 모읍니다. 공시는 변동한 ETF에 담긴 미국 종목의 것만 요청합니다. 끝내 근거를 받지 못하거나 리포트를 만들지 못하면 리포트 없이 끝내고, 인용할 근거가 없으면 메일을 보내지 않습니다. 종목(ETF·주식과 구성 종목)과 뉴스 검색어는 시세처리기 스키마의 표가, 멤버·메일 수신 설정·포트폴리오는 personal 스키마의 표가 원본이며, 수집기·뉴스·브리핑·발송기는 필요한 표만 읽기 전용 계정으로 읽습니다([ADR-004](docs/adr/004-postgresql.md)). 수집기와 뉴스는 시작할 때 읽으므로 종목을 바꾸면 다시 띄워야 합니다. 브리핑은 ETF 이름·추종 대상·구성 종목을 LLM 입력에 함께 넣습니다. 급변동 리포트와 데일리 브리핑 모두, LLM이 근거가 약하다고 표시한 문장마다 부족한 점으로 검색어를 만들어 수집기에 뉴스를 다시 검색하게 하고, 찾은 기사로 그 문장만 다시 씁니다. 작업마다 한 줄(입력과 최종 결과)과 그 아래 단계마다 한 줄(재검색, LLM 시도, 고치기 전후 문장)을 DB에 남기고, 메일의 브리핑 ID로 그 이력을 찾아볼 수 있습니다. 평일 아침 판(09:10)·마감 후 판 데일리 브리핑은 수집기의 시작 신호를 받아 시세처리기에 멤버 포트폴리오의 ETF 전체 판 자료를(일봉이 없는 ETF는 이유와 함께), 아침 판은 개장 흐름(전일 종가 대비 시가와 판 시작까지의 움직임)과 news 서비스의 미국 공시도 받아 ETF마다 그날 방향을 예상하며(장 시작부터 아침 판 사이 급변동은 따로 보내지 않고 아침 판에 담습니다), 글은 판마다 한 번 쓰고 메일은 멤버마다 자기 ETF만 담아 보내고, 자료가 빠지거나 LLM이 실패해도 숫자·목록 본문으로 반드시 나갑니다. 마감 후 판 끝에는 서버 상태 절(그날 수집·시세·뉴스·브리핑 상태 4줄과 점검할 점(주의))을 코드가 세어 붙입니다. 데일리 메일은 글자판과 HTML을 함께 담아 보내며, 마감 후 판은 맨 위에 결론 한 줄(보유·관심별 상승 수, 가장 크게 오르고 내린 ETF, 이유를 찾지 못한 ETF 수), 요약 2줄, 눈에 띄는 점(여러 ETF를 묶어 말할 거리가 있는 날만), 하루 등락 차트를 두고, ETF를 보유·관심으로 나눠 ETF마다 이유 한 줄(근거 약함 표시)과 담긴 미국 종목 이슈(`↳` 줄)를 보여 주며 맨 아래에 출처(기사·공시는 원문 링크)를 작게 답니다.
+</details>
 
 ## 설계 원칙
 
-- **서비스 간 계약은 JSON Schema 파일**로 두고, v1 샘플로 재현 가능성을 검증합니다 ([ADR-010](docs/adr/010-event-format.md))
-- **근거의 시간 범위를 지킵니다.** 기사와 공시는 발행·접수 시각이, 지수·환율 같은 배경 자료는 받은 시각이 자료마다 정한 범위 안인 것만 쓰고, 범위 밖 자료는 버립니다(규칙: [CLAUDE.md](CLAUDE.md)). 기사는 변동 시각 24시간 전부터 변동 직후의 짧은 여유(Δ)까지이며, Δ는 변동 직후에 나온 보도를 담기 위한 여유입니다. 테스트로 검증합니다.
-- **LLM은 문장만 씁니다.** 변동률 계산, 인용한 근거 번호가 코드가 준 목록에 있는지 검증, 머리말과 "투자 조언이 아님" 문구는 코드가 맡습니다. 원인을 단정하지 않고, 근거가 부족하면 부족하다고 쓰며, 다시 찾아도 근거가 약한 항목에는 무엇이 부족한지 함께 적습니다. LLM 키가 없으면 규칙 기반 리포트를 만듭니다.
-- **안전한 기본값.** 발송기는 드라이런이 기본이고, 중복 방지·주소 마스킹을 둡니다. 같은 종목의 급변동은 시세처리기가 정해 둔 재발행 간격 안에서는 다시 내지 않습니다
-- **토픽은 서비스가 선언**하고 브로커 자동 생성은 끕니다. 시작 순서와 무관하게 동작합니다
-- **비밀과 개인정보는 저장소에 두지 않습니다.** 설정은 AWS Parameter Store에서 가져옵니다
+- **근거의 시간 범위를 지킨다:** 변동 뒤에 나온 자료로 변동을 설명하지 않습니다(자료마다 범위를 정하고 테스트로 검증).
+- **LLM은 문장만:** 목록 밖 근거를 인용한 출력은 거부하고 다시 씁니다. LLM이 없어도 규칙 기반 본문으로 나갑니다.
+- **계약은 스키마 파일:** 서비스 간 이벤트는 언어 중립 JSON Schema(`contracts/events/`)로 정하고 계약 테스트로 지킵니다.
+- **안전한 기본값:** 발송은 기본 드라이런, 이벤트는 `eventId`로 멱등 처리, 외부 접속은 받지 않습니다.
 
 ## 기술 스택
 
@@ -64,29 +75,41 @@ flowchart LR
 |---|---|
 | 서비스 | Java 21 · Spring Boot, 브리핑은 Python |
 | 메시징 | Apache Kafka (KRaft) |
-| 저장소 | PostgreSQL (pgvector 예정) |
-| 리포트 작성 | Claude API (키가 없으면 규칙 기반) |
-| 알림 | AWS SES |
-| CI | GitHub Actions (테스트와 테스트 지도 검사) |
-| 빌드 | Gradle 멀티 모듈 |
+| 저장소 | PostgreSQL |
+| 리포트 작성 | Claude API |
+| 배포 | AWS Lightsail · ECR · Terraform · Docker Compose |
+| CI/CD | GitHub Actions (테스트, 이미지 빌드, 정해진 시각 자동 배포) |
+
+## 설계 결정
+
+| 결정 | 문서 |
+|---|---|
+| 서비스를 왜, 어떤 기준으로 나눴나 | [ADR-006](docs/adr/006-microservices.md) |
+| 왜 Kafka인가 (리플레이·팬아웃·순서) | [ADR-003](docs/adr/003-kafka.md) |
+| 이벤트 형식과 호환 규칙 | [ADR-010](docs/adr/010-event-format.md) |
+| 외부 접속을 받지 않는 구조 | [ADR-007](docs/adr/007-outbound-only.md) |
+
+전체 목록: [`docs/adr/`](docs/adr/README.md)
 
 ## 로드맵
 
-- [x] 실제 시세·뉴스·미국 공시 연동 (국내 공시는 조회 클라이언트까지)
-- [x] 근거 조회와 LLM 브리핑
-- [ ] 데일리 브리핑: 아침 예상 → 저녁 대조·급변동 요약 (남은 일: 실제 운영 확인, 휴장일)
-- [ ] RAG 기반 근거 검색
+- [x] 실제 시세·뉴스·미국 공시 연동
+- [x] 급변동 근거 브리핑과 근거 재검색
+- [x] 데일리 브리핑 (아침 예상 → 마감 후 대조)
+- [x] 클라우드 배포와 CI/CD
+- [ ] 근거 검색 개선 (벡터 검색)
 - [ ] 개인화 서비스
-- [ ] 클라우드 배포와 CI/CD (PR 테스트 CI까지)
 
 ## 검증한 가설
 
-구현 전에 증명해야 할 주장을 가설로 등록하고, 판정 기준을 **데이터를 보기 전에** 고정한 뒤 측정합니다. 아래 표는 [`docs/hypotheses/`](docs/hypotheses/README.md)의 정의와 실행 결과에서 자동 생성됩니다. 판정 기준이 완성되지 않은 가설은 표시하지 않습니다.
+구현 전에 증명할 주장을 가설로 등록하고, 판정 기준을 **데이터를 보기 전에** 고정한 뒤 측정합니다([`docs/hypotheses/`](docs/hypotheses/README.md)).
 
 <!-- hypotheses:start -->
 아직 공개할 가설이 없습니다.
 <!-- hypotheses:end -->
 
-## 문서
+## 더 보기
 
-설계 결정과 근거: [`docs/adr/`](docs/adr/README.md) · 가설 검증: [`docs/hypotheses/`](docs/hypotheses/README.md) · 로컬 실행: [`docs/local-development.md`](docs/local-development.md) · 기능별 테스트: [`docs/test-map/`](docs/test-map/README.md)
+로컬 실행: [`docs/local-development.md`](docs/local-development.md) · 기능별 테스트: [`docs/test-map/`](docs/test-map/README.md) · 배경: [`docs/background.md`](docs/background.md)
+
+코드는 읽기용으로 공개합니다. 라이선스를 두지 않으므로 재사용은 허가하지 않습니다.
