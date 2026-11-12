@@ -26,7 +26,7 @@ class MarketStatusLiveProbeTest {
         var mapper = JsonMapper.builder().build();
         Clock clock = Clock.system(ZoneId.of("Asia/Seoul"));
         var properties = new BrokerProperties(System.getenv("BROKER_BASE_URL"), System.getenv("BROKER_APP_KEY"),
-                System.getenv("BROKER_APP_SECRET"), 10, 10);
+                System.getenv("BROKER_APP_SECRET"), 10, 10, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS);
         var client = new BrokerClient(properties, mapper, clock, CallRateLimiter.perSecond(10));
         var status = new MarketStatusProperties(System.getenv("BROKER_MARKET_STATUS_PATH"),
                 System.getenv("BROKER_MARKET_STATUS_TODAY_FIELD"),

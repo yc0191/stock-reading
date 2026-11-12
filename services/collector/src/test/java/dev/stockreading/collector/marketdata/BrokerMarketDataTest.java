@@ -33,8 +33,13 @@ class BrokerMarketDataTest {
     }
 
     private BrokerMarketData marketData(int maxCalls, int timeoutSeconds, List<String> symbols) throws IOException {
+        return marketData(maxCalls, timeoutSeconds, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS, symbols);
+    }
+
+    private BrokerMarketData marketData(int maxCalls, int timeoutSeconds, int quoteTimeoutSeconds, List<String> symbols)
+            throws IOException {
         server = new FakeBrokerServer();
-        var broker = new BrokerProperties(server.baseUrl(), KEY, SECRET, timeoutSeconds, maxCalls);
+        var broker = new BrokerProperties(server.baseUrl(), KEY, SECRET, timeoutSeconds, maxCalls, quoteTimeoutSeconds);
         var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10));
         return new BrokerMarketData(client, broker,
                 CallRateLimiter.perSecond(maxCalls), PriceChecks.fake());
@@ -94,7 +99,7 @@ class BrokerMarketDataTest {
     @Test
     void aSwappedInLimitDecidesWhetherTheProviderIsCalled() throws IOException {
         server = new FakeBrokerServer();
-        var broker = new BrokerProperties(server.baseUrl(), KEY, SECRET, 5, 10);
+        var broker = new BrokerProperties(server.baseUrl(), KEY, SECRET, 5, 10, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS);
         var client = new BrokerClient(broker, JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10));
         CallRateLimit denyAll = maxWait -> false;
         var marketData = new BrokerMarketData(client, broker, denyAll, PriceChecks.fake());
@@ -140,9 +145,9 @@ class BrokerMarketDataTest {
 
     @Test
     void slowResponseBecomesTimeoutFailure() throws IOException {
-        var marketData = marketData(10, 1, List.of("TEST01"));
+        var marketData = marketData(10, 5, 1, List.of("TEST01"));
         marketData.fetch(List.of("TEST01"));
-        server.priceDelayMs = 2_500;
+        server.priceDelayMs = 2_000;
 
         QuoteFailure failure = marketData.fetch(List.of("TEST01")).failures().get(0);
 

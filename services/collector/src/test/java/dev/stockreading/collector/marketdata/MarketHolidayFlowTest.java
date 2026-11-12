@@ -48,7 +48,7 @@ class MarketHolidayFlowTest {
     @BeforeEach
     void start() throws Exception {
         server = new FakeBrokerServer();
-        BrokerClient client = new BrokerClient(new BrokerProperties(server.baseUrl(), "ak", "as", 5, 10), mapper, CLOCK, CallRateLimiter.perSecond(10));
+        BrokerClient client = new BrokerClient(new BrokerProperties(server.baseUrl(), "ak", "as", 5, 10, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS), mapper, CLOCK, CallRateLimiter.perSecond(10));
         marketDay = new BrokerMarketDay(client, CallRateLimiter.perSecond(10), FakeBrokerServer.MARKET_STATUS, mapper, CLOCK);
     }
 
