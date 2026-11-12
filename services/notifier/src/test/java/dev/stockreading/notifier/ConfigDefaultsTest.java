@@ -3,9 +3,11 @@ package dev.stockreading.notifier;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.env.YamlPropertySourceLoader;
+import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.PropertySource;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.mock.env.MockEnvironment;
@@ -31,5 +33,13 @@ class ConfigDefaultsTest {
     void theSubjectPrefixDefaultIsReadAsProperKorean() throws IOException {
         // 깨진 기본값은 실제 이메일 제목마다 붙게 된다.
         assertThat(applicationYmlOnly().getProperty("notifier.subject-prefix")).isEqualTo("[시뮬레이션]");
+    }
+
+    @Test
+    void anEmptyPrefixVariableRemovesTheDefaultPrefix() throws IOException {
+        // 운영은 실행 설정에서 이 값을 빈 값으로 넘겨 개발용 머리말을 떼므로, 빈 값이 기본값으로 바뀌면 안 된다.
+        MockEnvironment environment = applicationYmlOnly();
+        environment.getPropertySources().addFirst(new MapPropertySource("env", Map.of("NOTIFIER_SUBJECT_PREFIX", "")));
+        assertThat(environment.getProperty("notifier.subject-prefix")).isEmpty();
     }
 }

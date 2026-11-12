@@ -143,6 +143,8 @@ services:
       # 메일은 기본이 드라이런(로그만)이다. 켜는 것은 사람이 서버의 배포 설정에서 직접 바꾼다.
       NOTIFIER_SEND_ENABLED: ${NOTIFIER_SEND_ENABLED:-false}
       NOTIFIER_SENDER: ${NOTIFIER_SENDER:-}
+      # 이 값이 없으면 발송기는 개발용 머리말 [시뮬레이션]을 붙인다. 운영은 실데이터라 머리말을 비운다.
+      NOTIFIER_SUBJECT_PREFIX: ${NOTIFIER_SUBJECT_PREFIX:-}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USERNAME: ${SMTP_USERNAME:-}
