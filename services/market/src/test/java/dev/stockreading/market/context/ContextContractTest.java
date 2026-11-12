@@ -84,13 +84,31 @@ class ContextContractTest {
                 new ContextPayload.EtfMember("US", "TESTA", "TEST CORP", "12.5", 1),
                 new ContextPayload.EtfMember("KR", "TEST09", null, null, 2)), true);
         String with = serialize(new ContextPayload("5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13", 1, "TEST01", List.of(),
-                List.of(), List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false, info));
+                List.of(), List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false, info, null));
         String without = serialize(new ContextPayload("5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13", 1, "TEST01", List.of(),
                 List.of(), List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false));
 
         assertThat(ContractSchemas.validate("market.context.responded.v1.schema.json", with)).isEmpty();
         assertThat(ContractSchemas.validate("market.context.responded.v1.schema.json", without)).isEmpty();
         assertThat(mapper.readTree(without).get("payload").has("etf")).isFalse();
+    }
+
+    @Test
+    void producerNameMatchesSchemaAndIsLeftOutWhenUnknown() throws IOException {
+        List<ContextPayload.Background> background =
+                List.of(ContextPayload.Background.missing("exchange-rate-summary", null));
+        String named = serialize(new ContextPayload("5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13", 1, "TEST01", List.of(),
+                List.of(), background, false, null, "TEST STOCK"));
+        String unnamed = serialize(new ContextPayload("5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13", 1, "TEST01", List.of(),
+                List.of(), background, false));
+
+        assertThat(ContractSchemas.validate("market.context.responded.v1.schema.json", named)).isEmpty();
+        assertThat(mapper.readTree(named).get("payload").get("name").asText()).isEqualTo("TEST STOCK");
+        assertThat(ContractSchemas.validate("market.context.responded.v1.schema.json", unnamed)).isEmpty();
+        assertThat(mapper.readTree(unnamed).get("payload").has("name")).isFalse();
+        // 빈 이름은 계약 위반이라 시세처리기가 칸을 빼야 한다.
+        assertThat(ContractSchemas.validate("market.context.responded.v1.schema.json",
+                named.replace("TEST STOCK", ""))).isNotEmpty();
     }
 
     @Test

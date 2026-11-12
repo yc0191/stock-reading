@@ -3,12 +3,14 @@ package dev.stockreading.market.context;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
 import dev.stockreading.market.Topics;
 import dev.stockreading.market.event.ContextPayload;
+import dev.stockreading.market.constituent.EtfInfo;
 import dev.stockreading.market.constituent.HoldingsPort;
 import dev.stockreading.market.insight.OverseasCloseRateQuery;
 import tools.jackson.databind.ObjectMapper;
@@ -72,8 +74,20 @@ class ContextRequestListener {
                 new ArrayList<>(marketBackground.market(properties.worldIndexContinents(), since, asOf, maxBytes));
         background.add(marketBackground.single(BackgroundKind.DAILY_PRICE, request.symbol(), since, asOf, maxBytes));
 
+        Optional<EtfInfo> etf = holdings.etfInfo(request.symbol());
         return new ContextPayload(request.jobId(), request.seq(), request.symbol(), tickers, closeRates, background,
                 allTickers.size() > tickers.size(),
-                holdings.etfInfo(request.symbol()).map(info -> MarketBackground.etfInfo(info, maxTickers)).orElse(null));
+                etf.map(info -> MarketBackground.etfInfo(info, maxTickers)).orElse(null),
+                nameOf(request.symbol(), etf));
+    }
+
+    /**
+     * ETF 표의 이름을 먼저 보고, 없거나 비었으면 주식 표에서 찾는다. 둘 다 없거나 비면 null이라 칸이 빠지고,
+     * 이름은 앞뒤 공백을 걷는다.
+     */
+    private String nameOf(String symbol, Optional<EtfInfo> etf) {
+        return etf.map(EtfInfo::name).filter(name -> name != null && !name.isBlank())
+                .or(() -> holdings.stockName(symbol))
+                .filter(name -> !name.isBlank()).map(String::strip).orElse(null);
     }
 }

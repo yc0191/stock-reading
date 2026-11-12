@@ -424,6 +424,47 @@ def early_started(core, rec, etf=ETF):
     core.on_context_responded(etf_context(1, etf), T + S.early_research_delay + SEC)
 
 
+def test_the_context_name_reaches_the_report_input_only_when_present(core, rec):
+    start(core)
+    event = json.loads(context_response())
+    event["payload"]["name"] = " TEST 주식 "
+    core.on_context_responded(json.dumps(event), T + SEC)
+    core.on_history_responded(history_response(1, points=[100, 101]), T + SEC)
+    core.on_articles_responded(news_response(1, ["a"]), T + SEC)
+    core.on_tick(T + SEC + S.recheck_interval)
+    core.on_articles_responded(news_response(2, ["a"]), T + 12 * SEC)
+
+    (ready,) = rec.readied
+    assert ready.name == "TEST 주식"
+
+
+def test_a_response_without_a_name_leaves_the_report_input_name_empty(core, rec):
+    start(core)
+    core.on_context_responded(context_response(), T + SEC)
+    core.on_history_responded(history_response(1, points=[100, 101]), T + SEC)
+    core.on_articles_responded(news_response(1, ["a"]), T + SEC)
+    core.on_tick(T + SEC + S.recheck_interval)
+    core.on_articles_responded(news_response(2, ["a"]), T + 12 * SEC)
+
+    (ready,) = rec.readied
+    assert ready.name is None
+
+
+@pytest.mark.parametrize("bad_name", [5, "", "   ", ["x"]])
+def test_a_context_name_that_is_not_usable_text_is_treated_as_no_name(core, rec, bad_name):
+    start(core)
+    event = json.loads(context_response())
+    event["payload"]["name"] = bad_name
+    core.on_context_responded(json.dumps(event), T + SEC)
+    core.on_history_responded(history_response(1, points=[100, 101]), T + SEC)
+    core.on_articles_responded(news_response(1, ["a"]), T + SEC)
+    core.on_tick(T + SEC + S.recheck_interval)
+    core.on_articles_responded(news_response(2, ["a"]), T + 12 * SEC)
+
+    (ready,) = rec.readied
+    assert ready.name is None
+
+
 def test_a_move_asks_for_the_context_at_t_plus_five_minutes_and_nothing_before(core, rec):
     core.on_move(move(), T)
     core.on_tick(T + S.early_research_delay - SEC)

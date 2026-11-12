@@ -96,6 +96,8 @@ class ReportInput:
     background: tuple[Background, ...] = ()
     # 변동 종목이 ETF일 때 응답에 담긴 ETF 정보. 이전 형식 응답에는 없다.
     etf: EtfInfo | None = None
+    # 응답에 담긴 변동 종목 이름(ETF 또는 주식). 이전 형식 응답에는 없다.
+    name: str | None = None
     # market.move를 감지한 시각(봉투의 occurredAt)과 감지 유형. 머리말의 "몇 분 사이"에 쓴다. 이전 형식에는 없을 수 있다.
     detected_at: datetime | None = None
     detection_type: str | None = None
@@ -147,6 +149,7 @@ class _Context:
     close_rates: tuple[CloseRate, ...]
     background: tuple[Background, ...]
     etf: EtfInfo | None = None
+    name: str | None = None
 
 
 @dataclass
@@ -350,6 +353,10 @@ class BriefingCore:
 
     @staticmethod
     def _parse_context(payload: dict) -> _Context:
+        def _name_or_none(value: object) -> str | None:
+            # 문자열이 아니거나 비면 이름 없음으로 본다(AttributeError로 실행 루프가 멈추지 않게).
+            return value.strip() or None if isinstance(value, str) else None
+
         try:
             return _Context(
                 tickers=tuple(payload["tickers"]),
@@ -357,6 +364,7 @@ class BriefingCore:
                 close_rates=parse_close_rates(payload["closeRates"]),
                 background=tuple(parse_background(b) for b in payload["background"]),
                 etf=parse_etf_info(payload.get("etf")),
+                name=_name_or_none(payload.get("name")),
             )
         except (KeyError, TypeError) as error:
             raise ValueError(f"malformed market.context.responded event: {error!r}") from error
@@ -664,7 +672,7 @@ class BriefingCore:
             articles_truncated=job.news_truncated, tickers=context.tickers,
             tickers_truncated=context.tickers_truncated, close_rates=tuple(close_rates),
             filings=tuple(filings), filings_truncated=job.filings_truncated, background=tuple(background),
-            etf=context.etf, detected_at=job.detected_at, detection_type=job.detection_type,
+            etf=context.etf, name=context.name, detected_at=job.detected_at, detection_type=job.detection_type,
             news_seq=job.news_seq)
         _log_collection(report_input, _Excluded(
             articles=len(job.news_articles or ()) - len(articles),

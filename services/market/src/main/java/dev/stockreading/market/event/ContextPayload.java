@@ -13,11 +13,12 @@ public record ContextPayload(
         List<CloseRate> closeRates,
         List<Background> background,
         boolean truncated,
-        @JsonInclude(JsonInclude.Include.NON_NULL) EtfInfo etf) {
+        @JsonInclude(JsonInclude.Include.NON_NULL) EtfInfo etf,
+        @JsonInclude(JsonInclude.Include.NON_NULL) String name) {
 
     public ContextPayload(String jobId, int seq, String symbol, List<String> tickers, List<CloseRate> closeRates,
             List<Background> background, boolean truncated) {
-        this(jobId, seq, symbol, tickers, closeRates, background, truncated, null);
+        this(jobId, seq, symbol, tickers, closeRates, background, truncated, null, null);
     }
 
     /**

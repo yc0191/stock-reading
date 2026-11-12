@@ -61,6 +61,7 @@ class ContextRequestListenerTest {
         when(repository.worldIndexRows(anyString(), any(), any())).thenReturn(List.of());
         when(closeRateQuery.find(anyString(), any(), any())).thenReturn(Optional.empty());
         when(holdings.topTickers(anyString())).thenReturn(List.of());
+        when(holdings.stockName(anyString())).thenReturn(Optional.empty());
     }
 
     private ContextRequestListener listener(ContextProperties properties) {
@@ -137,6 +138,36 @@ class ContextRequestListenerTest {
                 new EtfInfo.Member("US", "FAKEA", "FAKE CORP", new BigDecimal("12.500"), 1),
                 new EtfInfo.Member("KR", "TEST09", null, null, 2),
                 new EtfInfo.Member("US", "FAKEB", null, new BigDecimal("1"), 3)))));
+    }
+
+    @Test
+    void nameComesFromTheEtfTableWhenTheSymbolIsAnEtf() throws IOException {
+        givenEtfInfo();
+        when(holdings.stockName("TEST01")).thenReturn(Optional.of("TEST STOCK"));
+
+        assertThat(answer(listener(), request()).name()).isEqualTo("TEST ETF");
+    }
+
+    @Test
+    void nameComesFromTheStockTableWhenTheSymbolIsNotAnEtf() throws IOException {
+        when(holdings.stockName("TEST01")).thenReturn(Optional.of("TEST STOCK"));
+
+        ContextPayload payload = answer(listener(), request());
+
+        assertThat(payload.name()).isEqualTo("TEST STOCK");
+        assertThat(payload.etf()).isNull();
+        assertThat(mapper.writeValueAsString(payload)).contains("\"name\":\"TEST STOCK\"");
+    }
+
+    @Test
+    void nameIsLeftOutWhenNeitherTableHasItOrItIsBlank() throws IOException {
+        when(holdings.etfInfo("TEST01")).thenReturn(Optional.of(new EtfInfo("  ", null, null, List.of())));
+        when(holdings.stockName("TEST01")).thenReturn(Optional.of(" "));
+
+        ContextPayload payload = answer(listener(), request());
+
+        assertThat(payload.name()).isNull();
+        assertThat(mapper.readTree(mapper.writeValueAsString(payload)).has("name")).isFalse();
     }
 
     @Test

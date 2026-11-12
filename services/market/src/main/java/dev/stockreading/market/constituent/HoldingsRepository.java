@@ -49,6 +49,15 @@ class HoldingsRepository implements HoldingsPort {
     }
 
     @Override
+    public Optional<String> stockName(String code) {
+        if (code == null) {
+            return Optional.empty();
+        }
+        return jdbc.sql("SELECT name FROM stock WHERE market = 'KR' AND symbol = :code")
+                .param("code", code).query(String.class).optional().filter(name -> !name.isBlank());
+    }
+
+    @Override
     public Optional<EtfInfo> etfInfo(String etfCode) {
         if (etfCode == null) {
             return Optional.empty();
