@@ -10,6 +10,12 @@ on:
 permissions:
   issues: write
 
+# 이슈를 만들 때 opened·labeled 이벤트가 거의 동시에 와서 두 실행이 서로의 라벨을 못 본 채 판단했다(#43, #44).
+# 같은 이슈의 실행은 차례로 돌게 하고, 판단은 이벤트에 담긴 라벨이 아니라 그때 다시 읽은 라벨로 한다.
+concurrency:
+  group: issue-labels-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -31,9 +37,11 @@ jobs:
               if (AREAS.includes(m[1])) wanted.add(`area: ${m[1]}`);
               if (m[1] === '문서') wanted.add('documentation');
             }
-            let labels = issue.labels.map(l => l.name);
+            const current = await github.rest.issues.get(target);
+            let labels = current.data.labels.map(l => typeof l === 'string' ? l : l.name);
             const toAdd = [...wanted].filter(name => !labels.includes(name));
-            if (['opened', 'edited'].includes(context.payload.action) && toAdd.length) {
+            // 같은 이슈의 대기 실행은 최신 하나만 남으므로, 어떤 이벤트로 돌든 본문의 체크를 라벨로 옮긴다.
+            if (toAdd.length) {
               await github.rest.issues.addLabels({ ...target, labels: toAdd });
               labels = labels.concat(toAdd);
             }
