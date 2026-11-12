@@ -12,13 +12,15 @@ body:
     id: services
     attributes:
       label: 관련 서비스
+      description: 고른 항목마다 `area:` 라벨이 자동으로 달립니다. 하나 이상 고릅니다.
       options:
         - label: collector (수집기)
         - label: market (시세처리기)
         - label: news (뉴스)
         - label: notifier (발송기)
         - label: briefing (브리핑)
-        - label: 배포·인프라 (infra, CI)
+        - label: infra (배포, CI)
+        - label: contracts (이벤트 계약)
         - label: 문서 (README, ADR, 가이드)
   - type: textarea
     id: why

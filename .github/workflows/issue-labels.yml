@@ -1,0 +1,56 @@
+# 이슈마다 종류 라벨 1개와 영역(area:) 라벨 1개 이상을 달게 한다(.claude/rules/issue.md).
+# 양식의 "관련 서비스"에서 고른 항목을 area: 라벨로 달고, 그래도 빠진 라벨이 있으면 needs-labels 라벨과 안내 댓글을 단다.
+# 이 작업이 단 라벨은 GITHUB_TOKEN으로 단 것이라 이 워크플로를 다시 부르지 않는다.
+name: issue-labels
+
+on:
+  issues:
+    types: [opened, edited, labeled, unlabeled]
+
+permissions:
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7.0.1
+        with:
+          script: |
+            const AREAS = ['collector', 'market', 'news', 'notifier', 'briefing', 'infra', 'contracts'];
+            const TYPES = ['bug', 'enhancement', 'documentation', 'refactor', 'chore'];
+            const MARKER = '<!-- issue-labels -->';
+            const issue = context.payload.issue;
+            const target = { owner: context.repo.owner, repo: context.repo.repo, issue_number: issue.number };
+
+            // 본문은 사람이 쓴 글이라 정해 둔 이름과 맞는 체크 줄만 읽는다.
+            const wanted = new Set();
+            for (const line of (issue.body || '').split('\n')) {
+              const m = line.match(/^- \[[xX]\] (\S+)/);
+              if (!m) continue;
+              if (AREAS.includes(m[1])) wanted.add(`area: ${m[1]}`);
+              if (m[1] === '문서') wanted.add('documentation');
+            }
+            let labels = issue.labels.map(l => l.name);
+            const toAdd = [...wanted].filter(name => !labels.includes(name));
+            if (['opened', 'edited'].includes(context.payload.action) && toAdd.length) {
+              await github.rest.issues.addLabels({ ...target, labels: toAdd });
+              labels = labels.concat(toAdd);
+            }
+
+            const hasType = labels.some(name => TYPES.includes(name));
+            // 문서만 바꾸는 이슈는 서비스 영역이 없을 수 있다.
+            const hasArea = labels.some(name => name.startsWith('area: ')) || labels.includes('documentation');
+            const flagged = labels.includes('needs-labels');
+            if (hasType && hasArea) {
+              if (flagged) await github.rest.issues.removeLabel({ ...target, name: 'needs-labels' });
+              return;
+            }
+            if (!flagged) await github.rest.issues.addLabels({ ...target, labels: ['needs-labels'] });
+            const comments = await github.paginate(github.rest.issues.listComments, target);
+            if (comments.some(c => (c.body || '').includes(MARKER))) return;
+            const missing = [!hasType && `종류 라벨(${TYPES.join(', ')}) 1개`, !hasArea && '영역 라벨(area:) 1개 이상'].filter(Boolean);
+            await github.rest.issues.createComment({
+              ...target,
+              body: `${MARKER}\n라벨이 빠졌습니다: ${missing.join(', ')}. 라벨을 달면 needs-labels 라벨이 자동으로 빠집니다.`,
+            });
