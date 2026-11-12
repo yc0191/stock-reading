@@ -26,14 +26,14 @@ ENV_NAMES = {
 # collector 는 선택 그룹이다: 없어도 notifier 설정 반영을 막지 않는다.
 COLLECTOR_ENV_NAMES = {
     "dart-api-key": "DART_API_KEY",
-    "kb-app-key": "BROKER_APP_KEY",
-    "kb-app-secret": "BROKER_APP_SECRET",
+    "broker-app-key": "BROKER_APP_KEY",
+    "broker-app-secret": "BROKER_APP_SECRET",
     "broker-base-url": "BROKER_BASE_URL",
     # 전체 실행 스크립트(test-all.sh --live)가 실제 시세를 부를 기준 종목 하나.
     "test-live-symbol": "TEST_ALL_LIVE_SYMBOL",
 
-    "naver-client-id": "NEWS_SEARCH_CLIENT_ID",
-    "naver-client-secret": "NEWS_SEARCH_CLIENT_SECRET",
+    "news-search-client-id": "NEWS_SEARCH_CLIENT_ID",
+    "news-search-client-secret": "NEWS_SEARCH_CLIENT_SECRET",
     "news-search-base-url": "NEWS_SEARCH_BASE_URL",
     "news-search-id-header": "NEWS_SEARCH_ID_HEADER",
     "news-search-secret-header": "NEWS_SEARCH_SECRET_HEADER",
