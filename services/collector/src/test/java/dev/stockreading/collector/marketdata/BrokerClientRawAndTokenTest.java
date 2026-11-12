@@ -42,7 +42,7 @@ class BrokerClientRawAndTokenTest {
 
     private BrokerClient client() throws IOException {
         server = new FakeBrokerServer();
-        return new BrokerClient(new BrokerProperties(server.baseUrl(), KEY, SECRET, 5, 10),
+        return new BrokerClient(new BrokerProperties(server.baseUrl(), KEY, SECRET, 5, 10, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS),
                 JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10));
     }
 
@@ -195,7 +195,7 @@ class BrokerClientRawAndTokenTest {
         root.addAppender(appender);
         try {
             server = new FakeBrokerServer();
-            var broker = new BrokerProperties(server.baseUrl(), KEY, SECRET, 5, 10);
+            var broker = new BrokerProperties(server.baseUrl(), KEY, SECRET, 5, 10, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS);
             var marketData = new BrokerMarketData(new BrokerClient(broker, JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10)),
                     (QuoteSymbolsPort) () -> List.of("TEST01"), broker, CallRateLimiter.perSecond(10),
                     PriceChecks.fake());

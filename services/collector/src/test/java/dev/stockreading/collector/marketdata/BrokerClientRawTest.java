@@ -45,7 +45,7 @@ class BrokerClientRawTest {
             reply(exchange, apiStatus, apiBody);
         });
         server.start();
-        var properties = new BrokerProperties("http://127.0.0.1:" + server.getAddress().getPort(), "ak", "as", 5, 10);
+        var properties = new BrokerProperties("http://127.0.0.1:" + server.getAddress().getPort(), "ak", "as", 5, 10, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS);
         client = new BrokerClient(properties, JsonMapper.builder().build(),
                 Clock.fixed(Instant.parse("2026-10-22T07:00:00Z"), ZoneId.of("Asia/Seoul")), CallRateLimiter.perSecond(10));
     }

@@ -28,7 +28,7 @@ class BrokerClientLiveSmokeTest {
         Path out = Path.of(System.getenv("BROKER_PROBE_OUT"));
         String symbol = System.getenv("BROKER_PROBE_SYMBOLS").split(",")[0].trim();
         var properties = new BrokerProperties(System.getenv("BROKER_BASE_URL"), System.getenv("BROKER_APP_KEY"),
-                System.getenv("BROKER_APP_SECRET"), 10, 10);
+                System.getenv("BROKER_APP_SECRET"), 10, 10, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS);
         var client = new BrokerClient(properties, JsonMapper.builder().build(), Clock.systemDefaultZone(), CallRateLimiter.perSecond(10));
         try {
             step("price", () -> client.currentPrice(symbol) != null ? "ok" : "empty");

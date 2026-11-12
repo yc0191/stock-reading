@@ -106,7 +106,7 @@ class QueryOnlyPathsTest {
         server.start();
         try {
             BrokerClient client = new BrokerClient(
-                    new BrokerProperties("http://127.0.0.1:" + server.getAddress().getPort(), "key-test", "secret-test", 5, 10),
+                    new BrokerProperties("http://127.0.0.1:" + server.getAddress().getPort(), "key-test", "secret-test", 5, 10, BrokerProperties.DEFAULT_QUOTE_TIMEOUT_SECONDS),
                     JsonMapper.builder().build(), CLOCK, CallRateLimiter.perSecond(10));
             // 새로 생긴 메서드도 빠지지 않도록 선언된 메서드를 모두 부른다.
             for (Method method : BrokerClient.class.getDeclaredMethods()) {
