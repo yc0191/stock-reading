@@ -14,7 +14,7 @@ from typing import Any, Callable, Mapping, Protocol
 
 from briefing.article_groups import RESEARCH_MARK, ArticleRow, GroupedArticles, group_article_lists
 from briefing.config import DEFAULT_SETTINGS, CoreSettings
-from briefing.compose import DISCLAIMER, KST, NO_EVIDENCE, direction_of, headline
+from briefing.compose import DISCLAIMER, KST, NO_EVIDENCE, direction_of, headline, window_headline
 from briefing.events import BRIEFING_GENERATED_TOPIC, OutboundEvent, format_timestamp
 from briefing.jobs import ReportInput
 from briefing.job_log import (
@@ -38,9 +38,12 @@ from briefing.move_figures import (
     EXCHANGE_RATE_API,
     MARKET_SUMMARY_API,
     MoveFigures,
+    comparison_facts,
+    compared_label,
+    compares_today,
     display,
-    move_figures,
-    signed,
+    report_figures,
+    today_first,
 )
 from briefing.llm_output import (
     InvalidLlmOutput,
@@ -115,7 +118,8 @@ SYSTEM_PROMPT = """당신은 ETF 가격 변동과 같은 시기에 공개된 자
 - 해외 등락률은 변동 종목에 담긴 미국 종목의 직전 정규장 등락률(%)이며 hoursBeforeMove는 그 장 마감이 변동보다 몇 시간 전인지입니다.
 - 배경 자료(category가 "배경")는 환율·시장종합·세계지수·국내 일봉의 응답 원문(response)을 그대로 준 것이며, receivedAt은 받은 시각, minutesBeforeMove는 변동보다 몇 분 전에 받은 값인지입니다.
 - 세계지수 배경 자료의 indexRates는 코드가 지수마다 직전 영업일 종가와 비교해 계산한 등락률입니다. 원문의 전일대비·등락률은 장이 끝난 지수에서 0.00으로 오므로 0.00을 "변동 없음"으로 읽지 말고, 등락률은 indexRates의 계산된 rate를 씁니다. rate가 "없음"이면 그 지수의 등락률은 모르는 것입니다.
-- figures는 코드가 배경 원문에서 꺼낸 숫자(원/달러 환율, 코스피종합, 코스닥종합)와 코드가 계산한 비교 숫자입니다. "변동률 - 코스피종합 등락률"의 differencePoint는 변동 종목의 변동률에서 지수 등락률을 뺀 값(%p)으로, 음수면 시장 전체보다 더 내렸거나 덜 올랐다는 뜻이고 양수면 더 올랐거나 덜 내렸다는 뜻입니다. "미국 종목 직전 정규장 등락 집계"는 담긴 미국 종목 가운데 오른 수·내린 수·보합 수와 평균 등락률(%)입니다. status가 "없음"인 항목에는 ref가 없어 인용할 수 없습니다.
+- todayChangePercent(짧은 시간 변동일 때만 담깁니다)는 변동 종목의 오늘 등락률(%, 전일 종가 대비)입니다. 이때 changePercent는 몇 분 사이의 변동률이라 지수의 하루 등락률과 기간이 다르므로 둘을 직접 비교하지 않습니다.
+- figures는 코드가 배경 원문에서 꺼낸 숫자(원/달러 환율, 코스피종합, 코스닥종합)와 코드가 계산한 비교 숫자입니다. "변동률 - 코스피종합 등락률"의 differencePoint는 변동 종목의 변동률에서 지수 등락률을 뺀 값(%p)이고, "오늘 등락률 - 코스피종합 등락률"(짧은 시간 변동)은 todayChangePercent에서 지수 등락률을 뺀 값(%p)입니다. 음수면 시장 전체보다 더 내렸거나 덜 올랐다는 뜻이고 양수면 더 올랐거나 덜 내렸다는 뜻입니다. 비교 숫자에 indexReceivedAt이 있으면 지수 값을 변동 시각보다 한참 앞서 받은 것이므로, 그 숫자를 쓰는 문장에 "14:12에 받은 코스피종합 값과 비교하면"처럼 그 받은 시각을 함께 씁니다. "미국 종목 직전 정규장 등락 집계"는 담긴 미국 종목 가운데 오른 수·내린 수·보합 수와 평균 등락률(%)입니다. status가 "없음"인 항목에는 ref가 없어 인용할 수 없습니다.
 - etf(변동 종목이 ETF이고 정보가 있을 때만 담깁니다)는 ETF의 이름(name)·추종 대상(tracks)·업종(sector)과 비중 순위(rank, 1이 가장 큼) 순의 구성 종목(members)입니다. ETF가 무엇을 따라가고 무엇이 담겨 있는지 이해하는 맥락으로만 쓰고, 이것을 변동의 원인으로 단정하지 않습니다. ref가 없어 인용할 수 없으며, 근거는 ref가 있는 자료에서 찾습니다.
 - 상태 표시: "잘림"은 상한 때문에 일부만 받았다는 뜻, "없음"은 기간 안에 자료가 없다는 뜻, "너무 큼"은 원문이 커서 빠졌다는 뜻, "해당 없음"은 변동 종목에 미국 종목이 없어 공시·해외 등락률을 조회하지 않았다는 뜻입니다.
 
@@ -259,10 +263,11 @@ class RuleBasedWriter:
     """원인을 추정하지 않고 비교 사실과 최근 기사·공시를 나열한다. LLM 키가 없을 때 쓰는 기본 구현이다."""
 
     limit: int = RULE_BASED_LIMIT
+    settings: CoreSettings = DEFAULT_SETTINGS
 
     def write(self, report_input: ReportInput) -> Report:
         i = report_input
-        catalog = evidence_catalog(i)
+        catalog = evidence_catalog(i, self.settings)
         evidence = tuple(
             item
             for kind in (KIND_ARTICLE, KIND_FILING)
@@ -270,7 +275,7 @@ class RuleBasedWriter:
                                key=lambda e: e.published_at, reverse=True)[: self.limit]
         )
         lines = [move_headline(i), "", RULE_BASED_NOTE]
-        facts = comparison_facts(i)
+        facts = comparison_facts(i, self.settings)
         if facts:
             lines.append(COMPARISON_TITLE)
             lines.extend(f"- {fact}" for fact in facts)
@@ -286,29 +291,13 @@ class RuleBasedWriter:
         return Report("\n".join(lines), GENERATED_BY_RULE, evidence)
 
 
-def comparison_facts(report_input: ReportInput) -> list[str]:
-    """코드가 계산한 비교 숫자를 문장으로 바꾼다. 값이 없는 비교는 쓰지 않는다."""
-    i = report_input
-    f = move_figures(i.change_percent, i.background, i.close_rates)
-    facts = []
-    for label, diff in (("코스피종합", f.vs_kospi), ("코스닥종합", f.vs_kosdaq)):
-        if diff is None:
-            continue
-        if diff == 0:
-            facts.append(f"변동률이 {label} 등락률과 같습니다 (차이 0.00%p, 시세 자료로 코드가 계산).")
-        else:
-            side = "높습니다" if diff > 0 else "낮습니다"
-            facts.append(f"변동률이 {label} 등락률보다 {abs(diff)}%p {side} (차이 {signed(diff)}%p, 시세 자료로 코드가 계산).")
-    us = f.us_close
-    if us is not None:
-        facts.append(f"담긴 미국 종목은 직전 정규장에서 {us.up}개 오르고 {us.down}개 내렸으며 {us.flat}개는 보합이었고, "
-                     f"평균 등락률은 {signed(us.average)}%입니다 (해외 시세 자료로 코드가 계산).")
-    return facts
-
-
 def move_headline(report_input: ReportInput) -> str:
-    """머리말: 종목, 시각, 방향과 변동률, 몇 분 사이 움직였는지."""
+    """머리말: 종목, 시각, 방향과 변동률, 몇 분 사이 움직였는지. 짧은 시간 변동은 오늘 등락을 먼저 쓴다."""
     i = report_input
+    first = today_first(i)
+    if first is not None:
+        return window_headline(i.symbol, i.previous_price, i.price, i.change_percent, first[0], first[1], i.as_of,
+                               display_name(i))
     line = headline(i.symbol, i.previous_price, i.price, i.change_percent, i.as_of, display_name(i))
     if i.detection_type == "prevClose":
         return f"{line}, 전일 종가 대비"
@@ -351,7 +340,7 @@ def unchecked_items(report_input: ReportInput) -> list[str]:
         if b.target and b.api_type == "world-index":
             name = f"{name} {WORLD_INDEX_CONTINENT_NAMES.get(b.target, b.target)}"
         add(name, BACKGROUND_STATUS_MARKS.get(b.status, MARK_MISSING))
-    f = move_figures(i.change_percent, i.background, i.close_rates)
+    f = report_figures(i)
     present = {b.api_type for b in i.background if b.status == BACKGROUND_OK}
     if EXCHANGE_RATE_API in present and f.exchange_rate is None:
         items.append("원/달러 환율: 환율종합 원문에서 값을 찾지 못함")
@@ -392,7 +381,7 @@ def _background_title(item: Background) -> str:
     return f"{name}{target} ({BACKGROUND_LABEL})"
 
 
-def evidence_catalog(report_input: ReportInput) -> dict[str, EvidenceItem]:
+def evidence_catalog(report_input: ReportInput, settings: CoreSettings = DEFAULT_SETTINGS) -> dict[str, EvidenceItem]:
     """LLM이 인용할 수 있는 근거 번호와 자료. LLM 입력과 출력 검증이 같은 목록을 쓴다."""
     i = report_input
     catalog: dict[str, EvidenceItem] = {}
@@ -412,7 +401,7 @@ def evidence_catalog(report_input: ReportInput) -> dict[str, EvidenceItem]:
     for ref, b in zip(_background_refs(i), i.background):
         if ref is not None:
             catalog[ref] = EvidenceItem(b.api_type, ref, _background_title(b), BACKGROUND_SOURCE, b.fetched_at)
-    for figure in figure_entries(i):
+    for figure in figure_entries(i, settings):
         if figure.ref is not None:
             catalog[figure.ref] = EvidenceItem(figure.kind, figure.ref, figure.title, figure.source, figure.at)
     return catalog
@@ -433,8 +422,8 @@ class FigureEntry:
     values: dict[str, str]
 
 
-def _figure_candidates(f: MoveFigures) -> list[tuple[str, str, str, datetime | None, dict[str, str]]]:
-    """(이름, kind, 출처, 기준 시각, 값) 목록. 순서가 근거 번호 순서다."""
+def _figure_candidates(f: MoveFigures, compared: str) -> list[tuple[str, str, str, datetime | None, dict[str, str]]]:
+    """(이름, kind, 출처, 기준 시각, 값) 목록. 순서가 근거 번호 순서다. compared는 지수와 비교한 등락률의 이름이다."""
     rows: list[tuple[str, str, str, datetime | None, dict[str, str]]] = []
     fx = f.exchange_rate
     rows.append(("원/달러 환율", EXCHANGE_RATE_API, FIGURE_SOURCE, fx.fetched_at if fx else None, {
@@ -449,10 +438,12 @@ def _figure_candidates(f: MoveFigures) -> list[tuple[str, str, str, datetime | N
             "change": display(index.change if index else None, sign=True),
             "ratePercent": display(index.rate if index else None, sign=True),
         }))
-    for label, index, diff in (("변동률 - 코스피종합 등락률", f.kospi, f.vs_kospi),
-                               ("변동률 - 코스닥종합 등락률", f.kosdaq, f.vs_kosdaq)):
-        rows.append((label, MARKET_SUMMARY_API, COMPUTED_SOURCE, index.fetched_at if index else None,
-                     {"differencePoint": display(diff, sign=True)}))
+    for label, index, diff in (("코스피종합", f.kospi, f.vs_kospi), ("코스닥종합", f.kosdaq, f.vs_kosdaq)):
+        values = {"differencePoint": display(diff, sign=True)}
+        if diff is not None and f.stale_index_at is not None:
+            values["indexReceivedAt"] = f"{f.stale_index_at.astimezone(KST):%H:%M}"
+        rows.append((f"{compared} - {label} 등락률", MARKET_SUMMARY_API, COMPUTED_SOURCE,
+                     index.fetched_at if index else None, values))
     us = f.us_close
     rows.append(("미국 종목 직전 정규장 등락 집계", KIND_CLOSE_RATE, CLOSE_COMPUTED_SOURCE,
                  us.latest_close_at if us else None, {
@@ -465,17 +456,16 @@ def _figure_candidates(f: MoveFigures) -> list[tuple[str, str, str, datetime | N
 
 
 _VALUE_LABELS = {"value": "값", "change": "전일대비", "ratePercent": "등락률(%)", "receivedTime": "최종 수신",
-                 "differencePoint": "차이(%p)", "up": "오름", "down": "내림", "flat": "보합",
+                 "differencePoint": "차이(%p)", "indexReceivedAt": "지수 받은 시각", "up": "오름", "down": "내림", "flat": "보합",
                  "averageRatePercent": "평균 등락률(%)"}
 
 
-def figure_entries(report_input: ReportInput) -> list[FigureEntry]:
+def figure_entries(report_input: ReportInput, settings: CoreSettings = DEFAULT_SETTINGS) -> list[FigureEntry]:
     """배경 원문에서 꺼낸 숫자와 비교 숫자. 값이 있는 항목에만 F1, F2 … 순번을 붙인다."""
     i = report_input
-    f = move_figures(i.change_percent, i.background, i.close_rates)
     entries = []
     number = 0
-    for name, kind, source, at, values in _figure_candidates(f):
+    for name, kind, source, at, values in _figure_candidates(report_figures(i, settings), compared_label(i)):
         present = at is not None and any(v != MARK_MISSING for v in values.values())
         ref = None
         if present:
@@ -561,8 +551,11 @@ def build_llm_input(report_input: ReportInput, settings: CoreSettings = DEFAULT_
         "overseasCloseRatesMissing": [t for t in i.tickers if t not in rated],
         "background": [_background_input(ref, b, i.as_of) for ref, b in zip(_background_refs(i), i.background)],
         # 배경 원문에서 꺼낸 숫자와 코드가 계산한 비교 숫자. LLM은 계산하지 않고 ref로 인용만 한다.
-        "figures": [_figure_input(e, i.as_of) for e in figure_entries(i)],
+        "figures": [_figure_input(e, i.as_of) for e in figure_entries(i, settings)],
     }
+    # 오늘 등락률은 짧은 시간 변동일 때만 넣는다. 다른 유형의 입력 모양은 바꾸지 않는다.
+    if compares_today(i) and i.today_change_percent is not None:
+        data["todayChangePercent"] = round(i.today_change_percent, 2)
     # ETF 정보는 응답에 있을 때만 넣는다. 정보가 없는 이전 형식 응답의 입력 모양은 바꾸지 않는다.
     if i.etf is not None:
         data["etf"] = etf_info_input(i.etf, settings.max_etf_members)
@@ -687,7 +680,7 @@ class LlmWriter:
     def write(self, report_input: ReportInput) -> Report:
         user = json.dumps(build_llm_input(report_input, self.settings), ensure_ascii=False)
         groups = article_groups(report_input, self.settings).record()
-        allowed = frozenset(evidence_catalog(report_input))
+        allowed = frozenset(evidence_catalog(report_input, self.settings))
         tickers = us_symbols_in_input(report_input)
         reason = ""
         failed: list[LlmAttempt] = []
@@ -723,7 +716,7 @@ def _rewrite_cause(writer: LlmWriter, report_input: ReportInput, current: Cause,
                        "newRefs": list(new_refs)}
     user = json.dumps(data, ensure_ascii=False)
     groups = article_groups(report_input, writer.settings).record()
-    allowed = frozenset(evidence_catalog(report_input))
+    allowed = frozenset(evidence_catalog(report_input, writer.settings))
     tickers = us_symbols_in_input(report_input)
     failed: list[LlmAttempt] = []
     for attempt in range(1, writer.max_attempts + 1):
@@ -797,7 +790,7 @@ def build_report_writer(env: Mapping[str, str],
     config = llm_config(env)
     if config is None:
         log.warning("%s is not set; briefing reports will be rule-based", API_KEY_ENV)
-        return RuleBasedWriter()
+        return RuleBasedWriter(settings=settings)
     log.info("briefing reports will be written by the LLM (model=%s)", config.model)
     return LlmWriter(client_factory(config.api_key, config.model), settings=settings)
 
@@ -826,6 +819,7 @@ def briefing_event(report_input: ReportInput, report: Report, now: datetime) -> 
                 "generatedBy": report.generated_by,
                 "evidence": [_evidence_entry(e) for e in report.evidence],
                 **_name_entry(i),
+                **_today_first_entry(i),
             },
         },
     )
@@ -837,6 +831,15 @@ def display_name(report_input: ReportInput) -> str | None:
         if name and name.strip():
             return name.strip()
     return None
+
+
+def _today_first_entry(report_input: ReportInput) -> dict[str, float | int]:
+    """메일 제목도 머리말처럼 오늘 등락을 먼저 쓰도록 같은 값을 넘긴다. 머리말이 이전 모양이면 칸을 빼고,
+    분을 쓰지 않는 머리말('짧은 시간')이면 moveMinutes만 뺀다."""
+    first = today_first(report_input)
+    if first is None:
+        return {}
+    return {"todayChangePercent": first[0]} | ({} if first[1] is None else {"moveMinutes": first[1]})
 
 
 def _name_entry(report_input: ReportInput) -> dict[str, str]:

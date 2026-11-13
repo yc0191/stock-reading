@@ -13,6 +13,7 @@
     "thresholdPercent": 1.0,
     "asOf": "2026-10-20T16:00:31+09:00",
     "detectionType": "window",
-    "moveStartedAt": "2026-10-20T16:00:31+09:00"
+    "moveStartedAt": "2026-10-20T16:00:31+09:00",
+    "todayChangePercent": -2.1
   }
 }

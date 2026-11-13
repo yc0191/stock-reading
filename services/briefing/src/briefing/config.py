@@ -28,6 +28,13 @@ class CoreSettings:
     # 배경 자료(환율·지수·시장종합·일봉)와 해외 등락률은 받은 시각이 이 기간보다 오래되면 없음으로 본다.
     background_window: timedelta = timedelta(days=4)
     max_background_bytes: int = 32 * 1024
+    # 급변동의 시장 비교에 쓴 지수(시장종합)를 변동 시각보다 이 시간 넘게 앞서 받았으면, 비교 문장에 그 받은 시각을 밝힌다.
+    # 비교는 그대로 하고, 오래된 값과 비교했다는 것만 드러낸다(#66).
+    market_stale_after: timedelta = timedelta(minutes=10)
+    # 짧은 시간 변동 메일의 'N분 새'에 쓸 수 있는 가장 큰 N. 시세처리기의 짧은 시간 변동 구간 길이(market.window-minutes)와
+    # 같은 값이어야 한다. 변동률은 그 구간 안의 값인데, 이어지는 변동을 다시 보낼 때는 변동 시각이 처음 시각에 고정돼
+    # 감지 시각과의 차이가 구간보다 커진다. 그때 큰 N을 쓰면 거짓이 되므로 분을 쓰지 않는다.
+    window_move_max_minutes: int = 5
     # 아침 판의 개장 시세 범위: 판 날짜의 장 시작 시각(한국 시간)부터 판 시각까지. 판이 늦게 시작해도 판 시각에서 이 길이보다
     # 멀리 거슬러 읽지 않는다. 판 시각 뒤에 받은 시세는 쓰지 않는다(상태형 자료).
     open_flow_start: time = time(9, 0)
