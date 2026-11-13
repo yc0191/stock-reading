@@ -2,6 +2,7 @@ package dev.stockreading.collector.schedule;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
@@ -17,7 +18,9 @@ import static org.mockito.Mockito.when;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -135,6 +138,29 @@ class CollectorJobsTest {
         withDaily(Optional.empty()).run(Job.COLLECT_POST_CLOSE);
 
         verify(daily, times(2)).publishPostClose("collect-post-close-" + AT, all);
+    }
+
+    @Test
+    void anInterruptDuringTheRetryWaitStillSendsTheNoticeOnceAndKeepsTheInterruptForShutdown() {
+        // 재시도 대기 중 종료(인터럽트)로 반복이 끊긴 상태를 흉내 낸다.
+        when(insight.publishAll(anyString(), anyString())).thenAnswer(invocation -> {
+            Thread.currentThread().interrupt();
+            return Set.of("market-summary");
+        });
+        List<Boolean> interruptedWhileSending = new ArrayList<>();
+        doAnswer(invocation -> interruptedWhileSending.add(Thread.currentThread().isInterrupted()))
+                .when(daily).publishPostClose(anyString(), any());
+
+        try {
+            withDaily(Optional.of(insight)).run(Job.COLLECT_POST_CLOSE);
+
+            verify(daily).publishPostClose("collect-post-close-" + AT, Set.of("market-summary"));
+            assertThat(interruptedWhileSending).containsExactly(false);
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+        } finally {
+            // 다른 테스트로 인터럽트 표시가 새지 않게 지운다.
+            Thread.interrupted();
+        }
     }
 
     @Test

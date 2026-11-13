@@ -27,7 +27,8 @@ import tools.jackson.databind.ObjectMapper;
  * 데일리 판 하나에 쓸 관심 ETF 전체의 하루 등락, 담긴 미국 종목과 직전 정규장 등락률, 시장 배경을 한 번에 답한다.
  *
  * <p>ETF 목록은 종목 테이블의 국내 ETF 중 관계가 HELD 또는 WATCH인 종목이다. 받은 시각이 [하한, 기준 시각] 안인
- * 국내 일봉(daily-price)이 있으면 값을 싣고, 없거나 읽지 못하면 값을 비우고 이유를 싣는다. 미국 종목은 대응표로 찾고, 해외 등락률·세계지수 계산·받은 시각 하한은
+ * 국내 일봉(daily-price)이 있으면 값을 싣고, 없거나 읽지 못하면 값을 비우고 이유를 싣되, 받은 시각이 같은 범위 안인 장중 시세가
+ * 있으면 그 시세로 계산한 하루 등락 대체값을 싣는다. 미국 종목은 대응표로 찾고, 해외 등락률·세계지수 계산·받은 시각 하한은
  * 배경 자료 응답(market.context)과 같은 규칙을 쓴다. 저장 상태를 바꾸지 않는 조회라 같은 요청을 다시 받아도
  * 같은 내용으로 다시 답할 뿐이다(브리핑은 연결 실패·시간 초과 때 같은 요청을 다시 부른다).
  */
@@ -46,12 +47,14 @@ class DailyQuery {
     private final DailyProperties dailyProperties;
     private final OperationsReader operationsReader;
     private final OpenFlowCalculator openFlow;
+    private final DayRateFallback dayRateFallback;
 
     DailyQuery(BackgroundRepository repository, WorldIndexRates worldIndexRates,
             OverseasCloseRateQuery closeRateQuery, HoldingsPort holdings, MemberChangesPort memberChanges,
             ContextProperties contextProperties,
             DailyProperties dailyProperties, OperationsReader operationsReader,
-            ObjectMapper mapper, OpenFlowPort openFlowPort, MarketProperties marketProperties) {
+            ObjectMapper mapper, OpenFlowPort openFlowPort, IntradayQuotePort intradayQuotes,
+            MarketProperties marketProperties) {
         this.repository = repository;
         this.marketBackground = new MarketBackground(repository, worldIndexRates,
                 contextProperties.worldIndexPrevLookback());
@@ -64,6 +67,7 @@ class DailyQuery {
         this.operationsReader = operationsReader;
         this.openFlow = new OpenFlowCalculator(openFlowPort, mapper, marketProperties.openPriceFields(),
                 marketProperties.prevCloseFields());
+        this.dayRateFallback = new DayRateFallback(intradayQuotes, mapper, marketProperties.prevCloseFields());
     }
 
     /** 내부 조회 API 가 부른다. 같은 요청에는 같은 내용을 돌려준다. */
@@ -94,6 +98,7 @@ class DailyQuery {
         List<DailyPayload.Etf> etfs = new ArrayList<>();
         int noDaily = 0;
         int unreadable = 0;
+        int fallbacks = 0;
         List<String> tracked = holdings.trackedEtfs();
         // 잘릴 ETF는 미국 종목과 ETF 정보를 조회하지 않도록 상한을 먼저 적용한다.
         boolean truncated = tracked.size() > maxEtfs;
@@ -106,14 +111,22 @@ class DailyQuery {
             } else if (record.isEmpty()) {
                 unreadable++;
             }
-            etfs.add(etf(symbol, record.orElse(null), stored, stored == null
+            DailyPayload.Etf etf = etf(symbol, record.orElse(null), stored, stored == null
                     ? DailyPayload.NO_DAILY_PRICE_IN_RANGE : DailyPayload.DAILY_PRICE_UNREADABLE, maxTickers, since,
-                    asOf));
+                    asOf);
+            // 아침 판은 대체값을 쓰지 않으므로 요청한 판에서만 장중 시세를 읽는다.
+            if (record.isEmpty() && request.wantsIntradayFallback()) {
+                etf = withFallback(etf, since, asOf);
+                if (etf.intradayFallback() != null) {
+                    fallbacks++;
+                }
+            }
+            etfs.add(etf);
         }
         if (noDaily > 0 || unreadable > 0) {
             // 종목코드는 보유 종목이 드러나므로 건수만 남긴다.
-            log.warn("etfs without daily price jobId={} noDailyInRange={} unreadable={}", request.jobId(), noDaily,
-                    unreadable);
+            log.warn("etfs without daily price jobId={} noDailyInRange={} unreadable={} intradayFallback={}",
+                    request.jobId(), noDaily, unreadable, fallbacks);
         }
 
         if (request.openFlowSince() != null) {
@@ -160,6 +173,16 @@ class DailyQuery {
         if (failed > 0) {
             // 종목코드는 보유 종목이 드러나므로 건수만 남긴다.
             log.warn("open flow unavailable jobId={} seq={} etfs={}", request.jobId(), request.seq(), failed);
+        }
+    }
+
+    /** 대체값은 부가 정보라 시세 조회가 실패해도 그 ETF는 일봉 없음 그대로 보낸다. */
+    private DailyPayload.Etf withFallback(DailyPayload.Etf without, OffsetDateTime since, OffsetDateTime asOf) {
+        try {
+            return dayRateFallback.apply(without, since, asOf);
+        } catch (RuntimeException e) {
+            log.warn("intraday fallback unavailable error={}", e.getClass().getSimpleName());
+            return without;
         }
     }
 

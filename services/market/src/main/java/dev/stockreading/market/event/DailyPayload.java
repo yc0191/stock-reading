@@ -29,7 +29,8 @@ public record DailyPayload(
 
     /**
      * 관심 ETF 한 개의 하루 등락. date·close·prevClose·rate·fetchedAt은 국내 일봉 원문 레코드 값을 공백만 걷어 옮기며,
-     * 일봉이 없거나 읽지 못하면 모두 null이고 missingReason에 이유가 있다.
+     * 일봉이 없거나 읽지 못하면 모두 null이고 missingReason에 이유가 있다. 그때 판 시각 전에 받은 장중 시세가 있으면
+     * prevClose·rate만 그 시세로 계산한 대체값으로 채우고 intradayFallback에 그 시세의 가격과 받은 시각을 싣는다.
      */
     public record Etf(
             String symbol,
@@ -42,16 +43,24 @@ public record DailyPayload(
             List<String> tickers,
             boolean tickersTruncated,
             @JsonInclude(JsonInclude.Include.NON_NULL) ContextPayload.EtfInfo etf,
-            @JsonInclude(JsonInclude.Include.NON_NULL) OpenFlow openFlow) {
+            @JsonInclude(JsonInclude.Include.NON_NULL) OpenFlow openFlow,
+            @JsonInclude(JsonInclude.Include.NON_NULL) IntradayFallback intradayFallback) {
 
         public Etf(String symbol, String date, String close, String prevClose, String rate, String fetchedAt,
                 String missingReason, List<String> tickers, boolean tickersTruncated, ContextPayload.EtfInfo etf) {
-            this(symbol, date, close, prevClose, rate, fetchedAt, missingReason, tickers, tickersTruncated, etf, null);
+            this(symbol, date, close, prevClose, rate, fetchedAt, missingReason, tickers, tickersTruncated, etf, null,
+                    null);
         }
 
         public Etf withOpenFlow(OpenFlow flow) {
             return new Etf(symbol, date, close, prevClose, rate, fetchedAt, missingReason, tickers, tickersTruncated,
-                    etf, flow);
+                    etf, flow, intradayFallback);
+        }
+
+        /** 일봉 없는 ETF에 장중 시세로 계산한 전일 종가·하루 등락을 채운다. missingReason은 일봉이 없는 이유로 남는다. */
+        public Etf withIntradayFallback(String fallbackPrevClose, String fallbackRate, IntradayFallback fallback) {
+            return new Etf(symbol, date, close, fallbackPrevClose, fallbackRate, fetchedAt, missingReason, tickers,
+                    tickersTruncated, etf, openFlow, fallback);
         }
 
         public Etf(String symbol, String date, String close, String prevClose, String rate, String fetchedAt,
@@ -69,6 +78,10 @@ public record DailyPayload(
                 boolean tickersTruncated, ContextPayload.EtfInfo etf) {
             return new Etf(symbol, null, null, null, null, null, missingReason, tickers, tickersTruncated, etf);
         }
+    }
+
+    /** 하루 등락 대체값에 쓴 장중 시세: 가격(원)과 시세처리기가 그 시세를 받은 시각. */
+    public record IntradayFallback(String price, String receivedAt) {
     }
 
     /** 개장 흐름의 시가 출처: 시세 원문의 시가 칸 / 09:00 이후 첫 스냅샷 가격. */

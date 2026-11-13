@@ -52,6 +52,7 @@ class DailyQueryTest {
     private MemberChangesPort memberChanges;
     private OperationsReader operationsReader;
     private OpenFlowPort openFlowPort;
+    private IntradayQuotePort intradayQuotes;
 
     @BeforeEach
     void setUp() {
@@ -61,6 +62,8 @@ class DailyQueryTest {
         memberChanges = mock(MemberChangesPort.class);
         operationsReader = mock(OperationsReader.class);
         openFlowPort = mock(OpenFlowPort.class);
+        intradayQuotes = mock(IntradayQuotePort.class);
+        when(intradayQuotes.lastReceived(anyString(), any(), any())).thenReturn(Optional.empty());
         when(repository.latest(any(), any(), any(), any())).thenReturn(Optional.empty());
         when(repository.worldIndexRows(anyString(), any(), any())).thenReturn(List.of());
         when(repository.latestDailyPrices(any(), any())).thenReturn(List.of());
@@ -73,7 +76,7 @@ class DailyQueryTest {
     private DailyQuery listener(int maxTickers, int maxEtfs) {
         return new DailyQuery(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
                 memberChanges, new ContextProperties(Duration.ofDays(4), 32_768, maxTickers, List.of("C", "S"), Duration.ofDays(7)),
-                new DailyProperties(maxEtfs, null), operationsReader, mapper, openFlowPort,
+                new DailyProperties(maxEtfs, null), operationsReader, mapper, openFlowPort, intradayQuotes,
                 new MarketProperties(5, BigDecimal.ONE, List.of("f.a", "f.b", "f.c"), BigDecimal.ONE, List.of("f.open"),
                         1, List.of(), 0, new BigDecimal("2.00")));
     }
@@ -167,6 +170,126 @@ class DailyQueryTest {
         assertThat(without.tickers()).containsExactly("FAKEZ");
         assertThat(without.etf().name()).isEqualTo("TEST ETF NINE");
         assertThat(payload.closeRates()).extracting(ContextPayload.CloseRate::ticker).containsExactly("FAKEZ");
+    }
+
+    // #64 재현: 범위 안 일봉이 없으면 장중 시세가 있어도 하루 등락이 비어, 마감 후 판이 '자료 없음'이 됐다.
+    @Test
+    void etfWithoutADailyPriceGetsTheDayRateFromTheLastIntradayQuoteReceivedBeforeTheEdition() throws IOException {
+        tracked("TEST09");
+        when(intradayQuotes.lastReceived("TEST09", SINCE, AS_OF)).thenReturn(Optional.of(new IntradayQuotePort.Quote(
+                OffsetDateTime.parse("2026-10-20T15:29:58+09:00"), 9_705, "{\"f\":{\"a\":10000,\"b\":10000,\"c\":10000}}")));
+
+        DailyPayload.Etf etf = answer(listener(), request()).etfs().get(0);
+
+        assertThat(etf.rate()).isEqualTo("-2.95");
+        assertThat(etf.prevClose()).isEqualTo("10000");
+        assertThat(etf.missingReason()).isEqualTo(DailyPayload.NO_DAILY_PRICE_IN_RANGE);
+        assertThat(etf.intradayFallback()).isEqualTo(
+                new DailyPayload.IntradayFallback("9705", "2026-10-20T15:29:58+09:00"));
+        assertThat(etf).extracting(DailyPayload.Etf::date, DailyPayload.Etf::close, DailyPayload.Etf::fetchedAt)
+                .containsOnlyNulls();
+    }
+
+    private static IntradayQuotePort.Quote quote(OffsetDateTime receivedAt, long price, String raw) {
+        return new IntradayQuotePort.Quote(receivedAt, price, raw);
+    }
+
+    private static final String PREV_CLOSE_10000 = "{\"f\":{\"a\":10000,\"b\":10000,\"c\":10000}}";
+
+    @Test
+    void anEtfWithADailyPriceKeepsTheDailyValuesAndNoQuoteIsRead() throws IOException {
+        tracked("TEST01");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(daily("TEST01", "-1.50", AS_OF)));
+
+        DailyPayload.Etf etf = answer(listener(), request()).etfs().get(0);
+
+        assertThat(etf.rate()).isEqualTo("-1.50");
+        assertThat(etf.intradayFallback()).isNull();
+        verifyNoInteractions(intradayQuotes);
+    }
+
+    @Test
+    void anUnreadableDailyPriceAlsoFallsBackToTheIntradayQuote() throws IOException {
+        tracked("TEST09");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(new BackgroundRepository.StoredTargetResponse(
+                "TEST09", new BackgroundRepository.StoredResponse("{\"broken\": true}", AS_OF.minusMinutes(30)))));
+        when(intradayQuotes.lastReceived("TEST09", SINCE, AS_OF)).thenReturn(Optional.of(
+                quote(AS_OF.minusMinutes(90), 10_250, PREV_CLOSE_10000)));
+
+        DailyPayload.Etf etf = answer(listener(), request()).etfs().get(0);
+
+        assertThat(etf.missingReason()).isEqualTo(DailyPayload.DAILY_PRICE_UNREADABLE);
+        assertThat(etf.rate()).isEqualTo("2.50");
+    }
+
+    @Test
+    void aQuoteReceivedAfterTheEditionOrBeforeTheRangeIsNotUsedEvenIfTheStoreReturnsIt() throws IOException {
+        tracked("TEST09");
+        when(intradayQuotes.lastReceived("TEST09", SINCE, AS_OF)).thenReturn(
+                Optional.of(quote(AS_OF.plusSeconds(1), 9_705, PREV_CLOSE_10000)),
+                Optional.of(quote(SINCE.minusSeconds(1), 9_705, PREV_CLOSE_10000)),
+                Optional.of(quote(AS_OF, 9_705, PREV_CLOSE_10000)));
+
+        assertThat(answer(listener(), request()).etfs().get(0).rate()).isNull();
+        assertThat(answer(listener(), request()).etfs().get(0).rate()).isNull();
+        // 판 기준 시각에 받은 것은 범위 안이다.
+        assertThat(answer(listener(), request()).etfs().get(0).rate()).isEqualTo("-2.95");
+    }
+
+    @Test
+    void withoutAMajorityPrevCloseInTheQuoteTheEtfStaysWithoutADayRate() throws IOException {
+        tracked("TEST09");
+        when(intradayQuotes.lastReceived("TEST09", SINCE, AS_OF)).thenReturn(Optional.of(
+                quote(AS_OF.minusMinutes(90), 9_705, "{\"f\":{\"a\":10000,\"b\":9990,\"c\":9980}}")));
+
+        DailyPayload.Etf etf = answer(listener(), request()).etfs().get(0);
+
+        assertThat(etf).extracting(DailyPayload.Etf::prevClose, DailyPayload.Etf::rate,
+                DailyPayload.Etf::intradayFallback).containsOnlyNulls();
+        assertThat(etf.missingReason()).isEqualTo(DailyPayload.NO_DAILY_PRICE_IN_RANGE);
+    }
+
+    @Test
+    void aZeroPrevCloseInTheQuoteLeavesTheEtfWithoutADayRateInsteadOfFailing() throws IOException {
+        tracked("TEST09");
+        when(intradayQuotes.lastReceived("TEST09", SINCE, AS_OF)).thenReturn(Optional.of(
+                quote(AS_OF.minusMinutes(90), 9_705, "{\"f\":{\"a\":0,\"b\":0,\"c\":0}}")));
+
+        DailyPayload.Etf etf = answer(listener(), request()).etfs().get(0);
+
+        assertThat(etf).extracting(DailyPayload.Etf::prevClose, DailyPayload.Etf::rate,
+                DailyPayload.Etf::intradayFallback).containsOnlyNulls();
+        assertThat(etf.missingReason()).isEqualTo(DailyPayload.NO_DAILY_PRICE_IN_RANGE);
+    }
+
+    @Test
+    void morningRequestsWithoutTheFallbackFlagNeverReadIntradayQuotes() throws IOException {
+        tracked("TEST09");
+        String missing = request().replace(",\n    \"includeIntradayFallback\": true", "");
+        assertThat(missing).doesNotContain("includeIntradayFallback");
+
+        DailyPayload.Etf etf = answer(listener(), missing).etfs().get(0);
+
+        assertThat(etf.rate()).isNull();
+        assertThat(etf.intradayFallback()).isNull();
+        verifyNoInteractions(intradayQuotes);
+
+        String off = request().replace("\"includeIntradayFallback\": true", "\"includeIntradayFallback\": false");
+        assertThat(answer(listener(), off).etfs().get(0).intradayFallback()).isNull();
+        verifyNoInteractions(intradayQuotes);
+    }
+
+    @Test
+    void aFailingQuoteReadLeavesOnlyThatEtfWithoutAFallback() throws IOException {
+        tracked("TEST08", "TEST09");
+        when(intradayQuotes.lastReceived(eq("TEST08"), any(), any())).thenThrow(new IllegalStateException("db down"));
+        when(intradayQuotes.lastReceived(eq("TEST09"), any(), any())).thenReturn(Optional.of(
+                quote(AS_OF.minusMinutes(90), 9_705, PREV_CLOSE_10000)));
+
+        List<DailyPayload.Etf> etfs = answer(listener(), request()).etfs();
+
+        assertThat(etfs.get(0).rate()).isNull();
+        assertThat(etfs.get(1).rate()).isEqualTo("-2.95");
     }
 
     @Test

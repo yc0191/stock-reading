@@ -96,6 +96,21 @@
           "TESTA"
         ],
         "tickersTruncated": false
+      },
+      {
+        "symbol": "TEST04",
+        "date": null,
+        "close": null,
+        "prevClose": "10000",
+        "rate": "-2.95",
+        "fetchedAt": null,
+        "missingReason": "no-daily-price-in-range",
+        "intradayFallback": {
+          "price": "9705",
+          "receivedAt": "2026-10-20T15:29:58+09:00"
+        },
+        "tickers": [],
+        "tickersTruncated": false
       }
     ],
     "closeRates": [

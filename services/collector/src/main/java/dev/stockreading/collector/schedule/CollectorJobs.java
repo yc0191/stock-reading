@@ -205,7 +205,16 @@ public class CollectorJobs {
                 } finally {
                     // 수집이 일부 실패하거나 예외로 끝나도 마감 후 판 알림은 반드시 낸다.
                     Set<String> result = missing;
-                    daily.ifPresent(publisher -> publisher.publishPostClose(corr, result));
+                    // 재시도 대기 중 종료로 끊기면 인터럽트 표시가 켜진 채라 전송이 실패할 수 있다.
+                    // 알림을 보내는 동안만 표시를 비우고, 보낸 뒤 되돌려 종료가 이어지게 한다.
+                    boolean interrupted = Thread.interrupted();
+                    try {
+                        daily.ifPresent(publisher -> publisher.publishPostClose(corr, result));
+                    } finally {
+                        if (interrupted) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
                 }
             }
             case COLLECT_ETF_MEMBERS -> members.publishFetched(corr);

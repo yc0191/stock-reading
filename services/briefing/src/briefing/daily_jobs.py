@@ -378,6 +378,9 @@ class DailyCore:
             "maxEtfs": s.max_etfs,
             "maxTickers": s.max_tickers,
         }
+        if job.edition == EDITION_POST_CLOSE:
+            # 일봉 없는 ETF의 장중 시세 대체값(#64). 아침 판은 쓰지 않으므로 마감 후 판만 요청한다.
+            payload["includeIntradayFallback"] = True
         if job.edition == EDITION_POST_CLOSE and self.status is not None:
             # 서버 상태 절의 시세처리기 운영 상태. 마감 후 판만 요청한다.
             payload["includeOperations"] = True
@@ -430,7 +433,13 @@ class DailyCore:
             job.open_flow_since is None or not in_range(e.open_flow, job.open_flow_since, job.scheduled_for)) else e
                           for e in kept)
         self._note_excluded(job, "openFlow", sum(1 for a, b in zip(kept, rechecked) if a is not b))
-        return rechecked
+        # 장중 시세 대체값은 마감 후 판에서만, 판 범위 안에 받은 것만 쓴다. 아침 판의 하루 등락은 전날 일봉이라
+        # 그날 아침 시세로 대신하면 다른 날 등락이 된다.
+        final = tuple(e.without_fallback() if e.intraday_at is not None and (
+            job.edition != EDITION_POST_CLOSE or not job.range_start <= e.intraday_at <= job.scheduled_for) else e
+                      for e in rechecked)
+        self._note_excluded(job, "intradayFallback", sum(1 for a, b in zip(rechecked, final) if a is not b))
+        return final
 
     def _recheck_state(self, job: _DailyJob, close_rates: tuple[CloseRate, ...],
                        background: tuple[Background, ...]) -> tuple[tuple[CloseRate, ...], tuple[Background, ...]]:
@@ -910,12 +919,16 @@ class DailySentences:
 
 
 def _parse_etf_day(e: dict[str, Any]) -> EtfDay:
-    """v2 응답은 일봉이 없으면 값 칸이 null이다. v1 응답에는 missingReason이 없다."""
+    """v2 응답은 일봉이 없으면 값 칸이 null이다. v1 응답에는 missingReason이 없다. 장중 시세 대체값(intradayFallback)이
+    있으면 prevClose·rate가 그 값이다."""
     fetched = e["fetchedAt"]
+    fallback = e.get("intradayFallback")
     return EtfDay(e["symbol"], e["date"], e["close"], e["prevClose"], e["rate"],
                   parse_timestamp(fetched) if fetched is not None else None,
                   tuple(e["tickers"]), bool(e["tickersTruncated"]), parse_etf_info(e.get("etf")),
-                  e.get("missingReason"), open_flow=parse_open_flow(e.get("openFlow")))
+                  e.get("missingReason"), open_flow=parse_open_flow(e.get("openFlow")),
+                  intraday_at=parse_timestamp(fallback["receivedAt"]) if fallback is not None else None,
+                  intraday_price=fallback["price"] if fallback is not None else None)
 
 
 def _malformed(kind: QueryKind, job_id: str, error: Exception) -> None:
