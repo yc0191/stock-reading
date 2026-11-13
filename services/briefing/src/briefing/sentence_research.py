@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Any, Mapping, Protocol
 
 from briefing.config import DEFAULT_SETTINGS, CoreSettings
+from briefing.final_check import FinalCheck
 from briefing.job_log import DiscardJobLog, JobKind, JobLogPort
 from briefing.jobs import ReportInput
 from briefing.ports import RequestPort
@@ -285,6 +286,15 @@ class MoveDraft:
 
     input: ReportInput
     report: Report
+    # 문장 단위 재검색으로 다시 쓴 원인 번호(보고서 전체를 다시 썼으면 WHOLE_REPORT). 마지막 검사가 검토를 부를지 정한다.
+    rewritten: tuple[int, ...] = ()
+
+
+def checked_report(final: FinalCheck | None, draft: MoveDraft, now: datetime) -> Report:
+    """발행 직전 마지막 검사를 거친 보고서. 검사가 없거나 LLM이 쓴 본문이 아니면 그대로 낸다."""
+    if final is None or draft.report.output is None:
+        return draft.report
+    return final.run(draft, now).report
 
 
 def cause_text(cause: Cause) -> str:
@@ -297,6 +307,7 @@ class MoveSentences:
 
     stage: ReportStage
     settings: CoreSettings = DEFAULT_SETTINGS
+    final: FinalCheck | None = None
 
     def can_research(self, draft: MoveDraft) -> bool:
         return True
@@ -340,14 +351,14 @@ class MoveSentences:
         rewritten = replace(draft.input, research_articles=research_articles)
         report = self.stage.rewrite_sentence(rewritten, draft.report, sentence_no, round,
                                              tuple(a.article_id for a in articles))
-        return MoveDraft(rewritten, report) if report is not None else None
+        return MoveDraft(rewritten, report, draft.rewritten + (sentence_no,)) if report is not None else None
 
     def rewrite_whole(self, draft: MoveDraft, round: int, articles: tuple[Article, ...],
                       research_articles: tuple[Article, ...], now: datetime) -> MoveDraft | None:
         rewritten = replace(draft.input, research_articles=research_articles)
         # 다시 쓰기가 끝내 실패해도 첫 보고서를 낼 수 있으므로 작업을 실패로 닫지 않는다.
         report = self.stage.write(rewritten, fail_job=False)
-        return MoveDraft(rewritten, report) if report is not None else None
+        return MoveDraft(rewritten, report, (WHOLE_REPORT,)) if report is not None else None
 
     def sentence_text(self, draft: MoveDraft, sentence_no: int) -> str | None:
         output = draft.report.output
@@ -356,7 +367,7 @@ class MoveSentences:
         return cause_text(output.causes[sentence_no - 1])
 
     def publish(self, draft: MoveDraft, now: datetime, research_count: int) -> None:
-        self.stage.publish(draft.input, draft.report, research_count)
+        self.stage.publish(draft.input, checked_report(self.final, draft, now), research_count)
 
 
 @dataclass
@@ -368,14 +379,17 @@ class ResearchReportStage:
 
     stage: ReportStage
     sentences: SentenceResearch
+    # 있을 때만 발행 직전 마지막 검사(코드 검사, 필요하면 LLM 검토와 고침)를 한다.
+    final: FinalCheck | None = None
 
     def __post_init__(self) -> None:
-        self.sentences.register(JobKind.MOVE.value, MoveSentences(self.stage, self.sentences.settings))
+        self.sentences.register(JobKind.MOVE.value, MoveSentences(self.stage, self.sentences.settings, self.final))
 
     def on_ready(self, report_input: ReportInput) -> None:
         report = self.stage.write(report_input)
         if report is None:
             return
         draft = MoveDraft(report_input, report)
-        if not self.sentences.begin(JobKind.MOVE.value, report_input.job_id, draft, self.stage.clock()):
-            self.stage.publish(report_input, report)
+        now = self.stage.clock()
+        if not self.sentences.begin(JobKind.MOVE.value, report_input.job_id, draft, now):
+            self.stage.publish(report_input, checked_report(self.final, draft, now))

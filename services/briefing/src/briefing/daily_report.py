@@ -1206,7 +1206,7 @@ def _issues_by_etf(i: DailyInput) -> dict[str, tuple[MemberIssue, ...]]:
     return {etf: tuple(issues) for etf, issues in grouped.items()}
 
 
-def _etf_names(i: DailyInput) -> frozenset[str]:
+def summary_banned_names(i: DailyInput) -> frozenset[str]:
     """요약에 쓰면 안 되는 ETF 이름과 종목코드. 한 글자 이름은 일반 낱말과 겹쳐 뺀다."""
     return frozenset(n for etf in i.etfs or () for n in (etf.symbol, etf.label()) if len(n) >= 2)
 
@@ -1220,7 +1220,7 @@ class DailyLlmWriter:
     core: CoreSettings = DEFAULT_SETTINGS
 
     @staticmethod
-    def _forbidden_tickers(i: DailyInput) -> frozenset[str]:
+    def forbidden_tickers(i: DailyInput) -> frozenset[str]:
         return frozenset(i.tickers()) | frozenset(r.ticker for r in i.close_rates or ()) \
             | frozenset(t for f in i.filings or () for t in f.tickers) | i.member_us_symbols()
 
@@ -1228,7 +1228,7 @@ class DailyLlmWriter:
         user = json.dumps(build_llm_input(i, sections, self.settings, self.core), ensure_ascii=False)
         groups = article_groups(sections, self.core).record()
         allowed = frozenset(e.ref for s in sections for e in s.entries)
-        tickers = self._forbidden_tickers(i)
+        tickers = self.forbidden_tickers(i)
         post_close = i.edition == EDITION_POST_CLOSE
         prompt, schema = (SYSTEM_PROMPT_POST_CLOSE, OUTPUT_SCHEMA_POST_CLOSE) if post_close \
             else (SYSTEM_PROMPT, OUTPUT_SCHEMA_MORNING)
@@ -1241,7 +1241,7 @@ class DailyLlmWriter:
                 raw, usage = reply.text, reply.usage
                 output = parse_post_close_output(raw, allowed, tickers, _etfs_with_day(i), _issues_by_etf(i),
                                                  bool(i.notables), _reviews_to_explain(i),
-                                                 _etf_names(i)) \
+                                                 summary_banned_names(i)) \
                     if post_close else parse_morning_output(raw, allowed, tickers, _etfs_to_forecast(i))
             except (LlmCallError, InvalidDailyOutput) as error:
                 rejected.append(LlmAttempt(attempt, type(error).__name__, str(error), user, raw,
@@ -1266,7 +1266,7 @@ class DailyLlmWriter:
             data["rewrite"]["symbol"] = current.symbol
         user = json.dumps(data, ensure_ascii=False)
         allowed = frozenset(e.ref for s in sections for e in s.entries)
-        tickers = self._forbidden_tickers(i)
+        tickers = self.forbidden_tickers(i)
         prompt, addendum = (SYSTEM_PROMPT_POST_CLOSE, REWRITE_ADDENDUM_POST_CLOSE) \
             if i.edition == EDITION_POST_CLOSE else (SYSTEM_PROMPT, REWRITE_ADDENDUM)
         rejected: list[LlmAttempt] = []

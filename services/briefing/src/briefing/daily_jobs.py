@@ -73,6 +73,7 @@ from briefing.job_log import (
     record_result,
 )
 from briefing.evidence import MARKET_WIDE
+from briefing.final_check import FinalCheck
 from briefing.open_flow import in_range, open_flow_start, parse_open_flow
 from briefing.ports import FailureReason, RequestPort
 from briefing.research import ResearchTarget
@@ -160,6 +161,8 @@ class _Draft:
     insufficient_evidence: bool = False
     weak_shortfalls: tuple[str, ...] = ()
     output: DailyOutput | None = None
+    # 문장 단위 재검색으로 다시 쓴 문장(points) 번호. 보고서 전체를 다시 썼으면 WHOLE_REPORT. 마지막 검사가 검토를 부를지 정한다.
+    rewritten: tuple[int, ...] = ()
 
 
 @dataclass
@@ -234,6 +237,8 @@ class DailyCore:
     # 아침 판의 결과(판 시각, 나갔는가, 판에 개장 흐름이 담긴 종목코드, 개장 흐름을 읽은 구간 시작)를 받는 곳.
     # 장 시작 뒤 급변동을 아침 판에 합쳤는지 정하는 데 쓴다.
     on_morning_result: Callable[[datetime, bool, datetime, frozenset[str], datetime | None], None] | None = None
+    # 있을 때만 LLM 본문을 발행 직전 마지막 검사(코드 검사, 필요하면 LLM 검토와 고침)에 거친다.
+    final: FinalCheck | None = None
     _jobs: dict[str, _DailyJob] = field(default_factory=dict, init=False)
     _seen: OrderedDict[str, None] = field(default_factory=OrderedDict, init=False)
 
@@ -593,7 +598,9 @@ class DailyCore:
 
     def _finalize(self, job: _DailyJob, now: datetime, daily_input: DailyInput, sections: tuple[Section, ...],
                   draft: _Draft, research_count: int = 0) -> None:
-        """아침 판의 ETF별 예상을 작업 기록에 남긴 뒤 발행한다. 다시 쓴 뒤의 최종 본문 기준으로 한 번만 남긴다."""
+        """마지막 검사를 거친 뒤 아침 판의 ETF별 예상을 작업 기록에 남기고 발행한다. 최종 본문 기준으로 한 번만 남긴다."""
+        if self.final is not None and draft.generated_by == GENERATED_BY_LLM:
+            draft = self.final.run(DailyDraft(job, daily_input, sections, draft), now).draft
         outlooks = outlook_records(draft.output)
         if job.edition == EDITION_MORNING and outlooks:
             # 마감 후 판이 같은 날의 이 기록을 읽어 예상과 실제 등락을 대조한다(작업 종류 morning, 범위 끝 날짜로 찾음).
@@ -711,7 +718,7 @@ class DailyCore:
         output = replace(draft.draft.output, points=tuple(points))
         # 환율·금리 이슈 칸과 아침 판 ETF 예상의 근거도 초안 단계처럼 인용한 번호에 들어간다.
         new = _Draft(llm_text(rewritten_input, sections, output), GENERATED_BY_LLM, output.cited_refs(), False,
-                     output.weak_shortfalls(), output)
+                     output.weak_shortfalls(), output, draft.draft.rewritten + (no,))
         return DailyDraft(draft.job, rewritten_input, sections, new)
 
     def rewrite_whole(self, draft: DailyDraft, round: int, research_articles: tuple[Article, ...],
@@ -722,7 +729,7 @@ class DailyCore:
         new = self._write(draft.job, now, rewritten_input, sections)
         if new.generated_by != GENERATED_BY_LLM:
             return None
-        return DailyDraft(draft.job, rewritten_input, sections, new)
+        return DailyDraft(draft.job, rewritten_input, sections, replace(new, rewritten=(WHOLE_REPORT,)))
 
     # ---- 서버 상태 절 ----
 

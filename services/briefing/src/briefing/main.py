@@ -23,6 +23,7 @@ from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DEFAULT_SETTINGS, CoreSettings, DailySettings
 from briefing.daily_jobs import DailyCore
 from briefing.daily_members import MemberPort
+from briefing.daily_final_check import daily_final_check
 from briefing.daily_report import DailyLlmWriter, build_daily_writer
 from briefing.events import (
     ARTICLES_REQUESTED_TOPIC,
@@ -43,6 +44,7 @@ from briefing.llm import AnthropicClient
 from briefing.member_store import PostgresMemberStore
 from briefing.move_group import MoveGrouper
 from briefing.move_merge import MorningMerge
+from briefing.move_final_check import move_final_check
 from briefing.report import ReportStage, ReportWriter, build_report_writer
 from briefing.research import QueryWriter, build_query_writer
 from briefing.sentence_research import ResearchReportStage, SentenceResearch
@@ -239,7 +241,8 @@ class BriefingRunner:
         stage = ReportStage(self.writer, publisher, self.job_log, clock=self.clock)
         # 급변동과 데일리 판이 문장 단위 재검색 흐름 하나를 함께 쓴다.
         self.sentences = SentenceResearch(self.query_writer, publisher, self.job_log, self.settings)
-        self.research = ResearchReportStage(stage, self.sentences)
+        # LLM 본문은 발행 직전에 마지막 검사(코드 검사, 필요하면 LLM 검토와 고침)를 거친다.
+        self.research = ResearchReportStage(stage, self.sentences, move_final_check(self.writer, self.job_log))
         self.core = BriefingCore(publisher, self.research, self.settings, self.job_log)
         # 같은 종목의 급변동은 모아서 작업 하나로 넘긴다.
         self.grouper = MoveGrouper(self.core.on_move, self.job_log, self.settings)
@@ -247,7 +250,8 @@ class BriefingRunner:
         self.merge = MorningMerge(self.grouper.on_move, self.job_log, self.daily_settings)
         self.daily = DailyCore(publisher, self.daily_writer, self.job_log, self.daily_settings,
                                sentences=self.sentences, status=self.status_store, members=self.member_store,
-                               on_morning_result=self.merge.on_morning_result)
+                               on_morning_result=self.merge.on_morning_result,
+                               final=daily_final_check(self.daily_writer, self.job_log))
         self.merge.morning_in_progress = self.daily.morning_in_progress
         for edition, group in TICK_CONSUMER_GROUPS.items():
             consumer = self._consumer_factory({

@@ -688,7 +688,7 @@ class LlmWriter:
         user = json.dumps(build_llm_input(report_input, self.settings), ensure_ascii=False)
         groups = article_groups(report_input, self.settings).record()
         allowed = frozenset(evidence_catalog(report_input))
-        tickers = _us_symbols_in_input(report_input)
+        tickers = us_symbols_in_input(report_input)
         reason = ""
         failed: list[LlmAttempt] = []
         for attempt in range(1, self.max_attempts + 1):
@@ -705,7 +705,7 @@ class LlmWriter:
                 log.warning("LLM report attempt %d/%d failed for job %s: %s",
                             attempt, self.max_attempts, report_input.job_id, reason)
                 continue
-            return replace(_llm_report(report_input, output), failed_attempts=tuple(failed),
+            return replace(llm_report(report_input, output), failed_attempts=tuple(failed),
                            accepted=AcceptedAttempt(attempt, user, response, usage, groups))
         raise ReportError(f"LLM report failed after {self.max_attempts} attempts: {reason}", self.max_attempts,
                           tuple(failed))
@@ -724,7 +724,7 @@ def _rewrite_cause(writer: LlmWriter, report_input: ReportInput, current: Cause,
     user = json.dumps(data, ensure_ascii=False)
     groups = article_groups(report_input, writer.settings).record()
     allowed = frozenset(evidence_catalog(report_input))
-    tickers = _us_symbols_in_input(report_input)
+    tickers = us_symbols_in_input(report_input)
     failed: list[LlmAttempt] = []
     for attempt in range(1, writer.max_attempts + 1):
         response: str | None = None
@@ -746,13 +746,13 @@ def _rewrite_cause(writer: LlmWriter, report_input: ReportInput, current: Cause,
     return SentenceRewrite(None, tuple(failed))
 
 
-def _us_symbols_in_input(i: ReportInput) -> frozenset[str]:
+def us_symbols_in_input(i: ReportInput) -> frozenset[str]:
     """LLM 입력에 있던 미국 티커. 문장에 쓰면 거부한다."""
     return frozenset(i.tickers) | frozenset(r.ticker for r in i.close_rates) \
         | frozenset(t for f in i.filings for t in f.tickers) | (i.etf.us_tickers() if i.etf else frozenset())
 
 
-def _llm_report(report_input: ReportInput, output: LlmOutput) -> Report:
+def llm_report(report_input: ReportInput, output: LlmOutput) -> Report:
     i = report_input
     by_id = evidence_catalog(i)
     lines = [move_headline(i), ""]
@@ -901,7 +901,7 @@ class ReportStage:
         self._record_accepted(report_input, result.accepted, now, sentence_no, round)
         causes = list(report.output.causes)
         causes[sentence_no - 1] = result.cause
-        return _llm_report(report_input, LlmOutput(tuple(causes), False))
+        return llm_report(report_input, LlmOutput(tuple(causes), False))
 
     def publish(self, report_input: ReportInput, report: Report, research_count: int = 0) -> None:
         """최종 결과를 job_run에 적고, 이 작업의 줄이 모두 저장됐을 때만 발행한다."""
