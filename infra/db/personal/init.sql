@@ -9,7 +9,7 @@
 --   writer    값을 넣고 고치는 계정(작업자 SQL, 나중에 CUD 기능). personal 전체를 읽고 쓴다.
 --   collector 수집기. 수집 대상 뷰(personal.collect_target)와 뉴스 검색 대상 뷰(market.news_search_target), market의 구성 종목 표(etf, stock, etf_stock_map)만 읽는다.
 --   notifier  발송기. 받는 사람을 고르려고 personal의 표를 읽는다(member_mail 포함).
---   briefing  브리핑 서비스(기존 계정). 데일리 판을 멤버마다 짜려고 멤버 번호·사용 여부·수신 설정·포트폴리오와 market.etf의 종목코드만 읽는다. 메일 주소 열(member_mail.email)은 읽지 못하고 personal에 쓰지도 못한다. 표 권한은 personal 마이그레이션이 준다.
+--   briefing  브리핑 서비스(기존 계정). 데일리 판을 멤버마다 짜려고 멤버 번호·사용 여부·수신 설정·포트폴리오와 market.etf의 종목코드, market.stock의 종목코드·이름만 읽는다. 메일 주소 열(member_mail.email)은 읽지 못하고 personal에 쓰지도 못한다. 표 권한은 personal 마이그레이션이 준다.
 --   news      뉴스 서비스(기존 계정). market의 구성 종목 표(etf, stock, etf_stock_map)만 읽는다. personal은 읽지 못한다.
 --   market    시세처리기(기존 계정). personal.active_portfolio 뷰만 읽는다(보유·관심 구분 계산). member, member_mail, member_portfolio는 읽지 못한다.
 \set ON_ERROR_STOP on
@@ -65,3 +65,5 @@ GRANT SELECT ON market.etf, market.stock, market.etf_stock_map TO :"news_user", 
 -- 브리핑은 멤버의 포트폴리오에서 ETF 종목코드를 찾으려고 market.etf의 id·시장·종목코드 열만 읽는다(이름·그 밖의 열은 읽지 못한다).
 GRANT USAGE ON SCHEMA market TO :"briefing_user";
 GRANT SELECT (id, market, symbol) ON market.etf TO :"briefing_user";
+-- 마감 후 판의 그날 급변동에 멤버 포트폴리오의 국내 주식을 이름과 함께 보이려고 market.stock의 id·시장·종목코드·이름 열만 읽는다.
+GRANT SELECT (id, market, symbol, name) ON market.stock TO :"briefing_user";

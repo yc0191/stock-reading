@@ -28,6 +28,7 @@ from briefing.member_store import SELECT_SQL, PostgresMemberStore
 from briefing.sources import CloseRate, Filing
 from fake_members import FakeMembers, member
 from fake_news import answer_news
+from test_daily_review import seed_move
 from test_daily_jobs import (
     POST_CLOSE_AT,
     POST_CLOSE_BACKGROUND,
@@ -152,15 +153,20 @@ class FakeConnection:
 
 def test_the_store_groups_rows_by_member_and_picks_the_receive_column_of_the_edition():
     log = []
-    rows = [(1, "TEST01", "HELD"), (1, "TEST02", "WATCH"), (3, "TEST02", "HELD")]
+    rows = [(1, "ETF", "TEST01", "HELD", None), (1, "ETF", "TEST02", "WATCH", None),
+            (1, "STOCK", "TSTK01", "HELD", "TEST 주식 하나"), (3, "ETF", "TEST02", "HELD", None),
+            (3, "STOCK", "TSTK02", "WATCH", None), (5, "STOCK", "TSTK01", "HELD", "TEST 주식 하나")]
     store = PostgresMemberStore(lambda: FakeConnection(rows, log))
-    assert store.daily_members("morning") == (MemberPortfolio(1, (("TEST01", "HELD"), ("TEST02", "WATCH"))),
-                                              MemberPortfolio(3, (("TEST02", "HELD"),)))
+    # 주식은 (코드, 이름)으로 그 멤버에게 붙고, 국내 ETF가 없는 멤버(5)는 지금처럼 받는 사람이 아니다.
+    assert store.daily_members("morning") == (
+        MemberPortfolio(1, (("TEST01", "HELD"), ("TEST02", "WATCH")), (("TSTK01", "TEST 주식 하나"),)),
+        MemberPortfolio(3, (("TEST02", "HELD"),), (("TSTK02", None),)))
     store.daily_members("post-close")
     assert "mail.receive_morning" in log[0] and "mail.receive_post_close" in log[1]
-    # 사용 중인 멤버·메일 줄만, 국내 ETF만 읽고 메일 주소 열은 읽지 않는다.
+    # 사용 중인 멤버·메일 줄만, 국내 ETF와 국내 주식만 읽고 메일 주소 열은 읽지 않는다.
     assert "m.enabled" in log[0] and "mail.enabled" in log[0] and "e.market = 'KR'" in log[0]
-    assert "SELECT m.id, e.symbol, p.relation" in SELECT_SQL
+    assert "s.market = 'KR'" in log[0] and log[0].count("mail.receive_morning") == 2
+    assert "SELECT m.id, 'ETF' AS kind, e.symbol, p.relation" in SELECT_SQL and "email" not in SELECT_SQL
     with pytest.raises(ValueError):
         store.daily_members("noon")
 
@@ -183,8 +189,8 @@ def three_etfs():
             etf_v2_missing("TEST04", name="TEST 넷")]
 
 
-def run_post_close(members, monkeypatch=None, settings=None):
-    requests, details = Requests(), Details()
+def run_post_close(members, monkeypatch=None, settings=None, details=None):
+    requests, details = Requests(), details if details is not None else Details()
     settings = settings or DailySettings()
     llm = FakeLlm(post_close_output(symbols=("TEST01", "TEST02", "TEST03"), reasons=REASONS))
     core = DailyCore(requests, DailyLlmWriter(llm, settings.llm_max_attempts), details, settings,
@@ -251,6 +257,30 @@ def test_the_job_log_says_which_member_each_board_was_for_and_the_run_keeps_one_
     assert result.status == RunStatus.SUCCEEDED and result.result_event_id == events[0].value["eventId"]
     # 작업 기록의 본문은 멤버를 가르지 않은 전체 글이다.
     assert "TEST 하나" in result.final_text and "TEST 셋" in result.final_text and "[보유]" not in result.final_text
+
+
+def moves_of(payload):
+    return payload["text"].split("■ 그날 급변동")[1].split("투자 조언")[0]
+
+
+def test_a_move_of_a_korean_stock_in_the_members_portfolio_is_listed_with_its_name_for_that_member_only():
+    # 그날 급변동이 포트폴리오의 국내 주식에만 있었던 날(#65): 그 주식을 담은 멤버의 목록에 이름과 함께 나오고,
+    # 담지 않은 멤버의 목록에는 나오지 않는다. ETF 급변동도 그 ETF를 담은 멤버에게만 나온다.
+    details = Details()
+    seed_move(details, "TSTK01", datetime(2026, 10, 20, 10, 15, tzinfo=KST), 3.2, True, "TEST-MOVE-S1")
+    seed_move(details, "TSTK02", datetime(2026, 10, 20, 11, 0, tzinfo=KST), -2.4, True, "TEST-MOVE-S2")
+    seed_move(details, "TEST02", datetime(2026, 10, 20, 13, 20, tzinfo=KST), 1.9, True, "TEST-MOVE-E2")
+    members = (member(1, held=("TEST01",), stocks=(("TSTK01", "TEST 주식 하나"),)),
+               member(2, held=("TEST02",), stocks=(("TSTK02", None),)))
+    events, _, _ = run_post_close(members, details=details)
+    by_member = {e.value["payload"]["memberId"]: e.value["payload"] for e in events}
+    one, two = moves_of(by_member[1]), moves_of(by_member[2])
+    assert "  - 10:15 TEST 주식 하나(TSTK01) +3.20% · 리포트 성공" in one
+    assert "TSTK02" not in one and "TEST02" not in one and "  - 없음" not in one
+    # 이름을 모르는 주식은 코드만 보인다.
+    assert "  - 11:00 TSTK02 −2.40% · 리포트 성공" in two and "  - 13:20 TEST 둘(TEST02) +1.90%" in two
+    assert "TSTK01" not in two
+    assert "TEST 주식 하나(TSTK01)" in by_member[1]["html"] and "TSTK01" not in by_member[2]["html"]
 
 
 def test_a_member_whose_etfs_are_not_in_the_response_still_gets_a_board_saying_so():
