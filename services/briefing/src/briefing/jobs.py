@@ -102,6 +102,8 @@ class ReportInput:
     # market.move를 감지한 시각(봉투의 occurredAt)과 감지 유형. 머리말의 "몇 분 사이"에 쓴다. 이전 형식에는 없을 수 있다.
     detected_at: datetime | None = None
     detection_type: str | None = None
+    # 감지한 시세의 전일 종가 대비 오늘 등락률(%). 짧은 시간 변동을 시장의 하루 등락과 비교하고 첫 줄에 쓴다. 이전 형식에는 없다.
+    today_change_percent: float | None = None
     # 기사 요청에 마지막으로 쓴 순번. 재검색 기사 조회는 이 뒤 순번을 써서 늦게 온 이전 응답과 섞이지 않게 한다.
     news_seq: int = 0
     # 근거 부족으로 다시 검색해 받은 기사. 기존 기사와 따로 두고, 근거 번호·링크 규칙은 기사와 같다.
@@ -165,6 +167,7 @@ class _Job:
     created_at: datetime
     detected_at: datetime | None = None
     detection_type: str | None = None
+    today_change_percent: float | None = None
     phase: _Phase = _Phase.WAITING_COLLECTION
     early: _Early = _Early.PENDING
     # 시세·배경 자료·공시: 가장 최근에 보낸 요청의 순번과 보낸 시각
@@ -214,9 +217,19 @@ def parse_move(message: str | bytes, now: datetime) -> _Job:
             created_at=now,
             detected_at=parse_timestamp(move["occurredAt"]) if move.get("occurredAt") else None,
             detection_type=payload.get("detectionType"),
+            today_change_percent=_optional_float(payload.get("todayChangePercent")),
         )
     except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ValueError(f"malformed market.move event: {error!r}") from error
+
+
+def _optional_float(value: Any) -> float | None:
+    """선택 칸의 숫자. 칸이 없으면 None이고, 숫자가 아니면 형식 오류로 본다."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"not a number: {value!r}")
+    return float(value)
 
 
 @dataclass
@@ -679,7 +692,7 @@ class BriefingCore:
             tickers_truncated=context.tickers_truncated, close_rates=tuple(close_rates),
             filings=tuple(filings), filings_truncated=job.filings_truncated, background=tuple(background),
             etf=context.etf, name=context.name, detected_at=job.detected_at, detection_type=job.detection_type,
-            news_seq=job.news_seq)
+            today_change_percent=job.today_change_percent, news_seq=job.news_seq)
         _log_collection(report_input, _Excluded(
             articles=len(job.news_articles or ()) - len(articles),
             filings=len(job.filings_data) - len(filings),

@@ -162,7 +162,8 @@ def test_articles_exactly_at_both_ends_of_the_range_are_kept(start):
 
 def test_only_the_newest_five_articles_per_etf_are_kept_even_if_the_answer_has_more(start, caplog):
     c, requests, _, llm = start()
-    many = [article(f"a-{n}", f"TEST 기사 {n}", f"2026-10-20T{9 + n:02d}:00:00+09:00") for n in range(1, 8)]
+    # 제목이 서로 다른 사건이라 같은 사건으로 묶이지 않고 기사마다 한 칸씩 들어간다.
+    many = [article(f"a-{n}", f"TEST{n} 기사", f"2026-10-20T{9 + n:02d}:00:00+09:00") for n in range(1, 8)]
     with caplog.at_level(logging.INFO, logger="briefing.daily_jobs"):
         answer_news(c, requests, POST_CLOSE_AT, articles={"TEST01": many})
     assert [e["ref"] for e in item(llm, "ETF별 기사")["entries"]] == ["a-7", "a-6", "a-5", "a-4", "a-3"]

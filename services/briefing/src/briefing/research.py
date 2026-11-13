@@ -28,7 +28,7 @@ from briefing.events import (
 )
 from briefing.evidence import MARKET_WIDE
 from briefing.job_log import EntryType, JobLogEntry, JobLogPort
-from briefing.llm import LlmCallError, LlmClient, llm_config
+from briefing.llm import LlmCallError, LlmClient, LlmUsage, attempt_usage, llm_config, usage_record
 from briefing.ports import RequestPort
 from briefing.sources import Article, response_payload
 from briefing.trace import correlation_context
@@ -50,6 +50,8 @@ sentence는 보고서가 쓴 문장이고 shortfall은 그 문장에 어떤 자�
 - 검색어의 모든 낱말이 기사 제목이나 요약에 그대로 나와야 그 기사가 걸립니다. 낱말이 많을수록 거의 걸리지 않으므로 낱말을 늘리지 않습니다.
 - 미국 종목은 etf의 구성 종목에 name(한글 이름)이 있으면 그 한글 이름으로 검색어를 씁니다. 이름이 없을 때만 티커를 씁니다.
 - 추측한 주제를 쓰지 않고 입력 자료에 근거해 고릅니다(예: sentence와 shortfall에 나온 낱말, etf 정보, figures에서 크게 움직인 항목). 입력에 근거가 없으면 빈 목록을 냅니다.
+- sentence나 shortfall이 막연하면(예: "시장 불안", "투자 심리 위축") 그 막연한 낱말로 찾지 않고, 그 무렵 실제로 일어난 구체적 사건의 주체와 행위(누가·무엇을, 예: 회사 이름 + 실적 발표, 기관 이름 + 금리 결정)를 찾는 검색어를 씁니다. 주체와 행위는 입력 자료에 나온 것에서 고릅니다.
+- sentence가 이미 찾은 기사(foundArticleTitles)의 사건을 말하고 있으면 같은 기사를 다시 찾지 말고, 그 사건을 다룬 다른 기사(다른 수치, 관계자 발언, 후속 보도)를 더 모을 검색어를 씁니다(예: 그 사건의 주체 이름 + 전망, 주체 이름 + 발언).
 - 변동 시각 전후에 나왔을 만한 기사를 찾을 검색어를 고릅니다.
 - 검색어는 {max_queries}개 이하로, 서로 다르게 냅니다. 찾을 만한 검색어가 없으면 빈 목록을 냅니다.
 
@@ -186,7 +188,7 @@ def research_entry(target: ResearchTarget, stage: ResearchStep, reason: Research
             request: Mapping[str, Any] | None = None, received: tuple[Mapping[str, Any], ...] = (),
             awaited: Mapping[str, Any] | None = None, missing: tuple[str, ...] = (), excluded: int = 0,
             duplicates: int = 0, llm_input: str | None = None, raw_output: str | None = None,
-            rejection: str | None = None, extra: Mapping[str, Any] | None = None) -> JobLogEntry:
+            rejection: str | None = None, usage: Mapping[str, int] | None = None, extra: Mapping[str, Any] | None = None) -> JobLogEntry:
     """재검색 기록 한 줄. 요청 payload와 받은 응답 payload는 가공하지 않고 담는다. 검색어는 로그에 쓰지 않지만 여기에는 담는다."""
     data: dict[str, Any] = {
         "researchJobId": target.job_id,
@@ -194,7 +196,7 @@ def research_entry(target: ResearchTarget, stage: ResearchStep, reason: Research
         "missing": list(missing), "excluded": excluded, "duplicates": duplicates,
     }
     if llm_input is not None:
-        data["llm"] = {"input": llm_input, "rawOutput": raw_output, "rejectReason": rejection}
+        data["llm"] = {"input": llm_input, "rawOutput": raw_output, "rejectReason": rejection, "usage": usage}
     if extra:
         data.update(extra)
     return JobLogEntry(
@@ -216,6 +218,8 @@ class QueryAttempt:
     raw_output: str | None
     rejection: str | None
     error_type: str | None
+    # 응답을 받지 못한 호출 실패는 None이다.
+    usage: LlmUsage | None = None
 
 
 @dataclass(frozen=True)
@@ -240,13 +244,16 @@ class QueryWriter:
         attempts: list[QueryAttempt] = []
         for attempt in range(1, self.max_attempts + 1):
             raw = None
+            usage: LlmUsage | None = None
             try:
-                raw = self.client.complete(system, user, schema)
+                reply = self.client.complete(system, user, schema)
+                raw, usage = reply.text, reply.usage
                 queries = parse_queries(raw, self.max_queries)
             except (LlmCallError, InvalidQueries) as error:
-                attempts.append(QueryAttempt(attempt, user, raw, str(error), type(error).__name__))
+                attempts.append(QueryAttempt(attempt, user, raw, str(error), type(error).__name__,
+                                              attempt_usage(usage, error)))
                 continue
-            attempts.append(QueryAttempt(attempt, user, raw, None, None))
+            attempts.append(QueryAttempt(attempt, user, raw, None, None, usage))
             return QueryResult(queries, tuple(attempts), gave_up=False)
         return QueryResult((), tuple(attempts), gave_up=True)
 
@@ -285,7 +292,8 @@ def ask_queries(writer: QueryWriter, job_log: JobLogPort, target: ResearchTarget
 def _query_record(target: ResearchTarget, attempt: QueryAttempt, now: datetime,
                   reason: ResearchReason) -> JobLogEntry:
     return research_entry(target, ResearchStep.QUERY, reason, now, attempt.attempt, error_type=attempt.error_type,
-                   llm_input=attempt.llm_input, raw_output=attempt.raw_output, rejection=attempt.rejection)
+                   llm_input=attempt.llm_input, raw_output=attempt.raw_output, rejection=attempt.rejection,
+                   usage=usage_record(attempt.usage))
 
 
 # ---- 재검색 요청·대기·기사 조회 ----

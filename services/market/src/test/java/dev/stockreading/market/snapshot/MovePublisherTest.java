@@ -87,6 +87,27 @@ class MovePublisherTest {
         assertThat(payload.asOf()).isEqualTo("2026-10-20T09:30:00+09:00");
     }
 
+    @Test
+    void eventCarriesTodayChangeWhenTheDetectionHasIt() throws IOException {
+        OffsetDateTime startedAt = OffsetDateTime.parse("2026-10-20T15:59:00+09:00");
+        Detection detection = new Detection(DetectionType.WINDOW, 12_000, 12_120, new BigDecimal("1.00"),
+                new BigDecimal("1.00"), startedAt, new BigDecimal("-2.00"));
+        publisher.publish("TEST04", detection, startedAt, AS_OF, "corr-1");
+
+        assertThat(publishedPayload("TEST04").todayChangePercent()).isEqualByComparingTo("-2.00");
+    }
+
+    @Test
+    void eventLeavesTodayChangeOutWhenTheDetectionHasNone() throws IOException {
+        OffsetDateTime startedAt = OffsetDateTime.parse("2026-10-20T15:59:00+09:00");
+        publisher.publish("TEST05", detection(DetectionType.WINDOW, 10_000, 10_150, "1.50", startedAt), startedAt, AS_OF, "corr-1");
+
+        ArgumentCaptor<String> json = ArgumentCaptor.forClass(String.class);
+        verify(kafka).send(eq("market.move"), eq("TEST05"), json.capture());
+        assertThat(ContractSchemas.validate("market.move.v1.schema.json", json.getValue())).isEmpty();
+        assertThat(json.getValue()).doesNotContain("todayChangePercent");
+    }
+
     private MovePayload publishedPayload(String symbol) throws IOException {
         ArgumentCaptor<String> json = ArgumentCaptor.forClass(String.class);
         verify(kafka).send(eq("market.move"), eq(symbol), json.capture());

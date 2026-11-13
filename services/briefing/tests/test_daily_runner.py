@@ -317,3 +317,26 @@ def test_unreadable_status_fields_do_not_stop_the_evidence_lookup_from_getting_t
     message = type(message)("collection.completed", json.dumps(event))
     runner.handle_message(message)
     assert received == [message.value()] and status.saved == []
+
+
+def test_the_runner_puts_llm_bodies_through_the_final_check_with_the_writers_own_client(setup):
+    from briefing.daily_final_check import DailyFinalCheck
+    from briefing.move_final_check import MoveFinalCheck
+    from briefing.report import LlmWriter
+
+    make, _, store = setup
+    llm = FakeLlm()
+    runner, _, _ = make(DailyLlmWriter(llm))
+    final = runner.daily.final
+    assert isinstance(final.adapter, DailyFinalCheck) and final.client is llm and final.job_log is store
+    assert final.max_attempts == runner.daily_writer.max_attempts
+    # 급변동 작성기가 규칙 기반이면 LLM 본문이 없으므로 마지막 검사도 없다.
+    assert runner.research.final is None
+
+    move_llm = FakeLlm()
+    runner = main.BriefingRunner("localhost:9092", LlmWriter(move_llm), store, consumer_factory=FakeConsumer,
+                                 producer_factory=FakeProducer, declare_topics=lambda _: None)
+    runner.open()
+    final = runner.research.final
+    assert isinstance(final.adapter, MoveFinalCheck) and final.client is move_llm and final.max_attempts == 3
+    assert runner.daily.final is None

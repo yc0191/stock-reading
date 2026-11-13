@@ -28,6 +28,13 @@ class CoreSettings:
     # 배경 자료(환율·지수·시장종합·일봉)와 해외 등락률은 받은 시각이 이 기간보다 오래되면 없음으로 본다.
     background_window: timedelta = timedelta(days=4)
     max_background_bytes: int = 32 * 1024
+    # 급변동의 시장 비교에 쓴 지수(시장종합)를 변동 시각보다 이 시간 넘게 앞서 받았으면, 비교 문장에 그 받은 시각을 밝힌다.
+    # 비교는 그대로 하고, 오래된 값과 비교했다는 것만 드러낸다(#66).
+    market_stale_after: timedelta = timedelta(minutes=10)
+    # 짧은 시간 변동 메일의 'N분 새'에 쓸 수 있는 가장 큰 N. 시세처리기의 짧은 시간 변동 구간 길이(market.window-minutes)와
+    # 같은 값이어야 한다. 변동률은 그 구간 안의 값인데, 이어지는 변동을 다시 보낼 때는 변동 시각이 처음 시각에 고정돼
+    # 감지 시각과의 차이가 구간보다 커진다. 그때 큰 N을 쓰면 거짓이 되므로 분을 쓰지 않는다.
+    window_move_max_minutes: int = 5
     # 아침 판의 개장 시세 범위: 판 날짜의 장 시작 시각(한국 시간)부터 판 시각까지. 판이 늦게 시작해도 판 시각에서 이 길이보다
     # 멀리 거슬러 읽지 않는다. 판 시각 뒤에 받은 시세는 쓰지 않는다(상태형 자료).
     open_flow_start: time = time(9, 0)
@@ -56,6 +63,13 @@ class CoreSettings:
     # 정기 뉴스 수집을 기다리지 않고, 변동 시각 T 뒤 이 시간이 되면 ETF 이름과 비중 상위 구성 종목 이름으로 먼저 재검색한다.
     # 그 재검색 완료도 정기 수집 완료와 같이 '수집 완료'로 본다. 검색어 수는 max_research_queries를 쓴다.
     early_research_delay: timedelta = timedelta(minutes=5)
+    # 같은 사건 기사 묶기(급변동·데일리 LLM 입력 공통): 두 기사 제목의 낱말 겹침 비율(공통 낱말 수 / 두 제목 낱말 합집합 수)이
+    # 이 이상이고, 공통 낱말이 이 수 이상이며, 발행 시각 차이가 이 이내이면 같은 사건으로 본다. 묶음 안의 모든 기사 쌍이 맞아야 한다.
+    # 낱말은 제목 앞의 [속보] 같은 괄호 머리말을 떼고 글자·숫자로 자른 것 중 이 길이 이상만 센다.
+    article_group_min_overlap: float = 0.3
+    article_group_min_shared_words: int = 2
+    article_group_max_gap: timedelta = timedelta(hours=6)
+    article_group_min_word_length: int = 2
 
 
 @dataclass(frozen=True)

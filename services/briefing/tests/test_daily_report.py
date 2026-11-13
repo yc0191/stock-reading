@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from fake_anthropic import as_reply
 from briefing.config import DailySettings
 from briefing.daily_report import (
     DAILY_DISCLAIMER,
@@ -67,7 +68,9 @@ class FakeLlm:
         self.outputs = list(outputs)
         self.calls = 0
 
-    def complete(self, system, user, output_schema):
+    @as_reply
+    def complete(self, system, user, output_schema, addendum=""):
+        system = system + addendum
         self.calls += 1
         return self.outputs.pop(0)
 

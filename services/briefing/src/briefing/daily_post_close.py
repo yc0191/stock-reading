@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Callable
 
-from briefing.compose import KST
+from briefing.compose import KST, label_of
 from briefing.daily_report import (
     DAILY_DISCLAIMER,
     DAILY_INSUFFICIENT,
@@ -158,7 +158,7 @@ def _signed_percent(rate: Decimal) -> str:
 
 
 def move_line(move: MoveRun, names: dict[str, str]) -> str:
-    """급변동 한 건의 한 줄: 시각 · ETF · 등락 · 리포트 결과."""
+    """급변동 한 건의 한 줄: 시각 · ETF 또는 주식 · 등락 · 리포트 결과."""
     at = move.move_at.astimezone(KST)
     change = _signed_percent(Decimal(str(move.change_percent))) if move.change_percent is not None else NO_DATA
     if move.status == RunStatus.SUCCEEDED.value and move.failure_reason == REASON_MERGED_INTO_MORNING:
@@ -176,7 +176,8 @@ def _moves_lines(i: DailyInput) -> tuple[str, ...] | None:
         return (MOVES_NOT_READ,)
     if not i.review.moves:
         return (MOVES_NONE,)
-    names = {e.symbol: etf_name(e) for e in i.etfs or ()}
+    names = {symbol: label_of(symbol, name) for symbol, name in i.review.stock_names}
+    names.update({e.symbol: etf_name(e) for e in i.etfs or ()})
     cap = i.settings.max_move_lines
     lines = [move_line(m, names) for m in i.review.moves[:cap]]
     if len(i.review.moves) > cap:

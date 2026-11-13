@@ -38,9 +38,11 @@ class MovePublisher {
         Envelope<MovePayload> event = EventFactory.create(
                 clock, "market.move", observedAt, correlationId,
                 new MovePayload(symbol, detection.previousPrice(), detection.price(), detection.changePercent(),
-                        detection.thresholdPercent(), startedAt, detection.type().wire(), startedAt));
+                        detection.thresholdPercent(), startedAt, detection.type().wire(), startedAt,
+                        detection.todayChangePercent()));
         kafka.send(Topics.MARKET_MOVE, symbol, mapper.writeValueAsString(event));
-        log.info("{} {} move detected change={}% (threshold {}%) since {} corr={}",
-                symbol, detection.type().wire(), detection.changePercent(), detection.thresholdPercent(), startedAt, correlationId);
+        log.info("{} {} move detected change={}% today={}% (threshold {}%) since {} corr={}",
+                symbol, detection.type().wire(), detection.changePercent(), detection.todayChangePercent(),
+                detection.thresholdPercent(), startedAt, correlationId);
     }
 }

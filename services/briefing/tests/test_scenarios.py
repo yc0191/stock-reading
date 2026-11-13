@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from fake_anthropic import as_reply
 from briefing.config import CoreSettings
 from briefing.jobs import BriefingCore
 from briefing.ports import FailureReason
@@ -70,7 +71,9 @@ class FakeLlm:
         self.responses = list(responses)
         self.calls = []
 
-    def complete(self, system, user, output_schema):
+    @as_reply
+    def complete(self, system, user, output_schema, addendum=""):
+        system = system + addendum
         self.calls.append((system, user))
         return self.responses.pop(0)
 
@@ -708,10 +711,11 @@ def figure_ref(report_input, name):
 def test_meaning_sentence_cites_the_market_comparison_and_the_report_shows_the_article_link(core, rec):
     run_with_figures(core)
     ready = rec.readied[0]
-    vs_kospi = figure_ref(ready, "변동률 - 코스피종합 등락률")
+    # 샘플 변동은 짧은 시간 변동이라 오늘 등락률로 시장과 비교한다.
+    vs_kospi = figure_ref(ready, "오늘 등락률 - 코스피종합 등락률")
     llm_out = json.dumps({"causes": [{
         "title": "미국 종목 실적 공시", "detail": "미국 종목이 8-K 항목 2.02를 냈으며 어느 부분이 부진했는지는 자료에 없음.",
-        "refs": [ACCESSION, "a1"], "meaning": "변동률이 코스피종합 등락률보다 낮아 시장 전체보다 더 빠졌습니다.",
+        "refs": [ACCESSION, "a1"], "meaning": "오늘 등락률이 코스피종합 등락률보다 낮아 시장 전체보다 더 빠졌습니다.",
         "meaningRefs": [vs_kospi]}], "insufficientEvidence": False}, ensure_ascii=False)
     stage, published, _ = report_stage(LlmWriter(FakeLlm(llm_out)))
 
@@ -738,9 +742,9 @@ def test_rule_based_report_states_code_computed_comparisons_without_guessing_cau
     event = published.sent[0].value
     assert validate("briefing.generated.v1.schema.json", event) == []
     text = event["payload"]["text"]
-    # 변동률 -1.5, 코스피종합 -0.45 → 차이 -1.05%p
-    assert "변동률이 코스피종합 등락률보다 1.05%p 낮습니다 (차이 -1.05%p" in text
-    assert "변동률이 코스닥종합 등락률보다 1.80%p 낮습니다" in text
+    # 샘플 변동은 짧은 시간 변동이라 오늘 등락률 -2.1로 비교한다. 코스피종합 -0.45 → 차이 -1.65%p, 코스닥종합 0.30 → -2.40%p
+    assert "오늘 등락률이 코스피종합 등락률보다 1.65%p 낮습니다 (차이 -1.65%p" in text
+    assert "오늘 등락률이 코스닥종합 등락률보다 2.40%p 낮습니다" in text
     assert "담긴 미국 종목은 직전 정규장에서 0개 오르고 1개 내렸으며 0개는 보합이었고, 평균 등락률은 -1.25%" in text
     assert "https://news.example.com/a1" in text and "확인하지 못한 것:" in text
     assert "1. " not in text.split("근거 후보:")[0]  # 원인 묶음 없음

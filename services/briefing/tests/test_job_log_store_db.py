@@ -61,7 +61,7 @@ def entry(job_id, entry_type=EntryType.RESENT, data=None, **changes):
     return JobLogEntry(**values)
 
 
-def test_flyway_created_the_briefing_tables_and_recorded_versions_1_to_3(store, connect):
+def test_flyway_created_the_briefing_tables_and_recorded_versions_1_to_4(store, connect):
     rows = fetch(connect, "SELECT table_name FROM information_schema.tables WHERE table_schema = 'briefing' "
                           "AND table_name IN ('job_run', 'job_log', 'collection_completed', 'failed_jobs', "
                           "'market_closed_edition') ORDER BY table_name")
@@ -69,7 +69,7 @@ def test_flyway_created_the_briefing_tables_and_recorded_versions_1_to_3(store, 
                              "ORDER BY installed_rank")
 
     assert rows == [("collection_completed",), ("job_log",), ("job_run",), ("market_closed_edition",)]
-    assert applied == [("1", True), ("2", True), ("3", True)]
+    assert applied == [("1", True), ("2", True), ("3", True), ("4", True)]
 
 
 def test_job_run_line_is_made_running_and_updated_when_the_job_ends(store, connect):
@@ -229,6 +229,29 @@ def test_a_member_briefing_line_says_which_member_the_board_was_for(store, conne
         connect, f"SELECT entry_type, data::text FROM {LOG_TABLE} WHERE job_id = 'it-member-1'")
     assert entry_type == "member-briefing" and json.loads(stored) == data
 
+
+
+def test_final_check_and_sentence_fixed_lines_are_accepted_and_read_back(store, connect):
+    # V3가 기록 종류에 final-check와 sentence-fixed를 더했다. 고친 문장의 before·after가 그대로 남는다.
+    start(store, "it-final-1")
+    check = {"codeCheck": {"fixable": [], "weakOnly": [2]}, "review": {"problems": []}, "chosen": "original"}
+    assert store.record(entry("it-final-1", EntryType.FINAL_CHECK, stage="final-check", reason="no-problem",
+                              error_type=None, attempts=1, data=check)) is True
+    assert store.record(entry("it-final-1", EntryType.SENTENCE_FIXED, stage="final-check", reason="contradiction",
+                              error_type=None, attempts=1, sentence_no=4, round=1, before="고치기 전 문장 한글",
+                              after="검토로 고친 문장 한글", data={"problem": "모순"})) is True
+
+    rows = fetch(connect, f"SELECT entry_type, stage, reason, sentence_no, round, before, after, data::text "
+                          f"FROM {LOG_TABLE} WHERE job_id = 'it-final-1' ORDER BY id")
+
+    ((check_type, check_stage, check_reason, check_no, check_round, check_before, check_after, check_data),
+     (fixed_type, fixed_stage, fixed_reason, fixed_no, fixed_round, fixed_before, fixed_after, fixed_data)) = rows
+    assert (check_type, check_stage, check_reason, check_no, check_round, check_before, check_after) == (
+        "final-check", "final-check", "no-problem", None, None, None, None)
+    assert json.loads(check_data) == check
+    assert (fixed_type, fixed_stage, fixed_reason, fixed_no, fixed_round, fixed_before, fixed_after) == (
+        "sentence-fixed", "final-check", "contradiction", 4, 1, "고치기 전 문장 한글", "검토로 고친 문장 한글")
+    assert json.loads(fixed_data) == {"problem": "모순"}
 
 # ---- 마감 후 판이 읽는 그날 아침 예상과 급변동 ----
 

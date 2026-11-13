@@ -42,11 +42,13 @@ class MorningCall:
 
 @dataclass(frozen=True)
 class ReviewInput:
-    """마감 후 판이 작업 기록에서 읽은 값. calls가 비면 note가 대조를 뺀 이유이고, moves가 None이면 읽지 못한 것이다."""
+    """마감 후 판이 작업 기록에서 읽은 값. calls가 비면 note가 대조를 뺀 이유이고, moves가 None이면 읽지 못한 것이다.
+    stock_names는 그날 급변동 줄에 이름을 붙일 국내 주식 (종목코드, 이름)이다. 데일리 자료에 주식 이름이 없어 멤버 포트폴리오에서 받는다."""
 
     calls: tuple[MorningCall, ...]
     note: str | None
     moves: tuple[MoveRun, ...] | None
+    stock_names: tuple[tuple[str, str | None], ...] = ()
 
 
 @dataclass(frozen=True)

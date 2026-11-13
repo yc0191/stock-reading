@@ -8,7 +8,10 @@ from briefing.compose import KST
 from briefing.daily_start import SOURCE_LABELS, STATUS_COLLECTED, STATUS_MARKET_CLOSED
 from briefing.events import (EDITION_MORNING, EDITION_POST_CLOSE, EDITIONS, RESEARCH_JOB_KINDS,
                              daily_briefing_event, research_request_event)
+from briefing.jobs import parse_move
 from contracts import CONTRACTS_DIR, sample, validate
+
+NOW = datetime(2026, 10, 20, 16, 1, 0, tzinfo=KST)
 
 
 def test_committed_move_sample_matches_its_schema():
@@ -57,6 +60,26 @@ def test_move_sample_carries_detection_fields_and_older_form_still_valid():
     del older["payload"]["detectionType"]
     del older["payload"]["moveStartedAt"]
     assert validate("market.move.v1.schema.json", older) == []
+
+
+def test_move_sample_carries_today_change_and_moves_without_it_are_still_read():
+    current = sample("market.move.sample.json")
+    assert isinstance(current["payload"]["todayChangePercent"], float)
+    assert parse_move(json.dumps(current), NOW).today_change_percent == current["payload"]["todayChangePercent"]
+
+    older = sample("market.move.sample.json")
+    del older["payload"]["todayChangePercent"]
+    assert validate("market.move.v1.schema.json", older) == []
+    assert parse_move(json.dumps(older), NOW).today_change_percent is None
+
+
+def test_move_with_a_non_numeric_today_change_is_rejected():
+    broken = sample("market.move.sample.json")
+    broken["payload"]["todayChangePercent"] = "-2.10"
+
+    assert validate("market.move.v1.schema.json", broken) != []
+    with pytest.raises(ValueError):
+        parse_move(json.dumps(broken), NOW)
 
 
 def test_move_with_unknown_detection_type_is_rejected():
