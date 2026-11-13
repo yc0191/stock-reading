@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping, Protocol
 
+from briefing.article_groups import RESEARCH_MARK, ArticleRow, GroupedArticles, group_article_lists
 from briefing.config import DEFAULT_SETTINGS, CoreSettings
 from briefing.compose import DISCLAIMER, KST, NO_EVIDENCE, direction_of, headline
 from briefing.events import BRIEFING_GENERATED_TOPIC, OutboundEvent, format_timestamp
@@ -108,6 +109,7 @@ SYSTEM_PROMPT = """당신은 ETF 가격 변동과 같은 시기에 공개된 자
 입력은 JSON이며 종목 코드, 변동 방향과 변동률, 변동 시각, 시세 이력, 기사, 미국 공시, 미국 종목 직전 정규장 등락률, 배경 자료, 숫자 항목(figures)을 담고 있습니다.
 근거로 쓸 수 있는 자료에는 ref(근거 번호)가 붙어 있습니다.
 - researchArticles는 근거가 부족해 다시 검색해 찾은 기사이며(있을 때만 담깁니다) 기사와 같은 방식으로 읽고 인용합니다.
+- articles·researchArticles의 한 칸이 sameEventArticles이면 제목 낱말과 발행 시각이 가까워 코드가 같은 사건을 다룬 기사로 묶은 것입니다. 묶음 안의 기사도 저마다 ref가 있어 그 ref로 인용하며, 묶음 자체에는 근거 번호가 없습니다. 묶음 안에서 research가 true인 기사는 다시 검색해 찾은 기사입니다. 묶이지 않은 기사는 한 칸에 하나씩 들어 있습니다.
 - 기사의 minutesFromMove는 기사 발행 시각과 변동 시각의 차이(분)이며, 음수는 변동 전, 양수는 변동 후에 나온 기사입니다.
 - 공시의 hoursBeforeMove는 공시 접수 시각이 변동보다 몇 시간 전인지입니다. 공시는 형식과 항목 번호만 있고 본문은 없습니다.
 - 해외 등락률은 변동 종목에 담긴 미국 종목의 직전 정규장 등락률(%)이며 hoursBeforeMove는 그 장 마감이 변동보다 몇 시간 전인지입니다.
@@ -121,10 +123,13 @@ SYSTEM_PROMPT = """당신은 ETF 가격 변동과 같은 시기에 공개된 자
 - 원인 후보마다 묶음 하나를 씁니다. title은 원인을 짧게 이름 붙인 제목입니다(예: "미국 반도체 종목 실적 부진").
 - detail은 무엇이 어땠는지 구체적으로 쓴 문장입니다. 기사 제목·요약과 공시(형식·항목)에 실제로 있는 내용만 씁니다. 어느 회사·어느 부분인지 같은 세부가 자료에 없으면 지어내지 않고 그 부분은 "자료에 없음"이라고 씁니다.
 - meaning은 그 원인과 관련된 숫자가 무슨 뜻인지 쓴 문장입니다. figures의 비교 숫자나 해외 등락률·세계지수 등락률을 ref로 인용해, 예를 들어 "변동률이 코스피종합 등락률보다 1.05%p 낮아 시장 전체보다 더 빠졌다"처럼 씁니다. 숫자는 입력에 있는 값을 그대로 옮기고, 맞는 숫자가 없으면 그 원인의 근거 자료가 무엇을 보여 주는지 씁니다.
+- 같은 사건 묶음은 한 기사만 보지 말고 묶음 안 기사들의 제목·요약을 함께 읽어, 여러 기사에 나뉘어 나온 사실(누가, 무엇을, 수치, 발언)을 모아 한 원인으로 씁니다. 내용을 가져온 기사의 ref는 모두 refs에 넣습니다.
 - refs에는 detail의 근거가 된 자료의 ref를, meaningRefs에는 meaning의 근거가 된 자료의 ref를 하나 이상씩 넣습니다. 입력에 없는 ref는 쓰지 않습니다.
 
 규칙:
 - 원인을 단정하지 않습니다. "~때문에 올랐다"가 아니라 "~가 영향을 줬을 수 있다"처럼 씁니다.
+- 기사끼리 수치나 해석이 다르면 어느 쪽이 맞다고 단정하지 않고 양쪽을 모두 씁니다. 수치는 "보도에 따라 2천억~3천억 원으로 엇갈립니다"처럼 범위로 쓰고, 해석이 갈리면 "...를 이유로 드는 보도와 ...를 우려하는 보도가 함께 나왔습니다"처럼 씁니다. 양쪽 기사의 ref를 모두 refs(또는 meaningRefs)에 넣어 코드가 문장 끝에 두 근거 번호를 함께 보이게 합니다.
+- 문장 안에 근거 번호나 ref·articleId 값을 직접 쓰지 않습니다. 근거 번호는 코드가 refs로 문장 끝에 붙입니다.
 - 배경 자료는 변동 당시의 상태를 보여 줄 뿐입니다. 배경 자료를 변동의 원인으로 단정하지 않고, 기사·공시와 함께 상황을 설명하는 데에만 씁니다.
 - 원인마다 weak(근거 약함 여부)와 shortfall(부족한 점)을 냅니다. 그 원인을 뒷받침하는 자료가 약하면(시각이 맞지 않거나, 간접 정보뿐이거나, 세부가 자료에 없으면) weak를 true로 하고 shortfall에 어떤 자료가 더 있어야 하는지 한 문장으로 씁니다. 근거가 충분하면 weak를 false로, shortfall을 빈 문자열로 둡니다. shortfall은 찾아야 할 자료를 말할 뿐 원인을 단정하지 않습니다.
 - 제목·문장·부족한 점에 미국 종목의 티커(ticker, tickers, members의 symbol 중 미국 종목의 값)를 쓰지 않습니다. 개별 종목을 말해야 하면 회사 이름이나 "미국 종목"이라고 씁니다.
@@ -509,11 +514,15 @@ def _at(value: datetime) -> str:
     return format_timestamp(value.astimezone(KST))
 
 
-def build_llm_input(report_input: ReportInput, settings: CoreSettings = DEFAULT_SETTINGS) -> dict[str, Any]:
+def build_llm_input(report_input: ReportInput, settings: CoreSettings = DEFAULT_SETTINGS, *,
+                    group: bool = True) -> dict[str, Any]:
     """LLM에게 줄 공개 정보만 고른다. 보유 수량·금액 같은 개인 정보는 ReportInput에도 없고 여기서도 넣지 않는다."""
     i = report_input
     us = bool(i.tickers)
     rated = {r.ticker for r in i.close_rates}
+    # 검색어 입력처럼 기사 칸을 쓰지 않는 곳은 group=False로 묶기를 건너뛴다.
+    articles, research_articles = article_groups(i, settings).lists if group else (
+        [_article_input(a, i.as_of) for a in i.articles], [_article_input(a, i.as_of) for a in i.research_articles])
     data: dict[str, Any] = {
         "symbol": i.symbol,
         "direction": direction_of(i.change_percent),
@@ -522,7 +531,7 @@ def build_llm_input(report_input: ReportInput, settings: CoreSettings = DEFAULT_
         "priceHistoryStatus": _status(len(i.price_points), i.history_truncated),
         "priceHistory": [{"at": _at(p.as_of), "price": p.price} for p in i.price_points],
         "articlesStatus": _status(len(i.articles), i.articles_truncated),
-        "articles": [_article_input(a, i.as_of) for a in i.articles],
+        "articles": articles,
         "filingsStatus": _status(len(i.filings), i.filings_truncated, us),
         "filings": [
             {
@@ -560,8 +569,17 @@ def build_llm_input(report_input: ReportInput, settings: CoreSettings = DEFAULT_
     # 재검색 기사는 다시 쓸 때만 있다. 첫 작성의 입력 모양은 바꾸지 않는다.
     if i.research_articles:
         data["researchArticlesStatus"] = _status(len(i.research_articles), i.research_articles_truncated)
-        data["researchArticles"] = [_article_input(a, i.as_of) for a in i.research_articles]
+        data["researchArticles"] = research_articles
     return data
+
+
+def article_groups(report_input: ReportInput, settings: CoreSettings = DEFAULT_SETTINGS) -> GroupedArticles:
+    """처음 모은 기사와 재검색 기사를 함께 같은 사건끼리 묶는다. 둘 다 이미 시간 범위로 거른 기사다."""
+    i = report_input
+    return group_article_lists(
+        [[ArticleRow(_article_input(a, i.as_of), a.title, a.published_at) for a in i.articles],
+         [ArticleRow(_article_input(a, i.as_of), a.title, a.published_at) for a in i.research_articles]],
+        settings, marks=({}, RESEARCH_MARK))
 
 
 def _article_input(a: Article, as_of: datetime) -> dict[str, Any]:
@@ -642,6 +660,7 @@ REWRITE_ADDENDUM = """
 - 입력의 rewrite 칸은 근거가 약하다고 한 원인 하나(sentence)와 그 부족한 점(shortfall)입니다. newRefs는 그 부족한 점을 채우려고 새로 찾아 researchArticles에 담은 기사의 ref입니다.
 - 그 원인 하나만 다시 씁니다. causes에는 다시 쓴 원인 하나만 담고 다른 원인은 쓰지 않으며, insufficientEvidence는 false로 둡니다.
 - 새 기사로 부족한 점이 채워지면 weak를 false로, 그래도 약하면 weak를 true로 하고 shortfall에 아직 부족한 점을 씁니다. 새 기사에 없는 내용은 지어내지 않습니다.
+- 새 기사가 같은 사건 묶음(sameEventArticles)에 들었으면 묶음의 다른 기사와 함께 읽어 종합하고, 기사끼리 수치·해석이 다르면 위의 규칙대로 양쪽을 쓰고 단정하지 않습니다.
 - 근거 번호·단정 금지·티커 금지 같은 위의 규칙은 그대로 지킵니다."""
 
 
@@ -667,8 +686,9 @@ class LlmWriter:
 
     def write(self, report_input: ReportInput) -> Report:
         user = json.dumps(build_llm_input(report_input, self.settings), ensure_ascii=False)
+        groups = article_groups(report_input, self.settings).record()
         allowed = frozenset(evidence_catalog(report_input))
-        tickers = _us_symbols_in_input(report_input)
+        tickers = us_symbols_in_input(report_input)
         reason = ""
         failed: list[LlmAttempt] = []
         for attempt in range(1, self.max_attempts + 1):
@@ -685,8 +705,8 @@ class LlmWriter:
                 log.warning("LLM report attempt %d/%d failed for job %s: %s",
                             attempt, self.max_attempts, report_input.job_id, reason)
                 continue
-            return replace(_llm_report(report_input, output), failed_attempts=tuple(failed),
-                           accepted=AcceptedAttempt(attempt, user, response, usage))
+            return replace(llm_report(report_input, output), failed_attempts=tuple(failed),
+                           accepted=AcceptedAttempt(attempt, user, response, usage, groups))
         raise ReportError(f"LLM report failed after {self.max_attempts} attempts: {reason}", self.max_attempts,
                           tuple(failed))
 
@@ -702,8 +722,9 @@ def _rewrite_cause(writer: LlmWriter, report_input: ReportInput, current: Cause,
     data["rewrite"] = {"sentenceNo": no, "sentence": _cause_input(current), "shortfall": current.shortfall,
                        "newRefs": list(new_refs)}
     user = json.dumps(data, ensure_ascii=False)
+    groups = article_groups(report_input, writer.settings).record()
     allowed = frozenset(evidence_catalog(report_input))
-    tickers = _us_symbols_in_input(report_input)
+    tickers = us_symbols_in_input(report_input)
     failed: list[LlmAttempt] = []
     for attempt in range(1, writer.max_attempts + 1):
         response: str | None = None
@@ -720,17 +741,18 @@ def _rewrite_cause(writer: LlmWriter, report_input: ReportInput, current: Cause,
             log.warning("LLM sentence rewrite attempt %d/%d failed for job %s: %s",
                         attempt, writer.max_attempts, report_input.job_id, error)
             continue
-        return SentenceRewrite(output.causes[0], tuple(failed), AcceptedAttempt(attempt, user, response, usage))
+        return SentenceRewrite(output.causes[0], tuple(failed),
+                               AcceptedAttempt(attempt, user, response, usage, groups))
     return SentenceRewrite(None, tuple(failed))
 
 
-def _us_symbols_in_input(i: ReportInput) -> frozenset[str]:
+def us_symbols_in_input(i: ReportInput) -> frozenset[str]:
     """LLM 입력에 있던 미국 티커. 문장에 쓰면 거부한다."""
     return frozenset(i.tickers) | frozenset(r.ticker for r in i.close_rates) \
         | frozenset(t for f in i.filings for t in f.tickers) | (i.etf.us_tickers() if i.etf else frozenset())
 
 
-def _llm_report(report_input: ReportInput, output: LlmOutput) -> Report:
+def llm_report(report_input: ReportInput, output: LlmOutput) -> Report:
     i = report_input
     by_id = evidence_catalog(i)
     lines = [move_headline(i), ""]
@@ -879,7 +901,7 @@ class ReportStage:
         self._record_accepted(report_input, result.accepted, now, sentence_no, round)
         causes = list(report.output.causes)
         causes[sentence_no - 1] = result.cause
-        return _llm_report(report_input, LlmOutput(tuple(causes), False))
+        return llm_report(report_input, LlmOutput(tuple(causes), False))
 
     def publish(self, report_input: ReportInput, report: Report, research_count: int = 0) -> None:
         """최종 결과를 job_run에 적고, 이 작업의 줄이 모두 저장됐을 때만 발행한다."""
@@ -925,7 +947,7 @@ class ReportStage:
                          sentence_no: int | None = None, round: int | None = None) -> None:
         self._record(report_input, EntryType.REPORT_WRITTEN, REASON_LLM_ACCEPTED, None, a.attempt, now,
                      {"attempt": a.attempt, "llmInput": a.llm_input, "llmResponse": a.response, "rejection": None,
-                      "usage": usage_record(a.usage)},
+                      "usage": usage_record(a.usage), "articleGroups": a.article_groups},
                      sentence_no=sentence_no, round=round)
 
     def _record(self, report_input: ReportInput, entry_type: EntryType, reason: str, error_type: str | None,

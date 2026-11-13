@@ -50,6 +50,8 @@ class AcceptedAttempt:
     llm_input: str
     response: str
     usage: LlmUsage | None = None
+    # 입력에 넣은 같은 사건 기사 묶음 수(article_groups.GroupedArticles.record). 기사를 넣지 않는 호출은 None.
+    article_groups: dict[str, int] | None = None
 
 
 class LlmCallError(Exception):

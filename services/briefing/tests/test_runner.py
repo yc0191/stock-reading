@@ -9,6 +9,7 @@ import pytest
 from fake_anthropic import as_reply
 from briefing import main
 from briefing.config import CoreSettings
+from briefing.job_log import EntryType
 from briefing.ports import FailureReason
 from fake_job_log import FakeJobLog
 from briefing.report import GENERATED_BY_LLM, LlmWriter, Report, ReportError, RuleBasedWriter
@@ -494,7 +495,9 @@ def test_insufficient_evidence_flows_through_research_request_completion_and_rew
     report_llm = FakeLlm(json.dumps({"causes": [], "insufficientEvidence": True}),
                          json.dumps({"causes": [{"title": "다시 찾은 기사", "detail": "다시 찾은 기사가 영향을 줬을 수 있습니다.",
                                                  "refs": ["r1"], "meaning": "다시 찾은 기사가 영향을 줬을 수 있습니다.",
-                                                 "meaningRefs": ["r1"]}], "insufficientEvidence": False}))
+                                                 "meaningRefs": ["r1"]}], "insufficientEvidence": False}),
+                         # 다시 쓴 본문이라 발행 직전 마지막 검사가 메일 전체를 검토한다(문제 없음).
+                         json.dumps({"problems": []}))
     query_llm = FakeLlm(json.dumps({"queries": ["가짜검색어"]}))
     runner, consumer, producer = make(LlmWriter(report_llm), query_writer=QueryWriter(query_llm))
 
@@ -523,7 +526,8 @@ def test_insufficient_evidence_flows_through_research_request_completion_and_rew
 
     (_, event), = sent(producer, "briefing.generated")
     assert [e["articleId"] for e in event["payload"]["evidence"]] == ["r1"]
-    assert report_llm.calls == 2 and query_llm.calls == 1
+    assert report_llm.calls == 3 and query_llm.calls == 1
+    assert [e.reason for e in store.of_type(EntryType.FINAL_CHECK)] == ["code-checked", "reviewed", "body-chosen"]
     assert store.failures == []
     assert len(runner.core._completions) == 1  # 재검색 완료는 정기 수집 완료 목록에 쌓이지 않는다
 
@@ -575,6 +579,9 @@ class SlowRewriteLlm:
         self.calls += 1
         if self.calls == 1:
             return weak_report()
+        if "mail" in json.loads(user):
+            # 다시 쓴 문장이 있어 발행 직전 마지막 검사가 메일 전체를 검토한다(문제 없음).
+            return json.dumps({"problems": []})
         self.clock.advance(seconds=SLOW_REWRITE.total_seconds())
         rewrite = json.loads(user)["rewrite"]
         no, ref = rewrite["sentenceNo"], rewrite["newRefs"][0]

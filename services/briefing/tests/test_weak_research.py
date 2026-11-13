@@ -556,7 +556,8 @@ class DailyFlow:
     def rid(self, no, round_no=1):
         return research_job_id(TICK_ID, no, round_no)
 
-    def to_first_report(self):
+    def to_first_report(self, articles=None):
+        """articles: 종목코드별 ETF 기사 dict 목록(없으면 0건)."""
         self.core.on_schedule_tick(tick(self.job_type, self.at), self.now, self.edition)
         etfs, background, close_rates = self.etfs, None, None
         if self.edition == "post-close":
@@ -574,7 +575,7 @@ class DailyFlow:
             daily_response(etfs=etfs, background=background, close_rates=close_rates), self.now)
         # 두 판 모두 ETF별 기사를 받아야 나가고, 아침 판은 미국 종목이 있으면 공시도 받는다.
         filings = json.loads(filings_response())["payload"]["filings"] if self.edition == "morning" else None
-        answer_news(self.core, self.requests, self.now, filings=filings)
+        answer_news(self.core, self.requests, self.now, articles=articles, filings=filings)
 
     def news(self, seq, items, research_id):
         return envelope("news.articles.responded", {
