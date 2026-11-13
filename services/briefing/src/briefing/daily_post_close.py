@@ -24,6 +24,7 @@ from briefing.daily_report import (
     Section,
     etf_line,
     conclusion,
+    fallback_note,
     etf_groups,
     etf_name,
     headline,
@@ -224,8 +225,10 @@ def post_close_view(i: DailyInput, sections: tuple[Section, ...], output: DailyO
             review_rows.append(ReviewRow(f"{name} 아침 예상 {r.call.direction} → {NOT_COMPARED}", None, (), None))
             continue
         p = review_reasons.get(r.symbol)
+        note = fallback_note(etf_by_symbol[r.symbol])
+        actual = f"{_signed_percent(r.rate)} {note}" if note else _signed_percent(r.rate)
         review_rows.append(ReviewRow(
-            f"{name} 아침 예상 {r.call.direction} → 실제 {_signed_percent(r.rate)}: {r.verdict}",
+            f"{name} 아침 예상 {r.call.direction} → 실제 {actual}: {r.verdict}",
             p.statement if p else None, number(p.refs) if p else (), p.shortfall if p else None))
     return PostCloseView(
         output is not None, bool(output is not None and output.insufficient_evidence), market_line(i, sections),

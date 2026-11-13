@@ -28,7 +28,7 @@ import tools.jackson.databind.ObjectMapper;
 /**
  * 데일리 판(아침 판, 마감 후 판)의 시작 신호인 daily.collection.completed 를 발행한다. 자료는 모으지 않는다.
  * 아침 판은 개장 흐름 구간이 끝나는 시각(morning-cron)에 그날 장 시작 전 수집 결과를 담아 내고, 마감 후 판은 마감 후 수집이
- * 끝나는 즉시 CollectorJobs 가 부른다. 휴장일(시세 제공자의 장 운영 상태로 판정, 판정하지 못하면 영업일)에는 판 시각에
+ * 실패한 조회의 재시도까지 끝나는 즉시 CollectorJobs 가 부른다. 휴장일(시세 제공자의 장 운영 상태로 판정, 판정하지 못하면 영업일)에는 판 시각에
  * '휴장이라 수집 안 함'을 낸다. collector.daily-briefing.enabled 가 true 일 때만 빈이 만들어진다(기본 꺼짐).
  */
 @Component

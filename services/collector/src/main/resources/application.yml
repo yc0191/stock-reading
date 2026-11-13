@@ -93,6 +93,12 @@ collector:
       enabled: ${COLLECTOR_INSIGHT_SCHEDULE_ENABLED:false}
       # 한국 시간 기준 cron(초 분 시 일 월 요일)
       cron: ${COLLECTOR_INSIGHT_CRON:0 30 16 * * MON-FRI}
+    # 마감 후 조회에서 실패한 조회만 회차 시작 시각에서 간격의 배수 시각에 다시 부른다(기본 16:30 → 16:36·16:42·16:48).
+    # 재시도도 시세 호출 상한 장치를 거친다. 0 번이면 다시 부르지 않는다. 마감 후 판 시작 알림은 마지막 재시도가 끝난 뒤
+    # 한 번 나가므로 횟수 x 간격은 브리핑의 마감 후 판 한도 시각(17:30)까지 남은 시간보다 짧아야 한다.
+    retry:
+      max-attempts: ${COLLECTOR_INSIGHT_RETRY_MAX_ATTEMPTS:3}
+      interval: ${COLLECTOR_INSIGHT_RETRY_INTERVAL:6m}
     # 일봉 조회의 시장구분과 조회 건수
     daily-market-class: "0"
     daily-count: 30
@@ -105,7 +111,7 @@ collector:
   daily-briefing:
     # 꺼 두면 데일리 판 시작 알림(daily.collection.completed)을 발행하지 않는다. 브리핑의 한도 시각 안전장치도 같은 환경변수로 켠다.
     # 아침 판: 장 시작 전 수집 결과(못 받은 자료 목록)를 담아 개장 흐름 구간이 끝나는 이 시각에 낸다.
-    # 마감 후 판: 마감 후 수집(타이머 또는 수동 실행 명령)이 끝나는 즉시 낸다. 아래 post-close-cron 은 휴장 알림 시각이다.
+    # 마감 후 판: 마감 후 수집(타이머 또는 수동 실행 명령)이 실패한 조회의 재시도까지 끝나는 즉시 한 번 낸다. 아래 post-close-cron 은 휴장 알림 시각이다.
     # 휴장일(시세 제공자의 장 운영 상태로 판정, 판정하지 못하면 영업일로 본다)에는 두 판 시각에 '휴장이라 수집 안 함'을 낸다.
     enabled: ${COLLECTOR_DAILY_BRIEFING_ENABLED:false}
     # 한국 시간 기준 cron(초 분 시 일 월 요일). 한 판만 끄려면 그 판의 값을 "-" 로 준다.

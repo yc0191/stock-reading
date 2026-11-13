@@ -13,6 +13,7 @@
     "maxResponseBytes": 32768,
     "maxEtfs": 50,
     "maxTickers": 100,
-    "includeOperations": true
+    "includeOperations": true,
+    "includeIntradayFallback": true
   }
 }

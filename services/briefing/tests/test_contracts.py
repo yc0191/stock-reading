@@ -624,7 +624,7 @@ DAILY_DATA_CONTRACTS = [
 
 
 # 요청 샘플에 있어도 없는 요청이 유효해야 하는 선택 칸.
-OPTIONAL_DAILY_REQUEST_FIELDS = {"includeOperations"}
+OPTIONAL_DAILY_REQUEST_FIELDS = {"includeOperations", "includeIntradayFallback"}
 
 
 @pytest.mark.parametrize("schema_file, sample_file", DAILY_DATA_CONTRACTS)
@@ -855,7 +855,30 @@ def test_daily_responded_v2_sample_matches_its_schema_and_has_a_missing_etf():
     assert validate(DAILY_V2, event) == []
     assert event["schemaVersion"] == 2
     empty = [e for e in event["payload"]["etfs"] if e["missingReason"] is not None]
-    assert empty and all(e["rate"] is None and e["fetchedAt"] is None for e in empty)
+    plain = [e for e in empty if "intradayFallback" not in e]
+    assert plain and all(e["rate"] is None and e["fetchedAt"] is None for e in plain)
+    # 일봉이 없어도 장중 시세 대체값이 있으면 등락률만 차고 일봉 값(일자·종가·받은 시각)은 비어 있다.
+    fallback = [e for e in empty if "intradayFallback" in e]
+    assert fallback and all(e["rate"] is not None and e["fetchedAt"] is None and e["date"] is None for e in fallback)
+
+
+def test_daily_responded_v2_intraday_fallback_needs_its_rate_and_no_daily_cells():
+    event = daily_v2()
+    assert validate(DAILY_V2, event) == []
+
+    def broken(change):
+        bad = daily_v2()
+        change(next(e for e in bad["payload"]["etfs"] if "intradayFallback" in e))
+        return bad
+
+    assert validate(DAILY_V2, broken(lambda e: e.update(rate=None))) != []
+    assert validate(DAILY_V2, broken(lambda e: e.update(date="20261020"))) != []
+    assert validate(DAILY_V2, broken(lambda e: e["intradayFallback"].update(receivedAt="15:29"))) != []
+    assert validate(DAILY_V2, broken(lambda e: e["intradayFallback"].pop("price"))) != []
+    # 일봉이 있는 ETF에는 대체값 칸이 붙지 않는다.
+    on_daily = daily_v2()
+    on_daily["payload"]["etfs"][0]["intradayFallback"] = {"price": "9850", "receivedAt": "2026-10-20T15:29:58+09:00"}
+    assert validate(DAILY_V2, on_daily) != []
 
 
 def test_daily_responded_v2_member_changes_match_the_schema_and_a_broken_one_is_rejected():
@@ -910,6 +933,16 @@ def test_daily_request_operations_flag_is_optional_and_must_be_boolean():
     assert validate("market.daily.requested.v1.schema.json", request) == []
 
     request["payload"]["includeOperations"] = "yes"
+    assert validate("market.daily.requested.v1.schema.json", request) != []
+
+
+def test_daily_request_intraday_fallback_flag_is_optional_and_must_be_boolean():
+    request = sample("market.daily.requested.sample.json")
+    assert request["payload"]["includeIntradayFallback"] is True
+    del request["payload"]["includeIntradayFallback"]
+    assert validate("market.daily.requested.v1.schema.json", request) == []
+
+    request["payload"]["includeIntradayFallback"] = "yes"
     assert validate("market.daily.requested.v1.schema.json", request) != []
 
 

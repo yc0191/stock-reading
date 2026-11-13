@@ -44,6 +44,19 @@ class DailyContractTest {
         assertThat(request.maxEtfs()).isEqualTo(50);
         assertThat(request.maxTickers()).isEqualTo(100);
         assertThat(request.wantsOperations()).isTrue();
+        assertThat(request.wantsIntradayFallback()).isTrue();
+    }
+
+    @Test
+    void requestWithoutTheIntradayFallbackFlagStillMatchesTheSchemaAndDoesNotAskForIt() throws IOException {
+        String sample = ContractSchemas.sample("market.daily.requested.sample.json");
+        String withoutFlag = sample.replace(",\n    \"includeIntradayFallback\": true", "");
+
+        assertThat(withoutFlag).doesNotContain("includeIntradayFallback");
+        assertThat(ContractSchemas.validate("market.daily.requested.v1.schema.json", withoutFlag)).isEmpty();
+        assertThat(payload(withoutFlag, DailyRequest.class).wantsIntradayFallback()).isFalse();
+        assertThat(ContractSchemas.validate("market.daily.requested.v1.schema.json",
+                sample.replace("\"includeIntradayFallback\": true", "\"includeIntradayFallback\": \"yes\""))).isNotEmpty();
     }
 
     @Test
@@ -284,6 +297,45 @@ class DailyContractTest {
         String noReasonKey = sample.replaceFirst("\"missingReason\": null,", "");
 
         for (String bad : List.of(reasonWithValues, nullsWithoutReason, unknownReason, noReasonKey)) {
+            assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", bad)).isNotEmpty();
+        }
+    }
+
+    @Test
+    void producerIntradayFallbackMatchesTheSchemaAndIsLeftOutForADailyPrice() throws IOException {
+        DailyPayload.Etf plain = new DailyPayload.Etf("TEST01", "20261020", "9850", "10000", "-1.50",
+                "2026-10-20T16:30:02+09:00", List.of(), false);
+        DailyPayload.Etf fallback = DailyPayload.Etf.withoutDaily("TEST04", DailyPayload.NO_DAILY_PRICE_IN_RANGE,
+                List.of(), false, null).withIntradayFallback("10000", "-2.95",
+                new DailyPayload.IntradayFallback("9705", "2026-10-20T15:29:58+09:00"));
+        String json = serialize(new DailyPayload(JOB_ID, 1, List.of(plain, fallback), List.of(),
+                List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false));
+
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", json)).isEmpty();
+        var etfs = mapper.readTree(json).get("payload").get("etfs");
+        assertThat(etfs.get(0).has("intradayFallback")).isFalse();
+        assertThat(etfs.get(1).get("rate").asString()).isEqualTo("-2.95");
+        assertThat(etfs.get(1).get("missingReason").asString()).isEqualTo("no-daily-price-in-range");
+        assertThat(etfs.get(1).get("intradayFallback").get("receivedAt").asString())
+                .isEqualTo("2026-10-20T15:29:58+09:00");
+    }
+
+    @Test
+    void schemaRejectsAFallbackWithDailyCellsOrWithoutItsRate() throws IOException {
+        String sample = ContractSchemas.sample("v2", "market.daily.responded.sample.json");
+        assertThat(sample).contains("\"intradayFallback\"");
+        // 대체값인데 일봉 값(일자)이 있음, 대체값인데 등락률이 비어 있음, 받은 시각이 시각 형식이 아님,
+        // 일봉이 있는 ETF에 대체값 칸이 붙음, 대체값 없이 사유와 등락률이 함께 있음.
+        String withDate = sample.replace("\"rate\": \"-2.95\",\n        \"fetchedAt\": null",
+                "\"rate\": \"-2.95\",\n        \"fetchedAt\": \"2026-10-20T16:30:02+09:00\"");
+        String withoutRate = sample.replace("\"rate\": \"-2.95\"", "\"rate\": null");
+        String badTime = sample.replace("\"receivedAt\": \"2026-10-20T15:29:58+09:00\"", "\"receivedAt\": \"15:29\"");
+        String onDaily = sample.replaceFirst("\"missingReason\": null,",
+                "\"missingReason\": null, \"intradayFallback\": {\"price\": \"9850\", \"receivedAt\": \"2026-10-20T15:29:58+09:00\"},");
+        String noFallback = sample.replaceFirst("\"intradayFallback\": \\{[^}]*\\},", "");
+
+        for (String bad : List.of(withDate, withoutRate, badTime, onDaily, noFallback)) {
+            assertThat(bad).isNotEqualTo(sample);
             assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", bad)).isNotEmpty();
         }
     }

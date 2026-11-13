@@ -163,7 +163,8 @@ WEEKDAYS = "월화수목금토일"
 
 @dataclass(frozen=True)
 class EtfDay:
-    """보유 ETF 하나의 하루 등락. 값은 일봉 원문 그대로다. 일봉이 없으면 값 칸이 None이고 이유가 missing_reason에 있다."""
+    """보유 ETF 하나의 하루 등락. 값은 일봉 원문 그대로다. 일봉이 없으면 값 칸이 None이고 이유가 missing_reason에 있다.
+    일봉이 없어도 시세처리기가 장중 시세로 계산한 대체값이 있으면 prev_close·rate가 그 값이고 intraday_at이 그 시세를 받은 시각이다."""
 
     symbol: str
     date: str | None
@@ -181,9 +182,22 @@ class EtfDay:
     relation: str | None = None
     # 아침 판의 개장 흐름(선택 칸). 응답에 칸이 없으면 None이고, 범위 안 시세가 없으면 present가 False다.
     open_flow: OpenFlow | None = None
+    # 하루 등락 대체값(응답의 intradayFallback). 마감 후 판에서 판 범위 안에 받은 것만 남는다.
+    intraday_at: datetime | None = None
+    intraday_price: str | None = None
 
     def has_day(self) -> bool:
+        if self.is_fallback():
+            return True
         return self.missing_reason is None and None not in (self.date, self.close, self.prev_close, self.rate)
+
+    def is_fallback(self) -> bool:
+        """일봉 대신 장중 시세로 계산한 하루 등락인가."""
+        return self.intraday_at is not None and None not in (self.prev_close, self.rate)
+
+    def without_fallback(self) -> "EtfDay":
+        """대체값을 버리고 일봉 없음으로 되돌린다."""
+        return replace(self, prev_close=None, rate=None, intraday_at=None, intraday_price=None)
 
     def label(self) -> str:
         """본문에 쓰는 ETF 이름. 이름을 모르면 종목코드."""
@@ -461,11 +475,20 @@ def etf_name(etf: EtfDay) -> str:
     return etf.symbol if etf.label() == etf.symbol else f"{etf.label()}({etf.symbol})"
 
 
+def fallback_note(etf: EtfDay) -> str:
+    """대체값 뒤에 붙이는 기준 표시. 대체값이 아니면 빈 글."""
+    if not etf.is_fallback():
+        return ""
+    return f"(장중 시세 {etf.intraday_at.astimezone(KST):%H:%M} 기준, 일봉 없음)"
+
+
 def etf_line(etf: EtfDay) -> str:
     if not etf.has_day():
         return f"{NO_DATA}: {etf.label()}, {_etf_missing_reason(etf)}"
     rate = _rate(etf.rate)
     shown = f"+{etf.rate}" if rate is not None and rate > 0 and not etf.rate.startswith("+") else etf.rate
+    if etf.is_fallback():
+        return f"{etf_name(etf)} {shown}% {fallback_note(etf)}"
     return f"{etf_name(etf)} {shown}% (종가 {etf.close}, 전일 {etf.prev_close}, {etf.date})"
 
 
@@ -480,6 +503,13 @@ def _etfs_section(i: DailyInput, refs: Callable[[], str]) -> Section:
             gaps_llm.append({"symbol": etf.symbol, "name": etf.label(), "status": MARK_MISSING, "reason": reason})
             continue
         ref = refs()
+        if etf.is_fallback():
+            note = fallback_note(etf)
+            entries.append(Entry(ref, {"ref": ref, "symbol": etf.symbol, "basis": note, "price": etf.intraday_price,
+                                       "prevClose": etf.prev_close, "rate": etf.rate,
+                                       "receivedAt": _at(etf.intraday_at), "tickers": list(etf.tickers)},
+                                 f"{etf.symbol} 하루 등락 {etf.rate}% {note} — {BACKGROUND_SOURCE}", KIND_DAY))
+            continue
         entries.append(Entry(ref, {"ref": ref, "symbol": etf.symbol, "date": etf.date, "close": etf.close,
                                    "prevClose": etf.prev_close, "rate": etf.rate, "receivedAt": _at(etf.fetched_at),
                                    "tickers": list(etf.tickers)},
@@ -732,10 +762,19 @@ def _outlook_etfs_input(i: DailyInput) -> list[dict[str, Any]]:
 
 
 def _reviews_input(i: DailyInput) -> list[dict[str, Any]]:
-    """코드가 정한 맞음·빗나감을 Claude에 준다. Claude는 판정을 바꾸지 않고 이유만 쓴다."""
-    return [{"symbol": r.symbol, "morningDirection": r.call.direction, "morningReason": r.call.reason,
-             "actualRate": str(r.rate), "verdict": r.verdict}
-            for r in i.reviews() if r.verdict is not None]
+    """코드가 정한 맞음·빗나감을 Claude에 준다. Claude는 판정을 바꾸지 않고 이유만 쓴다.
+    실제 등락이 장중 시세 대체값이면 그 기준(actualBasis)을 함께 준다."""
+    etfs = {e.symbol: e for e in i.etfs or ()}
+    rows = []
+    for r in i.reviews():
+        if r.verdict is None:
+            continue
+        row = {"symbol": r.symbol, "morningDirection": r.call.direction, "morningReason": r.call.reason,
+               "actualRate": str(r.rate), "verdict": r.verdict}
+        if r.symbol in etfs and etfs[r.symbol].is_fallback():
+            row["actualBasis"] = fallback_note(etfs[r.symbol])
+        rows.append(row)
+    return rows
 
 
 def _candidates_input(i: DailyInput, sections: tuple[Section, ...]) -> list[dict[str, Any]]:

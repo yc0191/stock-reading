@@ -9,9 +9,13 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 @JsonIgnoreProperties(ignoreUnknown = true)
 record DailyRequest(
         String jobId, int seq, String asOf, String since, int maxResponseBytes, int maxEtfs, int maxTickers,
-        Boolean includeOperations, String openFlowSince) {
+        Boolean includeOperations, String openFlowSince, Boolean includeIntradayFallback) {
 
     boolean wantsOperations() {
         return Boolean.TRUE.equals(includeOperations);
+    }
+
+    boolean wantsIntradayFallback() {
+        return Boolean.TRUE.equals(includeIntradayFallback);
     }
 }

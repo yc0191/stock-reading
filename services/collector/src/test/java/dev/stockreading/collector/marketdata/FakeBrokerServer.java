@@ -31,6 +31,10 @@ public final class FakeBrokerServer implements AutoCloseable {
     final AtomicInteger overseasCalls = new AtomicInteger();
     // 국내 일봉, 세계지수, 환율종합, 시장종합 호출을 합쳐 센다.
     final AtomicInteger insightCalls = new AtomicInteger();
+    // 이 수만큼 마감 후·장중 조회를 답 없이 끊는다(연결 실패). 음수이면 끝까지 끊는다.
+    public final AtomicInteger dropInsightCalls = new AtomicInteger();
+    // 마감 후·장중 조회가 온 순서대로 "경로 끊음|답함".
+    public final List<String> insightCallLog = new CopyOnWriteArrayList<>();
     public final AtomicInteger marketStatusCalls = new AtomicInteger();
     final AtomicInteger inFlight = new AtomicInteger();
     final AtomicInteger maxInFlight = new AtomicInteger();
@@ -124,6 +128,14 @@ public final class FakeBrokerServer implements AutoCloseable {
         for (String path : List.of("/api/v1/ivs11560", "/api/v1/iva60140", "/api/v1/iva60190", "/api/v1/ivsa0070")) {
             server.createContext(path, exchange -> {
                 insightCalls.incrementAndGet();
+                int drop = dropInsightCalls.getAndUpdate(n -> n > 0 ? n - 1 : n);
+                if (drop != 0) {
+                    insightCallLog.add(path + " dropped");
+                    // 응답 머리 없이 연결을 닫아 호출한 쪽이 연결 실패를 받게 한다.
+                    exchange.close();
+                    return;
+                }
+                insightCallLog.add(path + " answered");
                 reply(exchange, 200, "{\"dataHeader\":" + OK_HEADER + ",\"dataBody\":{}}");
             });
         }

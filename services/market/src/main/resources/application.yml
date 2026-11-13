@@ -37,6 +37,7 @@ market:
   # prev-close-fields는 시세 응답의 전일 종가 후보 항목 세 개다. 제공자가 이 항목들을 하루 안에서도 깨뜨려 보내서(2026-11-04 확인)
   # 한 항목만 믿지 않고, 두 항목 이상이 같은 값일 때만 그 값을 전일 종가로 쓴다. 다수가 없으면 그 스냅샷은 유형 2를 판단하지 않는다.
   # MARKET_PREV_CLOSE_FIELDS를 쉼표로 이은 경로(원문 루트 기준 점 경로)로 주면 바꾸고, 빈 값으로 주면 유형 2를 끈다.
+  # 데일리 판 자료 응답의 하루 등락 대체값(일봉이 없을 때 장중 시세로 계산)도 같은 칸을 같은 규칙으로 읽으며, 빈 값이면 대체값도 싣지 않는다.
   prev-close-fields: ${MARKET_PREV_CLOSE_FIELDS:dataBody.bdy_cls_prc,dataBody.sprc,dataBody.krx_bdy_clpr}
   prev-close-threshold-percent: 3.00
   # 개장 흐름(아침 판)이 시세 응답 원문에서 시가를 읽는 칸. 앞에서부터 처음 읽히는 값을 쓰고, 읽히는 값이 없으면 09:00 이후 첫 스냅샷 가격을 시가로 쓴다.
