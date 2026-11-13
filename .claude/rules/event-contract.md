@@ -8,7 +8,7 @@ paths:
 
 # 이벤트 계약 규칙
 
-이벤트 스키마, 토픽, `Envelope`·`EventFactory` 같은 이벤트 모델을 바꿀 때 읽습니다. 서비스 간 통신은 Kafka 이벤트뿐이고, 서비스마다 이벤트 모델을 복제해 두었기 때문에(ADR-006, ADR-010) 한 곳만 고치면 다른 서비스가 조용히 깨집니다.
+이벤트 스키마, 토픽, `Envelope`·`EventFactory` 같은 이벤트 모델을 바꿀 때 읽습니다. 서비스 사이에 일어난 일(알림)은 Kafka 이벤트로, 이미 저장된 자료의 조회는 내부 조회 API(HTTP)로 주고받으며, 조회의 요청·응답 본문도 같은 스키마 파일을 계약으로 씁니다(ADR-006, ADR-010). 서비스마다 이벤트 모델을 복제해 두었기 때문에 한 곳만 고치면 다른 서비스가 조용히 깨집니다.
 
 ## 호환성
 
@@ -16,12 +16,13 @@ paths:
 - 소비자는 모르는 필드를 무시해야 합니다. 이를 확인하는 테스트(`consumerIgnoresFieldsAddedInFutureVersions`)를 약하게 만들지 않습니다.
 - 호환이 깨지는 변경이 필요하면 `v2` 스키마와 샘플을 새로 추가하고, 결정을 ADR에 남깁니다(`.claude/rules/adr.md`).
 - 샘플은 전부 가짜 데이터(`TEST01` 등)입니다.
+- 쓰지 않게 된 이벤트의 스키마·샘플은 지우지 않고 가장 높은 버전 설명에 '더 이상 쓰지 않음'과 대체한 방식을 적습니다(과거 이벤트를 다시 읽기 위해).
 
 ## 스키마를 바꿀 때 함께 확인할 곳
 
 1. `contracts/events/<토픽>.v1.schema.json`과 `contracts/events/samples/v1/<토픽>.sample.json`
 2. 그 이벤트를 만드는 서비스의 `event/` 패키지 (`Envelope`, `EventFactory`, `*Payload`)
-3. 그 이벤트를 읽는 서비스의 이벤트 모델 (`SnapshotEnvelope`, `BriefingEnvelope` 등)
+3. 그 이벤트를 읽는 서비스의 이벤트 모델 (`SnapshotEnvelope`, `BriefingEnvelope` 등). 조회 본문이면 조회하는 서비스의 `*Request`·조회 클래스와 브리핑의 `queries.py`
 4. 계약 테스트: 각 Java 서비스의 `*ContractTest`, `ContractSchemas`와 브리핑의 `tests/test_contracts.py`, `tests/contracts.py`
 5. `docs/adr/010-event-format.md`와 README의 흐름도
 
