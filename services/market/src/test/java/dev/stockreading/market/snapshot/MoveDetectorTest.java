@@ -248,6 +248,49 @@ class MoveDetectorTest {
 
         assertThat(evaluations.get(1).outcome()).isEqualTo(Outcome.UNKNOWN);
         assertThat(evaluations.get(0).outcome()).isEqualTo(Outcome.DETECTED);
+        // 전일 종가를 읽지 않으므로 오늘 등락률도 없다.
+        assertThat(evaluations.get(0).detection().todayChangePercent()).isNull();
+    }
+
+    // ---- 오늘 등락률: 감지한 스냅샷 원문의 전일 종가 대비 (#66)
+
+    @Test
+    void windowDetectionCarriesTodayChangeAgainstTheRawPrevClose() {
+        // 최근 구간에서는 10000 → 10100 (+1.00%)로 올랐지만 전일 종가 10306 대비로는 -2.00%다.
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(point("16:00:00", 10_000)));
+
+        Detection detection = detector.evaluate("TEST01", NOW, 10_100, raw("10306")).get(0).detection();
+
+        assertThat(detection.type()).isEqualTo(DetectionType.WINDOW);
+        assertThat(detection.changePercent()).isEqualByComparingTo("1.00");
+        assertThat(detection.todayChangePercent()).isEqualByComparingTo("-2.00");
+    }
+
+    @Test
+    void todayChangeIsComputedFromThePrevClosePriceNotCopiedFromARateField() {
+        // 원문의 등락률 칸(가짜 이름 fake.rate)은 옮기지 않는다. 다수결로 정한 전일 종가와 현재가로 코드가 계산한다.
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(point("16:00:00", 10_000)));
+        String rawWithRate = "{\"fake\":{\"a\":10000,\"b\":10000,\"c\":12345,\"rate\":\"-9.99\"},\"price\":\"1\"}";
+
+        Detection detection = detector.evaluate("TEST01", NOW, 10_150, rawWithRate).get(0).detection();
+
+        assertThat(detection.todayChangePercent()).isEqualByComparingTo("1.50");
+    }
+
+    @Test
+    void windowDetectionHasNoTodayChangeWhenThePrevCloseIsUnknown() {
+        when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(point("16:00:00", 10_000)));
+
+        assertThat(window(10_200).detection().todayChangePercent()).isNull();
+        assertThat(detector.evaluate("TEST01", NOW, 10_200, raw("10000", "10100", "10200")).get(0).detection()
+                .todayChangePercent()).isNull();
+    }
+
+    @Test
+    void prevCloseDetectionCarriesItsOwnChangeAsTodayChange() {
+        Detection detection = prevClose(10_400, raw("10000")).detection();
+
+        assertThat(detection.todayChangePercent()).isEqualByComparingTo("4.00");
     }
 
     // ---- 기준값에서 뺄 이력: 첫 체결 전 응답, 연속 확인을 받지 못한 튄 점

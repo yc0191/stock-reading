@@ -16,6 +16,7 @@ public record BriefingEnvelope(
         String correlationId,
         Payload payload) {
 
+    /** todayChangePercent, moveMinutes는 짧은 시간 변동일 때만 오는 선택 칸이다. 없으면 null이다. */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Payload(
             String symbol,
@@ -24,7 +25,14 @@ public record BriefingEnvelope(
             String asOf,
             String text,
             String generatedBy,
-            List<Evidence> evidence) {
+            List<Evidence> evidence,
+            BigDecimal todayChangePercent,
+            Integer moveMinutes) {
+
+        public Payload(String symbol, String name, BigDecimal changePercent, String asOf, String text,
+                String generatedBy, List<Evidence> evidence) {
+            this(symbol, name, changePercent, asOf, text, generatedBy, evidence, null, null);
+        }
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

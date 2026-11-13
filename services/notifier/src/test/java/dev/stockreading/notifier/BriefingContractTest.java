@@ -39,6 +39,24 @@ class BriefingContractTest {
     }
 
     @Test
+    void windowBriefingWithTodayChangeMatchesTheSchemaAndIsRead() throws IOException {
+        String window = ContractSchemas.sample("briefing.generated.sample.json")
+                .replace("\"payload\": {", "\"payload\": {\n    \"todayChangePercent\": -2.1,\n    \"moveMinutes\": 1,");
+
+        assertThat(ContractSchemas.validate("briefing.generated.v1.schema.json", window)).isEmpty();
+        BriefingEnvelope.Payload payload = JsonMapper.builder().build().readValue(window, BriefingEnvelope.class).payload();
+        assertThat(payload.todayChangePercent()).isEqualByComparingTo("-2.1");
+        assertThat(payload.moveMinutes()).isEqualTo(1);
+        assertThat(ContractSchemas.validate("briefing.generated.v1.schema.json", window.replace("\"moveMinutes\": 1", "\"moveMinutes\": 0")))
+                .isNotEmpty();
+        // 칸이 없는 브리핑은 null로 읽혀 이전 제목을 쓴다.
+        BriefingEnvelope older = JsonMapper.builder().build()
+                .readValue(ContractSchemas.sample("briefing.generated.sample.json"), BriefingEnvelope.class);
+        assertThat(older.payload().todayChangePercent()).isNull();
+        assertThat(older.payload().moveMinutes()).isNull();
+    }
+
+    @Test
     void consumerIgnoresFieldsAddedInFutureVersions() throws IOException {
         String withExtras = ContractSchemas.sample("briefing.generated.sample.json")
                 .replace("\"payload\": {", "\"newTopLevelHint\": \"x\",\n  \"payload\": {\n    \"venue\": \"future\",");

@@ -88,6 +88,51 @@ class EmailComposerTest {
         assertThat(email.subject() + email.body()).doesNotContain("to@example.com").doesNotContain("from@example.com");
     }
 
+    /** 짧은 시간 변동 브리핑. todayChangePercent·moveMinutes가 있으면 제목에 오늘 등락을 먼저 쓴다(#66). */
+    private static BriefingEnvelope windowBriefing(String name, String change, String today, String minutes) {
+        String extras = (today == null ? "" : ", \"todayChangePercent\": " + today)
+                + (minutes == null ? "" : ", \"moveMinutes\": " + minutes)
+                + (name == null ? "" : ", \"name\": \"" + name + "\"");
+        String json = """
+                {"eventId": "9b7d1f20-3a4c-4e8b-b5d6-2c1a0f9e8d77", "eventType": "briefing.generated", "schemaVersion": 1,
+                 "occurredAt": "2026-10-20T14:39:00+09:00", "producedAt": "2026-10-20T14:45:00+09:00",
+                 "correlationId": "collect-2026-10-20T14:40:00+09:00",
+                 "payload": {"symbol": "TEST01", "changePercent": %s, "asOf": "2026-10-20T05:39:00Z",
+                             "text": "본문", "generatedBy": "rule-based", "evidence": []%s}}
+                """.formatted(change, extras);
+        return tools.jackson.databind.json.JsonMapper.builder().build().readValue(json, BriefingEnvelope.class);
+    }
+
+    @Test
+    void windowSubjectShowsTodayChangeFirstInKoreanTime() {
+        // 오늘 등락과 짧은 변동 방향이 반대면 반등/반락이다. 시각은 asOf를 한국 시간으로 바꿔 쓴다.
+        assertThat(composer("").compose(windowBriefing("TEST 샘플 ETF", "1.00", "-2.00", "1")).subject())
+                .isEqualTo("[TEST 샘플 ETF(TEST01)] 14:39 기준 오늘 -2.00% · 1분 새 +1.00% 반등 브리핑");
+        assertThat(composer("[시뮬레이션]").compose(windowBriefing(null, "-1.00", "1.20", "3")).subject())
+                .isEqualTo("[시뮬레이션] [TEST01] 14:39 기준 오늘 +1.20% · 3분 새 -1.00% 반락 브리핑");
+    }
+
+    @Test
+    void windowSubjectSaysRiseOrFallWhenTodayChangeIsTheSameWayOrFlat() {
+        assertThat(composer("").compose(windowBriefing(null, "-1.00", "-2.00", "1")).subject())
+                .isEqualTo("[TEST01] 14:39 기준 오늘 -2.00% · 1분 새 -1.00% 하락 브리핑");
+        assertThat(composer("").compose(windowBriefing(null, "1.00", "0.00", "2")).subject())
+                .isEqualTo("[TEST01] 14:39 기준 오늘 +0.00% · 2분 새 +1.00% 상승 브리핑");
+    }
+
+    @Test
+    void briefingWithoutTodayChangeKeepsThePreviousSubject() {
+        assertThat(composer("").compose(windowBriefing(null, "1.00", null, null)).subject())
+                .isEqualTo("[TEST01] 상승 +1.00% 브리핑");
+    }
+
+    @Test
+    void windowSubjectWithoutMinutesSaysShortTime() {
+        // 다시 보낸 변동이라 브리핑이 분을 뺐으면 'N분 새' 대신 '짧은 시간'으로 쓴다.
+        assertThat(composer("").compose(windowBriefing(null, "1.00", "-2.00", null)).subject())
+                .isEqualTo("[TEST01] 14:39 기준 오늘 -2.00% · 짧은 시간 +1.00% 반등 브리핑");
+    }
+
     @Test
     void committedSampleBriefingCanBeComposed() throws IOException {
         var mapper = tools.jackson.databind.json.JsonMapper.builder().build();

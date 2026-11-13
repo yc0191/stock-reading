@@ -28,6 +28,26 @@ def headline(symbol: str, previous_price: int, price: int, change_percent: float
             f"({previous_price:,} → {price:,})")
 
 
+def window_direction(change_percent: float, today_change_percent: float) -> str:
+    """짧은 시간 변동의 방향 단어. 오늘 등락과 방향이 반대면 반등·반락, 같거나 오늘 등락이 0.00이면 상승·하락."""
+    today = round(today_change_percent, 2)
+    if today != 0 and (today > 0) != (change_percent > 0):
+        return "반등" if change_percent > 0 else "반락"
+    return direction_of(change_percent)
+
+
+def window_headline(symbol: str, previous_price: int, price: int, change_percent: float,
+                    today_change_percent: float, minutes: int | None, as_of: datetime, name: str | None = None) -> str:
+    """짧은 시간 변동의 머리말. 몇 분 사이의 변동률보다 그날 흐름(오늘 등락)을 먼저 보여 준다.
+
+    분이 None이면 구간을 정확히 알 수 없는 것이라(다시 보낸 변동) '짧은 시간'으로 쓴다.
+    """
+    span = "짧은 시간" if minutes is None else f"{minutes}분 새"
+    return (f"[{label_of(symbol, name)}] {as_of.astimezone(KST):%H:%M} 기준 오늘 {today_change_percent:+.2f}% · "
+            f"{span} {change_percent:+.2f}% {window_direction(change_percent, today_change_percent)} "
+            f"({previous_price:,} → {price:,})")
+
+
 def compose(
     symbol: str,
     previous_price: int,
