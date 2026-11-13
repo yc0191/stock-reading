@@ -150,7 +150,12 @@ class BrokerClient {
         }
         Instant now = clock.instant();
         Instant expiresAt = now.plusSeconds(expiresIn);
-        return new Token(value, now, expiresAt.minus(TOKEN_MARGIN), expiresAt);
+        // 서버가 만료 5분 안의 토큰을 다시 돌려주면 여유를 빼면 이미 지난 시각이 되어 조회마다 발급을 요청하게 된다.
+        // 남은 시간이 여유보다 짧으면 실제 만료 시각까지 쓴다.
+        Instant refreshAt = Duration.ofSeconds(expiresIn).compareTo(TOKEN_MARGIN) > 0
+                ? expiresAt.minus(TOKEN_MARGIN)
+                : expiresAt;
+        return new Token(value, now, refreshAt, expiresAt);
     }
 
     private record Reply(JsonNode json, String raw, int status) {
