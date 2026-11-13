@@ -6,8 +6,10 @@ DEFAULT_MEMBER_ID = 1
 DEFAULT_SYMBOLS = tuple(f"TEST{n:02d}" for n in range(1, 21))
 
 
-def member(member_id, held=(), watched=()):
-    return MemberPortfolio(member_id, tuple([(s, "HELD") for s in held] + [(s, "WATCH") for s in watched]))
+def member(member_id, held=(), watched=(), stocks=()):
+    """stocks는 국내 주식 (종목코드, 이름) 목록이다."""
+    return MemberPortfolio(member_id, tuple([(s, "HELD") for s in held] + [(s, "WATCH") for s in watched]),
+                           tuple(stocks))
 
 
 class FakeMembers:

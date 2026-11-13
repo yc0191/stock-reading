@@ -29,20 +29,23 @@ from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
 
 @dataclass(frozen=True)
 class MemberPortfolio:
-    """이 판을 받을 멤버 한 명. etfs는 (종목코드, 보유/관심) 목록이다. 메일 주소는 브리핑이 알지 못한다."""
+    """이 판을 받을 멤버 한 명. etfs는 (종목코드, 보유/관심) 목록이다. 메일 주소는 브리핑이 알지 못한다.
+    stocks는 포트폴리오의 국내 주식 (종목코드, 이름) 목록이다. 데일리 자료는 ETF만 다루므로 주식은 그날 급변동 목록에만 쓴다."""
 
     member_id: int
     etfs: tuple[tuple[str, str], ...]
+    stocks: tuple[tuple[str, str | None], ...] = ()
 
 
 class MemberPort(Protocol):
     def daily_members(self, edition: str) -> tuple[MemberPortfolio, ...] | None:
-        """사용 중이고 그 판 수신을 켠 멤버 중 포트폴리오에 국내 ETF가 있는 멤버(번호 순). 읽지 못하면 None."""
+        """사용 중이고 그 판 수신을 켠 멤버 중 포트폴리오에 국내 ETF가 있는 멤버(번호 순)와 그 멤버의 국내 주식. 읽지 못하면 None."""
         ...
 
 
 def member_input(full: DailyInput, member: MemberPortfolio) -> DailyInput:
-    """판 전체 자료에서 이 멤버의 ETF에 관련된 것만 남긴 자료. 응답을 받지 못해 ETF 목록이 없으면 그대로 None이다."""
+    """판 전체 자료에서 이 멤버의 ETF에 관련된 것만 남긴 자료. 응답을 받지 못해 ETF 목록이 없으면 그대로 None이다.
+    그날 급변동은 시세 대상인 멤버의 국내 주식에서도 나므로 ETF와 주식 둘 다로 거른다."""
     relations = dict(member.etfs)
     etfs = None if full.etfs is None else tuple(replace(e, relation=relations[e.symbol])
                                                 for e in full.etfs if e.symbol in relations)
@@ -50,8 +53,10 @@ def member_input(full: DailyInput, member: MemberPortfolio) -> DailyInput:
     tickers = frozenset(t for e in etfs or () for t in e.tickers)
     review = full.review
     if review is not None:
+        moved = mine | frozenset(symbol for symbol, _ in member.stocks)
         review = ReviewInput(tuple(c for c in review.calls if c.symbol in mine), review.note,
-                             None if review.moves is None else tuple(m for m in review.moves if m.symbol in mine))
+                             None if review.moves is None else tuple(m for m in review.moves if m.symbol in moved),
+                             member.stocks)
     return replace(
         full,
         etfs=etfs,
