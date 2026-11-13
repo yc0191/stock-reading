@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from fake_anthropic import as_reply
 from briefing.daily_html import ChartSlot, render_html
 from briefing.daily_inputs import EtfArticles, MemberIssue, NotableCandidate, KIND_OPPOSITE, moves_with_market
 from briefing.daily_jobs import DailyDraft, DailySentences, _Draft
@@ -245,6 +246,7 @@ def test_each_edition_asks_with_its_own_prompt_and_schema():
         def __init__(self, reply):
             self.reply, self.calls = reply, []
 
+        @as_reply
         def complete(self, system, user, schema, addendum=""):
             system = system + addendum
             self.calls.append((system, schema))
@@ -267,6 +269,7 @@ class Sequence:
     def __init__(self, *replies):
         self.replies, self.calls = list(replies), []
 
+    @as_reply
     def complete(self, system, user, schema, addendum=""):
         system = system + addendum
         self.calls.append(user)
@@ -699,6 +702,7 @@ def test_a_daily_rewrite_sends_the_original_prompt_and_the_addendum_separately(e
         def __init__(self):
             self.calls = []
 
+        @as_reply
         def complete(self, system, user, schema, addendum=""):
             self.calls.append((system, addendum))
             return "{}"

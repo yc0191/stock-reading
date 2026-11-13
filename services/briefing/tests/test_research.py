@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from fake_anthropic import as_reply
 from briefing.config import CoreSettings
 from briefing.jobs import BriefingCore
 from briefing.llm import LlmCallError
@@ -57,6 +58,7 @@ class FakeLlm:
         self.responses = list(responses)
         self.calls = []
 
+    @as_reply
     def complete(self, system, user, output_schema, addendum=""):
         system = system + addendum
         self.calls.append((system, user, output_schema))
@@ -401,6 +403,8 @@ def test_query_llm_failing_every_attempt_reports_existing_evidence_and_records_e
     assert [r.data["llm"]["rejectReason"] for r in attempts] == ["output is not valid JSON", "output does not have queries",
                                                "LLM call failed: APIError"]
     assert [r.error_type for r in attempts] == ["InvalidQueries", "InvalidQueries", "LlmCallError"]
+    # 응답을 받은 시도는 사용량이 남고, 호출 실패는 사용량 없음으로 남는다.
+    assert [r.data["llm"]["usage"] for r in attempts] == [{"cacheWrite": 11, "cacheRead": 22, "input": 33, "output": 44}] * 2 + [None]
     assert all(r.data["llm"]["input"] == flow.query_llm.calls[0][1] for r in attempts)
     (gave_up,) = flow.records.of(ResearchReason.QUERY_GAVE_UP)
     assert (gave_up.stage, gave_up.attempts, gave_up.data["llm"]["rejectReason"]) == (

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from fake_anthropic import as_reply
 from briefing.config import CoreSettings
 from briefing.jobs import BriefingCore
 from briefing.ports import FailureReason
@@ -70,6 +71,7 @@ class FakeLlm:
         self.responses = list(responses)
         self.calls = []
 
+    @as_reply
     def complete(self, system, user, output_schema, addendum=""):
         system = system + addendum
         self.calls.append((system, user))

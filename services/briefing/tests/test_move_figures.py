@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+from fake_anthropic import as_reply
 from briefing.jobs import ReportInput
 from briefing.move_figures import (
     KOSDAQ_NAME,
@@ -259,6 +260,7 @@ def test_existing_inputs_stay_as_they_were():
 
 def test_a_cited_figure_reaches_the_event_and_passes_the_schema():
     class OneAnswer:
+        @as_reply
         def complete(self, system, user, output_schema, addendum=""):
             system = system + addendum
             return json.dumps({"causes": [{"title": "시장 전체 하락", "detail": "시장 전체가 내렸습니다.", "refs": ["F2"],

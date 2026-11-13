@@ -46,6 +46,7 @@ from briefing.daily_report import (
     missing_items,
     rule_based_text,
 )
+from briefing.llm import usage_record
 from briefing.events import (
     EDITION_MORNING,
     EDITION_POST_CLOSE,
@@ -661,7 +662,7 @@ class DailyCore:
                              attempt.attempt, now,
                              missingItems=missing,
                              llm={"input": attempt.llm_input, "rawOutput": attempt.raw_output,
-                                  "rejectReason": attempt.reason})
+                                  "rejectReason": attempt.reason, "usage": usage_record(attempt.usage)})
             if result.body is None:
                 detail = f"daily LLM failed after {len(result.rejected)} attempts"
                 last = result.rejected[-1] if result.rejected else None
@@ -669,7 +670,8 @@ class DailyCore:
                              last.error_type if last else None, len(result.rejected), now, missingItems=missing,
                              llm={"input": last.llm_input if last else None,
                                   "rawOutput": last.raw_output if last else None,
-                                  "rejectReason": last.reason if last else None})
+                                  "rejectReason": last.reason if last else None,
+                                  "usage": usage_record(last.usage) if last else None})
                 self._first_failure(job, FailureReason.LLM_ERROR, detail, len(result.rejected))
             else:
                 body = result.body
@@ -683,7 +685,8 @@ class DailyCore:
                   sentence_no: int | None = None, round: int | None = None) -> None:
         self._detail(job, STAGE_LLM, EntryType.REPORT_WRITTEN, REASON_LLM_ACCEPTED, None, a.attempt, now,
                      sentence_no=sentence_no, round=round, missingItems=missing,
-                     llm={"input": a.llm_input, "rawOutput": a.response, "rejectReason": None})
+                     llm={"input": a.llm_input, "rawOutput": a.response, "rejectReason": None,
+                          "usage": usage_record(a.usage)})
 
     # ---- 문장 단위 재검색(어댑터가 부른다) ----
 
@@ -699,7 +702,7 @@ class DailyCore:
             self._detail(draft.job, STAGE_LLM, EntryType.LLM_REJECTED, REASON_LLM_REJECTED, attempt.error_type,
                          attempt.attempt, now, sentence_no=no, round=round, missingItems=missing,
                          llm={"input": attempt.llm_input, "rawOutput": attempt.raw_output,
-                              "rejectReason": attempt.reason})
+                              "rejectReason": attempt.reason, "usage": usage_record(attempt.usage)})
         if result.point is None:
             return None
         self._accepted(draft.job, now, result.accepted, missing, sentence_no=no, round=round)
