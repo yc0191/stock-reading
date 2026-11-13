@@ -25,7 +25,7 @@
 - LLM은 코드가 붙여 준 근거 번호만 인용합니다. 목록 밖 번호를 쓴 출력은 거부합니다.
 - 발송기는 드라이런이 기본입니다. `NOTIFIER_SEND_ENABLED`는 사람이 직접 바꾸며, 로그의 주소는 마스킹합니다. 예외는 사람이 직접 실행을 결정한 `scripts/test-all.sh --live`뿐이며, 이때도 그 스크립트가 띄운 테스트용 발송기에만 발송을 켜고 `.env`는 바꾸지 않습니다.
 - 토픽은 사용하는 서비스가 시작할 때 선언하고, 같은 토픽은 선언하는 모든 곳에서 파티션 수가 같아야 합니다. 어긋나면 일부 종목이 오류 없이 누락됩니다.
-- `schedule.tick`은 다른 서비스로 가는 신호(데일리 판 시작 `daily-briefing-morning`·`daily-briefing-post-close`, 구성 종목 조회 `collect-members`)에만 씁니다. 이를 구독하는 리스너는 `jobType`마다 consumer group을 따로 둡니다. 이 토픽은 파티션이 1개라 같은 그룹이면 한쪽만 받아 tick이 오류 없이 누락됩니다. 수집기 자신의 수집 작업은 tick 없이 수집기 안 타이머와 수동 실행 명령(`collector.command`)으로 돕니다(ADR-012).
+- `schedule.tick`은 다른 서비스로 가는 신호(데일리 판 시작 `daily-briefing-morning`·`daily-briefing-post-close`)에만 씁니다. 이를 구독하는 리스너는 `jobType`마다 consumer group을 따로 둡니다. 이 토픽은 파티션이 1개라 같은 그룹이면 한쪽만 받아 tick이 오류 없이 누락됩니다. 수집기 자신의 수집 작업은 tick 없이 수집기 안 타이머와 수동 실행 명령(`collector.command`)으로 돕니다(ADR-012).
 - 시세 제공자 조회는 토큰 발급을 빼고 모두 같은 호출 상한 장치(`CallRateLimit` 빈 하나)를 거칩니다. 따로 세면 조회가 겹칠 때 앱 전체 한도를 넘습니다.
 - 이벤트는 `eventId`로 멱등하게 처리합니다.
 - 서비스 간 계약은 `contracts/events/`의 스키마입니다. 서비스마다 `Envelope` 등을 복제해 두었으므로 스키마를 바꾸면 모든 곳을 함께 고칩니다.

@@ -192,11 +192,11 @@ with_data_docker() {
 cmd_tick() {
   echo "== 가짜 tick 한 바퀴 =="
   local c
-  for c in collect collect-pre-open collect-intraday collect-post-close collect-news; do
+  for c in collect collect-pre-open collect-intraday collect-post-close collect-news collect-etf-members; do
     with_data_docker "$ROOT/scripts/collector-command.sh" "$c"
     sleep 3
   done
-  for c in collect-members daily-briefing-morning daily-briefing-post-close; do
+  for c in daily-briefing-morning daily-briefing-post-close; do
     with_data_docker "$ROOT/scripts/publish-tick.sh" "$c"
   done
 }

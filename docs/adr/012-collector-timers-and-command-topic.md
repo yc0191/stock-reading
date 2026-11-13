@@ -15,7 +15,8 @@
 ## 결정
 - 수집기 자신의 수집은 수집기 안 타이머(`@Scheduled`)가 실행 입구(`CollectorJobs`)를 직접 부른다. 같은 작업은 겹쳐 돌지 않고, 밀린 회차는 몰아서 실행하지 않는다.
 - 사람이 작업 하나를 지금 1회 돌리는 입구로 `collector.command` 토픽을 둔다. 수집기만 선언하고 읽는다. 받는 규칙의 원본은 `contracts/events/collector.command.v1.schema.json`, 쓰는 법은 `docs/local-development.md`(수동 실행)다.
-- 남는 `schedule.tick`은 다른 서비스로 가는 신호 셋뿐이다: 데일리 판 시작 `daily-briefing-morning`·`daily-briefing-post-close`(브리핑), 구성 종목 조회 `collect-members`(시세처리기).
+- 남는 `schedule.tick`은 다른 서비스로 가는 신호뿐이다: 데일리 판 시작 `daily-briefing-morning`·`daily-briefing-post-close`(브리핑).
+  - 2026-11-13 변경: 구성 종목 조회는 시세처리기로 가는 tick(`collect-members`)이 아니라 수집기 타이머 작업(`collect-etf-members`)이 되었다. 수집기가 운용사 사이트에서 받고 결과는 `etf.members.fetched` 이벤트로 시세처리기에 넘긴다.
 
 ## 이유
 1. 같은 서비스 안의 시각 실행은 타이머로 충분하다. ADR-006의 "서비스 간 통신은 Kafka 이벤트로 한다"는 서비스 사이의 규칙이고, 서비스 안 타이머는 서비스 간 통신이 아니다.

@@ -1,4 +1,4 @@
-package dev.stockreading.market.members;
+package dev.stockreading.collector.members;
 
 import java.time.DayOfWeek;
 import java.time.Duration;
@@ -11,7 +11,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * <p>urlTemplate이 비어 있으면 자동 조회를 하지 않는다(구성 종목은 etf_stock_map을 직접 고친다).
  * urlTemplate에는 {@code {fundId}}와 {@code {date}}(yyyy.MM.dd) 자리가 있다. ETF별 출처 번호는 환경변수가 아니라 etf.constituent_source_id에 있다.
  */
-@ConfigurationProperties("market.members")
+@ConfigurationProperties("collector.members")
 public record MemberSourceProperties(String urlTemplate, String userAgent, int topCount,
         Duration callInterval, Duration timeout, DayOfWeek fetchDay) {
 

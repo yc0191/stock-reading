@@ -12,7 +12,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "collector-command.sh"
 SCHEMA = json.loads((REPO_ROOT / "contracts" / "events" / "collector.command.v1.schema.json").read_text(encoding="utf-8"))
-COMMANDS = ["collect", "collect-news", "collect-pre-open", "collect-intraday", "collect-post-close"]
+COMMANDS = ["collect", "collect-news", "collect-pre-open", "collect-intraday", "collect-post-close", "collect-etf-members"]
 RFC3339 = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
 
 

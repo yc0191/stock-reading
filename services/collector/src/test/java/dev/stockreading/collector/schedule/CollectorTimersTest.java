@@ -99,16 +99,18 @@ class CollectorTimersTest {
     }
 
     @Test
-    void preOpenAndPostCloseRunTheirJobs() {
+    void preOpenPostCloseAndMembersRunTheirJobs() {
         new PreOpenTimer(jobs, OPEN).collectPreOpen();
         new PostCloseTimer(jobs, OPEN).collectPostClose();
+        new MembersTimer(jobs, OPEN).collectMembers();
 
         verify(jobs).run(Job.COLLECT_PRE_OPEN);
         verify(jobs).run(Job.COLLECT_POST_CLOSE);
+        verify(jobs).run(Job.COLLECT_ETF_MEMBERS);
     }
 
     @Test
-    void marketHolidayStopsQuotePreOpenIntradayAndPostCloseButKeepsNews() {
+    void marketHolidayStopsQuotePreOpenIntradayPostCloseAndMembersButKeepsNews() {
         // 2026-10-20(화) 10:00 한국 시간, 시세·장중 시간대 안이지만 휴장일로 판정된 경우
         Clock clock = at("2026-10-20T01:00:00Z");
         CollectTimer collect = new CollectTimer(jobs, QUOTE_HOURS, HOLIDAY, clock);
@@ -117,6 +119,7 @@ class CollectorTimersTest {
         new PreOpenTimer(jobs, HOLIDAY).collectPreOpen();
         new IntradayTimer(jobs, INTRADAY, HOLIDAY, clock).collectIntraday();
         new PostCloseTimer(jobs, HOLIDAY).collectPostClose();
+        new MembersTimer(jobs, HOLIDAY).collectMembers();
         // 로그 문맥에 둘 correlationId 는 묻지만 작업은 부르지 않는다.
         verifyNoJobRuns();
 
@@ -152,7 +155,8 @@ class CollectorTimersTest {
             seen.add(MDC.get(CorrelationId.KEY));
             return false;
         };
-        for (Job job : List.of(Job.COLLECT, Job.COLLECT_PRE_OPEN, Job.COLLECT_INTRADAY, Job.COLLECT_POST_CLOSE)) {
+        for (Job job : List.of(Job.COLLECT, Job.COLLECT_PRE_OPEN, Job.COLLECT_INTRADAY, Job.COLLECT_POST_CLOSE,
+                Job.COLLECT_ETF_MEMBERS)) {
             when(jobs.correlationId(job)).thenReturn("id-" + job.jobType());
         }
 
@@ -160,8 +164,10 @@ class CollectorTimersTest {
         new PreOpenTimer(jobs, recording).collectPreOpen();
         new IntradayTimer(jobs, INTRADAY, recording, clock).collectIntraday();
         new PostCloseTimer(jobs, recording).collectPostClose();
+        new MembersTimer(jobs, recording).collectMembers();
 
-        assertThat(seen).containsExactly("id-collect", "id-collect-pre-open", "id-collect-intraday", "id-collect-post-close");
+        assertThat(seen).containsExactly("id-collect", "id-collect-pre-open", "id-collect-intraday", "id-collect-post-close",
+                "id-collect-etf-members");
         assertThat(MDC.get(CorrelationId.KEY)).isNull();
     }
 
@@ -174,23 +180,27 @@ class CollectorTimersTest {
         assertThat(scheduled(IntradayTimer.class, "collectIntraday").cron()).isEqualTo("${collector.intraday.cron}");
         assertThat(scheduled(PostCloseTimer.class, "collectPostClose").cron())
                 .isEqualTo("${collector.insight.schedule.cron}");
+        assertThat(scheduled(MembersTimer.class, "collectMembers").cron()).isEqualTo("${collector.members.cron}");
         for (Scheduled cron : List.of(scheduled(PreOpenTimer.class, "collectPreOpen"),
-                scheduled(IntradayTimer.class, "collectIntraday"), scheduled(PostCloseTimer.class, "collectPostClose"))) {
+                scheduled(IntradayTimer.class, "collectIntraday"), scheduled(PostCloseTimer.class, "collectPostClose"),
+                scheduled(MembersTimer.class, "collectMembers"))) {
             assertThat(cron.zone()).isEqualTo("Asia/Seoul");
         }
     }
 
     @Test
-    void timersHaveOnlyTheFiveCollectionSchedules() {
+    void timersHaveOnlyTheSixCollectionSchedules() {
         // 공시는 장 시작 전 회차에서만 받는다. 타이머에 다른 주기 작업이 생기면 예전 15분 공시 수집 같은 일이 되살아난다.
-        List<String> timers = Stream.of(CollectTimer.class, PreOpenTimer.class, IntradayTimer.class, PostCloseTimer.class)
+        List<String> timers = Stream.of(CollectTimer.class, PreOpenTimer.class, IntradayTimer.class, PostCloseTimer.class,
+                        MembersTimer.class)
                 .flatMap(type -> Arrays.stream(type.getDeclaredMethods()))
                 .filter(method -> method.isAnnotationPresent(Scheduled.class))
                 .map(Method::getName)
                 .sorted()
                 .toList();
 
-        assertThat(timers).containsExactly("collect", "collectIntraday", "collectNews", "collectPostClose", "collectPreOpen");
+        assertThat(timers).containsExactly("collect", "collectIntraday", "collectMembers", "collectNews", "collectPostClose",
+                "collectPreOpen");
     }
 
     private static Scheduled scheduled(Class<?> type, String method) throws NoSuchMethodException {
@@ -209,7 +219,7 @@ class CollectorTimersTest {
                 .withBean(Clock.class, Clock::systemUTC)
                 .withBean(MarketDayPort.class, () -> OPEN)
                 .withUserConfiguration(Wiring.class, CollectTimer.class, PreOpenTimer.class, IntradayTimer.class,
-                        PostCloseTimer.class);
+                        PostCloseTimer.class, MembersTimer.class);
     }
 
     @Test
@@ -220,12 +230,14 @@ class CollectorTimersTest {
             assertThat(context).doesNotHaveBean(PreOpenTimer.class);
             assertThat(context).doesNotHaveBean(IntradayTimer.class);
             assertThat(context).doesNotHaveBean(PostCloseTimer.class);
+            assertThat(context).doesNotHaveBean(MembersTimer.class);
             var env = context.getEnvironment();
             assertThat(env.getProperty("collector.tick-interval-ms")).isEqualTo("1000");
             assertThat(env.getProperty("collector.schedule.news-interval-ms")).isEqualTo("900000");
             assertThat(env.getProperty("collector.pre-open.cron")).isEqualTo("0 30 8 * * MON-FRI");
             assertThat(env.getProperty("collector.intraday.cron")).isEqualTo("0 */5 9-15 * * MON-FRI");
             assertThat(env.getProperty("collector.insight.schedule.cron")).isEqualTo("0 30 16 * * MON-FRI");
+            assertThat(env.getProperty("collector.members.cron")).isEqualTo("0 0 8 * * MON-FRI");
             QuoteHoursProperties quoteHours = context.getBean(QuoteHoursProperties.class);
             assertThat(quoteHours.startTime()).hasToString("09:00");
             assertThat(quoteHours.endTime()).hasToString("15:30");
@@ -244,6 +256,8 @@ class CollectorTimersTest {
                 .run(context -> assertThat(context).hasSingleBean(IntradayTimer.class));
         yamlRunner().withPropertyValues("COLLECTOR_INSIGHT_SCHEDULE_ENABLED=true")
                 .run(context -> assertThat(context).hasSingleBean(PostCloseTimer.class));
+        yamlRunner().withPropertyValues("COLLECTOR_MEMBERS_ENABLED=true")
+                .run(context -> assertThat(context).hasSingleBean(MembersTimer.class));
         yamlRunner().withPropertyValues("COLLECTOR_SCHEDULE_ENABLED=false", "COLLECTOR_INSIGHT_SCHEDULE_ENABLED=false")
                 .run(context -> {
                     assertThat(context).doesNotHaveBean(CollectTimer.class);

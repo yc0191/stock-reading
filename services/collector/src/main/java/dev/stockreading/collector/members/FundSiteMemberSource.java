@@ -1,4 +1,4 @@
-package dev.stockreading.market.members;
+package dev.stockreading.collector.members;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -6,6 +6,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -37,8 +38,9 @@ class FundSiteMemberSource implements MemberSourcePort {
 
     private static final Logger log = LoggerFactory.getLogger(FundSiteMemberSource.class);
 
-    // 응답이 비정상적으로 크면 읽지 않는다.
-    private static final int MAX_BODY_CHARS = 2_000_000;
+    // 원문은 이벤트(etf.members.fetched)에 실려 Kafka 로 가므로, 기본 메시지 상한(1MB)보다 작게 UTF-8 바이트로 막는다.
+    // 넘으면 원문을 싣지 않고 실패로 본다(시세처리기는 이전 구성을 유지한다).
+    static final int MAX_BODY_BYTES = 900_000;
     private static final int MAX_NAME_CHARS = 100;
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyy.MM.dd");
     private static final Pattern STOCK_CODE = Pattern.compile("^[0-9A-Z]{1,6}([.-][0-9A-Z]{1,2})?$");
@@ -75,7 +77,7 @@ class FundSiteMemberSource implements MemberSourcePort {
             // 설정한 주소 모양이 틀린 경우. 메시지에 주소가 섞이지 않게 원인은 붙이지 않는다.
             throw new MemberSourceException("invalid url template");
         }
-        if (response.body().length() > MAX_BODY_CHARS) {
+        if (response.body().getBytes(StandardCharsets.UTF_8).length > MAX_BODY_BYTES) {
             throw new MemberSourceException("response too large");
         }
         // 200이 아니거나 모양이 달라 실패하는 응답도 원인을 볼 수 있게 해석 전에 원문을 남긴다.

@@ -1,4 +1,4 @@
-package dev.stockreading.market.members;
+package dev.stockreading.collector.members;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

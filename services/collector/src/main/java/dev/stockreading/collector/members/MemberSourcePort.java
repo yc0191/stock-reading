@@ -1,4 +1,4 @@
-package dev.stockreading.market.members;
+package dev.stockreading.collector.members;
 
 import java.time.LocalDate;
 import java.util.List;

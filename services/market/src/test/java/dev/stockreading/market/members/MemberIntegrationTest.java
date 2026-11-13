@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.UUID;
 
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
@@ -21,7 +22,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * 구성 종목 이력과 교체 일정 테이블의 마이그레이션, 이력 쓰기와 ETF 구성 연결 표 맞추기, 판 범위 안 변경 읽기를 실제 Postgres로 확인한다.
+ * 구성 종목 이력·원문 테이블의 마이그레이션, 받은 결과의 원문 저장·비교·반영(같은 이벤트는 한 번), 이력 쓰기와 ETF 구성 연결 표 맞추기,
+ * 판 범위 안 변경 읽기를 실제 Postgres로 확인한다.
  * 세 환경변수가 모두 있을 때만 실행하며, 대상은 비어 있는 새 DB(public 스키마)라고 가정한다.
  * 가짜 식별자는 MEMBER 접두어로 정해 다른 통합 테스트(TEST, FAKE 접두어)와 겹치지 않게 한다.
  */
@@ -35,6 +37,7 @@ class MemberIntegrationTest {
     private static JdbcClient jdbc;
     private static JdbcClient writer;
     private static MemberRepository repository;
+    private static TransactionTemplate transaction;
     private long etfId;
 
     @BeforeAll
@@ -48,8 +51,8 @@ class MemberIntegrationTest {
         jdbc = JdbcClient.create(dataSource);
         writer = JdbcClient.create(new DriverManagerDataSource(url, System.getenv("WRITER_IT_DB_USER"),
                 System.getenv("WRITER_IT_DB_PASSWORD")));
-        repository = new MemberRepository(jdbc, new TransactionTemplate(new DataSourceTransactionManager(dataSource)),
-                JsonMapper.builder().build());
+        transaction = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
+        repository = new MemberRepository(jdbc, transaction, JsonMapper.builder().build());
     }
 
     @BeforeEach
@@ -79,13 +82,12 @@ class MemberIntegrationTest {
     }
 
     @Test
-    void targetsAreTheKoreanEtfsWithASourceIdWithTheirIndex() {
-        jdbc.sql("INSERT INTO etf (market, symbol, constituent_source_id) VALUES ('KR', 'MEMBE2', NULL)").update();
-        jdbc.sql("INSERT INTO etf (market, symbol, constituent_source_id) VALUES ('KR', 'MEMBE3', '  ')").update();
-        jdbc.sql("INSERT INTO etf (market, symbol, constituent_source_id) VALUES ('US', 'MEMBE4', 'SRC4')").update();
+    void theEtfIdIsFoundByItsKoreanSymbolOnly() {
+        jdbc.sql("INSERT INTO etf (market, symbol) VALUES ('US', 'MEMBE4')").update();
 
-        assertThat(repository.targets())
-                .containsExactly(new MemberRepository.Target(etfId, "MEMBE1", "MEMBER INDEX", "SRC1"));
+        assertThat(repository.etfId("MEMBE1")).contains(etfId);
+        assertThat(repository.etfId("MEMBE4")).isEmpty();
+        assertThat(repository.etfId("MEMBE9")).isEmpty();
     }
 
     @Test
@@ -175,9 +177,15 @@ class MemberIntegrationTest {
     }
 
     @Test
-    void rawResponsesAreStoredVerbatimIncludingFailedOnes() {
-        repository.saveRaw(etfId, LocalDate.parse("2026-11-06"), 200, " {\"pdf\": 1}\n");
-        repository.saveRaw(etfId, LocalDate.parse("2026-11-06"), 503, "down");
+    void rawResponsesAreStoredVerbatimIncludingFailedOnesAndOnlyOncePerEvent() {
+        UUID first = UUID.randomUUID();
+        OffsetDateTime fetchedAt = OffsetDateTime.parse("2026-11-09T08:00:01+09:00");
+        assertThat(repository.saveRaw(first, etfId, LocalDate.parse("2026-11-06"), 200, " {\"pdf\": 1}\n", fetchedAt)).isTrue();
+        assertThat(repository.saveRaw(UUID.randomUUID(), etfId, LocalDate.parse("2026-11-06"), 503, "down", fetchedAt)).isTrue();
+        assertThat(repository.saveRaw(first, etfId, LocalDate.parse("2026-11-06"), 200, "again", fetchedAt)).isFalse();
+        // 받은 시각은 저장한 시각이 아니라 수집기가 응답을 받은 시각이다.
+        assertThat(jdbc.sql("SELECT DISTINCT fetched_at FROM etf_stock_raw WHERE etf_id = :etf").param("etf", etfId)
+                .query(OffsetDateTime.class).list()).singleElement().satisfies(t -> assertThat(t).isAtSameInstantAs(fetchedAt));
 
         assertThat(jdbc.sql("SELECT http_status || ':' || body FROM etf_stock_raw WHERE etf_id = :etf ORDER BY id")
                 .param("etf", etfId).query(String.class).list()).containsExactly("200: {\"pdf\": 1}\n", "503:down");
@@ -203,15 +211,48 @@ class MemberIntegrationTest {
     }
 
     @Test
-    void rebalanceMonthIsTheCalendarMonthOfAnEffectiveDateForThatIndexOnly() {
-        jdbc.sql("INSERT INTO index_rebalance_schedule (tracks, effective_date, note) VALUES ('MEMBER INDEX', DATE '2026-12-18', 'TEST')")
-                .update();
+    void aFetchedResultIsSavedComparedAndAppliedOnceAndAFailureKeepsTheComposition() {
+        MemberApplyService service = new MemberApplyService(repository, transaction);
+        UUID event = UUID.randomUUID();
 
-        assertThat(repository.inRebalanceMonth("MEMBER INDEX", LocalDate.parse("2026-12-01"))).isTrue();
-        assertThat(repository.inRebalanceMonth("MEMBER INDEX", LocalDate.parse("2026-12-31"))).isTrue();
-        assertThat(repository.inRebalanceMonth("MEMBER INDEX", LocalDate.parse("2026-11-30"))).isFalse();
-        assertThat(repository.inRebalanceMonth("MEMBER INDEX", LocalDate.parse("2027-01-01"))).isFalse();
-        assertThat(repository.inRebalanceMonth("OTHER INDEX", LocalDate.parse("2026-12-18"))).isFalse();
-        assertThat(repository.inRebalanceMonth(null, LocalDate.parse("2026-12-18"))).isFalse();
+        assertThat(service.apply(event, payload(members("MEMBA", "MEMBB"), "2026-11-02", null)))
+                .isEqualTo(MemberApplyService.Result.FIRST);
+        // 같은 이벤트가 다시 와도 이력·원문이 늘지 않는다.
+        assertThat(service.apply(event, payload(members("MEMBA", "MEMBB"), "2026-11-02", null)))
+                .isEqualTo(MemberApplyService.Result.DUPLICATE);
+        assertThat(service.apply(UUID.randomUUID(), payload(members("MEMBA", "MEMBB"), "2026-11-09", null)))
+                .isEqualTo(MemberApplyService.Result.SAME);
+        assertThat(service.apply(UUID.randomUUID(), payload(null, "2026-11-10", "unexpected status 503")))
+                .isEqualTo(MemberApplyService.Result.FAILED_KEPT);
+        assertThat(service.apply(UUID.randomUUID(), payload(members("MEMBC"), "2026-11-16", null)))
+                .isEqualTo(MemberApplyService.Result.CHANGED);
+
+        assertThat(jdbc.sql("SELECT count(*) FROM etf_stock_raw WHERE etf_id = :etf").param("etf", etfId)
+                .query(Long.class).single()).isEqualTo(4L);
+        assertThat(jdbc.sql("SELECT count(*) FROM etf_stock_history WHERE etf_id = :etf").param("etf", etfId)
+                .query(Long.class).single()).isEqualTo(2L);
+        assertThat(jdbc.sql("SELECT s.symbol FROM etf_stock_map m JOIN stock s ON s.id = m.stock_id WHERE m.etf_id = :etf")
+                .param("etf", etfId).query(String.class).list()).containsExactly("MEMBC");
+    }
+
+    @Test
+    void aFailureWhileApplyingLeavesNoRawSoTheRedeliveryIsAppliedAgain() {
+        MemberApplyService service = new MemberApplyService(repository, transaction);
+        UUID event = UUID.randomUUID();
+        // 이름 칸 길이(100자)를 넘는 값은 반영(stock 넣기)에서 실패한다. 원문 저장도 함께 되돌려져야 한다.
+        List<Member> tooLong = List.of(new Member("US", "MEMBA", "N".repeat(150), "5.5", 1));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> service.apply(event, payload(tooLong, "2026-11-02", null)));
+
+        assertThat(jdbc.sql("SELECT count(*) FROM etf_stock_raw WHERE event_id = :e").param("e", event)
+                .query(Long.class).single()).isZero();
+        assertThat(service.apply(event, payload(members("MEMBA"), "2026-11-02", null)))
+                .isEqualTo(MemberApplyService.Result.FIRST);
+    }
+
+    private static MembersFetchedEnvelope.Payload payload(List<Member> members, String fetchedOn, String failure) {
+        return new MembersFetchedEnvelope.Payload("MEMBE1", "2026-11-06", fetchedOn, fetchedOn + "T08:00:01+09:00",
+                failure == null ? 200 : 503, "RAW " + fetchedOn, members, failure);
     }
 }

@@ -67,21 +67,6 @@ market:
     # 세계지수 직전 영업일 행을 찾는 기간. 기준 시각보다 이 기간까지 이르게 받은 행에서 찾으며 판 범위와는 따로 둔다.
     # 연휴가 길어도 직전 영업일 행이 남도록 max-age보다 길게 둔다.
     world-index-prev-lookback: P7D
-  members:
-    # ETF 상위 구성 종목 자동 조회. 출처 주소는 저장소에 두지 않고 환경변수로만 받는다.
-    # url-template이 비어 있으면 자동 조회를 하지 않고, 구성 종목은 etf_stock_map을 직접 고친다.
-    # url-template에는 {fundId}(출처가 ETF를 부르는 번호, etf.constituent_source_id)와 {date}(yyyy.MM.dd, 기준일) 자리가 있다.
-    # 번호가 없는 ETF는 자동 조회하지 않는다.
-    url-template: ${MEMBERS_URL_TEMPLATE:}
-    # 요청마다 보내는 식별 문자열. 연락처가 필요하면 환경변수로 바꾼다(ASCII만).
-    user-agent: ${MEMBERS_USER_AGENT:stock-reading-members/1.0}
-    # 구성 종목에 담을 상위 개수(주식만).
-    top-count: 10
-    # 평소에 구성을 받는 요일. 지수 교체일이 든 달에는 매일 받는다(index_rebalance_schedule 테이블).
-    fetch-day: MONDAY
-    # 출처를 연달아 부르는 사이의 쉬는 시간과 요청 제한 시간.
-    call-interval: PT2S
-    timeout: PT10S
   daily:
     # 데일리 판 자료 응답(market.daily)에 담을 보유 ETF의 최대 개수(안전 상한). 기간·원문 크기·티커 수·세계지수 대륙은 context 설정을 함께 쓴다.
     max-etfs: 50

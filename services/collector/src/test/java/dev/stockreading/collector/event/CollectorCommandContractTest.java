@@ -14,7 +14,8 @@ class CollectorCommandContractTest {
 
     private static final String SCHEMA = "collector.command.v1.schema.json";
     private static final String[] COMMANDS = {
-            "collect", "collect-news", "collect-pre-open", "collect-intraday", "collect-post-close"};
+            "collect", "collect-news", "collect-pre-open", "collect-intraday", "collect-post-close",
+            "collect-etf-members"};
 
     private final ObjectMapper mapper = JsonMapper.builder().build();
 

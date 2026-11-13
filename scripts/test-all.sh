@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 전체 실행 스크립트. 단위·가상 테스트와 실제 DB 테스트를 항상 돌리고, --live 일 때만 시세 흐름과 브리핑·메일 실제 테스트를
+# 전체 실행 스크립트. 단위·가상 테스트와 실제 DB 테스트, 구성 종목 리허설(가짜 운용사 서버)을 항상 돌리고, --live 일 때만 시세 흐름과 브리핑·메일 실제 테스트를
 # 돌린 뒤 테스트 지도(docs/test-map)의 기능별 '돌았음 / 건너뜀(이유) / 실패' 표를 출력한다. 하나라도 실패하면 1로 끝난다.
 #
 # 사용법: scripts/test-all.sh [--live] [--plan]
@@ -56,6 +56,8 @@ if [ "$PLAN" = 1 ]; then
   echo "   테이블은 Flyway(flyway/flyway 이미지)로 만듦: market → personal 계정·권한(infra/db/personal/init.sql) → personal 순서(personal 이 market 표를 가리킴), 브리핑은 그다음."
   echo "   이미지가 없으면 처음 한 번 받음"
   echo "5. 실제 DB 테스트: 지도에서 고른 market·news·notifier·브리핑 실제 DB 테스트"
+  echo "5b. 구성 종목 리허설: 일회용 Kafka, 가짜 운용사 서버, market·collector(테스트 전용 데이터베이스), 수동 실행 명령 collect-etf-members 1건,"
+  echo "    원문·이력·구성 연결 표 확인 뒤 이 단계가 띄운 것만 정리(외부 호출 없음)"
   if [ "$LIVE" = 1 ]; then
     echo "6. 시세 흐름 실제: 일회용 Kafka, market(테스트 전용 데이터베이스), collector(실제 시세, 종목 1개), 수동 실행 명령 collect 1건, 저장 확인"
     echo "6b. 브리핑·메일 실제: news·notifier(발송 켬, [테스트], 1통)·briefing(실제 LLM) 기동, 가짜 변동·기사·수집 완료 넣기,"
@@ -97,7 +99,8 @@ unset MARKET_IT_DB_URL MARKET_IT_DB_USER MARKET_IT_DB_PASSWORD MARKET_IT_DB_MIGR
   QUOTE_FLOW_LIVE_DB_URL QUOTE_FLOW_LIVE_DB_USER QUOTE_FLOW_LIVE_DB_PASSWORD \
   BRIEFING_FLOW_LIVE_KAFKA BRIEFING_FLOW_LIVE_RUN_ID BRIEFING_FLOW_LIVE_DB_URL BRIEFING_FLOW_LIVE_DB_USER \
   BRIEFING_FLOW_LIVE_DB_PASSWORD BRIEFING_FLOW_LIVE_BRIEFING_LOG BRIEFING_FLOW_LIVE_NOTIFIER_LOG \
-  BRIEFING_FLOW_LIVE_REPORT_FILE QUOTE_FLOW_LIVE_SINCE BRIEFING_FLOW_LIVE_SINCE
+  BRIEFING_FLOW_LIVE_REPORT_FILE QUOTE_FLOW_LIVE_SINCE BRIEFING_FLOW_LIVE_SINCE \
+  MEMBERS_FLOW_DB_URL MEMBERS_FLOW_DB_USER MEMBERS_FLOW_DB_PASSWORD MEMBERS_FLOW_REQUEST_LOG MEMBERS_FLOW_WAIT_SECONDS
 
 TMP=""
 LOCKED=0
@@ -108,6 +111,7 @@ COLLECTOR_PID=""
 NEWS_PID=""
 NOTIFIER_PID=""
 BRIEFING_PID=""
+FAKE_FUND_PID=""
 MARKET_JAR=""
 COLLECTOR_JAR=""
 NEWS_JAR=""
@@ -204,6 +208,8 @@ cleanup_resources() {
   COLLECTOR_PID=""
   stop_service "$MARKET_PID" "$MARKET_JAR" market || bad=1
   MARKET_PID=""
+  stop_service "$FAKE_FUND_PID" "$ROOT/scripts/fake_fund_site.py" "가짜 운용사 서버" || bad=1
+  FAKE_FUND_PID=""
   remove_kafka || bad=1
   drop_db || bad=1
   return "$bad"
@@ -554,6 +560,39 @@ missing_live_settings() {
   printf '%s' "$missing"
 }
 
+KAFKA_FAIL_REASON=""
+
+free_port() {
+  python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
+}
+
+# 이 실행만의 일회용 Kafka 를 띄운다(라벨로 구분, 정리는 remove_kafka). 포트는 KAFKA_PORT 에 둔다.
+start_kafka() {
+  local port waited
+  port=$(free_port)
+  KAFKA_PORT=$port
+  echo "일회용 Kafka 기동: $KAFKA_NAME (127.0.0.1:$port)"
+  KAFKA_STARTED=1
+  # 컨테이너 안팎에서 같은 포트를 써서 collector-command.sh 도 같은 주소로 붙게 한다. 볼륨이 없어 지우면 데이터도 사라진다.
+  if ! docker run -d --name "$KAFKA_NAME" --label "$KAFKA_LABEL=$RUN_ID" -p "127.0.0.1:$port:$port" \
+      -e KAFKA_NODE_ID=1 -e KAFKA_PROCESS_ROLES=broker,controller \
+      -e "KAFKA_LISTENERS=PLAINTEXT://:$port,CONTROLLER://:9093" \
+      -e "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:$port" \
+      -e KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT \
+      -e KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER -e KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:9093 \
+      -e KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1 \
+      -e KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1 -e KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1 \
+      -e KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0 -e KAFKA_AUTO_CREATE_TOPICS_ENABLE=false \
+      "$KAFKA_IMAGE" >/dev/null; then
+    KAFKA_FAIL_REASON="일회용 Kafka 를 띄우지 못함"; return 1
+  fi
+  waited=0
+  until docker exec "$KAFKA_NAME" /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server "localhost:$port" >/dev/null 2>&1; do
+    if [ "$waited" -ge 60 ]; then KAFKA_FAIL_REASON="일회용 Kafka 가 60초 안에 준비되지 않음"; return 1; fi
+    sleep 2; waited=$((waited + 2))
+  done
+}
+
 service_jar() {
   local jar
   jar=$(ls "services/$1/build/libs/"*.jar 2>/dev/null | grep -v -- '-plain' | head -1)
@@ -589,28 +628,8 @@ run_live() {
     LIVE_FAIL_REASON="bootJar 를 찾지 못함"; return 1
   fi
 
-  port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-  KAFKA_PORT=$port
-  echo "일회용 Kafka 기동: $KAFKA_NAME (127.0.0.1:$port)"
-  KAFKA_STARTED=1
-  # 컨테이너 안팎에서 같은 포트를 써서 collector-command.sh 도 같은 주소로 붙게 한다. 볼륨이 없어 지우면 데이터도 사라진다.
-  if ! docker run -d --name "$KAFKA_NAME" --label "$KAFKA_LABEL=$RUN_ID" -p "127.0.0.1:$port:$port" \
-      -e KAFKA_NODE_ID=1 -e KAFKA_PROCESS_ROLES=broker,controller \
-      -e "KAFKA_LISTENERS=PLAINTEXT://:$port,CONTROLLER://:9093" \
-      -e "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:$port" \
-      -e KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT \
-      -e KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER -e KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:9093 \
-      -e KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1 \
-      -e KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1 -e KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1 \
-      -e KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0 -e KAFKA_AUTO_CREATE_TOPICS_ENABLE=false \
-      "$KAFKA_IMAGE" >/dev/null; then
-    LIVE_FAIL_REASON="일회용 Kafka 를 띄우지 못함"; return 1
-  fi
-  waited=0
-  until docker exec "$KAFKA_NAME" /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server "localhost:$port" >/dev/null 2>&1; do
-    if [ "$waited" -ge 60 ]; then LIVE_FAIL_REASON="일회용 Kafka 가 60초 안에 준비되지 않음"; return 1; fi
-    sleep 2; waited=$((waited + 2))
-  done
+  start_kafka || { LIVE_FAIL_REASON="$KAFKA_FAIL_REASON"; return 1; }
+  port=$KAFKA_PORT
 
   # 작업 위치를 임시 폴더 안쪽으로 두어 market 이 저장소의 .env 를 읽지 않게 한다.
   svc_dir="$TMP/svc"
@@ -793,6 +812,114 @@ run_live_briefing() {
     "$PY" -m pytest -c scripts/pytest.ini scripts/tests/test_briefing_flow_live.py --junitxml="$TMP/results/live/py/scripts-briefing.xml"
   ) || { LIVE_BRIEF_FAIL_REASON="리포트·메일 확인 실패"; return 1; }
 }
+
+# ---------------------------------------------------------------- 5b. 구성 종목 리허설 (가짜 운용사 서버)
+# 수집기가 가짜 운용사 사이트에서 구성 종목을 받아 etf.members.fetched 로 넘기고, 시세처리기가 테스트 전용 데이터베이스에
+# 원문 저장·비교·반영하는지 끝까지 돌린다. 외부는 부르지 않는다. 시세 흐름 실제 단계가 같은 이름의 Kafka 를 다시 띄우므로
+# 이 단계가 띄운 것(Kafka, 두 서비스, 가짜 서버)은 단계가 끝날 때 바로 정리한다.
+
+MEMBERS_FAIL_REASON=""
+
+seed_members_rehearsal() {
+  # 리허설 ETF 는 가짜 종목코드(RHRS 접두어)이며 출처 번호는 가짜 서버가 아는 값이다(scripts/fake_fund_site.py).
+  docker exec -i "$PG_CONTAINER" sh -c 'psql -qAtX -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$1"' sh "$DB_NAME" >/dev/null <<SQL
+INSERT INTO market.etf (market, symbol, name, constituent_source_id) VALUES
+  ('KR', 'RHRS01', 'REHEARSAL ETF OK', 'RHRS-OK'), ('KR', 'RHRS02', 'REHEARSAL ETF DOWN', 'RHRS-DOWN')
+ON CONFLICT (market, symbol) DO NOTHING;
+SQL
+}
+
+members_rehearsal_steps() {
+  local fund_port svc_dir="$TMP/svc-members" request_log
+  if [ "$PY_OK" = 0 ] || [ "$JAVA_OK" = 0 ]; then MEMBERS_FAIL_REASON="JDK 21 또는 브리핑 venv 가 없음"; return 1; fi
+  echo "bootJar 빌드(market, collector)"
+  ./gradlew -q :services:collector:bootJar :services:market:bootJar || { MEMBERS_FAIL_REASON="bootJar 빌드 실패"; return 1; }
+  MARKET_JAR=$(service_jar market)
+  COLLECTOR_JAR=$(service_jar collector)
+  if [ -z "$MARKET_JAR" ] || [ -z "$COLLECTOR_JAR" ]; then MEMBERS_FAIL_REASON="bootJar 를 찾지 못함"; return 1; fi
+  start_kafka || { MEMBERS_FAIL_REASON="$KAFKA_FAIL_REASON"; return 1; }
+
+  mkdir -p "$svc_dir/market" "$svc_dir/collector"
+  request_log="$svc_dir/fund-requests.log"
+  : > "$request_log"
+  fund_port=$(free_port)
+  echo "가짜 운용사 서버 기동(127.0.0.1:$fund_port)"
+  "$PY" "$ROOT/scripts/fake_fund_site.py" "$fund_port" "$request_log" > "$svc_dir/fake-fund.log" 2>&1 &
+  FAKE_FUND_PID=$!
+  seed_members_rehearsal || { MEMBERS_FAIL_REASON="리허설 ETF 를 넣지 못함"; return 1; }
+
+  echo "market 기동(테스트 전용 데이터베이스)"
+  (
+    export SPRING_DATASOURCE_URL="$JDBC_URL?currentSchema=market" SPRING_DATASOURCE_USERNAME="$M_USER" SPRING_DATASOURCE_PASSWORD="$M_PW"
+    export SPRING_KAFKA_BOOTSTRAP_SERVERS="localhost:$KAFKA_PORT"
+    cd "$svc_dir/market" && exec "$JAVA_HOME_21/bin/java" -jar "$MARKET_JAR"
+  ) > "$svc_dir/market.log" 2>&1 &
+  MARKET_PID=$!
+  wait_for_log "$svc_dir/market.log" "groupId=market-members] Adding newly assigned partitions:" "$MARKET_PID" 120
+  case $? in
+    0) ;;
+    2) MEMBERS_FAIL_REASON="market 이 시작 중에 끝남"; return 1 ;;
+    *) MEMBERS_FAIL_REASON="market 이 120초 안에 준비되지 않음"; return 1 ;;
+  esac
+
+  echo "collector 기동(가짜 운용사 서버, 타이머 모두 끔)"
+  (
+    export SPRING_KAFKA_BOOTSTRAP_SERVERS="localhost:$KAFKA_PORT"
+    export SPRING_DATASOURCE_URL="$JDBC_URL" SPRING_DATASOURCE_USERNAME="$PC_USER" SPRING_DATASOURCE_PASSWORD="$PC_PW"
+    export MEMBERS_URL_TEMPLATE="http://127.0.0.1:$fund_port/pdf/{fundId}?base={date}" MEMBERS_USER_AGENT=stock-reading-rehearsal/1.0
+    # 타이머를 모두 꺼서 구성 종목 조회는 아래 수동 실행 명령 1건뿐이게 한다. 시세는 기본(시뮬레이터)이라 외부를 부르지 않는다.
+    export COLLECTOR_SCHEDULE_ENABLED=false COLLECTOR_PRE_OPEN_ENABLED=false COLLECTOR_INSIGHT_SCHEDULE_ENABLED=false
+    export COLLECTOR_INTRADAY_ENABLED=false COLLECTOR_MEMBERS_ENABLED=false COLLECTOR_DAILY_BRIEFING_ENABLED=false
+    export COLLECTOR_MARKET_DATA_SOURCE=simulator
+    cd "$svc_dir/collector" && exec "$JAVA_HOME_21/bin/java" -jar "$COLLECTOR_JAR"
+  ) > "$svc_dir/collector.log" 2>&1 &
+  COLLECTOR_PID=$!
+  # 명령 리스너는 파티션을 받을 때 끝으로 옮기므로(꺼져 있던 동안의 명령은 실행하지 않음) 받기 전에 보낸 명령은 놓친다.
+  wait_for_log "$svc_dir/collector.log" "groupId=collector-command] Adding newly assigned partitions: [collector.command" "$COLLECTOR_PID" 120
+  case $? in
+    0) ;;
+    2) MEMBERS_FAIL_REASON="collector 가 시작 중에 끝남"; return 1 ;;
+    *) MEMBERS_FAIL_REASON="collector 가 120초 안에 준비되지 않음"; return 1 ;;
+  esac
+  sleep 3
+
+  echo "수동 실행 명령 collect-etf-members 1건 발행"
+  KAFKA_CONTAINER="$KAFKA_NAME" KAFKA_BOOTSTRAP="localhost:$KAFKA_PORT" bash scripts/collector-command.sh collect-etf-members >/dev/null \
+    || { MEMBERS_FAIL_REASON="수동 실행 명령을 보내지 못함"; return 1; }
+
+  echo "테스트 전용 데이터베이스에서 다시 읽어 확인"
+  (
+    export MEMBERS_FLOW_DB_URL="$PG_URL" MEMBERS_FLOW_DB_USER="$M_USER" MEMBERS_FLOW_DB_PASSWORD="$M_PW"
+    export MEMBERS_FLOW_REQUEST_LOG="$request_log" MEMBERS_FLOW_WAIT_SECONDS=60
+    "$PY" -m pytest -c scripts/pytest.ini scripts/tests/test_members_flow_rehearsal.py --junitxml="$TMP/results/main/py/scripts-members.xml"
+  ) || { MEMBERS_FAIL_REASON="반영 확인 실패(서비스 로그는 $svc_dir, 끝나면 지워짐)"; return 1; }
+}
+
+run_members_rehearsal() {
+  local rc=0
+  members_rehearsal_steps || rc=1
+  # 이 단계가 띄운 것만 바로 정리한다(데이터베이스는 마지막 정리 단계가 지운다).
+  stop_service "$COLLECTOR_PID" "$COLLECTOR_JAR" collector || rc=1
+  COLLECTOR_PID=""
+  stop_service "$MARKET_PID" "$MARKET_JAR" market || rc=1
+  MARKET_PID=""
+  stop_service "$FAKE_FUND_PID" "$ROOT/scripts/fake_fund_site.py" "가짜 운용사 서버" || rc=1
+  FAKE_FUND_PID=""
+  remove_kafka || rc=1
+  if [ "$rc" = 1 ] && [ -z "$MEMBERS_FAIL_REASON" ]; then MEMBERS_FAIL_REASON="정리하지 못한 것이 있음(위 안내 참고)"; fi
+  return "$rc"
+}
+
+log "5b. 구성 종목 리허설"
+t=$SECONDS
+if [ "$DB_READY" = 0 ]; then
+  stage members "구성 종목 리허설" fail "DB 준비 실패로 돌리지 못함" 0
+elif run_members_rehearsal; then
+  stage members "구성 종목 리허설" ok "" $((SECONDS - t)) main/py/scripts-members.xml
+else
+  echo "구성 종목 리허설 실패: $MEMBERS_FAIL_REASON"
+  stage members "구성 종목 리허설" fail "$MEMBERS_FAIL_REASON" $((SECONDS - t)) main/py/scripts-members.xml
+fi
 
 log "6. 시세 흐름 실제"
 t=$SECONDS

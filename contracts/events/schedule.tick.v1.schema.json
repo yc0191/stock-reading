@@ -16,7 +16,7 @@
       "type": "object",
       "required": ["jobType", "scheduledFor"],
       "properties": {
-        "jobType": { "type": "string", "minLength": 1, "description": "알려진 값: collect, collect-news, collect-post-close(장 마감 후 일봉·세계지수·환율종합·시장종합 조회), collect-pre-open(평일 장 시작 전 보유 미국 종목 해외 일봉·세계지수 아메리카 조회와 SEC EDGAR 공시 수집), collect-intraday(평일 장중 주기로 환율종합·시장종합·세계지수 아시아·아메리카 조회), daily-briefing-morning(평일 아침 판 데일리 브리핑 시작), daily-briefing-post-close(평일 마감 후 판 데일리 브리핑 시작), collect-members(평일 ETF 상위 구성 종목 조회, 그날 받을 ETF는 시세처리기가 정한다). collect-filings 는 더 이상 발행하지 않는다. collect, collect-news, collect-pre-open, collect-intraday, collect-post-close 도 더 이상 발행하지 않는다(수집기가 자기 타이머로 직접 실행하고, 수동 실행은 collector.command, ADR-012)" },
+        "jobType": { "type": "string", "minLength": 1, "description": "알려진 값: collect, collect-news, collect-post-close(장 마감 후 일봉·세계지수·환율종합·시장종합 조회), collect-pre-open(평일 장 시작 전 보유 미국 종목 해외 일봉·세계지수 아메리카 조회와 SEC EDGAR 공시 수집), collect-intraday(평일 장중 주기로 환율종합·시장종합·세계지수 아시아·아메리카 조회), daily-briefing-morning(평일 아침 판 데일리 브리핑 시작), daily-briefing-post-close(평일 마감 후 판 데일리 브리핑 시작). 구성 종목 조회는 tick 없이 수집기 작업 collect-etf-members 로 대체한다(collect-members 는 더 이상 발행하지 않는다). collect-filings 는 더 이상 발행하지 않는다. collect, collect-news, collect-pre-open, collect-intraday, collect-post-close 도 더 이상 발행하지 않는다(수집기가 자기 타이머로 직접 실행하고, 수동 실행은 collector.command, ADR-012)" },
         "scheduledFor": { "type": "string", "format": "date-time", "description": "작업이 실행되어야 했던 논리적 시각. 늦게 발행돼도 그대로 유지한다." }
       }
     }

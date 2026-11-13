@@ -51,9 +51,6 @@ java -jar services/news/build/libs/news-0.0.1-SNAPSHOT.jar
 
 | 설정 키 | 설명 |
 |---|---|
-| `market.members.url-template` | ETF 구성 종목 자동 조회의 요청 주소 틀(환경변수 `MEMBERS_URL_TEMPLATE`). `{fundId}`와 `{date}`(yyyy.MM.dd) 자리가 있습니다. 비어 있으면 자동 조회를 하지 않고 `etf_stock_map`을 직접 고칩니다. ETF별 출처 번호는 환경변수가 아니라 `etf.constituent_source_id`에 있습니다. 아래 "ETF 구성 종목 자동 조회"를 봅니다 |
-| `market.members.user-agent` | 요청마다 보내는 식별 문자열(`MEMBERS_USER_AGENT`, ASCII만) |
-| `market.members.top-count`, `fetch-day`, `call-interval`, `timeout` | 담을 상위 개수(기본 10), 평소 조회 요일(기본 월요일), 출처를 연달아 부르는 사이의 쉼(기본 2초), 요청 제한 시간(기본 10초) |
 | `market.context.max-age` | 기준 시각보다 이 기간 넘게 이른 자료는 없음으로 봅니다 |
 | `market.context.max-response-bytes` | 원문 1건의 최대 크기(UTF-8 바이트). 넘으면 원문을 빼고 너무 큼으로 표시합니다 |
 | `market.context.max-tickers` | 응답에 담을 미국 종목의 최대 개수 |
@@ -265,9 +262,9 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 
 수집기에는 공시, 시세, 뉴스 검색 클라이언트가 있습니다. 시세 기본은 가짜 데이터(시뮬레이터)이며, `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 외부 API를 씁니다. 뉴스는 15분 뉴스 수집(`collect-news`)마다 검색해 기사마다 `news.collected`를 발행하고, 기사 전송이 모두 확정된 뒤 `collection.completed`를 한 건 발행합니다([ADR-010](adr/010-event-format.md)). 브리핑의 재검색 요청을 받으면 요청한 검색어로 같은 방식으로 검색해 기사에 재검색 작업 id를 싣고, 끝나면 `jobType` `research-news`로 완료 알림을 보냅니다. 검색 한 번(정기 수집·재검색 모두)마다 거른 기사 건수를 이유별(기간 밖 `tooOld`·`tooFarAhead`, 검색어 낱말 불일치 `unmatched`, 통과한 뒤 앞서 모은 기사와 합쳐진 중복 `duplicates`)로 한 줄 `news filtered ...` 로그에 남기며 검색어와 종목은 쓰지 않습니다. DART 공시는 아직 조회 클라이언트까지만 구현되어 있고 이벤트로 발행하지 않습니다. 미국 종목 공시(SEC EDGAR)는 아래 장 시작 전 수집에서 `filing.collected`로 발행합니다. 기본값은 `application.yml`의 `collector.*`가 원본입니다.
 
-수집 작업 다섯 개(`collect` 1초 현재가, `collect-news` 뉴스, `collect-pre-open` 장 시작 전, `collect-intraday` 장중, `collect-post-close` 마감 후)는 수집기 안 타이머가 직접 실행합니다([ADR-012](adr/012-collector-timers-and-command-topic.md)). 같은 작업은 겹쳐 돌지 않아 앞 회차가 끝나지 않았으면 이번 회차를 건너뛰고 로그를 남기며, 밀린 회차를 뒤에 몰아서 실행하지 않습니다. 1초 현재가는 건너뛴 회차를 종목마다 `TICK_SKIPPED`(`exceptionType=SupersededByNewerTick`) 실패 이벤트로도 남겨 데일리 메일 서버 상태에 보입니다. 타이머 스레드가 여러 개(`spring.task.scheduling.pool.size`)라 오래 걸리는 작업이 1초 현재가와 뉴스를 막지 않습니다. 수집기가 보내는 `schedule.tick`은 다른 서비스로 가는 신호(데일리 판 시작 2개, 구성 종목 조회 `collect-members`)뿐입니다.
+수집 작업 여섯 개(`collect` 1초 현재가, `collect-news` 뉴스, `collect-pre-open` 장 시작 전, `collect-intraday` 장중, `collect-post-close` 마감 후, `collect-etf-members` ETF 구성 종목)는 수집기 안 타이머가 직접 실행합니다([ADR-012](adr/012-collector-timers-and-command-topic.md)). 같은 작업은 겹쳐 돌지 않아 앞 회차가 끝나지 않았으면 이번 회차를 건너뛰고 로그를 남기며, 밀린 회차를 뒤에 몰아서 실행하지 않습니다. 1초 현재가는 건너뛴 회차를 종목마다 `TICK_SKIPPED`(`exceptionType=SupersededByNewerTick`) 실패 이벤트로도 남겨 데일리 메일 서버 상태에 보입니다. 타이머 스레드가 여러 개(`spring.task.scheduling.pool.size`)라 오래 걸리는 작업이 1초 현재가와 뉴스를 막지 않습니다. 수집기가 보내는 `schedule.tick`은 다른 서비스로 가는 신호(데일리 판 시작 2개)뿐입니다.
 
-**수동 실행:** 작업 하나를 지금 1회 돌리려면 `scripts/collector-command.sh <명령>`을 씁니다. 명령은 위 다섯 이름이고, 스크립트가 `collector.command` 토픽으로 명령 한 건을 보냅니다. 수집기는 받은 즉시 시세 시간대와 타이머 켜기 설정에 상관없이 그 작업을 실행합니다. 같은 작업이 돌고 있으면 건너뛰고(1초 현재가도 건너뜀 이벤트는 남기지 않음), 모르는 명령은 무시하며, 둘 다 수집기 로그에만 남습니다. 같은 `eventId`는 한 번만 실행하고, 수집기가 꺼져 있던 동안 보낸 명령은 켜진 뒤 실행하지 않습니다. 환경변수 `KAFKA_CONTAINER`(기본 `stock-kafka`)와 `KAFKA_BOOTSTRAP`(컨테이너 안에서 붙을 주소, 기본 `localhost:9092`)은 `scripts/publish-tick.sh`와 같습니다. `publish-tick.sh`는 남는 tick(`daily-briefing-morning`, `daily-briefing-post-close`, `collect-members`)을 보낼 때만 씁니다.
+**수동 실행:** 작업 하나를 지금 1회 돌리려면 `scripts/collector-command.sh <명령>`을 씁니다. 명령은 위 여섯 이름이고, 스크립트가 `collector.command` 토픽으로 명령 한 건을 보냅니다. 수집기는 받은 즉시 시세 시간대와 타이머 켜기 설정에 상관없이 그 작업을 실행합니다. 같은 작업이 돌고 있으면 건너뛰고(1초 현재가도 건너뜀 이벤트는 남기지 않음), 모르는 명령은 무시하며, 둘 다 수집기 로그에만 남습니다. 같은 `eventId`는 한 번만 실행하고, 수집기가 꺼져 있던 동안 보낸 명령은 켜진 뒤 실행하지 않습니다. 환경변수 `KAFKA_CONTAINER`(기본 `stock-kafka`)와 `KAFKA_BOOTSTRAP`(컨테이너 안에서 붙을 주소, 기본 `localhost:9092`)은 `scripts/publish-tick.sh`와 같습니다. `publish-tick.sh`는 남는 tick(`daily-briefing-morning`, `daily-briefing-post-close`)을 보낼 때만 씁니다.
 
 ```bash
 scripts/collector-command.sh collect        # 1초 현재가 한 회차
@@ -300,8 +297,10 @@ scripts/collector-command.sh collect-news   # 뉴스 수집 한 번
 | `COLLECTOR_INSIGHT_CRON` | 마감 후 조회 시각. 한국 시간 기준 cron(초 분 시 일 월 요일) |
 | `COLLECTOR_PRE_OPEN_ENABLED` | `true`일 때만 수집기 타이머가 장 시작 전 수집(`collect-pre-open`)을 실행합니다. 휴장일에는 실행하지 않습니다(장 운영 상태 조회로 판정, 아래 `BROKER_MARKET_STATUS_*`). 공시는 이 수집에서만 받으므로 꺼 두면 수동 실행 명령을 보내지 않는 한 공시를 수집하지 않습니다 |
 | `COLLECTOR_PRE_OPEN_CRON` | 장 시작 전 수집 시각. 한국 시간 기준 cron |
-| `COLLECTOR_MEMBERS_ENABLED` | `true`일 때만 ETF 구성 종목 조회 tick(`collect-members`)을 평일 하루 한 번 발행합니다. 코드 기본은 꺼짐입니다. 그날 실제로 받을지는 tick을 받은 시세처리기가 정합니다 |
-| `COLLECTOR_MEMBERS_CRON` | 구성 종목 조회 tick 시각. 한국 시간 기준 cron(기본 평일 08:00). 휴장일에는 보내지 않습니다(장 운영 상태로 판정, 판정하지 못하면 영업일로 봅니다) |
+| `COLLECTOR_MEMBERS_ENABLED` | `true`일 때만 수집기 타이머가 ETF 구성 종목 조회(`collect-etf-members`)를 평일 하루 한 번 실행합니다. 코드 기본은 꺼짐입니다. 그날 실제로 받을 ETF는 수집기가 고릅니다(아래 "ETF 구성 종목 자동 조회") |
+| `COLLECTOR_MEMBERS_CRON` | 구성 종목 조회 시각. 한국 시간 기준 cron(기본 평일 08:00). 휴장일에는 조회하지 않습니다(장 운영 상태로 판정, 판정하지 못하면 영업일로 봅니다) |
+| `MEMBERS_URL_TEMPLATE` | 구성 종목 조회의 요청 주소 틀(`collector.members.url-template`). `{fundId}`와 `{date}`(yyyy.MM.dd) 자리가 있습니다. 비어 있으면 자동 조회를 하지 않고 `etf_stock_map`을 직접 고칩니다. ETF별 출처 번호는 환경변수가 아니라 `etf.constituent_source_id`에 있습니다 |
+| `MEMBERS_USER_AGENT` | 구성 종목 요청마다 보내는 식별 문자열(`collector.members.user-agent`, ASCII만). 담을 상위 개수·평소 조회 요일·호출 사이 쉼·요청 제한 시간은 `collector.members.*`가 원본입니다 |
 | `COLLECTOR_DAILY_BRIEFING_ENABLED` | `true`일 때만 데일리 브리핑 시작 tick(아침 판 `daily-briefing-morning`, 마감 후 판 `daily-briefing-post-close`)을 발행합니다. 수집기는 신호만 보내고 자료를 새로 모으지 않습니다. 휴장일에는 발행하지 않습니다(장 운영 상태 조회로 판정, 아래 `BROKER_MARKET_STATUS_*`) |
 | `COLLECTOR_DAILY_BRIEFING_MORNING_CRON` | 아침 판 시작 시각. 한국 시간 기준 cron이며 기본은 평일 09:10(`0 10 9 * * MON-FRI`)입니다. 장 시작 뒤 개장 흐름을 담으므로 장 시작(09:00)과 장 시작 전 수집 뒤로 둡니다. 바꾸면 브리핑의 급변동 합침 구간 끝(`DailySettings.morning_merge_end`)도 같이 고쳐야 합니다. `-`를 주면 이 판만 발행하지 않습니다(그러면 장 시작~09:10 급변동은 합쳐질 아침 판이 없어 09:40에 급변동 리포트로 나갑니다) |
 | `COLLECTOR_DAILY_BRIEFING_POST_CLOSE_CRON` | 마감 후 판 시작 시각. 한국 시간 기준 cron이며 장 마감 후 조회 뒤로 둡니다. `-`를 주면 이 판만 발행하지 않습니다 |
@@ -466,16 +465,17 @@ SELECT m.id, e.id, 'HELD' FROM personal.member m, market.etf e WHERE m.name = 'T
 
 ### ETF 구성 종목 자동 조회
 
-`collect-members` tick(수집기가 평일 하루 한 번 발행)을 시세처리기가 받아, 출처 번호(`etf.constituent_source_id`)가 있는 ETF의 상위 구성 종목(주식만, 비중 상위 10개)을 받아 바뀐 것만 반영합니다. 전용 consumer group(`market-members`)으로 받습니다. `schedule.tick`은 파티션이 1개라 다른 리스너와 그룹이 같으면 tick이 누락되기 때문입니다.
+수집기 타이머(`collect-etf-members`, 평일 하루 한 번)가 시세처리기 표(`etf`, `etf_stock_history`, `index_rebalance_schedule`)를 읽기 전용으로 읽어 오늘 받을 차례인 ETF를 고르고, 출처 번호(`etf.constituent_source_id`)가 있는 ETF의 구성(PDF)을 운용사 사이트에서 ETF마다 한 번 받습니다. 받은 응답마다 원문과 상위 구성 종목(주식만, 비중 상위 10개)을 `etf.members.fetched` 이벤트로 넘기고, 시세처리기가 받아(consumer group `market-members`) 원문 저장·앞 구성과 비교·바뀐 것만 반영합니다. 같은 `eventId`는 한 번만 반영합니다. 계약은 `contracts/events/etf.members.fetched.v1.schema.json`입니다.
 
-- **주기:** 평소에는 한 주에 한 번(`market.members.fetch-day`), 지수 교체일이 든 달에는 매일 받습니다. 교체 일정은 `index_rebalance_schedule` 테이블(`tracks`, `effective_date`, 선택 `note`)에 사람이 1년에 한 번 직접 넣습니다. `tracks`는 `etf.tracks`와 같은 값이어야 ETF와 이어집니다. 일정이 없는 ETF는 주 1회만 받습니다. 아직 구성을 한 번도 받지 않은 ETF는 요일을 기다리지 않고 다음 조회 때 바로 받습니다.
+- **주기:** 평소에는 한 주에 한 번(`collector.members.fetch-day`), 지수 교체일이 든 달에는 매일 받습니다. 교체 일정은 `index_rebalance_schedule` 테이블(`tracks`, `effective_date`, 선택 `note`)에 사람이 1년에 한 번 직접 넣습니다. `tracks`는 `etf.tracks`와 같은 값이어야 ETF와 이어집니다. 일정이 없는 ETF는 주 1회만 받습니다. 아직 구성을 한 번도 받지 않은 ETF는 요일을 기다리지 않고 다음 조회 때 바로 받습니다.
 - **반영:** 받은 상위 구성의 종목·순위가 이전과 다를 때만 `etf_stock_history`에 새 행을 넣고, 같은 때 `etf_stock_map`(현재 구성) 줄도 맞춥니다. 종목이 들어오거나 나가거나, 상위 10개 안의 순위만 바뀌어도 바뀐 것으로 봅니다. 비중과 이름은 비교하지 않습니다. 그대로면 이력 행의 마지막 확인일(`last_seen_on`)만 고치고, `etf_stock_map`의 비중(`weight`)은 새로 받은 값으로 맞춥니다. 이미 이름이 있는 주식의 이름은 출처 이름으로 바꾸지 않고 이름이 빈 행에만 채웁니다. 새 구성 종목은 `stock` 행으로 넣고, 구성에서 빠진 주식도 `stock` 행은 지우지 않습니다(개인 포트폴리오가 가리킬 수 있어서). 바뀐 `etf_stock_map`은 뉴스와 수집기가 다음에 시작할 때 읽어 반영합니다.
-- **원문 보관:** 받을 때마다 응답 원문을 그대로 `etf_stock_raw`(ETF, 기준일, 상태 코드, 원문, 받은 시각)에 저장합니다. 상태가 200이 아니거나 모양이 달라 실패한 응답도 해석 전에 저장합니다(너무 큰 응답은 제외). `etf_stock_history`의 구성은 이 원문에서 주식만 골라 상위 10개로 줄인 계산 결과입니다. 행은 받을 때마다 늘며 지우는 절차는 아직 없습니다.
-- **실패:** 출처가 응답하지 않거나, 상태가 200이 아니거나, 응답 모양이 다르거나, 주식 행이 하나도 없으면 그 ETF는 이전 구성을 그대로 두고 로그에 오류 종류만 남기며(주소·종목코드는 남기지 않음) 다음 ETF로 넘어갑니다. 비중이 숫자가 아니거나 0~100을 벗어난 응답도 모양이 다른 응답으로 봅니다.
+- **원문 보관:** 받을 때마다 응답 원문을 그대로 `etf_stock_raw`(ETF, 기준일, 상태 코드, 원문, 수집기가 받은 시각, 이벤트 번호)에 저장합니다. 상태가 200이 아니거나 모양이 달라 실패한 응답도 수집기가 해석 전에 원문을 이벤트에 실어 저장됩니다. 원문은 이벤트로 Kafka를 지나므로 UTF-8 900KB를 넘거나 이벤트 전체가 Kafka 메시지 상한에 가까우면(`MembersPublisher`) 보내지 않고 실패로 둡니다. `etf_stock_history`의 구성은 이 원문에서 주식만 골라 상위 10개로 줄인 계산 결과입니다. 행은 받을 때마다 늘며 지우는 절차는 아직 없습니다.
+- **실패:** 출처가 응답하지 않거나(이벤트 없음), 상태가 200이 아니거나, 응답 모양이 다르거나, 주식 행이 하나도 없으면 그 ETF는 이전 구성을 그대로 두고 로그에 오류 종류만 남기며(주소·종목코드는 남기지 않음) 다음 ETF로 넘어갑니다. 비중이 숫자가 아니거나 0~100을 벗어난 응답도 모양이 다른 응답으로 봅니다.
 - **수동 ETF:** 출처 번호가 없는 ETF는 자동으로 받지 않고, `etf_stock_map`을 직접 고칩니다.
 - **판에 싣기:** 데일리 응답은 판 요청 시간 범위 안에 반영된 변경만 `memberChanges`로 싣습니다. `since`는 바뀌기 전 구성을 마지막으로 확인한 날, `asOf`는 바뀐 구성을 처음 받은 날입니다. 범위 안에 변경이 여러 번이면 첫 변경 직전 구성과 마지막 구성을 비교하고, 되돌아왔으면 싣지 않습니다.
 - **조회 기준:** 출처에는 오늘 직전 평일을 기준일로 요청합니다. 공휴일은 따로 보지 않으며, 그날 자료가 없어 비어 오면 실패로 처리됩니다. 주식만 거르는 기준은 "비중이 있고 종목코드가 주식 코드 모양"이며, 시장은 코드가 숫자로 시작하는 6자리면 `KR`, 미국 티커 모양(영문 대문자 1~5자, 종류 구분 `-`·`.` 1자)이면 `US`이며(출처가 해외 종목코드를 `<티커> US Equity`처럼 거래소 꼬리를 붙여 주면 꼬리를 떼고, 종류 구분 `/`는 `-`로 바꿉니다) 그 밖의 코드(숫자 4자리 등 다른 해외 코드)는 후보에서 빼고 개수만 로그에 남깁니다. 같은 종목코드가 응답에 두 행 이상이면 비중을 합쳐 한 번만 넣습니다. 마지막 확인일이 7일 넘게 지난 ETF는 조회 요일과 상관없이 받을 차례로 봅니다(공휴일 다음 조회가 실패해도 다음 주까지 기다리지 않게). 해외 종목 코드 모양과 채권·파생·다른 ETF가 실제 응답에서 어떻게 보이는지는 아직 실제 응답으로 확인하지 못했습니다(미확인).
-- **결정: 시세처리기의 첫 외부 호출.** 지금까지 시세처리기는 외부를 호출하지 않고 수집기가 받아 준 자료만 읽었습니다. 구성 종목은 호출이 주 1회 수준으로 적고(ETF마다 한 번, 한 번에 약 수십 KB), 받은 결과를 곧바로 이력·종목 테이블에 반영해야 하며, 종목 테이블을 쓰는 서비스가 시세처리기뿐이라 시세처리기가 직접 호출합니다. 수집기가 받으면 응답을 이벤트로 옮기고 다시 시세처리기가 받아 테이블에 쓰는 단계가 더해집니다. 이 호출은 시세 제공자 API(`CallRateLimit` 대상)와 무관하며, 출처 주소와 ETF별 번호는 설정값으로만 받습니다. 출처 응답 모양이 예고 없이 바뀔 수 있어, 모양이 다르면 일부만 읽지 않고 실패로 둡니다.
+- **외부 호출은 수집기만.** 외부 조회는 수집기가 하고 시세처리기는 외부를 호출하지 않습니다(2026-11-13, 이전에는 시세처리기가 직접 받았습니다). 종목·이력 테이블을 쓰는 서비스는 여전히 시세처리기뿐이라 수집기는 그 표를 읽기만 하고 결과는 이벤트로 넘깁니다. 이 호출은 시세 제공자 API(`CallRateLimit` 대상)와 무관하며, 출처 주소와 ETF별 번호는 설정값으로만 받습니다. 출처 응답 모양이 예고 없이 바뀔 수 있어, 모양이 다르면 일부만 읽지 않고 실패로 둡니다. 수집기 계정의 읽기 권한은 `infra/db/personal/init.sql`이 줍니다.
+- **배포 뒤 확인:** 이 변경을 배포한 뒤 첫 평일 08:00 구성 종목 조회에서 수집기 로그에 대상 읽기 실패 경고(`member targets unreadable`, 권한 부족)가 없는지 확인합니다. 수집기의 읽기 권한(`etf_stock_history`, `index_rebalance_schedule` 포함)은 배포 때마다 도는 DB 준비 단계(`infra/deploy/migrate/migrate.sh`가 `infra/db/personal/init.sql` 실행)가 반영합니다.
 - **자동 수집을 허용한 곳만:** 이용약관이나 robots.txt가 자동 수집을 막는 출처는 쓰지 않고, 그런 ETF는 수동 입력으로 둡니다.
 
 ## 추적 ID
@@ -593,7 +593,7 @@ MOVE_REPLAY_INPUT=<저장소 밖>/snapshots.tsv MOVE_REPLAY_EXCLUDE=<저장소 �
 - **변동 알림의 읽은 위치를 언제 확정할지:** 지금은 `market.move`를 읽는 즉시 확정해, 브리핑이 정상 종료되면 모으는 중이던 변동은 실패 작업으로 남고(강제 종료만 기록 없이 사라짐) 이미 만든 작업은 `interrupted_by_restart`로 끝납니다(다시 처리하지 않음으로 정했습니다). 처리를 끝낸 뒤 확정하도록 바꿀지(재시작 후 다시 처리하므로 중복 리포트를 막는 방법도 함께 필요) 정합니다.
 - **작업 기록 보관 기간:** `briefing.job_run`과 `briefing.job_log`는 줄을 지우지 않고 쌓습니다. LLM 입력·원래 응답을 그대로 담아 커지므로 보관 기간과 정리 방법(오래된 `job_log` 줄만 지울지, `job_run`까지 지울지)을 정합니다.
 - **뉴스 수집 완료 테이블:** `briefing.collection_completed`의 보관 기간과 정리 방법을 정합니다.
-- **휴장일 판정:** 시세 제공자의 장 운영 상태 조회로 평일 08:00(`collector.market-status.decide-cron`)에 판정해 그날 하루 동안 씁니다. 판정하지 못하면 영업일로 봅니다. 휴장일에는 구성 종목 조회 tick(`collect-members`)과 데일리 판 tick, 시세·장 시작 전·장중·마감 후 수집을 건너뛰고 뉴스 수집은 계속합니다. 수동 실행 명령(`collector.command`)은 휴장 확인 없이 실행합니다. 실제 휴장일 응답으로 규칙을 확인하는 일이 남았습니다.
+- **휴장일 판정:** 시세 제공자의 장 운영 상태 조회로 평일 08:00(`collector.market-status.decide-cron`)에 판정해 그날 하루 동안 씁니다. 판정하지 못하면 영업일로 봅니다. 휴장일에는 구성 종목 조회(`collect-etf-members`)와 데일리 판 tick, 시세·장 시작 전·장중·마감 후 수집을 건너뛰고 뉴스 수집은 계속합니다. 수동 실행 명령(`collector.command`)은 휴장 확인 없이 실행합니다. 실제 휴장일 응답으로 규칙을 확인하는 일이 남았습니다.
 
 ## 후속
 

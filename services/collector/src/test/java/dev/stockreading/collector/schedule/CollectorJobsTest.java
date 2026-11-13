@@ -32,6 +32,7 @@ import org.slf4j.MDC;
 
 import dev.stockreading.collector.insight.InsightPublisher;
 import dev.stockreading.collector.insight.IntradayPublisher;
+import dev.stockreading.collector.members.MembersPublisher;
 import dev.stockreading.collector.schedule.CollectorJobs.Job;
 import dev.stockreading.collector.schedule.CollectorJobs.Outcome;
 import dev.stockreading.collector.trace.CorrelationId;
@@ -47,6 +48,7 @@ class CollectorJobsTest {
     private final FilingPublisher filings = mock(FilingPublisher.class);
     private final InsightPublisher insight = mock(InsightPublisher.class);
     private final IntradayPublisher intraday = mock(IntradayPublisher.class);
+    private final MembersPublisher members = mock(MembersPublisher.class);
     // 막아 둔 작업을 테스트가 끝나면 풀어 준다.
     private final CountDownLatch release = new CountDownLatch(1);
 
@@ -56,17 +58,18 @@ class CollectorJobsTest {
     }
 
     private CollectorJobs broker() {
-        return new CollectorJobs(quotes, news, filings, Optional.of(insight), Optional.of(intraday), CLOCK);
+        return new CollectorJobs(quotes, news, filings, Optional.of(insight), Optional.of(intraday), members, CLOCK);
     }
 
     private CollectorJobs simulator() {
-        return new CollectorJobs(quotes, news, filings, Optional.empty(), Optional.empty(), CLOCK);
+        return new CollectorJobs(quotes, news, filings, Optional.empty(), Optional.empty(), members, CLOCK);
     }
 
     @Test
     void jobNamesAreTheJobTypesAndUnknownNamesAreEmpty() {
         assertThat(Arrays.stream(Job.values()).map(Job::jobType)).containsExactly(
-                "collect", "collect-news", "collect-pre-open", "collect-intraday", "collect-post-close");
+                "collect", "collect-news", "collect-pre-open", "collect-intraday", "collect-post-close",
+                "collect-etf-members");
         for (Job job : Job.values()) {
             assertThat(Job.of(job.jobType())).contains(job);
         }
@@ -125,6 +128,7 @@ class CollectorJobsTest {
         verify(filings).publishCollected("collect-pre-open-" + AT);
         verify(intraday).publishIntraday("collect-intraday-" + AT, AT);
         verify(insight).publishAll("collect-post-close-" + AT, AT);
+        verify(members).publishFetched("collect-etf-members-" + AT);
     }
 
     @Test
@@ -289,6 +293,7 @@ class CollectorJobsTest {
             case COLLECT_PRE_OPEN -> doAnswer(answer).when(filings).publishCollected(anyString());
             case COLLECT_INTRADAY -> doAnswer(answer).when(intraday).publishIntraday(anyString(), anyString());
             case COLLECT_POST_CLOSE -> doAnswer(answer).when(insight).publishAll(anyString(), anyString());
+            case COLLECT_ETF_MEMBERS -> doAnswer(answer).when(members).publishFetched(anyString());
         }
     }
 

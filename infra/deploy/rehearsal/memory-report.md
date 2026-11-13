@@ -7,7 +7,7 @@
 1. 데이터 서버(`data.yml`)와 서비스 서버(`services.yml`)를 띄움.
 2. `flyway-migrate`가 market, personal 계정·권한, personal, briefing 순서로 표를 만든 뒤 서비스 5개가 뜸.
 3. 가짜 종목·멤버 2명(서로 다른 포트폴리오)을 넣고 수집기·뉴스를 다시 띄움.
-4. 수집기 수동 명령(`collect`, `collect-pre-open`, `collect-intraday`, `collect-post-close`, `collect-news`)과 tick(`collect-members`, `daily-briefing-morning`, `daily-briefing-post-close`)을 발행하고 150초 기다림.
+4. 수집기 수동 명령(`collect`, `collect-pre-open`, `collect-intraday`, `collect-post-close`, `collect-news`)과 tick(`collect-members`, `daily-briefing-morning`, `daily-briefing-post-close`)을 발행하고 150초 기다림. tick `collect-members`는 측정 당시 기준이며, 지금은 수동 실행 명령 `collect-etf-members`로 같은 일을 합니다.
 
 ## 결과
 

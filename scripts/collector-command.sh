@@ -4,12 +4,12 @@
 # 같은 작업이 돌고 있으면 건너뛰고 수집기 로그에만 남는다. 수집기가 꺼져 있을 때 보낸 명령은 켜진 뒤 실행되지 않는다.
 #
 # 사용법: scripts/collector-command.sh <명령>
-#   명령: collect | collect-news | collect-pre-open | collect-intraday | collect-post-close
+#   명령: collect | collect-news | collect-pre-open | collect-intraday | collect-post-close | collect-etf-members
 #   (예: collect 는 1초 현재가 한 회차, collect-news 는 뉴스 수집 한 번)
 # 환경변수: KAFKA_CONTAINER (기본 stock-kafka), KAFKA_BOOTSTRAP (컨테이너 안에서 붙을 주소, 기본 localhost:9092)
 set -euo pipefail
 
-usage="사용법: $0 <collect|collect-news|collect-pre-open|collect-intraday|collect-post-close>"
+usage="사용법: $0 <collect|collect-news|collect-pre-open|collect-intraday|collect-post-close|collect-etf-members>"
 
 if [ "$#" -ne 1 ]; then
   echo "$usage" >&2
@@ -19,7 +19,7 @@ fi
 command="$1"
 # 수집기는 모르는 명령을 무시만 하므로, 오타를 보낸 줄 모르고 기다리지 않게 여기서 막는다.
 case "$command" in
-  collect|collect-news|collect-pre-open|collect-intraday|collect-post-close) ;;
+  collect|collect-news|collect-pre-open|collect-intraday|collect-post-close|collect-etf-members) ;;
   *)
     echo "모르는 명령입니다: $command" >&2
     echo "$usage" >&2

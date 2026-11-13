@@ -17,8 +17,8 @@
       "required": ["command"],
       "properties": {
         "command": {
-          "enum": ["collect", "collect-news", "collect-pre-open", "collect-intraday", "collect-post-close"],
-          "description": "실행할 수집 작업. 수집기 타이머 작업의 jobType 과 같은 이름이다. collect(1초 현재가 한 회차), collect-news(뉴스), collect-pre-open(해외 일봉·세계지수 아메리카와 SEC 공시), collect-intraday(환율종합·시장종합·세계지수 아시아·아메리카), collect-post-close(마감 후 일봉·세계지수·환율종합·시장종합)."
+          "enum": ["collect", "collect-news", "collect-pre-open", "collect-intraday", "collect-post-close", "collect-etf-members"],
+          "description": "실행할 수집 작업. 수집기 타이머 작업의 jobType 과 같은 이름이다. collect(1초 현재가 한 회차), collect-news(뉴스), collect-pre-open(해외 일봉·세계지수 아메리카와 SEC 공시), collect-intraday(환율종합·시장종합·세계지수 아시아·아메리카), collect-post-close(마감 후 일봉·세계지수·환율종합·시장종합), collect-etf-members(오늘 받을 차례인 ETF의 구성 종목)."
         }
       }
     }

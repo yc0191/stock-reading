@@ -107,7 +107,10 @@ def test_plan_without_live_lists_steps_and_skips_the_live_flow():
     assert result.returncode == 0
     assert "Java 전체" in result.stdout and "실제 DB 테스트" in result.stdout
     assert f"건너뜀({rr.LIVE_SKIP_REASON})" in result.stdout
-    assert "일회용 Kafka" not in result.stdout
+    # 기본 실행이 띄우는 일회용 Kafka 는 외부를 부르지 않는 구성 종목 리허설뿐이다.
+    kafka_lines = [line for line in result.stdout.splitlines() if "일회용 Kafka" in line]
+    assert len(kafka_lines) == 1 and kafka_lines[0].startswith("5b. 구성 종목 리허설")
+    assert "외부 호출 없음" in result.stdout.split("5b.", 1)[1].split("\n6.", 1)[0]
 
 
 def test_plan_with_live_includes_the_live_flow():
@@ -438,7 +441,8 @@ def test_script_checks_every_live_key_before_calling_anything():
     assert all(f'{key}="$(env_or_dotenv {key})"' in collector for key in settings)
     # 키 확인이 bootJar·Kafka 기동보다 앞에 있어야 한다.
     body = text.split("run_live() {", 1)[1]
-    assert body.index("fetch_live_params") < body.index("missing_live_keys") < body.index("missing_live_settings") < body.index("bootJar") < body.index("docker run")
+    assert body.index("fetch_live_params") < body.index("missing_live_keys") < body.index("missing_live_settings") < body.index("bootJar") < body.index("start_kafka")
+    assert "docker run" in text.split("start_kafka() {", 1)[1].split("\n}\n", 1)[0]
 
 
 def _live_functions(text: str) -> str:
@@ -526,7 +530,8 @@ def test_service_ready_patterns_match_the_kafka_client_log_format():
     import re
     text = SCRIPT.read_text(encoding="utf-8")
     patterns = re.findall(r'wait_for_log "[^"]+" "([^"]*Adding newly assigned partitions:[^"]*)"', text)
-    assert len(patterns) == 4
+    # 시세 흐름 실제(market, collector), 브리핑·메일 실제(2곳), 구성 종목 리허설(market, collector)
+    assert len(patterns) == 6
     log_line = ("[Consumer clientId=consumer-collector-command-2, groupId=collector-command] "
                 "Adding newly assigned partitions: [collector.command-0]")
     assert any(p in log_line for p in patterns)

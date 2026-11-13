@@ -28,7 +28,7 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * 리허설: 가짜 시세 서버의 장 운영 상태 응답 → 휴장일 판정 → 수집기 타이머 4곳과 데일리 판 tick 발행기 → 가짜 실행 입구·가짜 Kafka 까지 끝까지 돌린다.
+ * 리허설: 가짜 시세 서버의 장 운영 상태 응답 → 휴장일 판정 → 수집기 타이머 5곳과 데일리 판 tick 발행기 → 가짜 실행 입구·가짜 Kafka 까지 끝까지 돌린다.
  * 타이머와 발행기는 다른 패키지의 package-private 클래스라 리플렉션으로 만든다.
  */
 class MarketHolidayFlowTest {
@@ -78,7 +78,7 @@ class MarketHolidayFlowTest {
                 new IntradayProperties(true, "0 */5 9-15 * * MON-FRI", "09:00", "15:30", 15_000), marketDay, CLOCK),
                 "collectIntraday");
         fire(publisher(SCHEDULE + "PostCloseTimer", jobs, marketDay), "collectPostClose");
-        fire(publisher(SCHEDULE + "MemberTickPublisher", marketDay, kafka, mapper, CLOCK), "publishMembersTick");
+        fire(publisher(SCHEDULE + "MembersTimer", jobs, marketDay), "collectMembers");
         Object daily = publisher(SCHEDULE + "DailyBriefingTickPublisher", marketDay, kafka, mapper, CLOCK);
         fire(daily, "publishMorningTick");
         fire(daily, "publishPostCloseTick");
@@ -86,26 +86,28 @@ class MarketHolidayFlowTest {
 
     private void verifyEveryJobAndTickRan() {
         verify(jobs).start(Job.COLLECT);
-        for (Job job : new Job[] {Job.COLLECT_NEWS, Job.COLLECT_PRE_OPEN, Job.COLLECT_INTRADAY, Job.COLLECT_POST_CLOSE}) {
+        for (Job job : new Job[] {Job.COLLECT_NEWS, Job.COLLECT_PRE_OPEN, Job.COLLECT_INTRADAY, Job.COLLECT_POST_CLOSE,
+                Job.COLLECT_ETF_MEMBERS}) {
             verify(jobs).run(job);
         }
-        for (String jobType : new String[] {"collect-members", "daily-briefing-morning", "daily-briefing-post-close"}) {
+        for (String jobType : new String[] {"daily-briefing-morning", "daily-briefing-post-close"}) {
             verify(kafka).send(eq(Topics.SCHEDULE_TICK), eq(jobType), anyString());
         }
     }
 
     @Test
-    void holidayStopsEveryMarketJobAndTickIncludingTheMembersTickAndKeepsTheNews() throws Exception {
+    void holidayStopsEveryMarketJobAndTickIncludingTheMembersFetchAndKeepsTheNews() throws Exception {
         server.marketStatusBody = FakeBrokerServer.marketStatus("20261110", "20261109");
 
         fireEverySchedule();
 
         verify(jobs).run(Job.COLLECT_NEWS);
         verify(jobs, never()).start(any());
-        for (Job job : new Job[] {Job.COLLECT_PRE_OPEN, Job.COLLECT_INTRADAY, Job.COLLECT_POST_CLOSE}) {
+        for (Job job : new Job[] {Job.COLLECT_PRE_OPEN, Job.COLLECT_INTRADAY, Job.COLLECT_POST_CLOSE,
+                Job.COLLECT_ETF_MEMBERS}) {
             verify(jobs, never()).run(job);
         }
-        for (String jobType : new String[] {"collect-members", "daily-briefing-morning", "daily-briefing-post-close"}) {
+        for (String jobType : new String[] {"daily-briefing-morning", "daily-briefing-post-close"}) {
             verify(kafka, never()).send(eq(Topics.SCHEDULE_TICK), eq(jobType), anyString());
         }
         // 여러 곳이 물었지만 서버 조회는 하루 한 번이다.
