@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from fake_anthropic import as_reply
 from briefing.config import CoreSettings, DailySettings
 from briefing.daily_jobs import DailyCore
 from briefing.daily_report import DAILY_INSUFFICIENT, DailyLlmWriter
@@ -495,8 +496,10 @@ class DailyLlm(FakeLlm):
         super().__init__(*outputs)
         self.edition = edition
 
-    def complete(self, system, user, output_schema):
-        output = super().complete(system, user, output_schema)
+    @as_reply
+    def complete(self, system, user, output_schema, addendum=""):
+        system = system + addendum
+        output = super().complete(system, user, output_schema).text
         if "다시 쓰기 요청" in system or isinstance(output, Exception):
             return output
         if self.edition == "morning":

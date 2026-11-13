@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from fake_anthropic import as_reply
 from briefing.jobs import ReportInput
 from briefing.job_log import REASON_NO_EVIDENCE
 from briefing.ports import FailureReason
@@ -15,7 +16,9 @@ from briefing.report import (
     LLM_DISCLAIMER,
     LLM_INSUFFICIENT,
     OUTPUT_SCHEMA,
+    REWRITE_ADDENDUM,
     SYSTEM_PROMPT,
+    Cause,
     LlmWriter,
     ReportStage,
     RuleBasedWriter,
@@ -73,7 +76,9 @@ class FakeLlm:
         self.calls = []
         self.schemas = []
 
-    def complete(self, system, user, output_schema):
+    @as_reply
+    def complete(self, system, user, output_schema, addendum=""):
+        system = system + addendum
         self.calls.append((system, user))
         self.schemas.append(output_schema)
         response = self.responses.pop(0)
@@ -666,3 +671,52 @@ def test_headline_uses_the_symbol_alone_when_the_response_has_no_etf_info():
     payload = published[0].value["payload"]
     assert payload["text"].startswith("[TEST01] 16:00")
     assert "name" not in payload
+
+
+def test_a_move_rewrite_sends_the_original_prompt_and_the_addendum_separately():
+    class Split:
+        def __init__(self):
+            self.calls = []
+
+        @as_reply
+        def complete(self, system, user, output_schema, addendum=""):
+            self.calls.append((system, addendum))
+            return output([("금리 결정", "금리 결정이 영향을 줬을 수 있습니다.", ["a1"], "같은 시기 금리 기사가 있었습니다.", ["a1"])])
+
+    llm = Split()
+    current = Cause("제목", "구체 문장", ("a1",), "뜻 문장", ("a1",), "더 필요한 자료")
+    LlmWriter(llm).rewrite_cause(report_input(), current, 1, ())
+
+    # 첫 블록(system)이 처음 작성 호출과 같아야 캐시를 읽는다.
+    assert llm.calls == [(SYSTEM_PROMPT, REWRITE_ADDENDUM)]
+
+
+def test_usage_is_kept_on_the_accepted_and_the_rejected_lines_and_a_call_failure_has_none():
+    from briefing.job_log import EntryType
+    from briefing.llm import LlmCallError, usage_record
+    from fake_anthropic import FAKE_USAGE
+    bad = output([("지어낸 기사가 영향을 줬을 수 있습니다.", ["a9"])])
+    s, _, job_log = stage_with_log(LlmWriter(FakeLlm(LlmCallError("LLM call failed: APIError"), bad, VALID)))
+
+    s.on_ready(report_input())
+
+    call_failed, rejected = job_log.of_type(EntryType.LLM_REJECTED)
+    (accepted,) = job_log.of_type(EntryType.REPORT_WRITTEN)
+    assert call_failed.data["usage"] is None and call_failed.data["llmResponse"] == "(응답 없음: 호출 실패)"
+    assert rejected.data["usage"] == usage_record(FAKE_USAGE) == {
+        "cacheWrite": 11, "cacheRead": 22, "input": 33, "output": 44}
+    assert accepted.data["usage"] == usage_record(FAKE_USAGE)
+
+
+def test_usage_carried_by_a_call_error_reaches_the_rejected_line():
+    from briefing.job_log import EntryType
+    from briefing.llm import usage_record
+    from fake_anthropic import FAKE_USAGE
+    # 응답은 받았지만 max_tokens로 잘려 정상 종료가 아닌 호출: 토큰은 이미 쓰였다.
+    truncated = LlmCallError("LLM call failed: max_tokens", FAKE_USAGE)
+    s, _, job_log = stage_with_log(LlmWriter(FakeLlm(truncated, VALID)))
+
+    s.on_ready(report_input())
+
+    (rejected,) = job_log.of_type(EntryType.LLM_REJECTED)
+    assert rejected.data["usage"] == usage_record(FAKE_USAGE)

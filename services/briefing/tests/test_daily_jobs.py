@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from fake_anthropic import as_reply
 from briefing.config import DailySettings
 from briefing.daily_jobs import (
     REASON_LLM_REJECTED,
@@ -88,7 +89,9 @@ class FakeLlm:
         self.outputs = list(outputs)
         self.calls = []
 
-    def complete(self, system, user, output_schema):
+    @as_reply
+    def complete(self, system, user, output_schema, addendum=""):
+        system = system + addendum
         self.calls.append((system, user, output_schema))
         output = self.outputs.pop(0)
         if isinstance(output, Exception):
@@ -798,3 +801,18 @@ def test_a_v1_response_without_the_missing_reason_is_still_read(core):
     [event] = published(requests)
     assert "TEST01 +0.50%" in event.value["payload"]["text"]
     assert event.value["payload"]["missingItems"] == []
+
+
+def test_daily_llm_lines_keep_the_usage_and_a_call_failure_has_none(core):
+    from fake_anthropic import FAKE_USAGE
+    llm = FakeLlm(LlmCallError("LLM call failed: APIError"), "bad", good_output("B1"))
+    c, requests, _, details = core(llm)
+    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_daily_data_responded(daily_response(), MORNING_AT)
+    c.on_filings_responded(filings_response(), MORNING_AT)
+    answer_news(c, requests, MORNING_AT)
+
+    failed, rejected = details.of_type(EntryType.LLM_REJECTED)
+    [accepted] = details.of_type(EntryType.REPORT_WRITTEN)
+    assert failed.data["llm"]["usage"] is None
+    assert rejected.data["llm"]["usage"] == accepted.data["llm"]["usage"] == FAKE_USAGE.as_record()

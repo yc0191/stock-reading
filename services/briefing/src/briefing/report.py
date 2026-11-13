@@ -53,7 +53,9 @@ from briefing.llm_output import (
     ticker_pattern,
     weak_note_line,
 )
-from briefing.llm import API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCallError, LlmClient, llm_config
+from briefing.llm import (API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCallError, LlmClient, LlmUsage,
+                          attempt_usage,
+                          llm_config, usage_record)
 from briefing.ports import FailureReason, RequestPort
 from briefing.sources import (
     BACKGROUND_LABEL,
@@ -184,6 +186,8 @@ class LlmAttempt:
     response: str | None
     rejection: str
     error_type: str
+    # 응답을 받지 못한 호출 실패는 None이다.
+    usage: LlmUsage | None = None
 
 
 @dataclass(frozen=True)
@@ -669,17 +673,20 @@ class LlmWriter:
         failed: list[LlmAttempt] = []
         for attempt in range(1, self.max_attempts + 1):
             response: str | None = None
+            usage: LlmUsage | None = None
             try:
-                response = self.client.complete(SYSTEM_PROMPT, user, OUTPUT_SCHEMA)
+                reply = self.client.complete(SYSTEM_PROMPT, user, OUTPUT_SCHEMA)
+                response, usage = reply.text, reply.usage
                 output = parse_output(response, allowed, tickers)
             except (LlmCallError, InvalidOutput) as error:
                 reason = str(error)
-                failed.append(LlmAttempt(attempt, user, response, reason, type(error).__name__))
+                failed.append(LlmAttempt(attempt, user, response, reason, type(error).__name__,
+                                         attempt_usage(usage, error)))
                 log.warning("LLM report attempt %d/%d failed for job %s: %s",
                             attempt, self.max_attempts, report_input.job_id, reason)
                 continue
             return replace(_llm_report(report_input, output), failed_attempts=tuple(failed),
-                           accepted=AcceptedAttempt(attempt, user, response))
+                           accepted=AcceptedAttempt(attempt, user, response, usage))
         raise ReportError(f"LLM report failed after {self.max_attempts} attempts: {reason}", self.max_attempts,
                           tuple(failed))
 
@@ -700,17 +707,20 @@ def _rewrite_cause(writer: LlmWriter, report_input: ReportInput, current: Cause,
     failed: list[LlmAttempt] = []
     for attempt in range(1, writer.max_attempts + 1):
         response: str | None = None
+        usage: LlmUsage | None = None
         try:
-            response = writer.client.complete(SYSTEM_PROMPT + REWRITE_ADDENDUM, user, OUTPUT_SCHEMA)
+            reply = writer.client.complete(SYSTEM_PROMPT, user, OUTPUT_SCHEMA, REWRITE_ADDENDUM)
+            response, usage = reply.text, reply.usage
             output = parse_output(response, allowed, tickers)
             if output.insufficient_evidence or len(output.causes) != 1:
                 raise InvalidOutput("rewrite must return exactly one cause")
         except (LlmCallError, InvalidOutput) as error:
-            failed.append(LlmAttempt(attempt, user, response, str(error), type(error).__name__))
+            failed.append(LlmAttempt(attempt, user, response, str(error), type(error).__name__,
+                                     attempt_usage(usage, error)))
             log.warning("LLM sentence rewrite attempt %d/%d failed for job %s: %s",
                         attempt, writer.max_attempts, report_input.job_id, error)
             continue
-        return SentenceRewrite(output.causes[0], tuple(failed), AcceptedAttempt(attempt, user, response))
+        return SentenceRewrite(output.causes[0], tuple(failed), AcceptedAttempt(attempt, user, response, usage))
     return SentenceRewrite(None, tuple(failed))
 
 
@@ -914,7 +924,8 @@ class ReportStage:
     def _record_accepted(self, report_input: ReportInput, a: AcceptedAttempt, now: datetime,
                          sentence_no: int | None = None, round: int | None = None) -> None:
         self._record(report_input, EntryType.REPORT_WRITTEN, REASON_LLM_ACCEPTED, None, a.attempt, now,
-                     {"attempt": a.attempt, "llmInput": a.llm_input, "llmResponse": a.response, "rejection": None},
+                     {"attempt": a.attempt, "llmInput": a.llm_input, "llmResponse": a.response, "rejection": None,
+                      "usage": usage_record(a.usage)},
                      sentence_no=sentence_no, round=round)
 
     def _record(self, report_input: ReportInput, entry_type: EntryType, reason: str, error_type: str | None,
@@ -931,7 +942,7 @@ def _attempt_data(a: LlmAttempt) -> dict[str, Any]:
     # 호출 자체가 실패해 응답이 없으면 그 사실을 값으로 남긴다(빈 값으로 두지 않는다).
     return {"attempt": a.attempt, "llmInput": a.llm_input,
             "llmResponse": a.response if a.response is not None else "(응답 없음: 호출 실패)",
-            "rejection": a.rejection}
+            "rejection": a.rejection, "usage": usage_record(a.usage)}
 
 
 def _evidence_entry(item: EvidenceItem) -> dict[str, Any]:

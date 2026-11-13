@@ -51,7 +51,9 @@ from briefing.llm_output import (
     parse_output_object,
     ticker_pattern,
 )
-from briefing.llm import API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCallError, LlmClient, llm_config
+from briefing.llm import (API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCallError, LlmClient, LlmUsage,
+                          attempt_usage,
+                          llm_config)
 from briefing.open_flow import OPEN_SOURCE_TEXT, OpenFlow, signed
 from briefing.move_figures import USD_KRW_NAME, display, exchange_rate_figure
 from briefing.sources import (
@@ -1134,6 +1136,8 @@ class LlmAttempt:
     reason: str
     llm_input: str
     raw_output: str | None
+    # 응답을 받지 못한 호출 실패는 None이다.
+    usage: LlmUsage | None = None
 
 
 @dataclass(frozen=True)
@@ -1201,21 +1205,24 @@ class DailyLlmWriter:
         rejected: list[LlmAttempt] = []
         for attempt in range(1, self.max_attempts + 1):
             raw: str | None = None
+            usage: LlmUsage | None = None
             try:
-                raw = self.client.complete(prompt, user, schema)
+                reply = self.client.complete(prompt, user, schema)
+                raw, usage = reply.text, reply.usage
                 output = parse_post_close_output(raw, allowed, tickers, _etfs_with_day(i), _issues_by_etf(i),
                                                  bool(i.notables), _reviews_to_explain(i),
                                                  _etf_names(i)) \
                     if post_close else parse_morning_output(raw, allowed, tickers, _etfs_to_forecast(i))
             except (LlmCallError, InvalidDailyOutput) as error:
-                rejected.append(LlmAttempt(attempt, type(error).__name__, str(error), user, raw))
+                rejected.append(LlmAttempt(attempt, type(error).__name__, str(error), user, raw,
+                                            attempt_usage(usage, error)))
                 log.warning("daily LLM attempt %d/%d failed for job %s: %s",
                             attempt, self.max_attempts, i.job_id, error)
                 continue
             return DailyWriteResult(DailyBody(llm_text(i, sections, output), GENERATED_BY_LLM,
                                               output.insufficient_evidence, output.cited_refs(),
                                               output.weak_shortfalls(), output), tuple(rejected),
-                                    AcceptedAttempt(attempt, user, raw))
+                                    AcceptedAttempt(attempt, user, raw, usage))
         return DailyWriteResult(None, tuple(rejected))
 
     def rewrite_point(self, i: DailyInput, sections: tuple[Section, ...], current: Point, no: int,
@@ -1229,13 +1236,15 @@ class DailyLlmWriter:
         user = json.dumps(data, ensure_ascii=False)
         allowed = frozenset(e.ref for s in sections for e in s.entries)
         tickers = self._forbidden_tickers(i)
-        prompt = SYSTEM_PROMPT_POST_CLOSE + REWRITE_ADDENDUM_POST_CLOSE if i.edition == EDITION_POST_CLOSE \
-            else SYSTEM_PROMPT + REWRITE_ADDENDUM
+        prompt, addendum = (SYSTEM_PROMPT_POST_CLOSE, REWRITE_ADDENDUM_POST_CLOSE) \
+            if i.edition == EDITION_POST_CLOSE else (SYSTEM_PROMPT, REWRITE_ADDENDUM)
         rejected: list[LlmAttempt] = []
         for attempt in range(1, self.max_attempts + 1):
             raw: str | None = None
+            usage: LlmUsage | None = None
             try:
-                raw = self.client.complete(prompt, user, OUTPUT_SCHEMA)
+                reply = self.client.complete(prompt, user, OUTPUT_SCHEMA, addendum)
+                raw, usage = reply.text, reply.usage
                 output = parse_output(raw, allowed, tickers, weak_without_refs=current.kind == POINT_ETF)
                 if output.insufficient_evidence or len(output.points) != 1:
                     raise InvalidDailyOutput("rewrite must return exactly one point")
@@ -1245,13 +1254,14 @@ class DailyLlmWriter:
                 if repeated is not None:
                     raise _repeat_error(repeated)
             except (LlmCallError, InvalidDailyOutput) as error:
-                rejected.append(LlmAttempt(attempt, type(error).__name__, str(error), user, raw))
+                rejected.append(LlmAttempt(attempt, type(error).__name__, str(error), user, raw,
+                                            attempt_usage(usage, error)))
                 log.warning("daily LLM sentence rewrite attempt %d/%d failed for job %s: %s",
                             attempt, self.max_attempts, i.job_id, error)
                 continue
             # 다시 쓴 문장은 원래 문장의 종류와 ETF를 이어받는다.
             point = replace(output.points[0], kind=current.kind, symbol=current.symbol)
-            return PointRewrite(point, tuple(rejected), AcceptedAttempt(attempt, user, raw))
+            return PointRewrite(point, tuple(rejected), AcceptedAttempt(attempt, user, raw, usage))
         return PointRewrite(None, tuple(rejected))
 
 

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from fake_anthropic import as_reply
 from briefing import main
 from briefing.config import CoreSettings
 from briefing.ports import FailureReason
@@ -103,7 +104,9 @@ class FakeLlm:
         self.outputs = list(outputs)
         self.calls = 0
 
-    def complete(self, system, user, output_schema):
+    @as_reply
+    def complete(self, system, user, output_schema, addendum=""):
+        system = system + addendum
         self.calls += 1
         return self.outputs.pop(0)
 
@@ -566,7 +569,9 @@ class SlowRewriteLlm:
     def __init__(self, clock):
         self.clock, self.calls = clock, 0
 
-    def complete(self, system, user, output_schema):
+    @as_reply
+    def complete(self, system, user, output_schema, addendum=""):
+        system = system + addendum
         self.calls += 1
         if self.calls == 1:
             return weak_report()
