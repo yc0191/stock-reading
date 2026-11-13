@@ -51,11 +51,11 @@ def run(edition="post-close", settings=None, llm=True, answer_etfs=None, ref=Non
     output = output or (post_close_output() if edition == "post-close" else good_output(ref or "B1", symbols=(
         "TEST04",)))  # 아침 판 범위 밖에 받은 ETF 셋은 버려지고 일봉이 빈 TEST04만 남는다
     writer = DailyLlmWriter(FakeLlm(output), settings.llm_max_attempts) if llm else None
-    core = DailyCore(requests, writer, details, settings, members=FakeMembers(members))
+    core = DailyCore(requests, requests.api, writer, details, settings, members=FakeMembers(members))
     job, at = (POST_CLOSE_JOB, POST_CLOSE_AT) if edition == "post-close" else (MORNING_JOB, MORNING_AT)
     core.on_collection_ready(tick(job, at), at)
     background = POST_CLOSE_BACKGROUND if edition == "post-close" else None
-    core.on_daily_data_responded(daily_response(etfs=answer_etfs or etfs(), background=background), at)
+    core.api.reply(daily_response(etfs=answer_etfs or etfs(), background=background), at)
     answer_news(core, requests, at)
     [event] = requests.topic("briefing.daily.generated")
     assert validate("briefing.daily.generated.v2.schema.json", event.value) == []

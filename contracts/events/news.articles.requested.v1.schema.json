@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://stock-reading.local/contracts/news.articles.requested.v1",
   "title": "news.articles.requested v1",
-  "description": "브리핑이 news 서비스에 한 종목의 기사를 요청한다. 읽기 전용 요청이라 같은 요청을 다시 보내도 부작용이 없다. 해당 종목과 시장 전체(\"*\") 기사를 함께 돌려준다. 메시지 키는 종목코드다.",
+  "description": "더 이상 쓰지 않음(2026-11-13). 브리핑은 이 자료를 뉴스처리기 내부 조회 API(POST /internal/news/articles)로 직접 부르고, 그 요청 본문이 이 이벤트의 payload 와 같은 모양이다. 토픽은 없앴고 옛 이벤트와 본문 모양을 확인할 수 있게 스키마와 샘플만 남긴다(ADR-010 호환 규칙). 브리핑이 news 서비스에 한 종목의 기사를 요청한다. 읽기 전용 요청이라 같은 요청을 다시 보내도 부작용이 없다. 해당 종목과 시장 전체(\"*\") 기사를 함께 돌려준다. 메시지 키는 종목코드다.",
   "type": "object",
   "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
   "properties": {

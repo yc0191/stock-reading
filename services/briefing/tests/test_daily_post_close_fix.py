@@ -68,9 +68,9 @@ def test_a_rate_that_is_not_a_number_is_not_before_open():
 
 def run_post_close(etfs, llm, at=PRE_OPEN_AT, background=None, settings=None):
     requests = Requests()
-    core = DailyCore(requests, DailyLlmWriter(llm), Details(), **({"settings": settings} if settings else {}))
+    core = DailyCore(requests, requests.api, DailyLlmWriter(llm), Details(), **({"settings": settings} if settings else {}))
     core.on_collection_ready(tick(POST_CLOSE_JOB, at), at)
-    core.on_daily_data_responded(daily_response(etfs=etfs, background=background), at)
+    core.api.reply(daily_response(etfs=etfs, background=background), at)
     answer_news(core, requests, at)
     [event] = published(requests)
     return event.value["payload"]
@@ -259,9 +259,9 @@ def raw_article(article_id, title, summary="FAKE 요약입니다."):
 def run_with_articles(rows, articles, details=None):
     llm = FakeLlm(post_close_output(tuple(r["symbol"] for r in rows)))
     requests, details = Requests(), details or Details()
-    core = DailyCore(requests, DailyLlmWriter(llm), details)
+    core = DailyCore(requests, requests.api, DailyLlmWriter(llm), details)
     core.on_collection_ready(tick(POST_CLOSE_JOB, REGULAR_AT), REGULAR_AT)
-    core.on_daily_data_responded(daily_response(etfs=rows, background=POST_CLOSE_BACKGROUND), REGULAR_AT)
+    core.api.reply(daily_response(etfs=rows, background=POST_CLOSE_BACKGROUND), REGULAR_AT)
     answer_news(core, requests, REGULAR_AT, articles=articles)
     return llm, details, published(requests)[0].value["payload"]
 

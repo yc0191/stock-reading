@@ -19,6 +19,7 @@ from briefing.job_log_store import (
     FINISH_RUN_SQL,
     INSERT_MARKET_CLOSED_SQL,
     INSERT_SQL,
+    INSERT_STEP_SQL,
     LOG_TABLE,
     RUN_TABLE,
     SELECT_EDITION_STARTED_SQL,
@@ -320,3 +321,31 @@ def test_a_failed_read_is_none_and_the_log_names_only_the_error_kind(sleeps, cap
     assert "ConnectionError" in caplog.text and "hunter2" not in caplog.text and "secret-user" not in caplog.text
     # 읽기는 다시 시도하지 않는다(판 발행을 늦추지 않는다).
     assert sleeps == []
+
+
+def test_a_job_step_is_saved_as_one_line_with_its_trace_id(sleeps):
+    from briefing.job_step import JobStep, StepResult
+    db = FakeDb()
+    step = JobStep(JOB_ID, "news.articles", "news/articles", AT, AT + timedelta(seconds=2), StepResult.FAILED, 3,
+                   "corr-1", "timeout")
+
+    assert store_for(db, sleeps).record_step(step) is True
+
+    ((sql, params),) = db.statements
+    assert sql is INSERT_STEP_SQL and "briefing.job_step" in sql
+    assert params == (JOB_ID, "news.articles", "news/articles", AT, AT + timedelta(seconds=2), "failed", "timeout", 3,
+                      "corr-1")
+
+
+def test_a_job_step_that_cannot_be_saved_does_not_mark_the_job_as_failed(sleeps, caplog):
+    from briefing.job_step import JobStep, StepResult
+    db = FakeDb(fail_times=3)
+    store = store_for(db, sleeps)
+    step = JobStep(JOB_ID, "llm", "llm/test-model", AT, AT, StepResult.SUCCEEDED, 1, None)
+
+    with caplog.at_level(logging.WARNING, logger="briefing.job_log_store"):
+        assert store.record_step(step) is False
+
+    # 호출 기록은 진단용이라 실패해도 작업의 발행을 막지 않는다(job_run·job_log 저장 실패와 다르다).
+    assert store.has_failed(JOB_ID) is False
+    assert len(sleeps) == 2 and "hunter2" not in caplog.text

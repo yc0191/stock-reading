@@ -20,9 +20,10 @@ class TopicsConfigTest {
                     Map<String, NewTopic> topics = context.getBeansOfType(NewTopic.class);
                     assertThat(topics.values()).extracting(NewTopic::name)
                             .containsExactlyInAnyOrder("market.snapshot", "market.snapshot.failed", "market.move",
-                                    "market.insight", "market.history.requested", "market.history.responded",
-                                    "market.context.requested", "market.context.responded",
-                                    "market.daily.requested", "market.daily.responded", "etf.members.fetched");
+                                    "market.insight", "etf.members.fetched");
+                    // 브리핑의 시세 조회는 내부 조회 API 라 요청·응답 토픽을 선언하지 않는다.
+                    assertThat(topics.values()).extracting(NewTopic::name)
+                            .noneMatch(name -> name.endsWith(".requested") || name.endsWith(".responded"));
                     // 생산자(수집기)도 같은 값으로 선언해야 한다.
                     assertThat(topics.values()).extracting(NewTopic::numPartitions).containsOnly(3);
                 });

@@ -1,9 +1,7 @@
 package dev.stockreading.news.query;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -14,7 +12,6 @@ import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
-import org.mockito.ArgumentCaptor;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
@@ -96,15 +93,14 @@ class ArticleQueryIntegrationTest {
 
     @Test
     void requestWithAResearchJobIdIsAnsweredWithThatJobsArticlesUnderTheRequestSymbol() {
-        ArticlesPublisher publisher = mock(ArticlesPublisher.class);
-        ArticlesRequestListener listener = new ArticlesRequestListener(repository, publisher, JsonMapper.builder().build(), mock(EtfStockMembers.class));
+        ArticlesQuery listener = new ArticlesQuery(repository, JsonMapper.builder().build(), mock(EtfStockMembers.class));
 
-        listener.onRequest(request(100).replace("\"maxArticles\":100", "\"maxArticles\":100,\"researchJobId\":\""
-                + RESEARCH_JOB + "\""));
-
-        ArgumentCaptor<List<ArticlesPayload.Article>> articles = ArgumentCaptor.captor();
-        verify(publisher).publish(eq("it-job"), eq(1), eq("ITQ001"), articles.capture(), eq(false), eq("it"));
-        assertThat(articles.getValue()).extracting(ArticlesPayload.Article::title)
+        ArticlesPayload answer = answer(listener, request(100).replace("\"maxArticles\":100",
+                "\"maxArticles\":100,\"researchJobId\":\"" + RESEARCH_JOB + "\""));
+        assertThat(answer.truncated()).isFalse();
+        assertThat(answer.jobId()).isEqualTo("it-job");
+        List<ArticlesPayload.Article> articles = answer.articles();
+        assertThat(articles).extracting(ArticlesPayload.Article::title)
                 .containsExactly("r-until", "r-middle", "r-since");
     }
 
@@ -154,14 +150,13 @@ class ArticleQueryIntegrationTest {
 
     @Test
     void responseIsCutAtMaxArticlesAndMarkedTruncated() {
-        ArticlesPublisher publisher = mock(ArticlesPublisher.class);
-        ArticlesRequestListener listener = new ArticlesRequestListener(repository, publisher, JsonMapper.builder().build(), mock(EtfStockMembers.class));
+        ArticlesQuery listener = new ArticlesQuery(repository, JsonMapper.builder().build(), mock(EtfStockMembers.class));
 
-        listener.onRequest(request(3));
-
-        ArgumentCaptor<List<ArticlesPayload.Article>> articles = ArgumentCaptor.captor();
-        verify(publisher).publish(eq("it-job"), eq(1), eq("ITQ001"), articles.capture(), eq(true), eq("it"));
-        assertThat(articles.getValue()).extracting(ArticlesPayload.Article::title)
+        ArticlesPayload answer = answer(listener, request(3));
+        assertThat(answer.truncated()).isTrue();
+        assertThat(answer.jobId()).isEqualTo("it-job");
+        List<ArticlesPayload.Article> articles = answer.articles();
+        assertThat(articles).extracting(ArticlesPayload.Article::title)
                 .containsExactly("q-until", "q-both", "q-market");
     }
 
@@ -193,5 +188,11 @@ class ArticleQueryIntegrationTest {
                  "payload":{"jobId":"it-job","seq":1,"symbol":"ITQ001",
                             "since":"2026-03-11T09:00:00+09:00","until":"2026-03-12T09:00:00+09:00","maxArticles":%d}}
                 """.formatted(maxArticles);
+    }
+
+    // 요청 이벤트 모양의 JSON 에서 payload 를 꺼내 내부 조회 API 요청 본문으로 조회 클래스에 넣는다.
+    private static ArticlesPayload answer(ArticlesQuery query, String request) {
+        JsonMapper mapper = JsonMapper.builder().build();
+        return query.answer(mapper.treeToValue(mapper.readTree(request).get("payload"), ArticlesRequest.class));
     }
 }

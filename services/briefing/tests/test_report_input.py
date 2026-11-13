@@ -186,8 +186,8 @@ def test_daily_data_response_carries_the_etf_info_into_the_llm_input(daily_core)
     with_info = {**etf_response(), "etf": ETF_INFO}
 
     c.on_collection_ready(tick(), MORNING_AT)
-    c.on_daily_data_responded(daily_response(etfs=[with_info]), MORNING_AT)
-    c.on_filings_responded(filings_response(), MORNING_AT)
+    c.api.reply(daily_response(etfs=[with_info]), MORNING_AT)
+    c.api.reply(filings_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT)
 
     published(requests)
@@ -200,8 +200,8 @@ def test_daily_data_response_from_an_older_format_without_etf_info_still_works(d
     c, requests, _, _ = daily_core(llm)
 
     c.on_collection_ready(tick(), MORNING_AT)
-    c.on_daily_data_responded(daily_response(), MORNING_AT)
-    c.on_filings_responded(filings_response(), MORNING_AT)
+    c.api.reply(daily_response(), MORNING_AT)
+    c.api.reply(filings_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT)
 
     assert len(published(requests)) == 1

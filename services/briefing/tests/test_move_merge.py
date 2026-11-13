@@ -16,6 +16,7 @@ from briefing.daily_post_close import MOVE_MERGED_TEXT
 from briefing.daily_report import DailyLlmWriter
 from briefing.job_log import REASON_INTERRUPTED, REASON_MERGED_INTO_MORNING, RunStatus
 from briefing.move_merge import MorningMerge
+from fake_api import FakeApi
 from fake_job_log import FakeJobLog
 from fake_members import FakeMembers
 from fake_news import answer_news
@@ -248,7 +249,7 @@ def morning_core(members=None, llm=None):
     notified = []
     requests, details = jobs.Requests(), jobs.Details()
     writer = DailyLlmWriter(llm, 3) if llm is not None else None
-    c = jobs.DailyCore(requests, writer, details, DailySettings(), members=members or FakeMembers(),
+    c = jobs.DailyCore(requests, requests.api, writer, details, DailySettings(), members=members or FakeMembers(),
                        on_morning_result=lambda scheduled_for, ok, now, flowed, since:
                        notified.append((scheduled_for, ok, now, flowed, since)))
     return c, requests, notified
@@ -256,8 +257,8 @@ def morning_core(members=None, llm=None):
 
 def run_morning(c, requests):
     c.on_collection_ready(jobs.tick(at=OPEN_AT), OPEN_AT)
-    c.on_daily_data_responded(jobs.daily_response(etfs=[jobs.etf(open_flow=jobs.OPEN_FLOW)]), OPEN_AT)
-    c.on_filings_responded(jobs.filings_response(), OPEN_AT)
+    c.api.reply(jobs.daily_response(etfs=[jobs.etf(open_flow=jobs.OPEN_FLOW)]), OPEN_AT)
+    c.api.reply(jobs.filings_response(), OPEN_AT)
     answer_news(c, requests, OPEN_AT)
 
 
@@ -272,10 +273,10 @@ def test_a_sent_morning_edition_reports_success():
 def test_an_etf_without_its_open_flow_in_the_edition_is_not_reported_as_flowed():
     c, requests, notified = morning_core()
     c.on_collection_ready(jobs.tick(at=OPEN_AT), OPEN_AT)
-    c.on_daily_data_responded(jobs.daily_response(etfs=[
+    c.api.reply(jobs.daily_response(etfs=[
         jobs.etf(open_flow=jobs.OPEN_FLOW), jobs.etf("TEST02", tickers=("TESTC",)),
         jobs.etf("TEST03", tickers=("TESTD",), open_flow={"status": "no-snapshot"})]), OPEN_AT)
-    c.on_filings_responded(jobs.filings_response(), OPEN_AT)
+    c.api.reply(jobs.filings_response(), OPEN_AT)
     answer_news(c, requests, OPEN_AT)
 
     assert [n[3] for n in notified] == [frozenset({"TEST01"})]
@@ -288,8 +289,8 @@ def test_the_morning_edition_is_in_progress_from_its_tick_until_it_finishes():
     c.on_collection_ready(jobs.tick(at=OPEN_AT), OPEN_AT)
     assert c.morning_in_progress(day) is True
     assert c.morning_in_progress(day + timedelta(days=1)) is False
-    c.on_daily_data_responded(jobs.daily_response(etfs=[jobs.etf(open_flow=jobs.OPEN_FLOW)]), OPEN_AT)
-    c.on_filings_responded(jobs.filings_response(), OPEN_AT)
+    c.api.reply(jobs.daily_response(etfs=[jobs.etf(open_flow=jobs.OPEN_FLOW)]), OPEN_AT)
+    c.api.reply(jobs.filings_response(), OPEN_AT)
     answer_news(c, requests, OPEN_AT)
     assert c.morning_in_progress(day) is False
 
@@ -305,9 +306,9 @@ def test_a_morning_edition_that_could_not_read_its_members_reports_failure():
 def test_the_post_close_edition_does_not_report_a_morning_result():
     c, requests, notified = morning_core()
     c.on_collection_ready(jobs.tick(jobs.POST_CLOSE_JOB, jobs.POST_CLOSE_AT), jobs.POST_CLOSE_AT)
-    c.on_daily_data_responded(jobs.daily_response(etfs=[jobs.etf(fetched="2026-10-20T16:30:00+09:00")]),
+    c.api.reply(jobs.daily_response(etfs=[jobs.etf(fetched="2026-10-20T16:30:00+09:00")]),
                               jobs.POST_CLOSE_AT)
-    c.on_filings_responded(jobs.filings_response(), jobs.POST_CLOSE_AT)
+    c.api.reply(jobs.filings_response(), jobs.POST_CLOSE_AT)
     answer_news(c, requests, jobs.POST_CLOSE_AT)
 
     assert notified == []
@@ -326,7 +327,7 @@ def runner_parts():
 
     runner = main.BriefingRunner("localhost:9092", None, store, clock=clock, consumer_factory=consumer_factory,
                                  producer_factory=FakeProducer, declare_topics=lambda _bootstrap: None,
-                                 daily_settings=DailySettings(morning_merge_enabled=True))
+                                 daily_settings=DailySettings(morning_merge_enabled=True), api_factory=FakeApi)
     runner.open()
     return runner, created[-1], clock, store
 
@@ -369,7 +370,7 @@ def test_with_the_merge_switched_off_a_window_move_goes_straight_to_the_report_f
         return created[-1]
 
     runner = main.BriefingRunner("localhost:9092", None, store, clock=clock, consumer_factory=consumer_factory,
-                                 producer_factory=FakeProducer, declare_topics=lambda _bootstrap: None)
+                                 producer_factory=FakeProducer, declare_topics=lambda _bootstrap: None, api_factory=FakeApi)
     runner.open()
     feed(runner, created[-1], clock, at(9, 3, 5), "in-window", at(9, 3))
 

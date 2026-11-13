@@ -1,7 +1,6 @@
-"""근거 자료의 형식과 응답 해석, 요청 한 번의 순번 기록, LLM 입력에 붙이는 상태 표시. Kafka를 모르며 메시지를 인자로 받는다."""
+"""근거 자료의 형식과 응답 해석, 조회 한 번의 순번 기록, LLM 입력에 붙이는 상태 표시. Kafka를 모르며 응답 본문을 인자로 받는다."""
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import date, datetime
 
@@ -143,19 +142,25 @@ BACKGROUND_SOURCE = "시세 자료(배경)"
 
 @dataclass
 class Exchange:
-    """응답 한 번으로 끝나는 요청(시세 이력, 배경 자료, 공시)의 순번과 보낸 시각."""
+    """응답 한 번으로 끝나는 조회(시세 이력, 배경 자료, 기사, 공시, 데일리 자료)의 순번과 맡긴 시각.
+
+    재시도는 조회 구현이 하므로 조회마다 결과는 한 번 온다. 끝내 받지 못하면 given_up이다.
+    """
 
     seq: int = 0
     sent_at: datetime | None = None
     received: bool = False
+    given_up: bool = False
 
     def awaiting(self) -> bool:
-        return self.sent_at is not None and not self.received
+        return self.sent_at is not None and not self.received and not self.given_up
 
 
 def next_seq(exchange: Exchange, now: datetime) -> int:
     exchange.seq += 1
     exchange.sent_at = now
+    # 앞 조회를 포기한 뒤 새로 맡긴 조회는 다시 결과를 기다린다.
+    exchange.given_up = False
     return exchange.seq
 
 
@@ -177,16 +182,12 @@ def parse_background(item: dict) -> Background:
     )
 
 
-def response_payload(message: str | bytes, event_type: str) -> dict:
-    try:
-        event = json.loads(message)
-        if event["eventType"] != event_type:
-            raise ValueError(f"unexpected eventType: {event['eventType']}")
-        payload = event["payload"]
-        payload["jobId"], payload["seq"]  # noqa: B018 - 필수 필드 확인
-        return payload
-    except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise ValueError(f"malformed {event_type} event: {error!r}") from error
+def parse_articles(items: list[dict]) -> tuple[Article, ...]:
+    """기사 응답의 항목들을 값 객체로 바꾼다. 칸이 없으면 KeyError, 시각이 잘못되면 ValueError."""
+    return tuple(
+        Article(a["articleId"], a["title"], a["summary"], parse_timestamp(a["publishedAt"]), a["publisher"], a["url"])
+        for a in items
+    )
 
 
 def parse_close_rates(items: list[dict]) -> tuple[CloseRate, ...]:

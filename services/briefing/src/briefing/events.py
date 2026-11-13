@@ -1,18 +1,17 @@
 """브리핑 코어가 내보내고 받는 이벤트의 모양. Kafka는 모르고, 통신은 main.py가 맡는다."""
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-HISTORY_REQUESTED_TOPIC = "market.history.requested"
-ARTICLES_REQUESTED_TOPIC = "news.articles.requested"
-CONTEXT_REQUESTED_TOPIC = "market.context.requested"
-FILINGS_REQUESTED_TOPIC = "news.filings.requested"
 RESEARCH_REQUESTED_TOPIC = "news.research.requested"
 BRIEFING_GENERATED_TOPIC = "briefing.generated"
 DAILY_BRIEFING_GENERATED_TOPIC = "briefing.daily.generated"
+# 뉴스처리기의 저장 끝 알림. 수집 완료(collection.completed)가 가리킨 기사가 모두 저장(또는 대기 한도)된 뒤 온다.
+NEWS_STORED = "news.stored"
 
 # 데일리 브리핑의 판 종류. briefing.daily.generated 와 판 시작 알림(daily.collection.completed)의 edition 값이다.
 EDITION_MORNING = "morning"
@@ -73,6 +72,17 @@ def research_request_event(job_id: str, seq: int, job_kind: str, symbol: str, qu
         "symbol": symbol,
         "queries": list(queries),
     })
+
+
+def stored_payload(message: str | bytes) -> dict[str, Any]:
+    """저장 끝 알림(news.stored)의 payload. JSON이 아니거나 종류가 다르면 ValueError."""
+    try:
+        event = json.loads(message)
+        if event["eventType"] != NEWS_STORED:
+            raise ValueError(f"unexpected eventType: {event['eventType']}")
+        return event["payload"]
+    except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ValueError(f"malformed {NEWS_STORED} event: {error!r}") from error
 
 
 def daily_briefing_event(job_id: str, correlation_id: str, scheduled_for: datetime, now: datetime,

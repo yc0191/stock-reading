@@ -21,6 +21,8 @@ class FakeJobLog:
         self.unfinished_ids = []
         # 휴장 기록(market_closed_edition): (한국 날짜, 판 값)
         self.closed = set()
+        # 호출 기록(job_step)
+        self.steps = []
 
     def start(self, run):
         if self.fail:
@@ -41,6 +43,10 @@ class FakeJobLog:
             self._failed.add(result.job_id)
             return False
         self.finishes.append(result)
+        return True
+
+    def record_step(self, step):
+        self.steps.append(step)
         return True
 
     def fail_unfinished(self, now):

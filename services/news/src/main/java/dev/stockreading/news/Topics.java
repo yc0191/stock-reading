@@ -13,11 +13,7 @@ import org.springframework.kafka.config.TopicBuilder;
 public class Topics {
 
     public static final String NEWS_COLLECTED = "news.collected";
-    public static final String NEWS_ARTICLES_REQUESTED = "news.articles.requested";
-    public static final String NEWS_ARTICLES_RESPONDED = "news.articles.responded";
     public static final String FILING_COLLECTED = "filing.collected";
-    public static final String NEWS_FILINGS_REQUESTED = "news.filings.requested";
-    public static final String NEWS_FILINGS_RESPONDED = "news.filings.responded";
     public static final String COLLECTION_COMPLETED = "collection.completed";
     public static final String NEWS_STORED = "news.stored";
     public static final int PARTITIONS = 3;
@@ -27,16 +23,6 @@ public class Topics {
     @Bean
     NewTopic newsCollectedTopic() {
         return TopicBuilder.name(NEWS_COLLECTED).partitions(PARTITIONS).replicas(1).build();
-    }
-
-    @Bean
-    NewTopic newsArticlesRequestedTopic() {
-        return TopicBuilder.name(NEWS_ARTICLES_REQUESTED).partitions(PARTITIONS).replicas(1).build();
-    }
-
-    @Bean
-    NewTopic newsArticlesRespondedTopic() {
-        return TopicBuilder.name(NEWS_ARTICLES_RESPONDED).partitions(PARTITIONS).replicas(1).build();
     }
 
     // 생산자(collector)와 같은 파티션 수여야 한다.
@@ -53,15 +39,5 @@ public class Topics {
     @Bean
     NewTopic newsStoredTopic() {
         return TopicBuilder.name(NEWS_STORED).partitions(COMPLETION_PARTITIONS).replicas(1).build();
-    }
-
-    @Bean
-    NewTopic newsFilingsRequestedTopic() {
-        return TopicBuilder.name(NEWS_FILINGS_REQUESTED).partitions(PARTITIONS).replicas(1).build();
-    }
-
-    @Bean
-    NewTopic newsFilingsRespondedTopic() {
-        return TopicBuilder.name(NEWS_FILINGS_RESPONDED).partitions(PARTITIONS).replicas(1).build();
     }
 }

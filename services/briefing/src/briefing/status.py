@@ -51,6 +51,7 @@ FAILURE_REASON_NAMES = {
     "collection_not_covered": "기사 수집 미포함",
     "market_no_response": "시세 무응답",
     "news_no_response": "기사 무응답",
+    # 기사 안정 확인 라운드를 없애기 전(2026-11-13까지)의 작업 기록에만 있는 사유
     "news_unstable": "기사 불안정",
     "context_no_response": "배경 자료 무응답",
     "filings_no_response": "공시 무응답",
@@ -106,7 +107,7 @@ class CollectionStat:
 
 @dataclass(frozen=True)
 class Operations:
-    """market.daily.responded의 운영 상태(operations)를 읽은 값."""
+    """데일리 자료 조회 응답의 운영 상태(operations)를 읽은 값."""
 
     collections: tuple[CollectionStat, ...]
     quote_failures: Mapping[str, int]

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://stock-reading.local/contracts/news.articles.responded.v1",
   "title": "news.articles.responded v1",
-  "description": "news 서비스가 기사 요청에 답한다. 0건 응답도 정상 응답이다. 본문과 개인 정보는 담지 않는다. 메시지 키는 종목코드다.",
+  "description": "더 이상 쓰지 않음(2026-11-13). 브리핑은 이 자료를 뉴스처리기 내부 조회 API(POST /internal/news/articles)로 직접 부르고, 그 응답 본문이 이 이벤트의 payload 와 같은 모양이다. 토픽은 없앴고 옛 이벤트와 본문 모양을 확인할 수 있게 스키마와 샘플만 남긴다(ADR-010 호환 규칙). news 서비스가 기사 요청에 답한다. 0건 응답도 정상 응답이다. 본문과 개인 정보는 담지 않는다. 메시지 키는 종목코드다.",
   "type": "object",
   "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
   "properties": {

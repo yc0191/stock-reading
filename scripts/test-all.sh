@@ -634,13 +634,15 @@ run_live() {
   # 작업 위치를 임시 폴더 안쪽으로 두어 market 이 저장소의 .env 를 읽지 않게 한다.
   svc_dir="$TMP/svc"
   mkdir -p "$svc_dir/market" "$svc_dir/collector"
-  echo "market 기동(테스트 전용 데이터베이스)"
+  # 시세처리기 내부 조회 API 포트도 빈 포트로 둔다. 기본 포트(8091)를 쓰면 개발용 시세처리기와 겹치고, 브리핑이 그쪽을 부를 수 있다.
+  MARKET_HTTP_PORT=$(free_port)
+  echo "market 기동(테스트 전용 데이터베이스, 내부 조회 127.0.0.1:$MARKET_HTTP_PORT)"
   # MARKET_PREV_CLOSE_FIELDS 를 빈 값으로 넘겨 전일 종가 기준 감지를 끈다. 스냅샷이 1개라 구간 감지도 일어나지 않으므로
   # market 이 스스로 변동을 내지 않고, 브리핑·메일 단계의 변동은 스크립트가 넣은 1건뿐이다.
   (
     export MARKET_PREV_CLOSE_FIELDS=
     export SPRING_DATASOURCE_URL="$JDBC_URL?currentSchema=market" SPRING_DATASOURCE_USERNAME="$M_USER" SPRING_DATASOURCE_PASSWORD="$M_PW"
-    export SPRING_KAFKA_BOOTSTRAP_SERVERS="localhost:$port"
+    export SPRING_KAFKA_BOOTSTRAP_SERVERS="localhost:$port" SERVER_PORT="$MARKET_HTTP_PORT"
     cd "$svc_dir/market" && exec "$JAVA_HOME_21/bin/java" -jar "$MARKET_JAR"
   ) > "$svc_dir/market.log" 2>&1 &
   MARKET_PID=$!
@@ -733,10 +735,11 @@ run_live_briefing() {
   llm_model=$(env_or_dotenv BRIEFING_LLM_MODEL)
   mkdir -p "$svc_dir/news" "$svc_dir/notifier" "$svc_dir/briefing"
 
-  echo "news 기동(테스트 전용 데이터베이스 news 스키마)"
+  NEWS_HTTP_PORT=$(free_port)
+  echo "news 기동(테스트 전용 데이터베이스 news 스키마, 내부 조회 127.0.0.1:$NEWS_HTTP_PORT)"
   (
     export SPRING_DATASOURCE_URL="$JDBC_URL?currentSchema=news" SPRING_DATASOURCE_USERNAME="$N_USER" SPRING_DATASOURCE_PASSWORD="$N_PW"
-    export SPRING_KAFKA_BOOTSTRAP_SERVERS="$bootstrap"
+    export SPRING_KAFKA_BOOTSTRAP_SERVERS="$bootstrap" SERVER_PORT="$NEWS_HTTP_PORT"
     cd "$svc_dir/news" && exec "$JAVA_HOME_21/bin/java" -jar "$NEWS_JAR"
   ) > "$svc_dir/news.log" 2>&1 &
   NEWS_PID=$!
@@ -779,6 +782,8 @@ run_live_briefing() {
   echo "briefing 기동(테스트 전용 데이터베이스, 실제 LLM)"
   (
     export KAFKA_BOOTSTRAP="$bootstrap" POSTGRES_DB="$DB_NAME" BRIEFING_DB_USER="$B_USER" BRIEFING_DB_PASSWORD="$B_PW"
+    # 근거 자료는 이 실행이 띄운 시세처리기·뉴스처리기 내부 조회 API 로 묻는다.
+    export MARKET_API_URL="http://127.0.0.1:$MARKET_HTTP_PORT" NEWS_API_URL="http://127.0.0.1:$NEWS_HTTP_PORT"
     export ANTHROPIC_API_KEY="$llm_key" PYTHONPATH="$ROOT/services/briefing/src" PYTHONUNBUFFERED=1
     if [ -n "$llm_model" ]; then export BRIEFING_LLM_MODEL="$llm_model"; else unset BRIEFING_LLM_MODEL; fi
     # 캐시 위치를 이 실행의 임시 폴더로 두면 명령줄에 임시 폴더가 남아 정리할 때 이 실행의 프로세스인지 알 수 있다.
@@ -851,7 +856,8 @@ members_rehearsal_steps() {
   echo "market 기동(테스트 전용 데이터베이스)"
   (
     export SPRING_DATASOURCE_URL="$JDBC_URL?currentSchema=market" SPRING_DATASOURCE_USERNAME="$M_USER" SPRING_DATASOURCE_PASSWORD="$M_PW"
-    export SPRING_KAFKA_BOOTSTRAP_SERVERS="localhost:$KAFKA_PORT"
+    # 내부 조회 API 는 이 단계에서 쓰지 않지만 기본 포트가 개발용 시세처리기와 겹치지 않게 빈 포트로 띄운다.
+    export SPRING_KAFKA_BOOTSTRAP_SERVERS="localhost:$KAFKA_PORT" SERVER_PORT="$(free_port)"
     cd "$svc_dir/market" && exec "$JAVA_HOME_21/bin/java" -jar "$MARKET_JAR"
   ) > "$svc_dir/market.log" 2>&1 &
   MARKET_PID=$!

@@ -23,7 +23,6 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 
 import dev.stockreading.market.event.ContextPayload;
 import dev.stockreading.market.event.EventFactory;
@@ -35,11 +34,10 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 /** 저장소와 해외 등락률 조회를 대역으로 바꿔 요청 한 건의 응답 조립 전체를 돌린다. 값은 모두 가짜다. */
-class ContextRequestListenerTest {
+class ContextQueryTest {
 
     private static final String JOB_ID = "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13";
     private static final String CORRELATION_ID = "collect-2026-10-20T16:00:30+09:00";
-    private static final String REQUEST_EVENT_ID = "7a3d9e12-4b6c-4f81-9d2e-5c8b1a0f6e37";
     // 샘플 요청의 기준 시각과 since(4일 전).
     private static final OffsetDateTime AS_OF = OffsetDateTime.parse("2026-10-20T16:00:31+09:00");
     private static final OffsetDateTime SINCE = OffsetDateTime.parse("2026-10-16T16:00:31+09:00");
@@ -49,14 +47,12 @@ class ContextRequestListenerTest {
     private BackgroundRepository repository;
     private OverseasCloseRateQuery closeRateQuery;
     private HoldingsPort holdings;
-    private ContextPublisher publisher;
 
     @BeforeEach
     void setUp() {
         repository = mock(BackgroundRepository.class);
         closeRateQuery = mock(OverseasCloseRateQuery.class);
         holdings = mock(HoldingsPort.class);
-        publisher = mock(ContextPublisher.class);
         when(repository.latest(any(), any(), any(), any())).thenReturn(Optional.empty());
         when(repository.worldIndexRows(anyString(), any(), any())).thenReturn(List.of());
         when(closeRateQuery.find(anyString(), any(), any())).thenReturn(Optional.empty());
@@ -64,12 +60,12 @@ class ContextRequestListenerTest {
         when(holdings.stockName(anyString())).thenReturn(Optional.empty());
     }
 
-    private ContextRequestListener listener(ContextProperties properties) {
-        return new ContextRequestListener(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
-                properties, publisher, mapper);
+    private ContextQuery listener(ContextProperties properties) {
+        return new ContextQuery(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
+                properties);
     }
 
-    private ContextRequestListener listener() {
+    private ContextQuery listener() {
         return listener(new ContextProperties(Duration.ofDays(4), 32_768, 100, List.of("C", "S"), Duration.ofDays(7)));
     }
 
@@ -77,11 +73,9 @@ class ContextRequestListenerTest {
         return ContractSchemas.sample("market.context.requested.sample.json");
     }
 
-    private ContextPayload answer(ContextRequestListener listener, String request) throws IOException {
-        listener.onRequest(request);
-        ArgumentCaptor<ContextPayload> payload = ArgumentCaptor.captor();
-        verify(publisher).publish(payload.capture(), eq(REQUEST_EVENT_ID), eq(CORRELATION_ID));
-        return payload.getValue();
+    // 요청 샘플(옛 요청 이벤트)의 payload 가 내부 조회 API 의 요청 본문이다.
+    private ContextPayload answer(ContextQuery query, String request) throws IOException {
+        return query.answer(mapper.treeToValue(mapper.readTree(request).get("payload"), ContextRequest.class));
     }
 
     @Test
@@ -382,22 +376,16 @@ class ContextRequestListenerTest {
                 "\"since\": \"2026-10-20T16:00:32+09:00\"");
 
         for (String invalid : List.of(zeroBytes, zeroTickers, sinceAfterAsOf)) {
-            assertThatThrownBy(() -> listener().onRequest(invalid)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> answer(listener(), invalid)).isInstanceOf(IllegalArgumentException.class);
         }
-        verifyNoInteractions(repository, closeRateQuery, publisher);
+        verifyNoInteractions(repository, closeRateQuery);
     }
 
     @Test
     void sameRequestDeliveredTwiceGetsTheSameAnswer() throws IOException {
-        ContextRequestListener listener = listener();
+        ContextQuery listener = listener();
 
-        listener.onRequest(request());
-        listener.onRequest(request());
-
-        ArgumentCaptor<ContextPayload> payloads = ArgumentCaptor.captor();
-        verify(publisher, org.mockito.Mockito.times(2))
-                .publish(payloads.capture(), eq(REQUEST_EVENT_ID), eq(CORRELATION_ID));
-        assertThat(payloads.getAllValues().get(0)).isEqualTo(payloads.getAllValues().get(1));
+        assertThat(answer(listener, request())).isEqualTo(answer(listener, request()));
     }
 
     private static BackgroundRepository.StoredResponse stored(String response, String fetchedAt) {

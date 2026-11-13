@@ -11,8 +11,9 @@ from briefing.daily_prompts import NO_REASON_STATEMENT
 from briefing.daily_report import DailyLlmWriter
 from briefing.job_log import EntryType
 from briefing.ports import FailureReason
-from contracts import validate
-from fake_news import _envelope, answer_news, article as plain_article
+from briefing.queries import QueryKind, QueryResult
+from contracts import validate_payload
+from fake_news import answer_news, article as plain_article
 from test_daily_jobs import (
     MORNING_AT,
     MORNING_JOB,
@@ -71,9 +72,9 @@ def start():
     def build(settings=DailySettings(), llm=None, etfs=None):
         requests, details = Requests(), Details()
         llm = llm or FakeLlm(post_close_output())
-        core = DailyCore(requests, DailyLlmWriter(llm, settings.llm_max_attempts, settings), details, settings)
+        core = DailyCore(requests, requests.api, DailyLlmWriter(llm, settings.llm_max_attempts, settings), details, settings)
         core.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
-        core.on_daily_data_responded(daily_response(etfs=three_etfs() if etfs is None else etfs,
+        core.api.reply(daily_response(etfs=three_etfs() if etfs is None else etfs,
                                                     close_rates=close_rates(), background=POST_CLOSE_BACKGROUND),
                                      POST_CLOSE_AT)
         return core, requests, details, llm
@@ -81,7 +82,7 @@ def start():
 
 
 def articles_requested(requests):
-    return [e.value["payload"] for e in requests.topic("news.articles.requested")]
+    return [q.payload for q in requests.api.of(QueryKind.ARTICLES)]
 
 
 def llm_input(llm):
@@ -100,13 +101,12 @@ def test_one_articles_request_goes_out_per_etf_with_five_articles_and_the_editio
     assert [p["symbol"] for p in payloads] == ["TEST01", "TEST02", "TEST03"]
     assert {p["maxArticles"] for p in payloads} == {5}
     assert {(p["since"], p["until"]) for p in payloads} == {("2026-10-19T17:00:00+09:00", "2026-10-20T17:00:00+09:00")}
-    # 같은 작업의 요청은 번호가 겹치지 않아야 news가 서로 다른 요청으로 처리한다.
-    assert len({p["seq"] for p in payloads}) == 3 and len({e.value["eventId"] for e in
-                                                           requests.topic("news.articles.requested")}) == 3
+    # 같은 작업의 조회는 번호가 겹치지 않아 뉴스처리기 로그에서 서로 구별된다.
+    assert len({p["seq"] for p in payloads}) == 3
     assert all("researchJobId" not in p for p in payloads)
-    for event in requests.topic("news.articles.requested"):
-        assert validate("news.articles.requested.v1.schema.json", event.value) == []
-        assert event.key == event.value["payload"]["symbol"]
+    for query in requests.api.of(QueryKind.ARTICLES):
+        assert validate_payload("news.articles.requested.v1.schema.json", query.payload) == []
+        assert query.stage == STAGE_ETF_ARTICLES
 
 
 def test_the_article_count_comes_from_the_settings(start):
@@ -125,10 +125,10 @@ def test_the_edition_waits_for_every_answer_then_goes_out_once(start):
 
 def test_the_morning_edition_also_requests_articles_per_etf_and_waits_for_them():
     requests = Requests()
-    c = DailyCore(requests, None, Details())
+    c = DailyCore(requests, requests.api, None, Details())
     c.on_collection_ready(tick(MORNING_JOB, MORNING_AT), MORNING_AT)
-    c.on_daily_data_responded(daily_response(etfs=[etf("TEST01"), etf("TEST02")]), MORNING_AT)
-    c.on_filings_responded(filings_response(), MORNING_AT)
+    c.api.reply(daily_response(etfs=[etf("TEST01"), etf("TEST02")]), MORNING_AT)
+    c.api.reply(filings_response(), MORNING_AT)
     assert [p["symbol"] for p in articles_requested(requests)] == ["TEST01", "TEST02"]
     assert published(requests) == []
     answer_news(c, requests, MORNING_AT)
@@ -180,46 +180,33 @@ def test_in_range_filings_enter_the_claude_input_and_out_of_range_ones_are_dropp
 
 # ---- 응답이 없을 때 ----
 
-def test_an_etf_that_never_answers_is_asked_three_times_ten_seconds_apart_then_goes_on_without_articles(start):
+def test_an_etf_whose_articles_finally_fail_goes_on_without_articles(start):
     c, requests, details, llm = start()
     answer_news(c, requests, POST_CLOSE_AT, articles={"TEST01": [article("a-1", "TEST 안 기사", IN_RANGE)]},
                 silent=("TEST02",))
-    # TEST02만 답이 없다.
+    # TEST02만 답이 없다. 다시 부르는 것은 조회 구현이 하므로 판은 그 결과를 기다린다.
     assert published(requests) == []
-    mine = lambda: [e.value["payload"] for e in requests.topic("news.articles.requested")
-                    if e.value["payload"]["symbol"] == "TEST02"]
-    c.on_tick(POST_CLOSE_AT + timedelta(seconds=9))
-    assert len(mine()) == 1
-    c.on_tick(POST_CLOSE_AT + timedelta(seconds=10))
-    c.on_tick(POST_CLOSE_AT + timedelta(seconds=20))
-    assert len(mine()) == 3 and len({p["seq"] for p in mine()}) == 3
-    assert published(requests) == []
-    assert c.next_deadline() == POST_CLOSE_AT + timedelta(seconds=30)
-    c.on_tick(POST_CLOSE_AT + timedelta(seconds=30))
-    assert len(mine()) == 3
+    c.api.fail(QueryKind.ARTICLES, POST_CLOSE_AT + timedelta(minutes=1), symbol="TEST02", attempts=4)
+    assert len([p for p in articles_requested(requests) if p["symbol"] == "TEST02"]) == 1
     [event] = published(requests)
     # 답한 ETF의 기사는 그대로 있고, 못 받은 ETF는 자료 없음 목록에 오른다.
     assert [e["ref"] for e in item(llm, "ETF별 기사")["entries"]] == ["a-1"]
     assert event.value["payload"]["missingItems"] == ["ETF별 기사: TEST TEST02, 기사 응답을 받지 못함"]
     [failure] = [d for d in details.entries if d.entry_type == EntryType.STEP_FAILED]
     assert failure.stage == STAGE_ETF_ARTICLES and failure.reason == FailureReason.NEWS_NO_RESPONSE.value
-    assert failure.attempts == 3
-    assert len([d for d in details.entries if d.entry_type == EntryType.RESENT]) == 2
+    assert failure.attempts == 4
+    assert [d for d in details.entries if d.entry_type == EntryType.RESENT] == []
 
 
-def test_an_old_response_after_a_resend_and_a_late_response_after_giving_up_are_ignored(start):
+def test_a_late_result_after_the_edition_went_out_is_ignored(start):
     c, requests, _, llm = start()
     answer_news(c, requests, POST_CLOSE_AT, silent=("TEST02",))
-    first = [e for e in requests.topic("news.articles.requested") if e.value["payload"]["symbol"] == "TEST02"][0]
-    c.on_tick(POST_CLOSE_AT + timedelta(seconds=10))
-    stale = _envelope("news.articles.responded", {"jobId": first.value["payload"]["jobId"],
-                                                  "seq": first.value["payload"]["seq"], "symbol": "TEST02",
-                                                  "articles": [article("a-1", "TEST 늦은 기사", IN_RANGE)],
-                                                  "truncated": False}, POST_CLOSE_AT)
-    c.on_articles_responded(stale, POST_CLOSE_AT + timedelta(seconds=11))
-    assert published(requests) == []
-    c.on_tick(POST_CLOSE_AT + timedelta(seconds=20))
-    c.on_tick(POST_CLOSE_AT + timedelta(seconds=30))
+    [(query, on_result)] = c.api.pending
+    c.api.fail(QueryKind.ARTICLES, POST_CLOSE_AT + timedelta(minutes=1))
+    assert len(published(requests)) == 1
+    late = {"jobId": query.payload["jobId"], "seq": query.payload["seq"], "symbol": "TEST02",
+            "articles": [article("a-1", "TEST 늦은 기사", IN_RANGE)], "truncated": False}
+    on_result(QueryResult(query, late, 1), POST_CLOSE_AT + timedelta(minutes=2))
     assert len(published(requests)) == 1
     assert "TEST 늦은 기사" not in llm.calls[0][1]
 
@@ -230,18 +217,17 @@ def test_a_response_for_another_job_is_ignored_without_an_error(start):
                         "schemaVersion": 1, "occurredAt": FETCHED, "producedAt": FETCHED, "correlationId": "c",
                         "payload": {"jobId": "00000000-0000-4000-8000-0000000000ff", "seq": 1, "symbol": "TEST01",
                                     "articles": [], "truncated": False}})
-    c.on_articles_responded(other, POST_CLOSE_AT)
+    assert c.api.reply(other, POST_CLOSE_AT) is False
     assert published(requests) == []
 
 
-def test_a_malformed_articles_response_is_rejected(start):
-    c, requests, _, _ = start()
+def test_a_malformed_articles_response_counts_as_not_received(start):
+    c, requests, details, _ = start()
     p = articles_requested(requests)[0]
-    bad = json.dumps({"eventId": "x", "eventType": "news.articles.responded", "schemaVersion": 1,
-                      "occurredAt": FETCHED, "producedAt": FETCHED, "correlationId": "c",
-                      "payload": {"jobId": p["jobId"], "seq": p["seq"], "symbol": p["symbol"], "truncated": False}})
-    with pytest.raises(ValueError):
-        c.on_articles_responded(bad, POST_CLOSE_AT)
+    c.api.reply({"jobId": p["jobId"], "seq": p["seq"], "symbol": p["symbol"], "truncated": False}, POST_CLOSE_AT,
+                kind=QueryKind.ARTICLES)
+    [failure] = [d for d in details.entries if d.entry_type == EntryType.STEP_FAILED]
+    assert (failure.stage, failure.error_type) == (STAGE_ETF_ARTICLES, "MalformedResponse")
 
 
 # ---- 구성 종목 이슈와 눈에 띄는 점 후보 ----

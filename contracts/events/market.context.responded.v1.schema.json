@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://stock-reading.local/contracts/market.context.responded.v1",
   "title": "market.context.responded v1",
-  "description": "market 서비스가 배경 자료 요청에 답한다. 미국 종목이 없는 종목은 tickers와 closeRates가 빈 배열이다. 배경 자료 원문은 저장된 응답 원문 그대로이며 해석하지 않는다. 보유 수량 같은 개인 정보는 담지 않는다. 메시지 키는 종목코드다.",
+  "description": "더 이상 쓰지 않음(2026-11-13). 브리핑은 이 자료를 시세처리기 내부 조회 API(POST /internal/market/context)로 직접 부르고, 그 응답 본문이 이 이벤트의 payload 와 같은 모양이다. 토픽은 없앴고 옛 이벤트와 본문 모양을 확인할 수 있게 스키마와 샘플만 남긴다(ADR-010 호환 규칙). market 서비스가 배경 자료 요청에 답한다. 미국 종목이 없는 종목은 tickers와 closeRates가 빈 배열이다. 배경 자료 원문은 저장된 응답 원문 그대로이며 해석하지 않는다. 보유 수량 같은 개인 정보는 담지 않는다. 메시지 키는 종목코드다.",
   "type": "object",
   "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
   "properties": {

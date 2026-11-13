@@ -19,10 +19,10 @@ Kafka 기반 이벤트 구동 MSA와 근거를 인용하는 LLM 브리핑을 직
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.svg">
-  <img alt="Kafka를 가운데 두고 서비스에서 서비스로 가는 이벤트(시세→급변동→브리핑→메일, 판 시작 신호→데일리 브리핑, 기사)와 서비스마다 하는 일을 보여 주는 구성도" src="docs/images/architecture-light.svg">
+  <img alt="Kafka를 가운데 두고 서비스에서 서비스로 가는 이벤트(시세→급변동→브리핑→메일, 기사 저장 끝→브리핑, 판 시작 신호→데일리 브리핑, 기사)와 서비스마다 하는 일을 보여 주는 구성도" src="docs/images/architecture-light.svg">
 </picture>
 
-서비스끼리는 Kafka 이벤트로만 주고받고, 각 서비스는 PostgreSQL에서 자기 스키마를 씁니다. 종목·멤버 같은 업무 데이터는 DB 표가 원본이고, 필요한 서비스만 읽기 전용으로 읽습니다.
+서비스끼리 일어난 일은 Kafka 이벤트로 알리고, 브리핑이 근거 자료를 물을 때는 시세처리기·뉴스처리기의 내부 조회 API(서버 밖으로 열지 않음)를 직접 부릅니다. 각 서비스는 PostgreSQL에서 자기 스키마를 씁니다. 종목·멤버 같은 업무 데이터는 DB 표가 원본이고, 필요한 서비스만 읽기 전용으로 읽습니다.
 
 ## 어떻게 동작하나
 
@@ -45,16 +45,19 @@ sequenceDiagram
     participant S as 발송기
     C->>M: 시세 (market.snapshot)
     M->>B: 급변동 (market.move)
-    B->>M: 시세 이력·배경 자료 요청
+    C->>N: 기사 (news.collected), 수집 완료 (collection.completed)
+    N->>B: 기사 저장 끝 (news.stored)
+    B->>M: 시세 이력·배경 자료 조회 (내부 HTTP)
     M-->>B: 응답
-    B->>N: 변동 시각 전후 기사·공시 요청
+    B->>N: 변동 시각 전후 기사·공시 조회 (내부 HTTP, 기사는 한 번)
     N-->>B: 응답
     B->>L: 근거 번호를 붙인 자료로 문장 요청
     L-->>B: 문장 (코드가 근거 번호 검사)
     opt 근거가 약한 문장
         B->>C: 다시 검색 (news.research.requested)
-        C->>N: 찾은 기사 저장
-        B->>N: 다시 조회 후 그 문장만 다시 씀
+        C->>N: 찾은 기사
+        N->>B: 저장 끝 (news.stored)
+        B->>N: 한 번 조회 후 그 문장만 다시 씀
     end
     B->>S: 브리핑 (briefing.generated)
     S->>S: 멤버별 메일 발송
@@ -66,7 +69,7 @@ sequenceDiagram
 
 - **근거의 시간 범위를 지킨다:** 변동 뒤에 나온 자료로 변동을 설명하지 않습니다(자료마다 범위를 정하고 테스트로 검증).
 - **LLM은 문장만:** 목록 밖 근거를 인용한 출력은 거부하고 다시 씁니다. LLM이 없어도 규칙 기반 본문으로 나갑니다.
-- **계약은 스키마 파일:** 서비스 간 이벤트는 언어 중립 JSON Schema(`contracts/events/`)로 정하고 계약 테스트로 지킵니다.
+- **계약은 스키마 파일:** 서비스 간 이벤트와 내부 조회 API의 본문은 언어 중립 JSON Schema(`contracts/events/`)로 정하고 계약 테스트로 지킵니다.
 - **안전한 기본값:** 발송은 기본 드라이런, 이벤트는 `eventId`로 멱등 처리, 외부 접속은 받지 않습니다.
 
 ## 기술 스택

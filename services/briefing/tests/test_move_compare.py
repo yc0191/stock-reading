@@ -13,6 +13,7 @@ from briefing.config import CoreSettings
 from briefing.jobs import BriefingCore, parse_move
 from briefing.report import ReportStage, RuleBasedWriter, build_llm_input, comparison_facts, figure_entries
 from contracts import sample, validate
+from fake_api import FakeApi
 from fake_job_log import FakeJobLog
 
 KST = timezone(timedelta(hours=9))
@@ -65,16 +66,17 @@ def market_raw(kospi="  -1.45", kospi_direction="5", kosdaq="   0.30", kosdaq_di
 
 def run(move_json, market_fetched_at=T - timedelta(minutes=5)):
     """변동 1건을 응답이 모두 오는 경우로 끝까지 돌려 리포트 입력을 돌려준다. 미국 종목이 없어 공시는 요청하지 않는다."""
-    rec = Recorder()
-    core = BriefingCore(rec, rec, job_log=rec.log)
+    rec, api = Recorder(), FakeApi()
+    core = BriefingCore(rec, api, rec, job_log=rec.log)
     core.on_move(move_json, T)
-    completed = sample("collection.completed.sample.json")
-    completed["payload"].update(jobType="collect-news", startedAt=(T + S.delta).isoformat(), incompleteSymbols=[])
-    core.on_collection_completed(json.dumps(completed), T)
+    completed = sample("news.stored.sample.json")
+    completed["payload"].update(jobType="collect-news", startedAt=(T + S.delta).isoformat(), incompleteSymbols=[],
+                                unprocessedEventIds=[])
+    core.on_news_stored(json.dumps(completed), T)
     history = sample("market.history.responded.sample.json")
     history["payload"].update(jobId=JOB_ID, seq=1, symbol=SYMBOL, truncated=False,
                               points=[{"asOf": T.isoformat(), "price": 12_000}])
-    core.on_history_responded(json.dumps(history), T + SEC)
+    api.reply(json.dumps(history), T + SEC)
     context = sample("market.context.responded.sample.json")
     context["payload"].update(jobId=JOB_ID, seq=1, symbol=SYMBOL, tickers=[], truncated=False, closeRates=[],
                               background=[{"apiType": "market-summary", "target": None, "status": "ok",
@@ -82,15 +84,12 @@ def run(move_json, market_fetched_at=T - timedelta(minutes=5)):
     # 이름 표시는 이 파일의 관심이 아니어서 코드만 보이게 한다.
     context["payload"].pop("name")
     context["payload"].pop("etf")
-    core.on_context_responded(json.dumps(context), T + SEC)
-    for seq, at in ((1, T + SEC), (2, T + SEC + S.recheck_interval)):
-        articles = sample("news.articles.responded.sample.json")
-        articles["payload"].update(jobId=JOB_ID, seq=seq, symbol=SYMBOL, truncated=False, articles=[{
-            "articleId": "a1", "title": "기사 a1", "summary": "", "publisher": "news.example.com",
-            "publishedAt": (T - timedelta(minutes=30)).isoformat(), "url": "https://news.example.com/a1"}])
-        if seq == 2:
-            core.on_tick(at)
-        core.on_articles_responded(json.dumps(articles), at)
+    api.reply(json.dumps(context), T + SEC)
+    articles = sample("news.articles.responded.sample.json")
+    articles["payload"].update(jobId=JOB_ID, seq=1, symbol=SYMBOL, truncated=False, articles=[{
+        "articleId": "a1", "title": "기사 a1", "summary": "", "publisher": "news.example.com",
+        "publishedAt": (T - timedelta(minutes=30)).isoformat(), "url": "https://news.example.com/a1"}])
+    api.reply(json.dumps(articles), T + SEC)
     (ready,) = rec.readied
     return ready
 

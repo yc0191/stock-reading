@@ -10,7 +10,6 @@ from briefing.config import DailySettings
 from briefing.daily_jobs import (
     REASON_LLM_REJECTED,
     REASON_MISSING_ITEMS,
-    REASON_RESENT,
     STAGE_COMPOSE,
     STAGE_DAILY_DATA,
     STAGE_FILINGS,
@@ -36,7 +35,9 @@ from briefing.daily_report import (
 from briefing.job_log import DiscardJobLog, EntryType, GeneratedBy, JobKind, JobLogEntry, RunStatus
 from briefing.llm import LlmCallError
 from briefing.ports import FailureReason
-from contracts import validate
+from briefing.queries import QueryKind, QueryResult
+from contracts import validate, validate_payload
+from fake_api import FakeApi
 from fake_job_log import FakeJobLog
 from fake_news import answer_news
 
@@ -53,8 +54,11 @@ POST_CLOSE_JOB = "post-close"
 # ---- 가짜 ----
 
 class Requests:
+    """발행한 이벤트(sent)와, 맡긴 조회를 모으는 가짜 내부 조회 API(api)."""
+
     def __init__(self):
         self.sent = []
+        self.api = FakeApi()
 
     def send(self, event):
         self.sent.append(event)
@@ -202,7 +206,7 @@ def core():
     def make(llm=None, settings=DailySettings()):
         requests, details = Requests(), Details()
         writer = DailyLlmWriter(llm, settings.llm_max_attempts) if llm is not None else None
-        return DailyCore(requests, writer, details, settings), requests, Failures(details), details
+        return DailyCore(requests, requests.api, writer, details, settings), requests, Failures(details), details
     return make
 
 
@@ -245,17 +249,17 @@ def test_each_notice_starts_only_its_own_edition_and_an_unknown_edition_is_rejec
     assert requests.sent == []
     c.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
     assert [s.job_kind.value for s in details.starts] == ["post-close"]
-    assert len(requests.topic("market.daily.requested")) == 1
+    assert len(requests.api.of(QueryKind.DAILY)) == 1
 
 
 def test_the_same_notice_is_handled_once(core):
     c, requests, _, _ = core()
     c.on_collection_ready(tick(), MORNING_AT)
-    c.on_daily_data_responded(daily_response(), MORNING_AT)
-    c.on_filings_responded(filings_response(), MORNING_AT)
+    c.api.reply(daily_response(), MORNING_AT)
+    c.api.reply(filings_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT)
     c.on_collection_ready(tick(), MORNING_AT + timedelta(seconds=5))
-    assert len(requests.topic("market.daily.requested")) == 1
+    assert len(requests.api.of(QueryKind.DAILY)) == 1
     assert len(published(requests)) == 1
 
 
@@ -278,10 +282,12 @@ def test_malformed_notice_is_rejected(core):
 def test_daily_data_request_matches_the_contract_and_is_keyed_by_job(core):
     c, requests, _, _ = core()
     c.on_collection_ready(tick(), MORNING_AT)
-    [event] = requests.topic("market.daily.requested")
-    assert validate("market.daily.requested.v1.schema.json", event.value) == []
-    assert event.key == TICK_ID
-    payload = event.value["payload"]
+    [query] = requests.api.of(QueryKind.DAILY)
+    assert validate_payload("market.daily.requested.v1.schema.json", query.payload) == []
+    # job_step은 판 작업에, 추적 ID는 판 시작 알림의 것으로 남는다.
+    assert (query.job_id, query.stage, query.correlation_id) == (
+        TICK_ID, STAGE_DAILY_DATA, json.loads(tick())["correlationId"])
+    payload = query.payload
     assert payload["jobId"] == TICK_ID and payload["seq"] == 1
     assert payload["asOf"] == "2026-10-20T08:45:00+09:00"
     assert payload["since"] == "2026-10-19T08:45:00+09:00"
@@ -290,12 +296,12 @@ def test_daily_data_request_matches_the_contract_and_is_keyed_by_job(core):
 def test_morning_requests_filings_with_all_us_tickers_after_the_daily_data(core):
     c, requests, _, _ = core()
     c.on_collection_ready(tick(), MORNING_AT)
-    assert requests.topic("news.filings.requested") == []
-    c.on_daily_data_responded(daily_response(etfs=[
+    assert requests.api.of(QueryKind.FILINGS) == []
+    c.api.reply(daily_response(etfs=[
         etf("TEST02", ("FAKEB", "TESTC")), etf("TEST01", ("TESTA", "FAKEB")), etf("TEST03", ())]), MORNING_AT)
-    [event] = requests.topic("news.filings.requested")
-    assert validate("news.filings.requested.v1.schema.json", event.value) == []
-    payload = event.value["payload"]
+    [query] = requests.api.of(QueryKind.FILINGS)
+    assert validate_payload("news.filings.requested.v1.schema.json", query.payload) == []
+    payload = query.payload
     assert payload["symbol"] == "TEST01"  # 미국 종목이 있는 첫 ETF(종목코드 순)
     assert payload["tickers"] == ["TESTA", "FAKEB", "TESTC"]
     assert payload["since"] == "2026-10-19T08:45:00+09:00" and payload["until"] == "2026-10-20T08:45:00+09:00"
@@ -306,8 +312,8 @@ def test_morning_requests_filings_with_all_us_tickers_after_the_daily_data(core)
 def test_no_filings_request_when_no_etf_holds_us_stocks(core):
     c, requests, _, _ = core()
     c.on_collection_ready(tick(), MORNING_AT)
-    c.on_daily_data_responded(daily_response(etfs=[etf(tickers=())], close_rates=[]), MORNING_AT)
-    assert requests.topic("news.filings.requested") == []
+    c.api.reply(daily_response(etfs=[etf(tickers=())], close_rates=[]), MORNING_AT)
+    assert requests.api.of(QueryKind.FILINGS) == []
     answer_news(c, requests, MORNING_AT)
     [event] = published(requests)
     text = event.value["payload"]["text"]
@@ -318,13 +324,13 @@ def test_no_filings_request_when_no_etf_holds_us_stocks(core):
 def test_post_close_edition_requests_the_filings_of_the_us_stocks_in_its_range(core):
     c, requests, _, _ = core()
     c.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
-    c.on_daily_data_responded(daily_response(etfs=[etf(fetched="2026-10-20T16:30:02+09:00", rate="0.50")],
+    c.api.reply(daily_response(etfs=[etf(fetched="2026-10-20T16:30:02+09:00", rate="0.50")],
                                              background=[WORLD_C, EXCHANGE, {**MARKET, "fetchedAt": "2026-10-20T16:30:05+09:00"}]),
                               POST_CLOSE_AT)
-    [filings] = requests.topic("news.filings.requested")
-    assert filings.value["payload"]["tickers"] == ["TESTA", "FAKEB"]
-    assert filings.value["payload"]["since"] == "2026-10-19T17:00:00+09:00"
-    assert filings.value["payload"]["until"] == "2026-10-20T17:00:00+09:00"
+    [filings] = requests.api.of(QueryKind.FILINGS)
+    assert filings.payload["tickers"] == ["TESTA", "FAKEB"]
+    assert filings.payload["since"] == "2026-10-19T17:00:00+09:00"
+    assert filings.payload["until"] == "2026-10-20T17:00:00+09:00"
     # 응답이 오기 전에는 판이 나가지 않는다.
     assert published(requests) == []
     answer_news(c, requests, POST_CLOSE_AT)
@@ -340,8 +346,8 @@ def test_post_close_edition_requests_the_filings_of_the_us_stocks_in_its_range(c
 def test_morning_edition_uses_us_markets_filings_and_the_previous_korean_session(core):
     c, requests, _, _ = core()
     c.on_collection_ready(tick(), MORNING_AT)
-    c.on_daily_data_responded(daily_response(), MORNING_AT)
-    c.on_filings_responded(filings_response(), MORNING_AT)
+    c.api.reply(daily_response(), MORNING_AT)
+    c.api.reply(filings_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT)
     [event] = published(requests)
     payload = event.value["payload"]
@@ -361,7 +367,7 @@ def test_data_received_after_the_scheduled_time_or_before_the_range_is_dropped_w
     c, requests, _, _ = core()
     c.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
     with caplog.at_level(logging.WARNING, logger="briefing.daily_jobs"):
-        c.on_daily_data_responded(daily_response(
+        c.api.reply(daily_response(
             etfs=[etf(fetched="2026-10-20T17:00:01+09:00"), etf("TEST02", fetched="2026-10-19T16:59:59+09:00")],
             background=[WORLD_C, EXCHANGE, {**MARKET, "fetchedAt": "2026-10-20T17:00:01+09:00"}]), POST_CLOSE_AT)
         answer_news(c, requests, POST_CLOSE_AT)
@@ -374,7 +380,7 @@ def test_data_received_after_the_scheduled_time_or_before_the_range_is_dropped_w
 def test_data_received_exactly_at_both_ends_of_the_range_is_kept(core):
     c, requests, _, _ = core()
     c.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
-    c.on_daily_data_responded(daily_response(
+    c.api.reply(daily_response(
         etfs=[etf(fetched="2026-10-20T17:00:00+09:00"), etf("TEST02", fetched="2026-10-19T17:00:00+09:00")],
         background=[WORLD_C, EXCHANGE, {**MARKET, "fetchedAt": "2026-10-20T17:00:00+09:00"}]), POST_CLOSE_AT)
     answer_news(c, requests, POST_CLOSE_AT)
@@ -382,36 +388,33 @@ def test_data_received_exactly_at_both_ends_of_the_range_is_kept(core):
     assert event.value["payload"]["missingItems"] == []
 
 
-def test_stale_responses_are_ignored(core):
+def test_a_daily_data_result_for_a_finished_edition_is_ignored(core):
     c, requests, _, _ = core()
     c.on_collection_ready(tick(), MORNING_AT)
-    c.on_tick(MORNING_AT + timedelta(seconds=10))  # seq 2로 다시 보냄
-    c.on_daily_data_responded(daily_response(seq=1), MORNING_AT + timedelta(seconds=11))
-    assert requests.topic("news.filings.requested") == []
-    c.on_daily_data_responded(daily_response(seq=2), MORNING_AT + timedelta(seconds=12))
-    assert len(requests.topic("news.filings.requested")) == 1
+    [query] = requests.api.of(QueryKind.DAILY)
+    c.api.fail(QueryKind.DAILY, MORNING_AT + timedelta(minutes=1))
+    answer_news(c, requests, MORNING_AT + timedelta(minutes=1))
+    assert len(published(requests)) == 1
+    # 이미 낸 판의 같은 조회 결과가 다시 와도 아무것도 하지 않는다.
+    c._on_daily_data(QueryResult(query, json.loads(daily_response())["payload"], 1), MORNING_AT + timedelta(minutes=2))
+    assert requests.api.of(QueryKind.FILINGS) == [] and len(published(requests)) == 1
 
 
 def test_filings_responses_of_other_jobs_are_ignored(core):
     c, requests, _, _ = core()
-    c.on_filings_responded(filings_response(job_id="00000000-0000-4000-8000-0000000000aa"), MORNING_AT)
+    assert c.api.reply(filings_response(job_id="00000000-0000-4000-8000-0000000000aa"), MORNING_AT) is False
     assert requests.sent == []
 
 
-# ---- 재요청과 무응답 ----
+# ---- 끝내 받지 못한 조회 ----
 
-def test_daily_data_is_resent_with_a_new_seq_and_given_up_after_the_last_attempt(core):
+def test_daily_data_that_finally_fails_is_given_up_and_the_edition_still_goes_out(core):
     c, requests, failures, details = core()
     c.on_collection_ready(tick(), MORNING_AT)
-    assert c.next_deadline() == MORNING_AT + timedelta(seconds=10)
-    c.on_tick(MORNING_AT + timedelta(seconds=9))
-    assert len(requests.topic("market.daily.requested")) == 1
-    for n in (1, 2):
-        c.on_tick(MORNING_AT + timedelta(seconds=10 * n))
-    seqs = [e.value["payload"]["seq"] for e in requests.topic("market.daily.requested")]
-    assert seqs == [1, 2, 3]
-    c.on_tick(MORNING_AT + timedelta(seconds=30))
-    assert c.next_deadline() is None
+    # 재시도는 조회 구현이 하므로 판 작업에는 깨어날 시각이 없다.
+    assert not hasattr(c, "next_deadline")
+    c.api.fail(QueryKind.DAILY, MORNING_AT + timedelta(minutes=1), attempts=4, failure_kind="connect-failed")
+    assert [q.payload["seq"] for q in requests.api.of(QueryKind.DAILY)] == [1]
 
     [event] = published(requests)
     payload = event.value["payload"]
@@ -419,11 +422,11 @@ def test_daily_data_is_resent_with_a_new_seq_and_given_up_after_the_last_attempt
     assert payload["missingItems"] == [ITEM_US_INDEX, "환율", "미국 종목 직전 장 등락", ITEM_FILINGS, ITEM_KR_REVIEW,
                                          ITEM_OPEN_FLOW, ITEM_ETF_ARTICLES]
     assert payload["text"].count(NO_DATA) >= 5
-    assert requests.topic("news.filings.requested") == []
+    assert requests.api.of(QueryKind.FILINGS) == []
 
     [failure] = failures.records
     assert failure.reason == FailureReason.CONTEXT_NO_RESPONSE
-    assert failure.job_id == TICK_ID and failure.attempts == 3
+    assert failure.job_id == TICK_ID and failure.attempts == 4
     [run] = details.starts
     assert run.job_kind == JobKind.MORNING and run.job_id == TICK_ID
     [result] = details.results()
@@ -431,22 +434,22 @@ def test_daily_data_is_resent_with_a_new_seq_and_given_up_after_the_last_attempt
     [missing] = details.of_type(EntryType.MISSING_ITEMS)
     assert ITEM_FILINGS in missing.data["missingItems"]
 
-    resent = details.by_reason(REASON_RESENT)
-    assert [r.attempts for r in resent] == [1, 2] and {r.stage for r in resent} == {STAGE_DAILY_DATA}
+    assert details.of_type(EntryType.RESENT) == []
     [final] = details.by_reason("context_no_response")
-    assert final.attempts == 3 and final.error_type == "Timeout"
-    assert [r["seq"] for r in final.data["requests"]] == [1, 2, 3]
-    assert final.data["notReceived"] == ["market.daily.responded"]
+    assert final.attempts == 4 and final.error_type == "connect-failed"
+    assert [r["seq"] for r in final.data["requests"]] == [1]
+    assert final.data["notReceived"] == ["market/daily"]
+    assert final.data["failed"] == {"query": "market/daily", "seq": 1, "failureKind": "connect-failed"}
     assert final.data["requestRange"] == {"since": "2026-10-19T08:45:00+09:00", "asOf": "2026-10-20T08:45:00+09:00"}
 
 
-def test_filings_no_response_still_sends_the_edition_and_records_one_failure(core):
+def test_filings_that_finally_fail_still_send_the_edition_and_record_one_failure(core):
     c, requests, failures, details = core()
     c.on_collection_ready(tick(), MORNING_AT)
-    c.on_daily_data_responded(daily_response(), MORNING_AT)
+    c.api.reply(daily_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT, filings_silent=True)
-    for n in (1, 2, 3):
-        c.on_tick(MORNING_AT + timedelta(seconds=10 * n))
+    assert published(requests) == []
+    c.api.fail(QueryKind.FILINGS, MORNING_AT + timedelta(minutes=1))
     [event] = published(requests)
     assert event.value["payload"]["missingItems"] == [ITEM_FILINGS, ITEM_OPEN_FLOW]
     [failure] = failures.records
@@ -454,9 +457,18 @@ def test_filings_no_response_still_sends_the_edition_and_records_one_failure(cor
     [final] = details.by_reason("filings_no_response")
     assert final.stage == STAGE_FILINGS
     # 받은 응답은 내용 전부를 담는다.
-    assert final.data["received"]["market.daily.responded"]["background"][0]["response"] == WORLD_C["response"]
-    assert final.data["notReceived"] == ["news.filings.responded"]
-    assert len(details.by_reason(REASON_RESENT)) == 2
+    assert final.data["received"]["market/daily"]["background"][0]["response"] == WORLD_C["response"]
+    assert final.data["notReceived"] == ["news/filings"]
+
+
+def test_a_malformed_daily_data_result_counts_as_not_received(core, caplog):
+    c, requests, failures, _ = core()
+    c.on_collection_ready(tick(), MORNING_AT)
+    with caplog.at_level(logging.ERROR, logger="briefing.daily_jobs"):
+        c.api.reply({"jobId": TICK_ID, "seq": 1, "etfs": "not a list"}, MORNING_AT, kind=QueryKind.DAILY)
+    [failure] = failures.records
+    assert (failure.reason, failure.error_type) == (FailureReason.CONTEXT_NO_RESPONSE.value, "MalformedResponse")
+    assert len(published(requests)) == 1 and "malformed market/daily" in caplog.text
 
 
 # ---- LLM ----
@@ -465,8 +477,8 @@ def test_llm_writes_the_summary_and_cites_only_given_refs(core):
     llm = FakeLlm(good_output("B1", "0000000001-26-000001"))
     c, requests, failures, details = core(llm)
     c.on_collection_ready(tick(at=OPEN_AT), OPEN_AT)
-    c.on_daily_data_responded(daily_response(etfs=[etf(open_flow=OPEN_FLOW)]), OPEN_AT)
-    c.on_filings_responded(filings_response(), OPEN_AT)
+    c.api.reply(daily_response(etfs=[etf(open_flow=OPEN_FLOW)]), OPEN_AT)
+    c.api.reply(filings_response(), OPEN_AT)
     answer_news(c, requests, OPEN_AT)
     [event] = published(requests)
     payload = event.value["payload"]
@@ -488,8 +500,8 @@ def test_rejected_llm_attempts_are_each_recorded_even_when_the_edition_succeeds(
     llm = FakeLlm("not json", unknown, good_output())
     c, requests, failures, details = core(llm)
     c.on_collection_ready(tick(), MORNING_AT)
-    c.on_daily_data_responded(daily_response(), MORNING_AT)
-    c.on_filings_responded(filings_response(), MORNING_AT)
+    c.api.reply(daily_response(), MORNING_AT)
+    c.api.reply(filings_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT)
     [event] = published(requests)
     assert event.value["payload"]["generatedBy"] == GENERATED_BY_LLM
@@ -507,8 +519,8 @@ def test_llm_failing_every_time_falls_back_to_the_rule_based_body_and_records_ll
     llm = FakeLlm(LlmCallError("LLM call failed: APIError"), "{}", "[]")
     c, requests, failures, details = core(llm)
     c.on_collection_ready(tick(), MORNING_AT)
-    c.on_daily_data_responded(daily_response(), MORNING_AT)
-    c.on_filings_responded(filings_response(), MORNING_AT)
+    c.api.reply(daily_response(), MORNING_AT)
+    c.api.reply(filings_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT)
     [event] = published(requests)
     payload = event.value["payload"]
@@ -527,8 +539,8 @@ def test_insufficient_evidence_is_marked_in_the_body(core):
     llm = FakeLlm(json.dumps({"points": [], "insufficientEvidence": True}))
     c, requests, _, _ = core(llm)
     c.on_collection_ready(tick(), MORNING_AT)
-    c.on_daily_data_responded(daily_response(), MORNING_AT)
-    c.on_filings_responded(filings_response(), MORNING_AT)
+    c.api.reply(daily_response(), MORNING_AT)
+    c.api.reply(filings_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT)
     [event] = published(requests)
     assert event.value["payload"]["generatedBy"] == GENERATED_BY_LLM
@@ -539,8 +551,7 @@ def test_llm_is_not_called_when_there_is_no_evidence_at_all(core):
     llm = FakeLlm()
     c, requests, _, _ = core(llm)
     c.on_collection_ready(tick(), MORNING_AT)
-    for n in (1, 2, 3):
-        c.on_tick(MORNING_AT + timedelta(seconds=10 * n))
+    c.api.fail(QueryKind.DAILY, MORNING_AT + timedelta(minutes=1))
     assert llm.calls == []
     [event] = published(requests)
     assert event.value["payload"]["generatedBy"] == GENERATED_BY_RULE
@@ -550,10 +561,9 @@ def test_every_failure_is_logged_but_the_result_line_names_the_first_one(core):
     llm = FakeLlm("x", "x", "x")
     c, requests, failures, details = core(llm)
     c.on_collection_ready(tick(), MORNING_AT)
-    c.on_daily_data_responded(daily_response(), MORNING_AT)
+    c.api.reply(daily_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT, filings_silent=True)
-    for n in (1, 2, 3):
-        c.on_tick(MORNING_AT + timedelta(seconds=10 * n))
+    c.api.fail(QueryKind.FILINGS, MORNING_AT + timedelta(minutes=1))
     assert [f.reason for f in failures.records] == [FailureReason.FILINGS_NO_RESPONSE, FailureReason.LLM_ERROR]
     [result] = details.results()
     assert result.failure_reason == FailureReason.FILINGS_NO_RESPONSE.value
@@ -565,7 +575,7 @@ def test_every_failure_is_logged_but_the_result_line_names_the_first_one(core):
 def test_missing_items_are_recorded_with_every_field_filled(core):
     c, requests, _, details = core()
     c.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
-    c.on_daily_data_responded(daily_response(etfs=[], background=[]), POST_CLOSE_AT)
+    c.api.reply(daily_response(etfs=[], background=[]), POST_CLOSE_AT)
     answer_news(c, requests, POST_CLOSE_AT)
     [record] = details.by_reason(REASON_MISSING_ITEMS)
     assert record.job_id == TICK_ID and record.stage == STAGE_COMPOSE
@@ -574,7 +584,7 @@ def test_missing_items_are_recorded_with_every_field_filled(core):
     assert run.target == {"rangeStart": datetime(2026, 10, 19, 17, 0, tzinfo=KST).isoformat(),
                           "rangeEnd": POST_CLOSE_AT.isoformat()}
     assert record.data["missingItems"] == [ITEM_KR_TODAY, ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_ETFS]
-    assert record.data["received"]["market.daily.responded"]["etfs"] == []
+    assert record.data["received"]["market/daily"]["etfs"] == []
     assert record.occurred_at == POST_CLOSE_AT
 
 
@@ -584,8 +594,8 @@ def test_records_and_events_carry_no_keys_or_personal_data(core, caplog, monkeyp
     c, requests, failures, details = core(llm)
     with caplog.at_level(logging.DEBUG):
         c.on_collection_ready(tick(), MORNING_AT)
-        c.on_daily_data_responded(daily_response(), MORNING_AT)
-        c.on_filings_responded(filings_response(), MORNING_AT)
+        c.api.reply(daily_response(), MORNING_AT)
+        c.api.reply(filings_response(), MORNING_AT)
         answer_news(c, requests, MORNING_AT)
     dumped = json.dumps([e.value for e in requests.sent], ensure_ascii=False) \
         + json.dumps([r.data for r in details.records], ensure_ascii=False) + caplog.text
@@ -610,8 +620,8 @@ def test_every_edition_leaves_one_result_line_with_body_cited_evidence_missing_i
     llm = FakeLlm(good_output("B1", "0000000001-26-000001"))
     c, requests, _, details = core(llm)
     c.on_collection_ready(tick(at=OPEN_AT), OPEN_AT)
-    c.on_daily_data_responded(daily_response(etfs=[etf(open_flow=OPEN_FLOW)]), OPEN_AT)
-    c.on_filings_responded(filings_response(), OPEN_AT)
+    c.api.reply(daily_response(etfs=[etf(open_flow=OPEN_FLOW)]), OPEN_AT)
+    c.api.reply(filings_response(), OPEN_AT)
     answer_news(c, requests, OPEN_AT)
 
     [event] = published(requests)
@@ -633,8 +643,8 @@ def test_the_accepted_llm_attempt_keeps_its_input_and_original_response(core):
     llm = FakeLlm("bad", answer)
     c, requests, _, details = core(llm)
     c.on_collection_ready(tick(), MORNING_AT)
-    c.on_daily_data_responded(daily_response(), MORNING_AT)
-    c.on_filings_responded(filings_response(), MORNING_AT)
+    c.api.reply(daily_response(), MORNING_AT)
+    c.api.reply(filings_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT)
 
     [accepted] = details.of_type(EntryType.REPORT_WRITTEN)
@@ -645,24 +655,23 @@ def test_the_accepted_llm_attempt_keeps_its_input_and_original_response(core):
 
 def test_edition_is_not_published_when_its_log_could_not_be_saved(caplog):
     requests, log_port = Requests(), Details(fail=True)
-    c = DailyCore(requests, None, log_port, DailySettings())
+    c = DailyCore(requests, requests.api, None, log_port, DailySettings())
     with caplog.at_level(logging.ERROR, logger="briefing.job_log"):
         c.on_collection_ready(tick(), MORNING_AT)
-        c.on_daily_data_responded(daily_response(), MORNING_AT)
-        c.on_filings_responded(filings_response(), MORNING_AT)
+        c.api.reply(daily_response(), MORNING_AT)
+        c.api.reply(filings_response(), MORNING_AT)
         answer_news(c, requests, MORNING_AT)
 
     assert published(requests) == []
     assert "result event not published" in caplog.text and "TEST01" not in caplog.text
     assert "result was not saved" in caplog.text
-    assert c.next_deadline() is None  # 작업은 정리되어 더 기다리지 않는다
+    assert not c.morning_in_progress(MORNING_AT.date())  # 작업은 정리되어 더 기다리지 않는다
 
 
 def test_post_close_edition_also_leaves_its_lines_under_its_own_job_kind(core):
     c, requests, _, details = core()
     c.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
-    for n in (1, 2, 3):
-        c.on_tick(POST_CLOSE_AT + timedelta(seconds=10 * n))
+    c.api.fail(QueryKind.DAILY, POST_CLOSE_AT + timedelta(minutes=1))
 
     assert {run.job_kind for run in details.starts} == {JobKind.POST_CLOSE}
     assert {e.job_id for e in details.entries} == {TICK_ID}
@@ -701,7 +710,7 @@ POST_CLOSE_BACKGROUND = [WORLD_C, EXCHANGE, {**MARKET, "fetchedAt": "2026-10-20T
 
 def test_an_etf_with_no_daily_price_is_written_as_no_data_with_its_name_and_reason(core):
     c, requests, _, details = post_close_core(core)
-    c.on_daily_data_responded(daily_response(etfs=[
+    c.api.reply(daily_response(etfs=[
         etf_v2(fetched="2026-10-20T16:30:02+09:00", rate="0.50", name="TEST ETF ONE"),
         etf_v2_missing(name="TEST ETF TWO"),
         etf_v2_missing("TEST03", "daily-price-unreadable")], background=POST_CLOSE_BACKGROUND), POST_CLOSE_AT)
@@ -723,7 +732,7 @@ def test_an_etf_with_no_daily_price_is_written_as_no_data_with_its_name_and_reas
 
 def test_when_every_etf_is_empty_the_whole_item_is_no_data_and_each_etf_is_still_listed(core):
     c, requests, _, _ = post_close_core(core)
-    c.on_daily_data_responded(daily_response(etfs=[etf_v2_missing("TEST01"), etf_v2_missing("TEST02")],
+    c.api.reply(daily_response(etfs=[etf_v2_missing("TEST01"), etf_v2_missing("TEST02")],
                                              background=POST_CLOSE_BACKGROUND), POST_CLOSE_AT)
     answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
@@ -738,7 +747,7 @@ def test_an_etf_with_one_null_value_and_no_reason_is_no_data_with_an_unknown_rea
     item = etf_v2("TEST03", fetched="2026-10-20T16:30:02+09:00", rate="0.50")
     item["close"] = None
     del item["missingReason"]
-    c.on_daily_data_responded(daily_response(etfs=[item], background=POST_CLOSE_BACKGROUND), POST_CLOSE_AT)
+    c.api.reply(daily_response(etfs=[item], background=POST_CLOSE_BACKGROUND), POST_CLOSE_AT)
     answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
     text = event.value["payload"]["text"]
@@ -749,7 +758,7 @@ def test_an_etf_with_one_null_value_and_no_reason_is_no_data_with_an_unknown_rea
 def test_an_empty_etf_is_kept_even_though_it_has_no_received_time(core, caplog):
     c, requests, _, _ = post_close_core(core)
     with caplog.at_level(logging.WARNING, logger="briefing.daily_jobs"):
-        c.on_daily_data_responded(daily_response(etfs=[etf_v2_missing()], background=POST_CLOSE_BACKGROUND),
+        c.api.reply(daily_response(etfs=[etf_v2_missing()], background=POST_CLOSE_BACKGROUND),
                                   POST_CLOSE_AT)
         answer_news(c, requests, POST_CLOSE_AT)
     assert "dropped" not in caplog.text
@@ -760,7 +769,7 @@ def test_an_empty_etf_is_kept_even_though_it_has_no_received_time(core, caplog):
 def test_the_llm_is_told_which_etf_is_empty_and_not_to_invent_its_numbers(core):
     llm = FakeLlm(post_close_output(symbols=("TEST01",)))
     c, requests, _, _ = post_close_core(core, llm)
-    c.on_daily_data_responded(daily_response(etfs=[
+    c.api.reply(daily_response(etfs=[
         etf_v2(fetched="2026-10-20T16:30:02+09:00", rate="0.50"), etf_v2_missing(name="TEST ETF TWO")],
         background=POST_CLOSE_BACKGROUND), POST_CLOSE_AT)
     answer_news(c, requests, POST_CLOSE_AT)
@@ -778,9 +787,9 @@ def test_the_llm_is_told_which_etf_is_empty_and_not_to_invent_its_numbers(core):
 def test_morning_edition_ignores_an_empty_etf_in_its_missing_items(core):
     c, requests, _, _ = core()
     c.on_collection_ready(tick(at=OPEN_AT), OPEN_AT)
-    c.on_daily_data_responded(
+    c.api.reply(
         daily_response(etfs=[etf_v2_missing("TEST01", tickers=("TESTA",), open_flow=OPEN_FLOW)]), OPEN_AT)
-    c.on_filings_responded(filings_response(), OPEN_AT)
+    c.api.reply(filings_response(), OPEN_AT)
     answer_news(c, requests, OPEN_AT)
     [event] = published(requests)
     # 아침 판에는 보유 ETF 항목이 없어 ETF 칸은 빠진 항목에 오르지 않는다.
@@ -790,12 +799,12 @@ def test_morning_edition_ignores_an_empty_etf_in_its_missing_items(core):
 def test_an_etf_without_a_daily_price_still_gets_us_stocks_filings_and_research(core):
     c, requests, _, _ = core()
     c.on_collection_ready(tick(), MORNING_AT)
-    c.on_daily_data_responded(daily_response(etfs=[etf_v2_missing("TEST01", tickers=("TESTA", "FAKEB"))]),
+    c.api.reply(daily_response(etfs=[etf_v2_missing("TEST01", tickers=("TESTA", "FAKEB"))]),
                               MORNING_AT)
-    [filings] = requests.topic("news.filings.requested")
-    assert filings.value["payload"]["tickers"] == ["TESTA", "FAKEB"]
-    assert filings.value["payload"]["symbol"] == "TEST01"
-    c.on_filings_responded(filings_response(), MORNING_AT)
+    [filings] = requests.api.of(QueryKind.FILINGS)
+    assert filings.payload["tickers"] == ["TESTA", "FAKEB"]
+    assert filings.payload["symbol"] == "TEST01"
+    c.api.reply(filings_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT)
     [event] = published(requests)
     text = event.value["payload"]["text"]
@@ -804,7 +813,7 @@ def test_an_etf_without_a_daily_price_still_gets_us_stocks_filings_and_research(
 
 def test_a_v1_response_without_the_missing_reason_is_still_read(core):
     c, requests, _, _ = post_close_core(core)
-    c.on_daily_data_responded(daily_response(etfs=[etf(fetched="2026-10-20T16:30:02+09:00", rate="0.50")],
+    c.api.reply(daily_response(etfs=[etf(fetched="2026-10-20T16:30:02+09:00", rate="0.50")],
                                              background=POST_CLOSE_BACKGROUND), POST_CLOSE_AT)
     answer_news(c, requests, POST_CLOSE_AT)
     [event] = published(requests)
@@ -817,8 +826,8 @@ def test_daily_llm_lines_keep_the_usage_and_a_call_failure_has_none(core):
     llm = FakeLlm(LlmCallError("LLM call failed: APIError"), "bad", good_output("B1"))
     c, requests, _, details = core(llm)
     c.on_collection_ready(tick(), MORNING_AT)
-    c.on_daily_data_responded(daily_response(), MORNING_AT)
-    c.on_filings_responded(filings_response(), MORNING_AT)
+    c.api.reply(daily_response(), MORNING_AT)
+    c.api.reply(filings_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT)
 
     failed, rejected = details.of_type(EntryType.LLM_REJECTED)

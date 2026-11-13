@@ -3,11 +3,9 @@ package dev.stockreading.market.history;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.net.URI;
@@ -24,7 +22,6 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
@@ -40,10 +37,8 @@ import org.springframework.kafka.core.KafkaTemplate;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import dev.stockreading.market.Topics;
 import dev.stockreading.market.trace.CorrelationId;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -69,24 +64,12 @@ class HistoryQueryWebServerTest {
     @ComponentScan(basePackages = {"dev.stockreading.market.history", "dev.stockreading.market.api",
             "dev.stockreading.market.trace"}, useDefaultFilters = false,
             includeFilters = @ComponentScan.Filter(type = FilterType.REGEX,
-                    pattern = ".*\\.(HistoryQueryController|InvalidRequestHandler|CorrelationIdHttpFilter)"))
+                    pattern = ".*\\.(HistoryQueryController|HistoryQuery|InvalidRequestHandler|CorrelationIdHttpFilter)"))
     static class Wiring {
 
         @Bean
         PriceHistoryRepository priceHistoryRepository() {
             return mock(PriceHistoryRepository.class);
-        }
-
-        @SuppressWarnings("unchecked")
-        @Bean
-        KafkaTemplate<String, String> kafka() {
-            return mock(KafkaTemplate.class);
-        }
-
-        @Bean
-        HistoryRequestListener historyRequestListener(PriceHistoryRepository repository,
-                KafkaTemplate<String, String> kafka, ObjectMapper mapper) {
-            return new HistoryRequestListener(repository, new HistoryPublisher(kafka, mapper, CLOCK), mapper);
         }
     }
 
@@ -96,21 +79,18 @@ class HistoryQueryWebServerTest {
     private final ListAppender<ILoggingEvent> appender = new ListAppender<>();
     private final int port;
     private final PriceHistoryRepository repository;
-    private final KafkaTemplate<String, String> kafka;
-    private final HistoryRequestListener listener;
+    private final HistoryQuery listener;
 
     @Autowired
-    HistoryQueryWebServerTest(@LocalServerPort int port, PriceHistoryRepository repository,
-            KafkaTemplate<String, String> kafka, HistoryRequestListener listener) {
+    HistoryQueryWebServerTest(@LocalServerPort int port, PriceHistoryRepository repository, HistoryQuery listener) {
         this.port = port;
         this.repository = repository;
-        this.kafka = kafka;
         this.listener = listener;
     }
 
     @BeforeEach
     void setUp() {
-        reset(repository, kafka);
+        reset(repository);
         appender.start();
         controllerLog.addAppender(appender);
     }
@@ -134,21 +114,20 @@ class HistoryQueryWebServerTest {
     }
 
     @Test
-    void theRealServerAnswersTheSameJsonAsTheKafkaResponseAndLogsTheCorrelationId() throws Exception {
+    void theRealServerAnswersTheSameJsonAsTheQueryAndLogsTheCorrelationId() throws Exception {
         // DB 드라이버처럼 UTC 로 돌려줘, 응답이 KST 로 바꿔 쓰는 것까지 같이 비교한다.
         when(repository.findBetweenInclusive(eq("TEST01"), eq(SINCE), eq(UNTIL), anyInt())).thenReturn(
                 IntStream.range(0, 4).mapToObj(i -> new PriceHistoryRepository.StoredPoint(
                         SINCE.plusSeconds(10L * i).withOffsetSameInstant(ZoneOffset.UTC), 10_000L + i)).toList());
         String request = request();
 
-        listener.onRequest(request);
-        ArgumentCaptor<String> message = ArgumentCaptor.captor();
-        verify(kafka).send(eq(Topics.MARKET_HISTORY_RESPONDED), anyString(), message.capture());
+        JsonNode answer = reader.readTree(reader.writeValueAsString(listener.answer(
+                reader.treeToValue(reader.readTree(request).get("payload"), HistoryRequest.class))));
         HttpResponse<String> response = post(reader.readTree(request).get("payload").toString());
 
         assertThat(response.statusCode()).isEqualTo(200);
         JsonNode api = reader.readTree(response.body());
-        assertThat(api).isEqualTo(reader.readTree(message.getValue()).get("payload"));
+        assertThat(api).isEqualTo(answer);
         assertThat(api.get("points").size()).isEqualTo(3);
         // 필터가 자동 등록되어 컨트롤러 로그 줄에 요청 헤더의 추적 ID 가 붙는다.
         assertThat(appender.list).hasSize(1);

@@ -14,8 +14,8 @@ import dev.stockreading.market.event.ContextPayload;
 import dev.stockreading.market.event.DailyPayload;
 
 /**
- * 시장 배경(market.context)과 데일리 시세(market.daily) 요청·응답의 내부 조회 API. 본문은 Kafka 요청 payload 와 같고,
- * 답은 Kafka 응답 payload 와 같은 내용이다(같은 answer 를 쓴다). 추적 ID 는 요청 헤더 X-Correlation-Id 로 받는다.
+ * 시장 배경과 데일리 시세의 내부 조회 API. 본문과 답은 옛 market.context·market.daily 요청·응답 이벤트의
+ * payload 와 같은 모양이다(contracts/events/). 추적 ID 는 요청 헤더 X-Correlation-Id 로 받는다.
  */
 @RestController
 @RequestMapping("/internal/market")
@@ -23,16 +23,16 @@ class ContextQueryController {
 
     private static final Logger log = LoggerFactory.getLogger(ContextQueryController.class);
 
-    private final ContextRequestListener context;
-    private final DailyRequestListener daily;
+    private final ContextQuery context;
+    private final DailyQuery daily;
 
-    ContextQueryController(ContextRequestListener context, DailyRequestListener daily) {
+    ContextQueryController(ContextQuery context, DailyQuery daily) {
         this.context = context;
         this.daily = daily;
     }
 
     @PostMapping("/context")
-    ContextPayload context(@RequestBody ContextRequestEnvelope.RequestPayload request) {
+    ContextPayload context(@RequestBody ContextRequest request) {
         check(request);
         ContextPayload payload = context.answer(request);
         // 종목코드·티커·원문은 보유 종목과 자료 내용이 드러나므로 식별자와 건수만 남긴다.
@@ -42,7 +42,7 @@ class ContextQueryController {
     }
 
     @PostMapping("/daily")
-    DailyPayload daily(@RequestBody DailyRequestEnvelope.RequestPayload request) {
+    DailyPayload daily(@RequestBody DailyRequest request) {
         check(request);
         DailyPayload payload = daily.answer(request);
         log.info("daily answered jobId={} seq={} etfs={} truncated={}", payload.jobId(), payload.seq(),
@@ -50,8 +50,8 @@ class ContextQueryController {
         return payload;
     }
 
-    // answer 가 Kafka 요청에서 거르는 조건과 같다. 여기서 먼저 걸러 400 으로 답한다.
-    private static void check(ContextRequestEnvelope.RequestPayload request) {
+    // answer 가 거르는 조건과 같다. 여기서 먼저 걸러 400 으로 답한다.
+    private static void check(ContextRequest request) {
         RequestChecks checks = RequestChecks.of(request.jobId());
         checks.positive("seq", request.seq());
         checks.text("symbol", request.symbol());
@@ -61,7 +61,7 @@ class ContextQueryController {
         checks.positive("maxTickers", request.maxTickers());
     }
 
-    private static void check(DailyRequestEnvelope.RequestPayload request) {
+    private static void check(DailyRequest request) {
         RequestChecks checks = RequestChecks.of(request.jobId());
         checks.positive("seq", request.seq());
         OffsetDateTime asOf = checks.time("asOf", request.asOf());

@@ -8,8 +8,9 @@ from briefing.config import DailySettings
 from briefing.daily_jobs import DailyCore
 from briefing.daily_report import DailyLlmWriter
 from briefing.job_log import EntryType
+from briefing.queries import QueryKind
 from briefing.status import CollectionRecord, JobRunRow
-from contracts import validate
+from contracts import validate, validate_payload
 from fake_news import answer_news
 from test_daily_jobs import (
     KST,
@@ -103,10 +104,10 @@ def make():
         requests, details = Requests(), Details()
         settings = DailySettings()
         writer = DailyLlmWriter(llm, settings.llm_max_attempts) if llm is not None else None
-        core = DailyCore(requests, writer, details, settings, status=status)
+        core = DailyCore(requests, requests.api, writer, details, settings, status=status)
         edition = "post-close" if edition_job == POST_CLOSE_JOB else "morning"
         core.on_collection_ready(tick(edition_job, at), at)
-        core.on_daily_data_responded(with_operations() if answer == "default" else answer, at)
+        core.api.reply(with_operations() if answer == "default" else answer, at)
         # 아침 판은 공시 응답을 시험이 따로 보낸다.
         answer_news(core, requests, at, filings_silent=edition == "morning")
         return core, requests, details
@@ -128,17 +129,17 @@ def status_lines(text):
 
 def test_the_post_close_request_asks_for_the_operations_but_the_morning_request_does_not(make):
     _, requests, _ = make(FakeStatus())
-    [post] = requests.topic("market.daily.requested")
-    assert post.value["payload"]["includeOperations"] is True
-    assert validate("market.daily.requested.v1.schema.json", post.value) == []
+    [post] = requests.api.of(QueryKind.DAILY)
+    assert post.payload["includeOperations"] is True
+    assert validate_payload("market.daily.requested.v1.schema.json", post.payload) == []
     _, morning_requests, _ = make(FakeStatus(), edition_job=MORNING_JOB, at=MORNING_AT)
-    [morning] = morning_requests.topic("market.daily.requested")
-    assert "includeOperations" not in morning.value["payload"]
+    [morning] = morning_requests.api.of(QueryKind.DAILY)
+    assert "includeOperations" not in morning.payload
 
 
 def test_without_a_status_store_nothing_is_asked_or_added(make):
     _, requests, _ = make(None)
-    assert "includeOperations" not in requests.topic("market.daily.requested")[0].value["payload"]
+    assert "includeOperations" not in requests.api.of(QueryKind.DAILY)[0].payload
     assert "서버 상태" not in only_event(requests)["text"]
 
 
@@ -213,10 +214,9 @@ def test_a_malformed_operations_field_is_treated_as_no_operations_and_the_editio
 
 def test_when_the_data_response_never_comes_the_edition_still_goes_out_with_no_data_lines():
     requests, details = Requests(), Details()
-    core = DailyCore(requests, None, details, DailySettings(), status=FakeStatus([], [morning_run()]))
+    core = DailyCore(requests, requests.api, None, details, DailySettings(), status=FakeStatus([], [morning_run()]))
     core.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
-    for n in (1, 2, 3):
-        core.on_tick(POST_CLOSE_AT + timedelta(seconds=10 * n))
+    core.api.fail(QueryKind.DAILY, POST_CLOSE_AT + timedelta(minutes=1))
     payload = only_event(requests)
     assert status_lines(payload["text"])[0] == "- 수집: 자료 없음"
     assert "서버 상태: 수집·시세(시세처리기 운영 상태 없음)" in payload["missingItems"]
@@ -244,6 +244,6 @@ def test_the_morning_edition_is_unchanged_and_never_reads_the_store(make):
     status = FakeStatus()
     core, requests, _ = make(status, edition_job=MORNING_JOB, at=MORNING_AT, answer=daily_response())
     # 아침 판은 공시까지 받아야 나간다.
-    core.on_filings_responded(filings_response(), MORNING_AT)
+    core.api.reply(filings_response(), MORNING_AT)
     assert "서버 상태" not in only_event(requests)["text"]
     assert status.queries == []

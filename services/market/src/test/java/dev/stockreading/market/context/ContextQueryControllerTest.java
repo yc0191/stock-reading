@@ -5,7 +5,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -24,11 +23,9 @@ import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
@@ -36,7 +33,6 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import dev.stockreading.market.MarketProperties;
-import dev.stockreading.market.Topics;
 import dev.stockreading.market.api.InvalidRequestHandler;
 import dev.stockreading.market.constituent.EtfInfo;
 import dev.stockreading.market.constituent.HoldingsPort;
@@ -51,8 +47,8 @@ import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * 시장 배경·데일리 시세의 내부 조회 API 가 같은 입력에 Kafka 응답 payload 와 같은 내용을 돌려주는지 지킨다.
- * 저장소는 대역이고 값은 모두 가짜다. Kafka 쪽은 실제 발행기가 만든 메시지 본문을 잡아 payload 만 비교한다.
+ * 시장 배경·데일리 시세의 내부 조회 API 가 조회 클래스의 답을 그대로 JSON 으로 돌려주는지(요청 검사, 추적 ID 포함)
+ * 지킨다. 저장소는 대역이고 값은 모두 가짜다.
  */
 class ContextQueryControllerTest {
 
@@ -65,8 +61,6 @@ class ContextQueryControllerTest {
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-10-20T08:15:43Z"), ZoneId.of("Asia/Seoul"));
 
     private final JsonMapper mapper = JsonMapper.builder().build();
-    @SuppressWarnings("unchecked")
-    private final KafkaTemplate<String, String> kafka = mock(KafkaTemplate.class);
     private final Logger controllerLog = (Logger) LoggerFactory.getLogger(ContextQueryController.class);
     private final ListAppender<ILoggingEvent> appender = new ListAppender<>();
 
@@ -76,8 +70,8 @@ class ContextQueryControllerTest {
     private MemberChangesPort memberChanges;
     private OperationsReader operationsReader;
     private OpenFlowPort openFlowPort;
-    private ContextRequestListener contextListener;
-    private DailyRequestListener dailyListener;
+    private ContextQuery contextListener;
+    private DailyQuery dailyListener;
     private MockMvc mvc;
 
     @BeforeEach
@@ -92,11 +86,11 @@ class ContextQueryControllerTest {
 
         ContextProperties properties =
                 new ContextProperties(Duration.ofDays(4), 32_768, 100, List.of("C", "S"), Duration.ofDays(7));
-        contextListener = new ContextRequestListener(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
-                properties, new ContextPublisher(kafka, mapper, CLOCK), mapper);
-        dailyListener = new DailyRequestListener(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
+        contextListener = new ContextQuery(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
+                properties);
+        dailyListener = new DailyQuery(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
                 memberChanges, properties, new DailyProperties(50, Duration.ofMinutes(30)), operationsReader,
-                new DailyPublisher(kafka, mapper, CLOCK), mapper, openFlowPort,
+                mapper, openFlowPort,
                 new MarketProperties(5, BigDecimal.ONE, List.of("f.a", "f.b", "f.c"), BigDecimal.ONE,
                         List.of("f.open"), 1, List.of(), 0, new BigDecimal("2.00")));
         mvc = MockMvcBuilders.standaloneSetup(new ContextQueryController(contextListener, dailyListener))
@@ -148,10 +142,9 @@ class ContextQueryControllerTest {
         return ContractSchemas.sample(file);
     }
 
-    private JsonNode kafkaPayload(String topic) {
-        ArgumentCaptor<String> message = ArgumentCaptor.captor();
-        verify(kafka).send(eq(topic), anyString(), message.capture());
-        return mapper.readTree(message.getValue()).get("payload");
+    // 같은 요청 본문을 조회 클래스에 직접 넣어 얻은 답
+    private <T> T requestBody(String requestEnvelope, Class<T> type) {
+        return mapper.treeToValue(mapper.readTree(requestEnvelope).get("payload"), type);
     }
 
     private JsonNode apiPayload(String path, String requestEnvelope) throws Exception {
@@ -164,14 +157,13 @@ class ContextQueryControllerTest {
     }
 
     @Test
-    void contextApiAnswersTheSameContentAsTheKafkaResponse() throws Exception {
+    void contextApiAnswersTheSameContentAsTheQueryAnswer() throws Exception {
         String request = sample("market.context.requested.sample.json");
 
-        contextListener.onRequest(request);
-        JsonNode kafka = kafkaPayload(Topics.MARKET_CONTEXT_RESPONDED);
+        JsonNode answer = mapper.readTree(mapper.writeValueAsString(contextListener.answer(requestBody(request, ContextRequest.class))));
         JsonNode api = apiPayload("/internal/market/context", request);
 
-        assertThat(api).isEqualTo(kafka);
+        assertThat(api).isEqualTo(answer);
         // 비교가 빈 응답끼리가 아님을 확인한다.
         assertThat(api.get("tickers").size()).isEqualTo(2);
         assertThat(api.get("closeRates").size()).isEqualTo(1);
@@ -179,7 +171,7 @@ class ContextQueryControllerTest {
     }
 
     @Test
-    void dailyApiAnswersTheSameContentAsTheKafkaResponseIncludingOpenFlow() throws Exception {
+    void dailyApiAnswersTheSameContentAsTheQueryAnswerIncludingOpenFlow() throws Exception {
         when(openFlowPort.first(anyString(), any(), any())).thenReturn(Optional.of(new OpenFlowPort.Snapshot(
                 DAILY_AS_OF.minusMinutes(10), 10_100, null)));
         when(openFlowPort.last(anyString(), any(), any())).thenReturn(Optional.of(new OpenFlowPort.Snapshot(
@@ -187,11 +179,10 @@ class ContextQueryControllerTest {
         String request = sample("market.daily.requested.sample.json").replace("\"maxTickers\": 100",
                 "\"maxTickers\": 100,\n    \"openFlowSince\": \"" + DAILY_AS_OF.minusMinutes(10) + "\"");
 
-        dailyListener.onRequest(request);
-        JsonNode kafka = kafkaPayload(Topics.MARKET_DAILY_RESPONDED);
+        JsonNode answer = mapper.readTree(mapper.writeValueAsString(dailyListener.answer(requestBody(request, DailyRequest.class))));
         JsonNode api = apiPayload("/internal/market/daily", request);
 
-        assertThat(api).isEqualTo(kafka);
+        assertThat(api).isEqualTo(answer);
         assertThat(api.get("etfs").size()).isEqualTo(2);
         assertThat(api.get("etfs").get(0).get("rate").asString()).isEqualTo("-1.50");
         assertThat(api.get("etfs").get(1).get("missingReason").asString()).isEqualTo(DailyPayload.NO_DAILY_PRICE_IN_RANGE);

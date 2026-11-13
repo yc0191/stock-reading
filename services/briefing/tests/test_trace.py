@@ -13,7 +13,17 @@ from briefing.trace import CORRELATION_ID_KEY, CorrelationIdFilter, correlation_
 from fake_job_log import FakeJobLog
 from test_move_group import move
 from test_move_merge import at
-from test_runner import MOVE, FakeMessage, completed_message, feed, move_message, setup  # noqa: F401 - setup은 픽스처
+from test_runner import (  # noqa: F401 - setup은 픽스처
+    MOVE,
+    FakeMessage,
+    articles_message,
+    completed_message,
+    context_message,
+    feed,
+    history_message,
+    move_message,
+    setup,
+)
 from test_weak_research import EDITIONS, MOVE_TWO_WEAK, DailyFlow, Flow, queries, two_weak
 
 
@@ -86,9 +96,10 @@ def test_every_produced_message_has_the_body_correlation_id_in_its_header(setup)
     make, *_ = setup
     runner, consumer, producer = make()
 
-    feed(runner, consumer, move_message(), completed_message())
+    feed(runner, consumer, move_message(), completed_message(), history_message(1), context_message(1),
+         articles_message(1))
 
-    assert producer.sent
+    assert [topic for topic, _, _ in producer.sent] == ["briefing.generated"]
     for (topic, _, body), headers in zip(producer.sent, producer.headers):
         assert headers == [("correlationId", body["correlationId"].encode())], topic
 
@@ -181,3 +192,15 @@ def test_releasing_a_held_move_runs_with_its_id():
 
     assert seen == [("m1", "c-m1"), ("m2", "c-m2")]
     assert trace.current() is None
+
+
+def test_log_lines_while_handling_a_query_result_carry_the_queries_trace_id(setup, lines):
+    make, *_ = setup
+    runner, consumer, _ = make()
+    feed(runner, consumer, move_message(), completed_message(), history_message(1), context_message(1))
+
+    feed(runner, consumer, articles_message(1))
+
+    # 조회 결과로 리포트를 쓰고 발행하는 줄도 그 변동의 추적 ID로 찍힌다.
+    published = [cid for cid, message in lines() if message.startswith("published briefing")]
+    assert published == [MOVE["correlationId"]]

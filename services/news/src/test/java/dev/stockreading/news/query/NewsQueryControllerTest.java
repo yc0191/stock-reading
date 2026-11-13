@@ -6,7 +6,6 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -24,18 +23,15 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import dev.stockreading.news.Topics;
 import dev.stockreading.news.api.InvalidRequestHandler;
 import dev.stockreading.news.etfmap.EtfStockMembers;
 import dev.stockreading.news.trace.CorrelationId;
@@ -45,8 +41,8 @@ import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * 기사·공시의 내부 조회 API 가 같은 입력에 Kafka 응답 payload 와 같은 내용을 돌려주는지 지킨다. 저장소는 대역이고
- * 값은 모두 가짜다. Kafka 쪽은 실제 발행기가 만든 메시지 본문을 잡아 payload 만 비교한다.
+ * 기사·공시의 내부 조회 API 가 조회 클래스의 답을 그대로 JSON 으로 돌려주는지(요청 검사, 추적 ID 포함) 지킨다.
+ * 저장소는 대역이고 값은 모두 가짜다.
  */
 class NewsQueryControllerTest {
 
@@ -58,24 +54,20 @@ class NewsQueryControllerTest {
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-10-20T07:15:44Z"), ZoneId.of("Asia/Seoul"));
 
     private final JsonMapper mapper = JsonMapper.builder().build();
-    @SuppressWarnings("unchecked")
-    private final KafkaTemplate<String, String> kafka = mock(KafkaTemplate.class);
     private final ArticleQueryRepository articleRepository = mock(ArticleQueryRepository.class);
     private final FilingQueryRepository filingRepository = mock(FilingQueryRepository.class);
     private final EtfStockMembers members = mock(EtfStockMembers.class);
     private final Logger controllerLog = (Logger) LoggerFactory.getLogger(NewsQueryController.class);
     private final ListAppender<ILoggingEvent> appender = new ListAppender<>();
-    private ArticlesRequestListener articlesListener;
-    private FilingsRequestListener filingsListener;
+    private ArticlesQuery articlesListener;
+    private FilingsQuery filingsListener;
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
         when(members.membersOf(anyString())).thenReturn(Set.of());
-        articlesListener = new ArticlesRequestListener(articleRepository, new ArticlesPublisher(kafka, mapper, CLOCK),
-                mapper, members);
-        filingsListener = new FilingsRequestListener(filingRepository, new FilingsPublisher(kafka, mapper, CLOCK),
-                mapper);
+        articlesListener = new ArticlesQuery(articleRepository, mapper, members);
+        filingsListener = new FilingsQuery(filingRepository);
         mvc = MockMvcBuilders.standaloneSetup(new NewsQueryController(articlesListener, filingsListener))
                 .setControllerAdvice(new InvalidRequestHandler())
                 .addFilters(new CorrelationIdHttpFilter())
@@ -109,10 +101,9 @@ class NewsQueryControllerTest {
                 .toList();
     }
 
-    private JsonNode kafkaPayload(String topic) {
-        ArgumentCaptor<String> message = ArgumentCaptor.captor();
-        verify(kafka).send(eq(topic), anyString(), message.capture());
-        return mapper.readTree(message.getValue()).get("payload");
+    // 같은 요청 본문을 조회 클래스에 직접 넣어 얻은 답
+    private <T> T requestBody(String requestEnvelope, Class<T> type) {
+        return mapper.treeToValue(mapper.readTree(requestEnvelope).get("payload"), type);
     }
 
     private JsonNode apiPayload(String path, String requestEnvelope) throws Exception {
@@ -125,49 +116,46 @@ class NewsQueryControllerTest {
     }
 
     @Test
-    void articlesApiAnswersTheSameContentAsTheKafkaResponseWhenTruncated() throws Exception {
+    void articlesApiAnswersTheSameContentAsTheQueryAnswerWhenTruncated() throws Exception {
         when(articleRepository.findByRange(eq("TEST01"), any(), eq(ARTICLES_SINCE), eq(ARTICLES_UNTIL), anyInt()))
                 .thenReturn(articles(4));
         String request = ContractSchemas.sample("news.articles.requested.sample.json")
                 .replace("\"maxArticles\": 300", "\"maxArticles\": 3");
 
-        articlesListener.onRequest(request);
-        JsonNode kafka = kafkaPayload(Topics.NEWS_ARTICLES_RESPONDED);
+        JsonNode answer = mapper.readTree(mapper.writeValueAsString(articlesListener.answer(requestBody(request, ArticlesRequest.class))));
         JsonNode api = apiPayload("/internal/news/articles", request);
 
-        assertThat(api).isEqualTo(kafka);
+        assertThat(api).isEqualTo(answer);
         assertThat(api.get("articles").size()).isEqualTo(3);
         assertThat(api.get("truncated").asBoolean()).isTrue();
         assertThat(api.get("articles").get(0).get("publishedAt").asString()).isEqualTo("2026-10-20T16:10:31+09:00");
     }
 
     @Test
-    void researchArticlesApiAnswersTheSameContentAsTheKafkaResponse() throws Exception {
+    void researchArticlesApiAnswersTheSameContentAsTheQueryAnswer() throws Exception {
         UUID researchJobId = UUID.fromString("0b6f3c2e-9a41-4d7e-8c15-3e2a7f9d1b60");
         when(articleRepository.findByResearchJob(eq(researchJobId), eq(ARTICLES_SINCE), eq(ARTICLES_UNTIL), anyInt()))
                 .thenReturn(articles(2));
         String request = ContractSchemas.sample("news.articles.requested.sample.json").replace(
                 "\"maxArticles\": 300", "\"maxArticles\": 300,\n    \"researchJobId\": \"" + researchJobId + "\"");
 
-        articlesListener.onRequest(request);
-        JsonNode kafka = kafkaPayload(Topics.NEWS_ARTICLES_RESPONDED);
+        JsonNode answer = mapper.readTree(mapper.writeValueAsString(articlesListener.answer(requestBody(request, ArticlesRequest.class))));
         JsonNode api = apiPayload("/internal/news/articles", request);
 
-        assertThat(api).isEqualTo(kafka);
+        assertThat(api).isEqualTo(answer);
         assertThat(api.get("articles").size()).isEqualTo(2);
     }
 
     @Test
-    void filingsApiAnswersTheSameContentAsTheKafkaResponse() throws Exception {
+    void filingsApiAnswersTheSameContentAsTheQueryAnswer() throws Exception {
         when(filingRepository.findByTickers(eq(List.of("TESTA", "FAKEB")), eq(FILINGS_SINCE), eq(FILINGS_UNTIL),
                 anyInt())).thenReturn(filings(3));
         String request = ContractSchemas.sample("news.filings.requested.sample.json");
 
-        filingsListener.onRequest(request);
-        JsonNode kafka = kafkaPayload(Topics.NEWS_FILINGS_RESPONDED);
+        JsonNode answer = mapper.readTree(mapper.writeValueAsString(filingsListener.answer(requestBody(request, FilingsRequest.class))));
         JsonNode api = apiPayload("/internal/news/filings", request);
 
-        assertThat(api).isEqualTo(kafka);
+        assertThat(api).isEqualTo(answer);
         assertThat(api.get("filings").size()).isEqualTo(3);
         assertThat(api.get("filings").get(0).get("items").size()).isEqualTo(2);
     }

@@ -11,11 +11,9 @@ import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
 import dev.stockreading.market.MarketProperties;
-import dev.stockreading.market.Topics;
 import dev.stockreading.market.event.ContextPayload;
 import dev.stockreading.market.event.DailyPayload;
 import dev.stockreading.market.event.EventFactory;
@@ -31,12 +29,12 @@ import tools.jackson.databind.ObjectMapper;
  * <p>ETF 목록은 종목 테이블의 국내 ETF 중 관계가 HELD 또는 WATCH인 종목이다. 받은 시각이 [하한, 기준 시각] 안인
  * 국내 일봉(daily-price)이 있으면 값을 싣고, 없거나 읽지 못하면 값을 비우고 이유를 싣는다. 미국 종목은 대응표로 찾고, 해외 등락률·세계지수 계산·받은 시각 하한은
  * 배경 자료 응답(market.context)과 같은 규칙을 쓴다. 저장 상태를 바꾸지 않는 조회라 같은 요청을 다시 받아도
- * 같은 내용으로 다시 답할 뿐이고, 브리핑은 jobId·seq로 짝을 지어 중복 응답을 버린다.
+ * 같은 내용으로 다시 답할 뿐이다(브리핑은 연결 실패·시간 초과 때 같은 요청을 다시 부른다).
  */
 @Component
-class DailyRequestListener {
+class DailyQuery {
 
-    private static final Logger log = LoggerFactory.getLogger(DailyRequestListener.class);
+    private static final Logger log = LoggerFactory.getLogger(DailyQuery.class);
 
     private final BackgroundRepository repository;
     private final MarketBackground marketBackground;
@@ -47,14 +45,12 @@ class DailyRequestListener {
     private final ContextProperties contextProperties;
     private final DailyProperties dailyProperties;
     private final OperationsReader operationsReader;
-    private final DailyPublisher publisher;
-    private final ObjectMapper mapper;
     private final OpenFlowCalculator openFlow;
 
-    DailyRequestListener(BackgroundRepository repository, WorldIndexRates worldIndexRates,
+    DailyQuery(BackgroundRepository repository, WorldIndexRates worldIndexRates,
             OverseasCloseRateQuery closeRateQuery, HoldingsPort holdings, MemberChangesPort memberChanges,
             ContextProperties contextProperties,
-            DailyProperties dailyProperties, OperationsReader operationsReader, DailyPublisher publisher,
+            DailyProperties dailyProperties, OperationsReader operationsReader,
             ObjectMapper mapper, OpenFlowPort openFlowPort, MarketProperties marketProperties) {
         this.repository = repository;
         this.marketBackground = new MarketBackground(repository, worldIndexRates,
@@ -66,24 +62,17 @@ class DailyRequestListener {
         this.contextProperties = contextProperties;
         this.dailyProperties = dailyProperties;
         this.operationsReader = operationsReader;
-        this.publisher = publisher;
-        this.mapper = mapper;
         this.openFlow = new OpenFlowCalculator(openFlowPort, mapper, marketProperties.openPriceFields(),
                 marketProperties.prevCloseFields());
     }
 
-    @KafkaListener(topics = Topics.MARKET_DAILY_REQUESTED, groupId = "market")
-    void onRequest(String message) {
-        DailyRequestEnvelope event = mapper.readValue(message, DailyRequestEnvelope.class);
-        publisher.publish(answer(event.payload()), event.eventId(), event.correlationId());
-    }
-
-    DailyPayload answer(DailyRequestEnvelope.RequestPayload request) {
+    /** 내부 조회 API 가 부른다. 같은 요청에는 같은 내용을 돌려준다. */
+    DailyPayload answer(DailyRequest request) {
         OffsetDateTime asOf = OffsetDateTime.parse(request.asOf());
         OffsetDateTime requestedSince = OffsetDateTime.parse(request.since());
         if (request.maxResponseBytes() < 1 || request.maxEtfs() < 1 || request.maxTickers() < 1
                 || requestedSince.isAfter(asOf)) {
-            // 잘못된 요청은 응답하지 않는다. 브리핑이 제한 시간 뒤 다시 보내거나 실패로 기록한다.
+            // 잘못된 요청은 답하지 않는다. 내부 조회 API 는 먼저 400 으로 거른다.
             throw new IllegalArgumentException("invalid daily request jobId=" + request.jobId()
                     + " seq=" + request.seq());
         }
@@ -150,7 +139,7 @@ class DailyRequestListener {
      * 아침 판이 요청했을 때만 ETF마다 개장 흐름을 붙인다. 읽을 구간은 요청 시작 시각부터 기준 시각까지이고, 안전 상한보다
      * 길면 기준 시각에서 그 기간만큼만 거슬러 읽는다. 한 ETF의 조회가 실패해도 나머지 응답은 보낸다(그 ETF는 칸이 없다).
      */
-    private void addOpenFlow(DailyRequestEnvelope.RequestPayload request, List<DailyPayload.Etf> etfs,
+    private void addOpenFlow(DailyRequest request, List<DailyPayload.Etf> etfs,
             OffsetDateTime asOf) {
         OffsetDateTime requested = OffsetDateTime.parse(request.openFlowSince());
         if (requested.isAfter(asOf)) {
@@ -175,7 +164,7 @@ class DailyRequestListener {
     }
 
     /** 운영 상태는 부가 정보라 조회가 실패해도 나머지 응답은 보낸다. 종목코드·외부 오류 원문이 새지 않게 예외 종류만 남긴다. */
-    private DailyPayload.Operations operations(DailyRequestEnvelope.RequestPayload request, OffsetDateTime since,
+    private DailyPayload.Operations operations(DailyRequest request, OffsetDateTime since,
             OffsetDateTime asOf) {
         try {
             return operationsReader.read(since, asOf);

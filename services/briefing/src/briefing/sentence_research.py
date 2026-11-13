@@ -20,7 +20,9 @@ from briefing.config import DEFAULT_SETTINGS, CoreSettings
 from briefing.final_check import FinalCheck
 from briefing.job_log import DiscardJobLog, JobKind, JobLogPort
 from briefing.jobs import ReportInput
+from briefing.job_step import job_scope
 from briefing.ports import RequestPort
+from briefing.queries import QueryPort
 from briefing.report import Cause, Report, ReportStage, build_llm_input
 from briefing.research import (
     NewsResearch,
@@ -112,6 +114,8 @@ class SentenceResearch:
 
     queries: QueryWriter | None
     requests: RequestPort
+    # 재검색 기사 조회(뉴스처리기 내부 조회 API)
+    api: QueryPort
     job_log: JobLogPort = field(default_factory=DiscardJobLog)
     settings: CoreSettings = DEFAULT_SETTINGS
     research: NewsResearch = field(init=False)
@@ -119,7 +123,7 @@ class SentenceResearch:
     _runs: dict[str, _Run] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
-        self.research = NewsResearch(self.requests, self.job_log, self, self.settings)
+        self.research = NewsResearch(self.requests, self.api, self.job_log, self, self.settings)
 
     def register(self, job_kind: str, adapter: SentenceAdapter) -> None:
         self._adapters[job_kind] = adapter
@@ -232,18 +236,15 @@ class SentenceResearch:
 
     # ---- 시간 ----
 
-    def on_collection_completed(self, message: str | bytes, now: datetime) -> bool:
-        return self.research.on_collection_completed(message, now)
-
-    def on_articles_responded(self, message: str | bytes, now: datetime) -> bool:
-        return self.research.on_articles_responded(message, now)
+    def on_stored(self, message: str | bytes, now: datetime) -> bool:
+        return self.research.on_stored(message, now)
 
     def on_tick(self, now: datetime) -> None:
         self.research.on_tick(now)
         for run in list(self._runs.values()):
             if run.job_id in self._runs and now >= run.deadline:
-                # 메시지 처리 밖에서 판을 내보내므로 그 작업의 추적 ID를 로그 줄에 직접 건다.
-                with correlation_context(run.adapter.correlation_id(run.draft)):
+                # 메시지 처리 밖에서 판을 내보내므로 그 작업의 추적 ID를 로그 줄에, 작업 id를 LLM 호출 기록(job_step)에 직접 건다.
+                with correlation_context(run.adapter.correlation_id(run.draft)), job_scope(run.job_id):
                     self._expire(run, now)
 
     def next_deadline(self) -> datetime | None:

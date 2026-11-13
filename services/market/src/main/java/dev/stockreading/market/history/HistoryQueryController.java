@@ -10,22 +10,22 @@ import dev.stockreading.market.api.RequestChecks;
 import dev.stockreading.market.event.HistoryPayload;
 
 /**
- * 가격 이력(market.history) 요청·응답의 내부 조회 API. 본문은 Kafka 요청 payload 와 같고, 답은 Kafka 응답 payload 와
- * 같은 내용이다(같은 answer 를 쓴다). 추적 ID 는 요청 헤더 X-Correlation-Id 로 받는다.
+ * 가격 이력의 내부 조회 API. 본문과 답은 옛 market.history 요청·응답 이벤트의 payload 와 같은 모양이다
+ * (contracts/events/). 추적 ID 는 요청 헤더 X-Correlation-Id 로 받는다.
  */
 @RestController
 class HistoryQueryController {
 
     private static final Logger log = LoggerFactory.getLogger(HistoryQueryController.class);
 
-    private final HistoryRequestListener history;
+    private final HistoryQuery history;
 
-    HistoryQueryController(HistoryRequestListener history) {
+    HistoryQueryController(HistoryQuery history) {
         this.history = history;
     }
 
     @PostMapping("/internal/market/history")
-    HistoryPayload history(@RequestBody HistoryRequestEnvelope.RequestPayload request) {
+    HistoryPayload history(@RequestBody HistoryRequest request) {
         check(request);
         HistoryPayload payload = history.answer(request);
         log.info("history answered jobId={} seq={} points={} truncated={}", payload.jobId(), payload.seq(),
@@ -33,8 +33,8 @@ class HistoryQueryController {
         return payload;
     }
 
-    // answer 가 Kafka 요청에서 거르는 조건과 같다. 여기서 먼저 걸러 400 으로 답한다.
-    private static void check(HistoryRequestEnvelope.RequestPayload request) {
+    // answer 가 거르는 조건과 같다. 여기서 먼저 걸러 400 으로 답한다.
+    private static void check(HistoryRequest request) {
         RequestChecks checks = RequestChecks.of(request.jobId());
         checks.positive("seq", request.seq());
         checks.text("symbol", request.symbol());

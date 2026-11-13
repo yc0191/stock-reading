@@ -3,7 +3,6 @@ package dev.stockreading.market.history;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -19,27 +18,41 @@ import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 
 import dev.stockreading.market.event.HistoryPayload;
+import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
-class HistoryRequestListenerTest {
+class HistoryQueryTest {
 
     private static final String JOB_ID = "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13";
     private static final String CORRELATION_ID = "collect-2026-10-20T16:00:30+09:00";
     private static final OffsetDateTime SINCE = OffsetDateTime.parse("2026-10-20T15:55:31+09:00");
     private static final OffsetDateTime UNTIL = OffsetDateTime.parse("2026-10-20T16:10:31+09:00");
 
+    private final ObjectMapper mapper = JsonMapper.builder().build();
     private PriceHistoryRepository repository;
-    private HistoryPublisher publisher;
-    private HistoryRequestListener listener;
+    private HistoryQuery listener;
+    private HistoryPayload last;
 
     @BeforeEach
     void setUp() {
         repository = mock(PriceHistoryRepository.class);
-        publisher = mock(HistoryPublisher.class);
-        listener = new HistoryRequestListener(repository, publisher, JsonMapper.builder().build());
+        listener = new HistoryQuery(repository);
+    }
+
+    // 요청 샘플(옛 요청 이벤트)의 payload 가 내부 조회 API 의 요청 본문이다.
+    private void answer(String request) {
+        last = listener.answer(mapper.treeToValue(mapper.readTree(request).get("payload"), HistoryRequest.class));
+    }
+
+    /** 마지막 답이 요청의 식별자를 되돌려주고 잘림 표시가 기대대로인지 보고 점 목록을 돌려준다. */
+    private List<HistoryPayload.Point> published(boolean truncated) {
+        assertThat(last.jobId()).isEqualTo(JOB_ID);
+        assertThat(last.seq()).isEqualTo(1);
+        assertThat(last.symbol()).isEqualTo("TEST01");
+        assertThat(last.truncated()).isEqualTo(truncated);
+        return last.points();
     }
 
     private static List<PriceHistoryRepository.StoredPoint> rows(int count) {
@@ -52,12 +65,11 @@ class HistoryRequestListenerTest {
     void respondsWithEveryRowInTheRequestedRangeAndEchoesTheIdentifiers() throws IOException {
         when(repository.findBetweenInclusive(eq("TEST01"), eq(SINCE), eq(UNTIL), anyInt())).thenReturn(rows(3));
 
-        listener.onRequest(ContractSchemas.sample("market.history.requested.sample.json"));
+        answer(ContractSchemas.sample("market.history.requested.sample.json"));
 
-        ArgumentCaptor<List<HistoryPayload.Point>> points = ArgumentCaptor.captor();
-        verify(publisher).publish(eq(JOB_ID), eq(1), eq("TEST01"), points.capture(), eq(false), eq(CORRELATION_ID));
-        assertThat(points.getValue()).hasSize(3);
-        assertThat(points.getValue().get(0)).isEqualTo(new HistoryPayload.Point("2026-10-20T15:55:31+09:00", 10_000L));
+        List<HistoryPayload.Point> points = published(false);
+        assertThat(points).hasSize(3);
+        assertThat(points.get(0)).isEqualTo(new HistoryPayload.Point("2026-10-20T15:55:31+09:00", 10_000L));
     }
 
     @Test
@@ -66,20 +78,19 @@ class HistoryRequestListenerTest {
         when(repository.findBetweenInclusive(eq("TEST01"), eq(SINCE), eq(UNTIL), anyInt()))
                 .thenReturn(List.of(new PriceHistoryRepository.StoredPoint(utc, 10_000L)));
 
-        listener.onRequest(ContractSchemas.sample("market.history.requested.sample.json"));
+        answer(ContractSchemas.sample("market.history.requested.sample.json"));
 
-        ArgumentCaptor<List<HistoryPayload.Point>> points = ArgumentCaptor.captor();
-        verify(publisher).publish(eq(JOB_ID), eq(1), eq("TEST01"), points.capture(), eq(false), eq(CORRELATION_ID));
-        assertThat(points.getValue().get(0).asOf()).isEqualTo("2026-10-20T15:55:00+09:00");
+        List<HistoryPayload.Point> points = published(false);
+        assertThat(points.get(0).asOf()).isEqualTo("2026-10-20T15:55:00+09:00");
     }
 
     @Test
     void zeroRowsIsStillAnswered() throws IOException {
         when(repository.findBetweenInclusive(anyString(), any(), any(), anyInt())).thenReturn(List.of());
 
-        listener.onRequest(ContractSchemas.sample("market.history.requested.sample.json"));
+        answer(ContractSchemas.sample("market.history.requested.sample.json"));
 
-        verify(publisher).publish(eq(JOB_ID), eq(1), eq("TEST01"), eq(List.of()), eq(false), eq(CORRELATION_ID));
+        assertThat(published(false)).isEmpty();
     }
 
     @Test
@@ -88,12 +99,11 @@ class HistoryRequestListenerTest {
                 .replace("\"maxPoints\": 5000", "\"maxPoints\": 2");
         when(repository.findBetweenInclusive(eq("TEST01"), eq(SINCE), eq(UNTIL), eq(3))).thenReturn(rows(3));
 
-        listener.onRequest(request);
+        answer(request);
 
-        ArgumentCaptor<List<HistoryPayload.Point>> points = ArgumentCaptor.captor();
-        verify(publisher).publish(eq(JOB_ID), eq(1), eq("TEST01"), points.capture(), eq(true), eq(CORRELATION_ID));
+        List<HistoryPayload.Point> points = published(true);
         // 뒤쪽을 버려 구간 앞쪽(기준 가격)이 남는다.
-        assertThat(points.getValue()).extracting(HistoryPayload.Point::price).containsExactly(10_000L, 10_001L);
+        assertThat(points).extracting(HistoryPayload.Point::price).containsExactly(10_000L, 10_001L);
     }
 
     @Test
@@ -102,9 +112,9 @@ class HistoryRequestListenerTest {
                 .replace("\"maxPoints\": 5000", "\"maxPoints\": 3");
         when(repository.findBetweenInclusive(anyString(), any(), any(), eq(4))).thenReturn(rows(3));
 
-        listener.onRequest(request);
+        answer(request);
 
-        verify(publisher).publish(eq(JOB_ID), eq(1), eq("TEST01"), any(), eq(false), eq(CORRELATION_ID));
+        published(false);
     }
 
     @Test
@@ -113,9 +123,9 @@ class HistoryRequestListenerTest {
                 .replace("\"maxPoints\": 5000", "\"maxPoints\": 1000000");
         when(repository.findBetweenInclusive(anyString(), any(), any(), anyInt())).thenReturn(List.of());
 
-        listener.onRequest(request);
+        answer(request);
 
-        verify(repository).findBetweenInclusive("TEST01", SINCE, UNTIL, HistoryRequestListener.MAX_POINTS_CAP + 1);
+        verify(repository).findBetweenInclusive("TEST01", SINCE, UNTIL, HistoryQuery.MAX_POINTS_CAP + 1);
     }
 
     @Test
@@ -125,10 +135,10 @@ class HistoryRequestListenerTest {
         String reversedRange = ContractSchemas.sample("market.history.requested.sample.json")
                 .replace("\"since\": \"2026-10-20T15:55:31+09:00\"", "\"since\": \"2026-10-20T17:00:00+09:00\"");
 
-        assertThatThrownBy(() -> listener.onRequest(zeroLimit)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> listener.onRequest(reversedRange)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> answer(zeroLimit)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> answer(reversedRange)).isInstanceOf(IllegalArgumentException.class);
 
-        verifyNoInteractions(repository, publisher);
+        verifyNoInteractions(repository);
     }
 
     private static String withInterval(int maxPoints, int intervalSeconds) throws IOException {
@@ -141,11 +151,10 @@ class HistoryRequestListenerTest {
         when(repository.findThinnedBetweenInclusive(eq("TEST01"), eq(SINCE), eq(UNTIL), eq(10), eq(61)))
                 .thenReturn(rows(60));
 
-        listener.onRequest(withInterval(60, 10));
+        answer(withInterval(60, 10));
 
-        ArgumentCaptor<List<HistoryPayload.Point>> points = ArgumentCaptor.captor();
-        verify(publisher).publish(eq(JOB_ID), eq(1), eq("TEST01"), points.capture(), eq(false), eq(CORRELATION_ID));
-        assertThat(points.getValue()).hasSize(60);
+        List<HistoryPayload.Point> points = published(false);
+        assertThat(points).hasSize(60);
         verify(repository, org.mockito.Mockito.never()).findBetweenInclusive(anyString(), any(), any(), anyInt());
     }
 
@@ -153,18 +162,17 @@ class HistoryRequestListenerTest {
     void thinnedRowsOverTheLimitAreCutFromTheEndAndMarkedTruncated() throws IOException {
         when(repository.findThinnedBetweenInclusive(anyString(), any(), any(), eq(10), eq(3))).thenReturn(rows(3));
 
-        listener.onRequest(withInterval(2, 10));
+        answer(withInterval(2, 10));
 
-        ArgumentCaptor<List<HistoryPayload.Point>> points = ArgumentCaptor.captor();
-        verify(publisher).publish(eq(JOB_ID), eq(1), eq("TEST01"), points.capture(), eq(true), eq(CORRELATION_ID));
-        assertThat(points.getValue()).extracting(HistoryPayload.Point::price).containsExactly(10_000L, 10_001L);
+        List<HistoryPayload.Point> points = published(true);
+        assertThat(points).extracting(HistoryPayload.Point::price).containsExactly(10_000L, 10_001L);
     }
 
     @Test
     void olderRequestWithoutAnIntervalIsNotThinned() throws IOException {
         when(repository.findBetweenInclusive(anyString(), any(), any(), anyInt())).thenReturn(rows(2));
 
-        listener.onRequest(ContractSchemas.sample("market.history.requested.sample.json"));
+        answer(ContractSchemas.sample("market.history.requested.sample.json"));
 
         verify(repository).findBetweenInclusive("TEST01", SINCE, UNTIL, 5001);
         verify(repository, org.mockito.Mockito.never())
@@ -173,9 +181,9 @@ class HistoryRequestListenerTest {
 
     @Test
     void zeroIntervalIsRejectedWithoutQueryingOrAnswering() throws IOException {
-        assertThatThrownBy(() -> listener.onRequest(withInterval(60, 0))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> answer(withInterval(60, 0))).isInstanceOf(IllegalArgumentException.class);
 
-        verifyNoInteractions(repository, publisher);
+        verifyNoInteractions(repository);
     }
 
     @Test
@@ -183,9 +191,8 @@ class HistoryRequestListenerTest {
         when(repository.findBetweenInclusive(anyString(), any(), any(), anyInt()))
                 .thenThrow(new IllegalStateException("db down"));
 
-        assertThatThrownBy(() -> listener.onRequest(ContractSchemas.sample("market.history.requested.sample.json")))
+        assertThatThrownBy(() -> answer(ContractSchemas.sample("market.history.requested.sample.json")))
                 .isInstanceOf(IllegalStateException.class);
-
-        verify(publisher, org.mockito.Mockito.never()).publish(anyString(), anyInt(), anyString(), any(), anyBoolean(), anyString());
+        assertThat(last).isNull();
     }
 }

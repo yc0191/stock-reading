@@ -11,10 +11,6 @@ class CoreSettings:
     delta: timedelta = timedelta(minutes=5)
     evidence_window: timedelta = timedelta(hours=24)
     market_lookback: timedelta = timedelta(minutes=5)
-    response_timeout: timedelta = timedelta(seconds=10)
-    max_attempts: int = 3
-    recheck_interval: timedelta = timedelta(seconds=10)
-    max_rounds: int = 5
     collection_wait_limit: timedelta = timedelta(minutes=30)
     recent_completions: int = 10
     # 시세 이력은 T−5분~T+Δ 구간을 이 간격으로 솎아 받는다. 구간은 양끝을 포함하므로 10분 구간을 10초로 나누면
@@ -50,7 +46,7 @@ class CoreSettings:
     # 같은 eventId 중복 처리를 위해 기억하는 작업 키 수. 메모리가 무한히 늘지 않게 한다.
     remembered_jobs: int = 10000
     # 근거 부족 시 재검색: 검색어 LLM이 낼 수 있는 검색어 수, 검색어 LLM 시도 횟수, 재검색 완료 알림을 기다리는 상한.
-    # 재검색 기사 조회는 위의 응답 제한 시간·시도 횟수·재확인 간격·라운드 상한을 그대로 쓴다.
+    # 재검색 기사 조회는 저장 끝 알림(news.stored)을 받은 뒤 한 번만 하고, 다시 부르는 규칙은 QuerySettings를 따른다.
     max_research_queries: int = 3
     research_query_attempts: int = 3
     research_wait_limit: timedelta = timedelta(minutes=5)
@@ -79,8 +75,24 @@ class StoreSettings:
     record_retry_interval: timedelta = timedelta(milliseconds=500)
 
 
+@dataclass(frozen=True)
+class QuerySettings:
+    """시세처리기·뉴스처리기 내부 조회 API 호출의 재시도 규칙. 급변동·데일리 판·재검색이 함께 쓴다."""
+
+    # 한 번 호출의 응답 제한. 연결 실패·시간 초과·5xx만 다시 부르고, 4xx(잘못된 요청)는 다시 불러도 같으므로 그만둔다.
+    # 연결부터 응답을 다 읽기까지 시도 전체의 마감이다(http_queries.post_json).
+    call_timeout: timedelta = timedelta(seconds=10)
+    max_attempts: int = 4
+    # 시도 사이 간격. n번째 실패 뒤 n번째 값을 쉰다(최대 시도 4번이라 3개). 최악은 4×10초 + 22초 = 62초다.
+    retry_intervals: tuple[timedelta, ...] = (timedelta(seconds=2), timedelta(seconds=5), timedelta(seconds=15))
+    # 동시에 기다리는 호출 수. 호출은 이 수의 작업 스레드에서 돌고 수신 루프는 기다리지 않는다. 시세처리기·뉴스처리기
+    # 요청 스레드(각 8개)보다 크지 않게 둔다.
+    max_workers: int = 8
+
+
 DEFAULT_SETTINGS = CoreSettings()
 DEFAULT_STORE_SETTINGS = StoreSettings()
+DEFAULT_QUERY_SETTINGS = QuerySettings()
 
 
 @dataclass(frozen=True)
@@ -89,9 +101,7 @@ class DailySettings:
 
     # 범위 시작은 예정 시각에서 직전 평일의 같은 시각이다. 그래도 이보다 오래 거슬러 가지 않는다.
     max_lookback: timedelta = timedelta(days=7)
-    # 재요청 규칙은 급변동 근거 조회와 같다.
-    response_timeout: timedelta = timedelta(seconds=10)
-    max_attempts: int = 3
+    # 다시 부르는 규칙은 급변동 근거 조회와 같다(QuerySettings).
     max_response_bytes: int = 32 * 1024
     max_etfs: int = 50
     max_tickers: int = 100

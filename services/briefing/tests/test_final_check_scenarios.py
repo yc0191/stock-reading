@@ -64,7 +64,7 @@ def move_flow(report_outputs, query_outputs, check_outputs):
     flow.check_llm = FakeLlm(*check_outputs)
     final = FinalCheck(MoveFinalCheck(LlmWriter(flow.report_llm)), flow.check_llm, 3, flow.records)
     flow.stage = ResearchReportStage(flow.stage.stage, flow.sentences, final)
-    flow.core = BriefingCore(flow.requests, flow.stage, flow.settings, flow.records)
+    flow.core = BriefingCore(flow.requests, flow.api, flow.stage, flow.settings, flow.records)
     return flow
 
 
@@ -74,7 +74,7 @@ def researched_move(check_outputs):
                       one_cause(REWRITTEN, ["r1"])], [queries(*QUERIES)], check_outputs)
     flow.to_report()
     flow.complete_research(research_id=rid(2))
-    flow.stable_research([R1], research_id=rid(2))
+    flow.answer_research([R1], research_id=rid(2))
     return flow
 
 

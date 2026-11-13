@@ -19,9 +19,11 @@ class TopicsConfigTest {
                     assertThat(context).hasNotFailed();
                     Map<String, NewTopic> topics = context.getBeansOfType(NewTopic.class);
                     assertThat(topics.values()).extracting(NewTopic::name)
-                            .containsExactlyInAnyOrder("news.collected", "news.articles.requested",
-                                    "news.articles.responded", "filing.collected", "news.filings.requested",
-                                    "news.filings.responded", "collection.completed", "news.stored");
+                            .containsExactlyInAnyOrder("news.collected", "filing.collected", "collection.completed",
+                                    "news.stored");
+                    // 브리핑의 기사·공시 조회는 내부 조회 API 라 요청·응답 토픽을 선언하지 않는다.
+                    assertThat(topics.values()).extracting(NewTopic::name)
+                            .noneMatch(name -> name.endsWith(".requested") || name.endsWith(".responded"));
                     // 수집 완료와 저장 끝은 collector 의 collection.completed 와 같은 1개, 나머지는 3개다.
                     assertThat(topics.values()).filteredOn(t -> t.name().equals("collection.completed")
                             || t.name().equals("news.stored")).extracting(NewTopic::numPartitions).containsOnly(1);

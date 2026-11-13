@@ -18,13 +18,11 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 
 import dev.stockreading.market.MarketProperties;
 import dev.stockreading.market.event.ContextPayload;
@@ -40,11 +38,9 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 /** 저장소와 해외 등락률 조회를 대역으로 바꿔 데일리 판 자료 요청 한 건의 응답 조립 전체를 돌린다. 값은 모두 가짜다. */
-class DailyRequestListenerTest {
+class DailyQueryTest {
 
     private static final String JOB_ID = "8d3b5e17-6c2a-4f90-b1e4-7a9c0d2f3e68";
-    private static final String CORRELATION_ID = "daily-briefing-post-close-2026-10-20T17:00:00+09:00";
-    private static final String REQUEST_EVENT_ID = "2f6a1c8e-3b7d-4e59-9a0c-6d4e8b2f1a75";
     // 샘플 요청의 기준 시각과 since(4일 전).
     private static final OffsetDateTime AS_OF = OffsetDateTime.parse("2026-10-20T17:00:00+09:00");
     private static final OffsetDateTime SINCE = OffsetDateTime.parse("2026-10-16T17:00:00+09:00");
@@ -55,7 +51,6 @@ class DailyRequestListenerTest {
     private HoldingsPort holdings;
     private MemberChangesPort memberChanges;
     private OperationsReader operationsReader;
-    private DailyPublisher publisher;
     private OpenFlowPort openFlowPort;
 
     @BeforeEach
@@ -65,7 +60,6 @@ class DailyRequestListenerTest {
         holdings = mock(HoldingsPort.class);
         memberChanges = mock(MemberChangesPort.class);
         operationsReader = mock(OperationsReader.class);
-        publisher = mock(DailyPublisher.class);
         openFlowPort = mock(OpenFlowPort.class);
         when(repository.latest(any(), any(), any(), any())).thenReturn(Optional.empty());
         when(repository.worldIndexRows(anyString(), any(), any())).thenReturn(List.of());
@@ -76,15 +70,15 @@ class DailyRequestListenerTest {
         when(memberChanges.changes(anyString(), any(), any())).thenReturn(Optional.empty());
     }
 
-    private DailyRequestListener listener(int maxTickers, int maxEtfs) {
-        return new DailyRequestListener(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
+    private DailyQuery listener(int maxTickers, int maxEtfs) {
+        return new DailyQuery(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
                 memberChanges, new ContextProperties(Duration.ofDays(4), 32_768, maxTickers, List.of("C", "S"), Duration.ofDays(7)),
-                new DailyProperties(maxEtfs, null), operationsReader, publisher, mapper, openFlowPort,
+                new DailyProperties(maxEtfs, null), operationsReader, mapper, openFlowPort,
                 new MarketProperties(5, BigDecimal.ONE, List.of("f.a", "f.b", "f.c"), BigDecimal.ONE, List.of("f.open"),
                         1, List.of(), 0, new BigDecimal("2.00")));
     }
 
-    private DailyRequestListener listener() {
+    private DailyQuery listener() {
         return listener(100, 50);
     }
 
@@ -92,11 +86,9 @@ class DailyRequestListenerTest {
         return ContractSchemas.sample("market.daily.requested.sample.json");
     }
 
-    private DailyPayload answer(DailyRequestListener listener, String request) throws IOException {
-        listener.onRequest(request);
-        ArgumentCaptor<DailyPayload> payload = ArgumentCaptor.captor();
-        verify(publisher).publish(payload.capture(), eq(REQUEST_EVENT_ID), eq(CORRELATION_ID));
-        return payload.getValue();
+    // 요청 샘플(옛 요청 이벤트)의 payload 가 내부 조회 API 의 요청 본문이다.
+    private DailyPayload answer(DailyQuery query, String request) throws IOException {
+        return query.answer(mapper.treeToValue(mapper.readTree(request).get("payload"), DailyRequest.class));
     }
 
     private void tracked(String... symbols) {
@@ -377,26 +369,20 @@ class DailyRequestListenerTest {
     void sameRequestTwiceGivesTheSameAnswer() throws IOException {
         tracked("TEST01");
         when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(daily("TEST01", "-1.50", AS_OF)));
-        DailyRequestListener listener = listener();
+        DailyQuery listener = listener();
 
-        listener.onRequest(request());
-        listener.onRequest(request());
-
-        ArgumentCaptor<DailyPayload> payloads = ArgumentCaptor.captor();
-        verify(publisher, times(2)).publish(payloads.capture(), eq(REQUEST_EVENT_ID), eq(CORRELATION_ID));
-        assertThat(payloads.getAllValues().get(0)).isEqualTo(payloads.getAllValues().get(1));
+        assertThat(answer(listener, request())).isEqualTo(answer(listener, request()));
     }
 
     @Test
-    void invalidRequestIsRejectedWithoutPublishing() throws IOException {
-        DailyRequestListener listener = listener();
+    void invalidRequestIsRejectedWithoutAnAnswer() throws IOException {
+        DailyQuery listener = listener();
         String sinceAfterAsOf = request().replace("2026-10-16T17:00:00+09:00", "2026-10-21T17:00:00+09:00");
         String zeroEtfs = request().replace("\"maxEtfs\": 50", "\"maxEtfs\": 0");
 
-        assertThatThrownBy(() -> listener.onRequest(sinceAfterAsOf)).isInstanceOf(IllegalArgumentException.class)
+        assertThatThrownBy(() -> answer(listener, sinceAfterAsOf)).isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(JOB_ID);
-        assertThatThrownBy(() -> listener.onRequest(zeroEtfs)).isInstanceOf(IllegalArgumentException.class);
-        verifyNoInteractions(publisher);
+        assertThatThrownBy(() -> answer(listener, zeroEtfs)).isInstanceOf(IllegalArgumentException.class);
     }
 
     private static final DailyPayload.Operations OPERATIONS = new DailyPayload.Operations(
@@ -421,7 +407,6 @@ class DailyRequestListenerTest {
         assertThat(answer(listener(), missing).operations()).isNull();
         verifyNoInteractions(operationsReader);
 
-        publisher = mock(DailyPublisher.class);
         String off = request().replace("\"includeOperations\": true", "\"includeOperations\": false");
         assertThat(answer(listener(), off).operations()).isNull();
         verifyNoInteractions(operationsReader);
@@ -500,8 +485,7 @@ class DailyRequestListenerTest {
         tracked("TEST01");
         String bad = withOpenFlowSince(request(), "2026-10-20T17:00:01+09:00");
 
-        assertThatThrownBy(() -> listener().onRequest(bad)).isInstanceOf(IllegalArgumentException.class);
-        verify(publisher, never()).publish(any(), anyString(), anyString());
+        assertThatThrownBy(() -> answer(listener(), bad)).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

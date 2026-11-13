@@ -1,4 +1,4 @@
-"""BriefingRunner의 데일리 판 연결(판 시작 알림, 한도 시각, 요청·응답, 발행)을 가짜 Kafka로 확인한다."""
+"""BriefingRunner의 데일리 판 연결(판 시작 알림, 한도 시각, 내부 조회, 발행)을 가짜 Kafka·가짜 조회 API로 확인한다."""
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -8,7 +8,9 @@ from briefing import main
 from briefing.config import DailySettings
 from briefing.daily_report import DailyLlmWriter
 from briefing.ports import FailureReason
-from contracts import validate
+from briefing.queries import QueryKind
+from contracts import validate, validate_payload
+from fake_api import FakeApi
 from fake_members import FakeMembers
 from test_daily_jobs import MARKET, FakeLlm, daily_response, etf_v2, filings_response, good_output, post_close_output, tick
 from test_runner import Clock, FakeConsumer, FakeMessage, FakeProducer, FakeStore, sent
@@ -34,10 +36,12 @@ def setup():
             producers.append(FakeProducer(config))
             return producers[-1]
 
+        api = FakeApi()
         runner = main.BriefingRunner("localhost:9092", None, job_log or store, clock=clock,
                                      consumer_factory=consumer_factory, producer_factory=producer_factory,
                                      declare_topics=lambda _: None, daily_writer=daily_writer,
-                                     daily_settings=daily_settings, member_store=FakeMembers())
+                                     daily_settings=daily_settings, member_store=FakeMembers(),
+                                     api_factory=lambda: api)
         runner.open()
         return runner, consumers[-1], producers[-1]
 
@@ -46,6 +50,27 @@ def setup():
 
 def notice(*args, **kwargs):
     return FakeMessage("daily.collection.completed", tick(*args, **kwargs))
+
+
+def asked(runner, kind):
+    """맡긴 조회 전체(요청 본문, 추적 ID)"""
+    return runner.api.of(kind)
+
+
+def answer(runner, body, kind=None):
+    """가짜 조회 API의 답을 실행부가 꺼내 갈 결과로 쌓고 한 바퀴 돌린다."""
+    runner.api.queue_reply(body, kind)
+    runner.run_once()
+
+
+def give_up(runner, kind):
+    """맡긴 조회 하나를 끝내 받지 못한 결과로 쌓고 한 바퀴 돌린다(조회 구현이 재시도를 다 쓴 경우)."""
+    for index, (query, on_result) in enumerate(runner.api.pending):
+        if query.kind is kind:
+            del runner.api.pending[index]
+            runner.api.done.append((on_result, main.QueryResult(query, None, 4, "timeout")))
+            break
+    runner.run_once()
 
 
 def test_the_start_notice_is_read_by_the_main_consumer_and_no_tick_consumer_is_left(setup):
@@ -64,28 +89,24 @@ def test_a_morning_notice_flows_to_a_daily_briefing(setup):
     consumer.queue.append(notice())
     runner.run_once()
     assert consumer.events == [("commit", "daily.collection.completed")]
-    [(key, request)] = sent(producer, "market.daily.requested")
-    assert key == request["payload"]["jobId"]
-    assert validate("market.daily.requested.v1.schema.json", request) == []
+    [request] = asked(runner, QueryKind.DAILY)
+    assert validate_payload("market.daily.requested.v1.schema.json", request.payload) == []
+    assert request.correlation_id == json.loads(tick())["correlationId"]
+    assert producer.sent == []  # 조회는 Kafka로 나가지 않는다
 
-    consumer.queue.append(FakeMessage("market.daily.responded", daily_response()))
-    runner.run_once()
-    [(_, filings_request)] = sent(producer, "news.filings.requested")
-    assert validate("news.filings.requested.v1.schema.json", filings_request) == []
+    answer(runner, daily_response())
+    [filings_request] = asked(runner, QueryKind.FILINGS)
+    assert validate_payload("news.filings.requested.v1.schema.json", filings_request.payload) == []
     # 아침 판도 ETF마다 기사를 받아야 나간다.
-    [(key, articles_request)] = sent(producer, "news.articles.requested")
-    assert key == "TEST01" and validate("news.articles.requested.v1.schema.json", articles_request) == []
+    [articles_request] = asked(runner, QueryKind.ARTICLES)
+    assert articles_request.payload["symbol"] == "TEST01"
+    assert validate_payload("news.articles.requested.v1.schema.json", articles_request.payload) == []
 
-    consumer.queue.append(FakeMessage("news.filings.responded", filings_response()))
-    runner.run_once()
+    answer(runner, filings_response())
     assert sent(producer, "briefing.daily.generated") == []
-    payload = articles_request["payload"]
-    consumer.queue.append(FakeMessage("news.articles.responded", json.dumps({
-        "eventId": "00000000-0000-4000-8000-000000000007", "eventType": "news.articles.responded",
-        "schemaVersion": 1, "occurredAt": "2026-10-20T08:45:01+09:00", "producedAt": "2026-10-20T08:45:01+09:00",
-        "correlationId": "c", "payload": {"jobId": payload["jobId"], "seq": payload["seq"], "symbol": "TEST01",
-                                          "articles": [], "truncated": False}})))
-    runner.run_once()
+    payload = articles_request.payload
+    answer(runner, {"jobId": payload["jobId"], "seq": payload["seq"], "symbol": "TEST01", "articles": [],
+                    "truncated": False}, QueryKind.ARTICLES)
     [(key, briefing)] = sent(producer, "briefing.daily.generated")
     assert key == "morning:1" and briefing["payload"]["memberId"] == 1
     assert validate("briefing.daily.generated.v2.schema.json", briefing) == []
@@ -99,38 +120,29 @@ def test_a_post_close_notice_flows_through_articles_and_filings_to_a_daily_brief
     runner, consumer, producer = make(DailyLlmWriter(FakeLlm(post_close_output(symbols=("TEST01",)))))
     consumer.queue.append(notice("post-close", MORNING_AT))
     runner.run_once()
-    consumer.queue.append(FakeMessage("market.daily.responded", daily_response(
+    answer(runner, daily_response(
         etfs=[etf_v2("TEST01", "TEST ETF", fetched="2026-10-19T16:30:02+09:00", rate="0.50")],
-        background=[{**MARKET, "fetchedAt": "2026-10-19T16:30:05+09:00"}])))
-    runner.run_once()
-    [(key, articles_request)] = sent(producer, "news.articles.requested")
-    assert key == "TEST01" and validate("news.articles.requested.v1.schema.json", articles_request) == []
-    [(_, filings_request)] = sent(producer, "news.filings.requested")
-    payload = articles_request["payload"]
-    consumer.queue.append(FakeMessage("news.articles.responded", json.dumps({
-        "eventId": "00000000-0000-4000-8000-000000000007", "eventType": "news.articles.responded",
-        "schemaVersion": 1, "occurredAt": "2026-10-20T08:45:01+09:00", "producedAt": "2026-10-20T08:45:01+09:00",
-        "correlationId": "c", "payload": {"jobId": payload["jobId"], "seq": payload["seq"], "symbol": "TEST01",
-                                          "articles": [], "truncated": False}})))
-    runner.run_once()
+        background=[{**MARKET, "fetchedAt": "2026-10-19T16:30:05+09:00"}]))
+    [articles_request] = asked(runner, QueryKind.ARTICLES)
+    assert articles_request.payload["symbol"] == "TEST01"
+    [filings_request] = asked(runner, QueryKind.FILINGS)
+    payload = articles_request.payload
+    answer(runner, {"jobId": payload["jobId"], "seq": payload["seq"], "symbol": "TEST01", "articles": [],
+                    "truncated": False}, QueryKind.ARTICLES)
     assert sent(producer, "briefing.daily.generated") == []
-    consumer.queue.append(FakeMessage("news.filings.responded", filings_response(
-        seq=filings_request["payload"]["seq"], filings=[])))
-    runner.run_once()
+    answer(runner, filings_response(seq=filings_request.payload["seq"], filings=[]))
     [(key, briefing)] = sent(producer, "briefing.daily.generated")
     assert key == "post-close:1" and validate("briefing.daily.generated.v2.schema.json", briefing) == []
 
 
-def test_daily_no_response_is_resent_by_the_runner_timer_and_still_publishes(setup):
+def test_daily_data_that_finally_fails_still_publishes(setup):
     make, clock, store = setup
     runner, consumer, producer = make()
     consumer.queue.append(notice("post-close", MORNING_AT))
     runner.run_once()
     assert runner._poll_timeout() == 1.0
-    for _ in range(3):
-        clock.advance(seconds=10)
-        runner.run_once()
-    assert len(sent(producer, "market.daily.requested")) == 3
+    give_up(runner, QueryKind.DAILY)
+    assert len(asked(runner, QueryKind.DAILY)) == 1
     [(key, briefing)] = sent(producer, "briefing.daily.generated")
     assert key == "post-close:1" and briefing["payload"]["generatedBy"] == "rule-based"
     [failure] = store.failures
@@ -144,7 +156,7 @@ def test_duplicate_notice_is_handled_once_by_the_runner(setup):
     for _ in range(2):
         consumer.queue.append(notice())
         runner.run_once()
-    assert len(sent(producer, "market.daily.requested")) == 1
+    assert len(asked(runner, QueryKind.DAILY)) == 1
     assert len(consumer.commits) == 2
 
 
@@ -156,7 +168,7 @@ def test_malformed_notice_is_skipped_without_stopping_the_runner(setup):
     assert producer.sent == []
     consumer.queue.append(notice())
     runner.run_once()
-    assert len(sent(producer, "market.daily.requested")) == 1
+    assert len(asked(runner, QueryKind.DAILY)) == 1
 
 
 # ---- 한도 시각 안전장치 ----
@@ -170,23 +182,21 @@ def test_without_a_notice_the_runner_starts_the_morning_edition_at_its_deadline_
     clock.now = MORNING_DEADLINE - timedelta(seconds=1)
     runner, _, producer = make(daily_settings=ON)
     runner.run_once()
-    assert sent(producer, "market.daily.requested") == []
+    assert asked(runner, QueryKind.DAILY) == []
 
     clock.advance(seconds=1)
     runner.run_once()
-    [(_, request)] = sent(producer, "market.daily.requested")
-    assert request["payload"]["asOf"] == "2026-10-20T09:20:00+09:00"
-    assert request["correlationId"] == "daily-morning-deadline-2026-10-20T09:20:00+09:00"
-    for _ in range(3):
-        clock.advance(seconds=10)
-        runner.run_once()
+    [request] = asked(runner, QueryKind.DAILY)
+    assert request.payload["asOf"] == "2026-10-20T09:20:00+09:00"
+    assert request.correlation_id == "daily-morning-deadline-2026-10-20T09:20:00+09:00"
+    give_up(runner, QueryKind.DAILY)
     [(_, briefing)] = sent(producer, "briefing.daily.generated")
     assert briefing["payload"]["missingItems"][0] == "수집 완료 알림을 받지 못해 자료가 낡았을 수 있음"
     assert validate("briefing.daily.generated.v2.schema.json", briefing) == []
     # 한도 시각이 계속 지나 있어도 같은 날 다시 시작하지 않는다.
     clock.advance(hours=1)
     runner.run_once()
-    assert len(sent(producer, "market.daily.requested")) == 3
+    assert len(asked(runner, QueryKind.DAILY)) == 1
     assert [run.job_kind.value for run in store.starts] == ["morning"]
 
 
@@ -197,7 +207,7 @@ def test_a_late_notice_after_the_deadline_start_is_ignored(setup):
     runner.run_once()
     consumer.queue.append(notice(at=MORNING_DEADLINE + timedelta(minutes=3)))
     runner.run_once()
-    assert len(sent(producer, "market.daily.requested")) == 1
+    assert len(asked(runner, QueryKind.DAILY)) == 1
     assert [run.job_kind.value for run in store.starts] == ["morning"]
 
 
@@ -223,8 +233,8 @@ def test_a_market_closed_notice_turns_off_that_editions_deadline_for_the_day(set
     runner.run_once()
     # 아침 판은 휴장 알림으로 꺼졌고, 마감 후 판 휴장 알림은 오지 않았으므로 마감 후 판만 한도 시각에 시작한다.
     assert [run.job_kind.value for run in store.starts] == ["post-close"]
-    [(_, request)] = sent(producer, "market.daily.requested")
-    assert request["payload"]["asOf"] == "2026-10-20T17:30:00+09:00"
+    [request] = asked(runner, QueryKind.DAILY)
+    assert request.payload["asOf"] == "2026-10-20T17:30:00+09:00"
 
 
 def test_after_a_restart_the_same_days_edition_is_not_made_again(setup):
@@ -233,7 +243,7 @@ def test_after_a_restart_the_same_days_edition_is_not_made_again(setup):
     first, consumer, producer = make()
     consumer.queue.append(notice("post-close", clock.now))
     first.run_once()
-    assert len(sent(producer, "market.daily.requested")) == 1
+    assert len(asked(first, QueryKind.DAILY)) == 1
 
     # 재시작: 메모리 기억은 사라지고 작업 기록(job_run)만 남는다. 늦게 온 수동 재수집 알림과 한도 시각 모두 판을 다시 만들지 않는다.
     clock.now = datetime(2026, 10, 20, 17, 40, tzinfo=KST)
@@ -242,8 +252,8 @@ def test_after_a_restart_the_same_days_edition_is_not_made_again(setup):
     second.run_once()
     # 아침 판은 그날 만든 기록이 없어 한도 시각(09:20)이 지났으므로 이때 시작하지만, 마감 후 판은 다시 만들지 않는다.
     assert [run.job_kind.value for run in store.starts] == ["post-close", "morning"]
-    [(_, request)] = sent(producer, "market.daily.requested")
-    assert request["payload"]["asOf"] == "2026-10-20T09:20:00+09:00"
+    [request] = asked(second, QueryKind.DAILY)
+    assert request.payload["asOf"] == "2026-10-20T09:20:00+09:00"
 
 
 def test_when_the_job_log_cannot_be_read_the_edition_is_still_made(setup):
@@ -254,7 +264,7 @@ def test_when_the_job_log_cannot_be_read_the_edition_is_still_made(setup):
     runner, consumer, producer = make(job_log=unreadable)
     consumer.queue.append(notice("post-close", clock.now))
     runner.run_once()
-    assert len(sent(producer, "market.daily.requested")) == 1
+    assert len(asked(runner, QueryKind.DAILY)) == 1
 
 
 # ---- 서버 상태 절의 저장소 연결 ----
@@ -280,15 +290,24 @@ def status_runner(setup):
     runner = main.BriefingRunner("localhost:9092", None, store, clock=clock,
                                  consumer_factory=lambda config: FakeConsumer(config),
                                  producer_factory=lambda config: FakeProducer(config),
-                                 declare_topics=lambda _: None, status_store=status, member_store=FakeMembers())
+                                 declare_topics=lambda _: None, status_store=status, member_store=FakeMembers(),
+                                 api_factory=FakeApi)
     runner.open()
     return runner, status
 
 
+def collection_completed(incomplete=()):
+    return FakeMessage("collection.completed", json.dumps({
+        "eventId": "00000000-0000-4000-8000-000000000001", "eventType": "collection.completed", "schemaVersion": 1,
+        "occurredAt": "2026-10-20T16:15:42+09:00", "producedAt": "2026-10-20T16:15:42+09:00", "correlationId": "c",
+        "payload": {"jobType": "collect-news", "scheduledFor": "2026-10-20T16:15:00+09:00",
+                    "startedAt": "2026-10-20T16:15:01+09:00", "finishedAt": "2026-10-20T16:15:42+09:00",
+                    "publishedCount": 1, "incompleteSymbols": list(incomplete)}}))
+
+
 def test_every_collection_completed_is_saved_as_received(setup):
-    from test_runner import completed_message
     runner, status = status_runner(setup)
-    message = completed_message(incomplete=["TEST02"])
+    message = collection_completed(incomplete=["TEST02"])
     runner._consumer.commit = lambda **_: None
     runner.handle_message(message)
     [record] = status.saved
@@ -304,19 +323,12 @@ def test_a_malformed_collection_completed_is_skipped_without_saving(setup):
     assert status.saved == []
 
 
-def test_unreadable_status_fields_do_not_stop_the_evidence_lookup_from_getting_the_notice(setup):
-    from test_runner import completed_message
+def test_collection_completed_only_feeds_the_server_status_and_starts_no_lookup(setup):
     runner, status = status_runner(setup)
     runner._consumer.commit = lambda **_: None
-    received = []
-    runner.core.on_collection_completed = lambda message, now: received.append(message)
-    runner.sentences.on_collection_completed = lambda message, now: False
-    message = completed_message()
-    event = json.loads(message.value())
-    del event["payload"]["finishedAt"]
-    message = type(message)("collection.completed", json.dumps(event))
-    runner.handle_message(message)
-    assert received == [message.value()] and status.saved == []
+    runner.core.on_news_stored = lambda message, now: pytest.fail("the lookup starts from news.stored")
+    runner.handle_message(collection_completed())
+    assert len(status.saved) == 1 and runner.api.submitted == []
 
 
 def test_the_runner_puts_llm_bodies_through_the_final_check_with_the_writers_own_client(setup):
@@ -335,7 +347,7 @@ def test_the_runner_puts_llm_bodies_through_the_final_check_with_the_writers_own
 
     move_llm = FakeLlm()
     runner = main.BriefingRunner("localhost:9092", LlmWriter(move_llm), store, consumer_factory=FakeConsumer,
-                                 producer_factory=FakeProducer, declare_topics=lambda _: None)
+                                 producer_factory=FakeProducer, declare_topics=lambda _: None, api_factory=FakeApi)
     runner.open()
     final = runner.research.final
     assert isinstance(final.adapter, MoveFinalCheck) and final.client is move_llm and final.max_attempts == 3

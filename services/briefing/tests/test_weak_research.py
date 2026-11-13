@@ -20,7 +20,8 @@ from briefing.report import parse_output as parse_move
 from briefing.research import QueryWriter, ResearchReason, ResearchStep
 from briefing.sentence_research import SentenceResearch, research_job_id
 from briefing.status import parse_collection
-from contracts import validate
+from briefing.queries import QueryKind
+from contracts import validate, validate_payload
 from fake_news import answer_news
 from fake_job_log import FakeJobLog
 from test_daily_jobs import (
@@ -174,7 +175,7 @@ def test_move_with_one_weak_sentence_researches_only_that_sentence_and_rewrites_
     assert request.value["payload"]["jobId"] == rid(2)
 
     flow.complete_research(research_id=rid(2))
-    flow.stable_research([R1, A1], research_id=rid(2))
+    flow.answer_research([R1, A1], research_id=rid(2))
 
     # 다시 쓰기는 그 문장만 담은 요청이며, 약하지 않은 첫 문장은 그대로다.
     assert len(flow.report_llm.calls) == 2
@@ -211,7 +212,7 @@ def test_move_with_several_weak_sentences_sends_one_separate_research_job_per_se
     # 두 재검색이 따로 끝나고, 먼저 끝난 문장부터 그 문장만 다시 쓴다.
     flow.complete_research(research_id=rid(3))
     flow.complete_research(research_id=rid(1))
-    flow.stable_research_jobs({rid(3): [article("r3", T_ARTICLE)], rid(1): [R1]})
+    flow.answer_research_jobs({rid(3): [article("r3", T_ARTICLE)], rid(1): [R1]})
 
     (briefing,) = flow.briefings()
     text = briefing.value["payload"]["text"]
@@ -229,14 +230,14 @@ def test_move_sentence_that_becomes_strong_on_the_second_search_is_searched_twic
     flow = Flow([MOVE_ONE_WEAK, first, second], [queries("검색어 하나"), queries("검색어 둘")])
     flow.to_report()
     flow.complete_research(research_id=rid(2, 1))
-    flow.stable_research([R1], research_id=rid(2, 1))
+    flow.answer_research([R1], research_id=rid(2, 1))
 
     # 다시 써도 약하면 그 문장만 한 번 더 찾는다. 이때는 새 회차의 작업 id와 새 부족한 점으로 검색어를 정한다.
     assert [r.value["payload"]["jobId"] for r in sentence_requests(flow)] == [rid(2, 1), rid(2, 2)]
     assert json.loads(flow.query_llm.calls[1][1])["shortfall"] == STILL_SHORTFALL
     assert flow.briefings() == []
     flow.complete_research(research_id=rid(2, 2))
-    flow.stable_research([article("r2", T_ARTICLE)], research_id=rid(2, 2))
+    flow.answer_research([article("r2", T_ARTICLE)], research_id=rid(2, 2))
 
     (briefing,) = flow.briefings()
     text = briefing.value["payload"]["text"]
@@ -252,9 +253,9 @@ def test_move_sentence_still_weak_after_two_searches_keeps_the_weak_note_and_is_
     flow = Flow([MOVE_ONE_WEAK, first, second], [queries("검색어 하나"), queries("검색어 둘")])
     flow.to_report()
     flow.complete_research(research_id=rid(2, 1))
-    flow.stable_research([R1], research_id=rid(2, 1))
+    flow.answer_research([R1], research_id=rid(2, 1))
     flow.complete_research(research_id=rid(2, 2))
-    flow.stable_research([article("r2", T_ARTICLE)], research_id=rid(2, 2))
+    flow.answer_research([article("r2", T_ARTICLE)], research_id=rid(2, 2))
 
     (briefing,) = flow.briefings()
     text = briefing.value["payload"]["text"]
@@ -281,7 +282,7 @@ def test_move_sentences_over_the_request_limit_are_not_searched_and_keep_the_wea
 
     flow.complete_research(research_id=rid(1))
     flow.complete_research(research_id=rid(2))
-    flow.stable_research_jobs({rid(1): [R1], rid(2): [article("r3", T_ARTICLE)]})
+    flow.answer_research_jobs({rid(1): [R1], rid(2): [article("r3", T_ARTICLE)]})
 
     (briefing,) = flow.briefings()
     text = briefing.value["payload"]["text"]
@@ -296,7 +297,7 @@ def test_the_request_limit_counts_second_searches_too():
                 [queries("검색어 하나")], settings)
     flow.to_report()
     flow.complete_research(research_id=rid(2))
-    flow.stable_research([R1], research_id=rid(2))
+    flow.answer_research([R1], research_id=rid(2))
 
     assert len(sentence_requests(flow)) == 1 and len(flow.query_llm.calls) == 1
     (briefing,) = flow.briefings()
@@ -313,7 +314,7 @@ def test_move_total_time_limit_publishes_the_body_at_that_moment_and_ignores_lat
     flow.to_report()
     started = flow.clock.now
     flow.complete_research(research_id=rid(1))
-    flow.stable_research([R1], research_id=rid(1))  # 첫 문장은 제때 끝난다
+    flow.answer_research([R1], research_id=rid(1))  # 첫 문장은 제때 끝난다
     assert flow.briefings() == []
 
     assert flow.sentences.next_deadline() == started + limit
@@ -334,7 +335,7 @@ def test_move_total_time_limit_publishes_the_body_at_that_moment_and_ignores_lat
     # 늦게 온 답은 이미 낸 작업을 다시 움직이지 않는다.
     flow.complete_research(research_id=rid(3))
     late = articles(1, [article("r3", T_ARTICLE)], job_id=rid(3))
-    assert flow.research.on_articles_responded(late, flow.clock.now) is False
+    assert flow.research.api.reply(late, flow.clock.now) is False
     assert len(flow.briefings()) == 1 and flow.sentences.next_deadline() is None
 
 
@@ -347,7 +348,7 @@ def test_move_article_already_used_by_another_sentence_is_not_used_again():
     flow.complete_research(research_id=rid(1))
     flow.complete_research(research_id=rid(3))
     # 둘째 재검색은 r1도 찾았지만, 첫 문장이 이미 쓴 r1은 빼고 새 기사 r3만 쓴다.
-    flow.stable_research_jobs({rid(1): [R1], rid(3): [R1, other]})
+    flow.answer_research_jobs({rid(1): [R1], rid(3): [R1, other]})
 
     third = json.loads(flow.report_llm.calls[2][1])["rewrite"]
     assert third["sentenceNo"] == 3 and third["newRefs"] == ["r3"]
@@ -364,7 +365,7 @@ def test_move_sentence_whose_articles_were_all_used_by_another_sentence_is_not_r
     flow.to_report()
     flow.complete_research(research_id=rid(1))
     flow.complete_research(research_id=rid(3))
-    flow.stable_research_jobs({rid(1): [R1], rid(3): [R1]})
+    flow.answer_research_jobs({rid(1): [R1], rid(3): [R1]})
 
     assert len(flow.report_llm.calls) == 2
     (record,) = flow.records.of(ResearchReason.ALL_USED_BY_OTHERS)
@@ -378,7 +379,7 @@ def test_move_sentence_rewrite_citing_a_ref_outside_the_list_is_rejected_and_the
     flow = Flow([MOVE_ONE_WEAK, unknown, unknown, unknown], [queries(*QUERIES)])
     flow.to_report()
     flow.complete_research(research_id=rid(2))
-    flow.stable_research([R1], research_id=rid(2))
+    flow.answer_research([R1], research_id=rid(2))
 
     assert len(flow.report_llm.calls) == 4
     (briefing,) = flow.briefings()
@@ -401,7 +402,7 @@ def test_move_sentence_rewrite_that_returns_two_causes_or_insufficient_is_reject
     flow = Flow([MOVE_ONE_WEAK, two, nothing, good], [queries(*QUERIES)])
     flow.to_report()
     flow.complete_research(research_id=rid(2))
-    flow.stable_research([R1], research_id=rid(2))
+    flow.answer_research([R1], research_id=rid(2))
 
     rejected = [e for e in flow.records.of_type(EntryType.LLM_REJECTED) if e.sentence_no == 2]
     assert [e.data["rejection"] for e in rejected] == ["rewrite must return exactly one cause"] * 2
@@ -414,7 +415,7 @@ def test_move_research_articles_outside_the_time_range_are_dropped_again_and_nev
     flow = Flow([MOVE_ONE_WEAK], [queries(*QUERIES)])
     flow.to_report()
     flow.complete_research(research_id=rid(2))
-    flow.stable_research([late], research_id=rid(2))
+    flow.answer_research([late], research_id=rid(2))
 
     assert len(flow.report_llm.calls) == 1
     (record,) = flow.records.of(ResearchReason.NO_USABLE_ARTICLES)
@@ -464,7 +465,7 @@ def test_move_with_insufficient_evidence_overall_still_researches_the_whole_repo
     (request,) = sentence_requests(flow)
     assert request.value["payload"]["jobId"] == rid(0)
     flow.complete_research(research_id=rid(0))
-    flow.stable_research([R1], research_id=rid(0))
+    flow.answer_research([R1], research_id=rid(0))
     (briefing,) = flow.briefings()
     assert "다시 찾은 기사가 영향을 줬을 수 있습니다." in briefing.value["payload"]["text"]
 
@@ -545,10 +546,10 @@ class DailyFlow:
         daily_settings = DailySettings()
         self.sentences = SentenceResearch(
             QueryWriter(self.query_llm, settings.max_research_queries, settings.research_query_attempts),
-            self.requests, self.records, settings)
+            self.requests, self.requests.api, self.records, settings)
         self.research = self.sentences.research
         self.core = DailyCore(
-            self.requests, DailyLlmWriter(self.report_llm, daily_settings.llm_max_attempts), self.records,
+            self.requests, self.requests.api, DailyLlmWriter(self.report_llm, daily_settings.llm_max_attempts), self.records,
             daily_settings, sentences=self.sentences, status=status)
         self.now = self.at
         self.etfs = etfs
@@ -571,7 +572,7 @@ class DailyFlow:
                 etfs = [{**e, "fetchedAt": fetched} for e in etfs]
             background = [{**MARKET, "fetchedAt": "2026-10-20T16:30:05+09:00"}]
             close_rates = []
-        self.core.on_daily_data_responded(
+        self.core.api.reply(
             daily_response(etfs=etfs, background=background, close_rates=close_rates), self.now)
         # 두 판 모두 ETF별 기사를 받아야 나가고, 아침 판은 미국 종목이 있으면 공시도 받는다.
         filings = json.loads(filings_response())["payload"]["filings"] if self.edition == "morning" else None
@@ -583,28 +584,20 @@ class DailyFlow:
 
     def complete(self, research_id):
         self.now += SEC
-        event = json.loads(envelope("collection.completed", {
-            "jobType": "research-news", "startedAt": self.now.isoformat(), "finishedAt": self.now.isoformat(),
-            "incompleteSymbols": [], "researchJobId": research_id}))
-        return self.research.on_collection_completed(json.dumps(event), self.now)
+        event = json.loads(envelope("news.stored", {
+            "jobType": "research-news", "startedAt": self.now.isoformat(), "incompleteSymbols": [],
+            "unprocessedEventIds": [], "researchJobId": research_id}))
+        return self.research.on_stored(json.dumps(event), self.now)
 
     def stable(self, items, research_id):
-        for n in range(2):
-            self.now += SEC
-            assert self.research.on_articles_responded(self.news(n + 1, items, research_id), self.now) is True
-            if n == 0:
-                self.now += S.recheck_interval
-                self.research.on_tick(self.now)
+        """재검색 기사 조회에 답한다. 저장 끝 알림 뒤라 한 번 받으면 끝이다."""
+        self.now += SEC
+        assert self.research.api.reply(self.news(1, items, research_id), self.now) is True
 
     def stable_jobs(self, items_by_job):
-        """여러 재검색 작업에 같은 목록을 두 라운드 돌려준다. 라운드마다 모든 작업에 먼저 답한 뒤 확인 시각을 지나게 한다."""
-        for n in range(2):
-            for research_id, items in items_by_job.items():
-                self.now += SEC
-                assert self.research.on_articles_responded(self.news(n + 1, items, research_id), self.now) is True
-            if n == 0:
-                self.now += S.recheck_interval
-                self.research.on_tick(self.now)
+        """여러 재검색 작업의 기사 조회에 차례로 답한다."""
+        for research_id, items in items_by_job.items():
+            self.stable(items, research_id)
 
     def published(self):
         events = self.requests.topic("briefing.daily.generated")
@@ -674,9 +667,11 @@ def test_daily_with_one_weak_sentence_researches_only_that_sentence_and_rewrites
                                         "queries": QUERIES}
 
     assert flow.complete(flow.rid(2)) is True
-    (first,) = [e for e in flow.requests.topic("news.articles.requested") if "researchJobId" in e.value["payload"]]
-    assert validate("news.articles.requested.v1.schema.json", first.value) == []
-    payload = first.value["payload"]
+    (first,) = [q for q in flow.requests.api.of(QueryKind.ARTICLES) if "researchJobId" in q.payload]
+    assert validate_payload("news.articles.requested.v1.schema.json", first.payload) == []
+    # 재검색 기사 조회의 job_step은 판 작업에 남는다.
+    assert first.job_id == TICK_ID
+    payload = first.payload
     # 기사 시간 범위는 판 범위(예정 시각 포함)이고, 조회 symbol은 정렬한 첫 ETF 코드다.
     assert payload["since"] == (flow.core._jobs[TICK_ID].range_start).isoformat()
     assert payload["until"] == flow.at.isoformat()
@@ -839,7 +834,7 @@ def test_daily_total_time_limit_publishes_the_body_at_that_moment(edition):
     (limit,) = flow.records.of_reason(ResearchReason.TIME_LIMIT)
     assert limit.sentence_no == 3
     flow.complete(flow.rid(3))
-    assert flow.research.on_articles_responded(flow.news(1, [in_range(flow, "r3")], flow.rid(3)), flow.now) is False
+    assert flow.research.api.reply(flow.news(1, [in_range(flow, "r3")], flow.rid(3)), flow.now) is False
     assert len(flow.published()) == 1 and flow.sentences.next_deadline() is None
 
 
@@ -924,14 +919,14 @@ def test_daily_research_steps_are_logged_under_the_same_job_id_with_sentence_num
     assert {e.job_id for e in entries} == {TICK_ID}
     assert [r.job_kind.value for r in flow.records.starts] == [edition]
     steps = [(e.stage, e.entry_type) for e in entries]
-    # 검색어 LLM 거부와 성공, 재검색 요청, 안정 확인 라운드, 받은 기사, 다시 쓰기가 모두 남는다.
+    # 검색어 LLM 거부와 성공, 재검색 요청, 받은 기사, 다시 쓰기가 모두 남는다. 안정 확인 라운드는 없다.
     assert ("query", EntryType.LLM_REJECTED) in steps and ("query", EntryType.QUERY_WRITTEN) in steps
     assert ("research-request", EntryType.RESEARCH_REQUESTED) in steps
-    assert ("articles-confirm", EntryType.CHECK_ROUND) in steps
+    assert not [e for e in entries if e.entry_type == EntryType.CHECK_ROUND]
     assert ("filter", EntryType.ARTICLES_RECEIVED) in steps and ("select", EntryType.ARTICLES_RECEIVED) in steps
     assert ("rewrite", EntryType.SENTENCE_REWRITTEN) in steps
     assert [e.sentence_no for e in entries if e.stage == "query"] == [1, 1]
-    assert {e.round for e in entries if e.stage in ("query", "research-request", "articles-confirm", "rewrite")} == {1}
+    assert {e.round for e in entries if e.stage in ("query", "research-request", "filter", "rewrite")} == {1}
     rejected = next(e for e in entries if e.stage == "query" and e.entry_type == EntryType.LLM_REJECTED)
     assert rejected.data["llm"]["rejectReason"]
     received = next(e for e in entries if e.stage == "filter")
@@ -1000,8 +995,8 @@ def test_daily_research_symbol_is_the_first_etf_code_in_sorted_order():
     flow.to_first_report()
     flow.complete(flow.rid(1))
 
-    (request,) = [e for e in flow.requests.topic("news.articles.requested") if "researchJobId" in e.value["payload"]]
-    assert request.value["payload"]["symbol"] == "TEST02"
+    (request,) = [q for q in flow.requests.api.of(QueryKind.ARTICLES) if "researchJobId" in q.payload]
+    assert request.payload["symbol"] == "TEST02"
 
 
 def test_daily_query_llm_gets_the_etf_info_when_the_response_has_it():

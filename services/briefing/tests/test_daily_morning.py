@@ -13,6 +13,7 @@ from briefing.daily_report import (
     parse_morning_output,
 )
 from briefing.job_log import EntryType
+from briefing.queries import QueryKind
 from fake_members import FakeMembers, member
 from fake_news import answer_news, article
 from test_daily_jobs import (
@@ -115,9 +116,9 @@ IN_RANGE = "2026-10-20T07:00:00+09:00"
 def run_morning(output, rows=None, articles=None, llm=True):
     requests, details = Requests(), Details()
     writer = DailyLlmWriter(FakeLlm(output), 3) if llm else None
-    core = DailyCore(requests, writer, details)
+    core = DailyCore(requests, requests.api, writer, details)
     core.on_collection_ready(tick(MORNING_JOB, MORNING_AT), MORNING_AT)
-    core.on_daily_data_responded(daily_response(etfs=rows or [{**etf("TEST01"), "etf": ETF_INFO}, etf("TEST02", ())]),
+    core.api.reply(daily_response(etfs=rows or [{**etf("TEST01"), "etf": ETF_INFO}, etf("TEST02", ())]),
                                  MORNING_AT)
     answer_news(core, requests, MORNING_AT, articles=articles)
     [event] = published(requests)
@@ -127,15 +128,15 @@ def run_morning(output, rows=None, articles=None, llm=True):
 def test_watch_etfs_are_asked_too_and_unrelated_articles_never_reach_claude():
     llm = FakeLlm(morning_output(symbols=("TEST01", "TEST02")))
     requests, details = Requests(), Details()
-    core = DailyCore(requests, DailyLlmWriter(llm, 3), details,
+    core = DailyCore(requests, requests.api, DailyLlmWriter(llm, 3), details,
                      members=FakeMembers([member(1, held=("TEST01",), watched=("TEST02",))]))
     core.on_collection_ready(tick(MORNING_JOB, MORNING_AT), MORNING_AT)
-    core.on_daily_data_responded(daily_response(etfs=[{**etf("TEST01"), "etf": ETF_INFO}, etf("TEST02", ())]),
+    core.api.reply(daily_response(etfs=[{**etf("TEST01"), "etf": ETF_INFO}, etf("TEST02", ())]),
                                  MORNING_AT)
     answer_news(core, requests, MORNING_AT, articles={"TEST01": [
         article("a1", "TEST CORP A 신제품 공개", IN_RANGE), article("a2", "FAKE 지역 축제 일정 안내", IN_RANGE)]})
     published(requests)
-    asked = [e.value["payload"]["symbol"] for e in requests.topic("news.articles.requested")]
+    asked = [q.payload["symbol"] for q in requests.api.of(QueryKind.ARTICLES)]
     assert asked == ["TEST01", "TEST02"]
     user = json.loads(llm.calls[0][1])
     titles = [e["title"] for i in user["items"] if i["name"] == "ETF별 기사" for e in i["entries"]]

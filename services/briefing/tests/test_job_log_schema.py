@@ -1,4 +1,4 @@
-"""Flyway V1~V4 파일(services/briefing/db/migration)이 코드가 기대하는 테이블 모양과 같은지 글자로 확인한다. DB는 부르지 않는다.
+"""Flyway V1~V5 파일(services/briefing/db/migration)이 코드가 기대하는 테이블 모양과 같은지 글자로 확인한다. DB는 부르지 않는다.
 
 값 제한(CHECK)은 코드 enum과 SQL 파일 양쪽에 있으므로 어긋나면 여기서 실패한다.
 실제 Postgres에 적용한 모양은 test_job_log_store_db.py가 확인한다.
@@ -14,6 +14,7 @@ V1_CODE = re.sub(r"--[^\n]*", "", V1)  # 주석에는 JSONB 같은 말이 나올
 V2 = (MIGRATIONS / "V2__add_member_briefing_entry_type.sql").read_text(encoding="utf-8")
 V3 = (MIGRATIONS / "V3__add_final_check_entry_types.sql").read_text(encoding="utf-8")
 V4 = (MIGRATIONS / "V4__create_market_closed_edition.sql").read_text(encoding="utf-8")
+V5 = (MIGRATIONS / "V5__create_job_step.sql").read_text(encoding="utf-8")
 
 
 def table_sql(name):
@@ -35,7 +36,8 @@ def test_the_migration_creates_the_three_tables_without_if_not_exists():
     assert sorted(MIGRATIONS.glob("V*.sql")) == [MIGRATIONS / "V1__create_briefing_tables.sql",
                                                 MIGRATIONS / "V2__add_member_briefing_entry_type.sql",
                                                 MIGRATIONS / "V3__add_final_check_entry_types.sql",
-                                                MIGRATIONS / "V4__create_market_closed_edition.sql"]
+                                                MIGRATIONS / "V4__create_market_closed_edition.sql",
+                                                MIGRATIONS / "V5__create_job_step.sql"]
 
 
 def test_run_and_log_columns_follow_the_plan_and_keep_json_as_json():
@@ -100,3 +102,20 @@ def test_the_market_closed_table_takes_only_the_two_daily_editions_once_a_day():
     columns = re.search(r"\((.*?)\)\s*VALUES", INSERT_MARKET_CLOSED_SQL, re.S).group(1)
     for column in [c.strip() for c in columns.split(",")]:
         assert re.search(rf"^\s+{column}\s", match.group(1), re.M), column
+
+
+def test_the_job_step_table_holds_one_call_per_line_under_its_job_run():
+    from briefing.job_log_store import INSERT_STEP_SQL
+    from briefing.job_step import StepResult
+
+    # 호출 한 줄(조회·LLM의 시도 하나)은 그 작업(job_run) 아래에 남고, 메일 하나의 추적 ID로 찾는다.
+    match = re.search(r"CREATE TABLE job_step \((.*?)\n\);", V5, re.S)
+    assert match and "IF NOT EXISTS" not in re.sub(r"--[^\n]*", "", V5).upper()
+    table = match.group(1)
+    assert "REFERENCES job_run (job_id)" in table
+    values = set(re.findall(r"'([^']+)'", re.search(r"CHECK \(result IN \((.*?)\)\)", table).group(1)))
+    assert values == {m.value for m in StepResult}
+    columns = re.search(r"\((.*?)\)\s*VALUES", INSERT_STEP_SQL, re.S).group(1)
+    for column in [c.strip() for c in columns.split(",")]:
+        assert re.search(rf"^\s+{column}\s", table, re.M), column
+    assert "job_step (correlation_id)" in V5

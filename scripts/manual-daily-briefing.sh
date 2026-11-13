@@ -214,20 +214,24 @@ JDBC_URL="jdbc:postgresql://127.0.0.1:5432/$DB_NAME"
 
 # ---------------------------------------------------------------- 서비스
 
-echo "market 기동"
+# 시세처리기·뉴스처리기 내부 조회 API 도 빈 포트로 띄운다. 기본 포트(8091, 8092)는 개발용 서비스와 겹치고, 브리핑이 그쪽을 부를 수 있다.
+free_port() { "$PY" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
+MARKET_HTTP_PORT=$(free_port); NEWS_HTTP_PORT=$(free_port)
+
+echo "market 기동(내부 조회 127.0.0.1:$MARKET_HTTP_PORT)"
 (
   export SPRING_DATASOURCE_URL="$JDBC_URL?currentSchema=market" SPRING_DATASOURCE_USERNAME="$M_USER" SPRING_DATASOURCE_PASSWORD="$M_PW"
-  export SPRING_KAFKA_BOOTSTRAP_SERVERS="$BOOTSTRAP"
+  export SPRING_KAFKA_BOOTSTRAP_SERVERS="$BOOTSTRAP" SERVER_PORT="$MARKET_HTTP_PORT"
   # 전일 종가 기준 감지는 끈다(시세를 넣지 않음). 종목은 위에서 가짜 대응표로 DB 에 넣었다.
   export MARKET_PREV_CLOSE_FIELDS=
   cd "$TMP/market" && exec "$JAVA_HOME_21/bin/java" -jar "$MARKET_JAR"
 ) > "$TMP/market.log" 2>&1 &
 MARKET_PID=$!
 
-echo "news 기동"
+echo "news 기동(내부 조회 127.0.0.1:$NEWS_HTTP_PORT)"
 (
   export SPRING_DATASOURCE_URL="$JDBC_URL?currentSchema=news" SPRING_DATASOURCE_USERNAME="$N_USER" SPRING_DATASOURCE_PASSWORD="$N_PW"
-  export SPRING_KAFKA_BOOTSTRAP_SERVERS="$BOOTSTRAP"
+  export SPRING_KAFKA_BOOTSTRAP_SERVERS="$BOOTSTRAP" SERVER_PORT="$NEWS_HTTP_PORT"
   cd "$TMP/news" && exec "$JAVA_HOME_21/bin/java" -jar "$NEWS_JAR"
 ) > "$TMP/news.log" 2>&1 &
 NEWS_PID=$!
@@ -297,6 +301,8 @@ wait_ready notifier "$TMP/notifier.log" "groupId=notifier\] Adding newly assigne
 echo "briefing 기동"
 (
   export KAFKA_BOOTSTRAP="$BOOTSTRAP" POSTGRES_DB="$DB_NAME" BRIEFING_DB_USER="$B_USER" BRIEFING_DB_PASSWORD="$B_PW"
+  # 근거 자료는 이 실행이 띄운 시세처리기·뉴스처리기 내부 조회 API 로 묻는다.
+  export MARKET_API_URL="http://127.0.0.1:$MARKET_HTTP_PORT" NEWS_API_URL="http://127.0.0.1:$NEWS_HTTP_PORT"
   export PYTHONPATH="$ROOT/services/briefing/src" PYTHONUNBUFFERED=1
   if [ "$REAL_LLM" = 1 ]; then
     unset ANTHROPIC_BASE_URL

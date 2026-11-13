@@ -274,9 +274,9 @@ OUTLOOKS = [("TEST01", "상승"), ("TEST02", "보합"), ("TEST03", "예상 어�
 def run(store, llm, etfs=None, settings=DailySettings(), at=POST_CLOSE_AT):
     requests = Requests()
     writer = DailyLlmWriter(llm, settings.llm_max_attempts) if llm is not None else None
-    core = DailyCore(requests, writer, store, settings)
+    core = DailyCore(requests, requests.api, writer, store, settings)
     core.on_collection_ready(tick(POST_CLOSE_JOB, at), at)
-    core.on_daily_data_responded(daily_response(etfs=etfs or ETFS, background=POST_CLOSE_BACKGROUND), at)
+    core.api.reply(daily_response(etfs=etfs or ETFS, background=POST_CLOSE_BACKGROUND), at)
     answer_news(core, requests, at)
     [event] = published(requests)
     return event.value["payload"]

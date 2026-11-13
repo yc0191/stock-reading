@@ -1,4 +1,4 @@
-"""BriefingRunner를 가짜 Kafka로 돌려 토픽·키·확정·제한 시간·연결을 확인한다. 실제 브로커와 DB는 쓰지 않는다."""
+"""BriefingRunner를 가짜 Kafka와 가짜 내부 조회 API로 돌려 토픽·키·확정·제한 시간·연결을 확인한다. 실제 브로커와 DB는 쓰지 않는다."""
 import json
 import time
 from collections import deque
@@ -11,6 +11,8 @@ from briefing import main
 from briefing.config import CoreSettings
 from briefing.job_log import EntryType
 from briefing.ports import FailureReason
+from briefing.queries import QueryKind
+from fake_api import FakeApi
 from fake_job_log import FakeJobLog
 from briefing.report import GENERATED_BY_LLM, LlmWriter, Report, ReportError, RuleBasedWriter
 from briefing.research import QueryWriter
@@ -132,15 +134,29 @@ def move_message(as_of="2026-10-20T16:00:31+09:00", event_id=JOB_ID):
     return FakeMessage("market.move", json.dumps(move))
 
 
-def completed_message(started_at="2026-10-20T16:15:01+09:00", incomplete=()):
-    return FakeMessage("collection.completed", envelope("collection.completed", {
-        "jobType": "collect-news", "scheduledFor": "2026-10-20T16:15:00+09:00",
-        "startedAt": started_at, "finishedAt": "2026-10-20T16:15:42+09:00",
-        "publishedCount": 1, "incompleteSymbols": list(incomplete)}))
+def completed_message(started_at="2026-10-20T16:15:01+09:00", incomplete=(),
+                      event_id="00000000-0000-4000-8000-000000000101"):
+    """정기 수집의 저장 끝 알림(news.stored). 근거 조회는 이 알림으로 시작한다."""
+    return FakeMessage("news.stored", stored_envelope(event_id, {
+        "jobType": "collect-news", "scheduledFor": "2026-10-20T16:15:00+09:00", "startedAt": started_at,
+        "incompleteSymbols": list(incomplete)}))
+
+
+def stored_envelope(event_id, fields):
+    return envelope("news.stored", {
+        "collectionEventId": "00000000-0000-4000-8000-000000000201", "articleCount": 1, "storedCount": 1,
+        "mergedCount": 0, "failedCount": 0, "unprocessedEventIds": [], **fields}, event_id=event_id)
+
+
+class Answer:
+    """가짜 내부 조회 API의 답 하나. feed가 실행부의 끝난 조회 결과로 쌓는다."""
+
+    def __init__(self, body):
+        self.body = body
 
 
 def history_message(seq):
-    return FakeMessage("market.history.responded", envelope("market.history.responded", {
+    return Answer(envelope("market.history.responded", {
         "jobId": JOB_ID, "seq": seq, "symbol": "TEST01",
         "points": [{"asOf": "2026-10-20T15:55:31+09:00", "price": 10000},
                    {"asOf": "2026-10-20T07:00:31Z", "price": 9850}],
@@ -148,14 +164,14 @@ def history_message(seq):
 
 
 def context_message(seq, tickers=()):
-    return FakeMessage("market.context.responded", envelope("market.context.responded", {
+    return Answer(envelope("market.context.responded", {
         "jobId": JOB_ID, "seq": seq, "symbol": "TEST01", "tickers": list(tickers), "closeRates": [],
         "background": [{"apiType": "market-summary", "target": None, "status": "missing"}],
         "truncated": False}))
 
 
 def articles_message(seq, published_at="2026-10-20T07:02:00Z"):
-    return FakeMessage("news.articles.responded", envelope("news.articles.responded", {
+    return Answer(envelope("news.articles.responded", {
         "jobId": JOB_ID, "seq": seq, "symbol": "TEST01",
         "articles": [{"articleId": "a1", "title": "테스트 기사", "summary": "요약",
                       "publishedAt": published_at, "publisher": "news.example.com",
@@ -171,6 +187,8 @@ def setup():
     declared = []
 
     def make(writer=None, **runner_options):
+        created["api"] = FakeApi()
+
         def consumer_factory(config):
             created["consumer"] = FakeConsumer(config)
             return created["consumer"]
@@ -183,7 +201,8 @@ def setup():
         runner_options.setdefault("settings", CoreSettings(move_quiet_period=timedelta(0)))
         runner = main.BriefingRunner("localhost:9092", writer or RuleBasedWriter(), store, clock=clock,
                                      consumer_factory=consumer_factory, producer_factory=producer_factory,
-                                     declare_topics=declared.append, **runner_options)
+                                     declare_topics=declared.append, api_factory=lambda: created["api"],
+                                     **runner_options)
         runner.open()
         return runner, created["consumer"], created["producer"]
 
@@ -191,13 +210,22 @@ def setup():
 
 
 def feed(runner, consumer, *messages):
+    """Kafka 메시지는 소비자 큐에, 조회 답은 실행부가 꺼내 갈 결과로 넣고 한 바퀴씩 돌린다."""
     for message in messages:
-        consumer.queue.append(message)
+        if isinstance(message, Answer):
+            runner.api.queue_reply(message.body)
+        else:
+            consumer.queue.append(message)
         runner.run_once()
 
 
 def sent(producer, topic):
     return [(key, value) for t, key, value in producer.sent if t == topic]
+
+
+def asked(runner, kind):
+    """맡긴 조회의 요청 본문"""
+    return [q.payload for q in runner.api.of(kind)]
 
 
 def test_open_declares_topics_cleans_up_unfinished_jobs_and_subscribes_to_the_input_topics(setup):
@@ -207,10 +235,8 @@ def test_open_declares_topics_cleans_up_unfinished_jobs_and_subscribes_to_the_in
     assert declared == ["localhost:9092"]
     # 테이블은 Flyway가 만든다. 브리핑은 시작할 때 이전 실행의 남은 작업을 정리하러 한 번만 저장소를 부른다.
     assert store.unfinished_calls == [clock.now]
-    assert consumer.subscribed == ["market.move", "collection.completed",
-                                   "market.history.responded", "news.articles.responded",
-                                   "market.context.responded", "news.filings.responded",
-                                   "market.daily.responded", "daily.collection.completed"]
+    # 근거 자료는 내부 조회 API로 직접 묻고, Kafka로는 알림만 받는다.
+    assert consumer.subscribed == ["market.move", "collection.completed", "news.stored", "daily.collection.completed"]
     assert consumer.config["enable.auto.commit"] is False
     assert producer.config["acks"] == "all"
 
@@ -221,19 +247,16 @@ def test_a_move_flows_to_a_briefing_keyed_by_symbol(setup):
 
     feed(runner, consumer, move_message(), completed_message())
 
-    history = sent(producer, "market.history.requested")
-    articles = sent(producer, "news.articles.requested")
-    assert [key for key, _ in history] == ["TEST01"]
-    assert [key for key, _ in articles] == ["TEST01"]
-    assert validate("market.history.requested.v1.schema.json", history[0][1]) == []
-    assert validate("news.articles.requested.v1.schema.json", articles[0][1]) == []
+    history = asked(runner, QueryKind.HISTORY)
+    articles = asked(runner, QueryKind.ARTICLES)
+    assert [p["symbol"] for p in history] == ["TEST01"]
+    assert [p["symbol"] for p in articles] == ["TEST01"]
+    # 조회는 Kafka로 나가지 않는다.
+    assert producer.sent == []
 
-    # 기사 목록이 연속 두 번 같아야 안정으로 보므로, 재확인 간격이 지난 뒤 두 번째 라운드가 나간다.
+    # 저장 끝 알림 뒤라 기사는 한 번 받으면 끝이다.
     feed(runner, consumer, history_message(1), context_message(1), articles_message(1))
-    clock.advance(seconds=10)
-    runner.run_once()
-    assert len(sent(producer, "news.articles.requested")) == 2
-    feed(runner, consumer, articles_message(2))
+    assert len(asked(runner, QueryKind.ARTICLES)) == 1
 
     briefings = sent(producer, "briefing.generated")
     assert len(briefings) == 1
@@ -245,7 +268,7 @@ def test_a_move_flows_to_a_briefing_keyed_by_symbol(setup):
 
 
 def filings_message(seq):
-    return FakeMessage("news.filings.responded", envelope("news.filings.responded", {
+    return Answer(envelope("news.filings.responded", {
         "jobId": JOB_ID, "seq": seq, "symbol": "TEST01",
         "filings": [{"accessionNumber": "0000000001-26-000001", "tickers": ["TESTA"], "form": "8-K",
                      "items": ["2.02"], "acceptedAt": "2026-10-20T05:30:28+09:00",
@@ -263,21 +286,14 @@ def test_a_us_etf_move_sends_filings_after_context_and_flows_to_a_briefing(setup
     runner, consumer, producer = make(LlmWriter(llm))
 
     feed(runner, consumer, move_message(), completed_message(), history_message(1), articles_message(1))
-    assert sent(producer, "news.filings.requested") == []  # 티커를 받기 전에는 보내지 않는다
-    context = sent(producer, "market.context.requested")
-    assert [key for key, _ in context] == ["TEST01"]
-    assert validate("market.context.requested.v1.schema.json", context[0][1]) == []
+    assert asked(runner, QueryKind.FILINGS) == []  # 티커를 받기 전에는 묻지 않는다
+    assert [p["symbol"] for p in asked(runner, QueryKind.CONTEXT)] == ["TEST01"]
 
     feed(runner, consumer, context_message(1, tickers=["TESTA"]))
-    filings = sent(producer, "news.filings.requested")
-    assert [key for key, _ in filings] == ["TEST01"]
-    assert validate("news.filings.requested.v1.schema.json", filings[0][1]) == []
-    assert filings[0][1]["payload"]["tickers"] == ["TESTA"]
+    filings = asked(runner, QueryKind.FILINGS)
+    assert [p["tickers"] for p in filings] == [["TESTA"]]
 
     feed(runner, consumer, filings_message(1))
-    clock.advance(seconds=10)
-    runner.run_once()
-    feed(runner, consumer, articles_message(2))
 
     (_, event), = sent(producer, "briefing.generated")
     assert validate("briefing.generated.v1.schema.json", event) == []
@@ -291,23 +307,23 @@ def test_the_early_research_completion_is_routed_to_the_move_job_and_starts_the_
     make, _, store, _ = setup
     runner, consumer, producer = make()
     named = context_message(1)
-    body = json.loads(named.value())
+    body = json.loads(named.body)
     body["payload"]["etf"] = {"name": "가짜 반도체 ETF", "membersTruncated": False, "members": []}
-    named = FakeMessage("market.context.responded", json.dumps(body))
-    done = FakeMessage("collection.completed", envelope("collection.completed", {
+    named = Answer(json.dumps(body))
+    done = FakeMessage("news.stored", stored_envelope("00000000-0000-4000-8000-000000000102", {
         "jobType": "research-news", "scheduledFor": "2026-10-20T16:15:00+09:00",
-        "startedAt": "2026-10-20T16:15:44+09:00", "finishedAt": "2026-10-20T16:15:50+09:00",
-        "publishedCount": 3, "incompleteSymbols": [], "researchJobId": early_research_id(JOB_ID)}))
+        "startedAt": "2026-10-20T16:15:44+09:00", "incompleteSymbols": [],
+        "researchJobId": early_research_id(JOB_ID)}))
 
-    # 시계가 변동 T+5분보다 뒤라 변동을 받자마자 배경 자료를 먼저 요청한다. 정기 수집 완료는 오지 않는다.
+    # 시계가 변동 T+5분보다 뒤라 변동을 받자마자 배경 자료를 먼저 묻는다. 정기 수집의 저장 끝은 오지 않는다.
     feed(runner, consumer, move_message(), named)
     (_, research), = sent(producer, "news.research.requested")
     assert research["payload"]["queries"] == ["가짜 반도체 ETF"]
-    assert sent(producer, "market.history.requested") == []
+    assert asked(runner, QueryKind.HISTORY) == []
 
     feed(runner, consumer, done)
 
-    assert len(sent(producer, "market.history.requested")) == 1 and len(sent(producer, "news.articles.requested")) == 1
+    assert len(asked(runner, QueryKind.HISTORY)) == 1 and len(asked(runner, QueryKind.ARTICLES)) == 1
     assert store.failures == []
 
 
@@ -319,9 +335,8 @@ def test_every_message_offset_is_committed_before_it_is_handled(setup):
     feed(runner, consumer, move, completed_message())
 
     assert consumer.commits[0] is move
-    assert consumer.events == [("commit", "market.move"), ("commit", "collection.completed")]
-    # 확정은 처리보다 먼저다: 확정 시점에는 아직 요청이 하나도 나가지 않았다.
-    assert len(consumer.commits) == 2 and len(producer.sent) == 3
+    assert consumer.events == [("commit", "market.move"), ("commit", "news.stored")]
+    assert len(consumer.commits) == 2 and len(runner.api.submitted) == 3
 
 
 def test_malformed_message_is_committed_and_skipped_without_stopping_the_loop(setup):
@@ -332,7 +347,7 @@ def test_malformed_message_is_committed_and_skipped_without_stopping_the_loop(se
     feed(runner, consumer, bad, move_message(), completed_message())
 
     assert consumer.commits[0] is bad
-    assert len(sent(producer, "market.history.requested")) == 1
+    assert len(asked(runner, QueryKind.HISTORY)) == 1
 
 
 def test_timestamps_with_z_and_kst_offset_are_both_read(setup):
@@ -343,14 +358,14 @@ def test_timestamps_with_z_and_kst_offset_are_both_read(setup):
     feed(runner, consumer, move_message(as_of="2026-10-20T07:00:31Z"),
          completed_message(started_at="2026-10-20T07:15:01Z"))
 
-    request = sent(producer, "market.history.requested")[0][1]["payload"]
+    request = asked(runner, QueryKind.HISTORY)[0]
     assert datetime.fromisoformat(request["until"]) == T + timedelta(minutes=5)
 
 
 def test_poll_waits_only_until_the_next_deadline(setup):
     make, clock, _, _ = setup
-    runner, consumer, _ = make()
-    feed(runner, consumer, move_message(), completed_message())
+    runner, consumer, _ = make(settings=CoreSettings(move_quiet_period=timedelta(seconds=10)))
+    feed(runner, consumer, move_message())
 
     clock.advance(seconds=9, milliseconds=600)
     runner.run_once()
@@ -359,20 +374,17 @@ def test_poll_waits_only_until_the_next_deadline(setup):
     assert consumer.timeouts[-1] == pytest.approx(0.4)
 
 
-def test_response_timeout_is_detected_by_the_timer_and_resends_with_a_new_seq(setup):
+def test_a_query_that_finally_fails_reaches_the_job_through_the_loop(setup):
     make, clock, store, _ = setup
     runner, consumer, producer = make()
     feed(runner, consumer, move_message(), completed_message())
 
-    for _ in range(2):
-        clock.advance(seconds=10)
-        runner.run_once()
-    assert [v["payload"]["seq"] for _, v in sent(producer, "market.history.requested")] == [1, 2, 3]
-
-    clock.advance(seconds=10)
+    runner.api.pending, ((query, on_result),) = [p for p in runner.api.pending if p[0].kind is not QueryKind.HISTORY], \
+        [p for p in runner.api.pending if p[0].kind is QueryKind.HISTORY]
+    runner.api.done.append((on_result, main.QueryResult(query, None, 4, "timeout")))
     runner.run_once()
-    # 한 작업은 실패를 한 번만 기록한다. 같은 시각에 끝난 시세 쪽이 먼저 판정된다.
-    assert [(f.reason, f.attempts) for f in store.failures] == [(FailureReason.MARKET_NO_RESPONSE, 3)]
+
+    assert [(f.reason, f.attempts) for f in store.failures] == [(FailureReason.MARKET_NO_RESPONSE, 4)]
     assert sent(producer, "briefing.generated") == []
 
 
@@ -381,8 +393,8 @@ def test_collection_wait_limit_is_detected_by_the_timer(setup):
     runner, consumer, producer = make()
     # 변동보다 먼저 시작한 수집은 쓸 수 없다.
     feed(runner, consumer, move_message(), completed_message(started_at="2026-10-20T16:00:00+09:00"))
-    # 나간 것은 T+5분이 지나 ETF 이름을 알려고 먼저 보낸 배경 자료 요청뿐이고, 근거 조회 요청은 없다.
-    assert [t for t, _, _ in producer.sent] == ["market.context.requested"]
+    # 맡긴 것은 T+5분이 지나 ETF 이름을 알려고 먼저 한 배경 자료 조회뿐이고, 근거 조회는 없다.
+    assert [q.kind for q in runner.api.submitted] == [QueryKind.CONTEXT]
 
     clock.advance(minutes=29, seconds=59)
     runner.run_once()
@@ -402,9 +414,6 @@ def test_llm_writer_is_connected_and_marks_the_briefing_as_llm(setup):
 
     feed(runner, consumer, move_message(), completed_message(), history_message(1), context_message(1),
          articles_message(1))
-    clock.advance(seconds=10)
-    runner.run_once()
-    feed(runner, consumer, articles_message(2))
 
     (_, event), = sent(producer, "briefing.generated")
     assert llm.calls == 1
@@ -422,9 +431,6 @@ def test_report_failure_is_recorded_through_the_job_log(setup):
     runner, consumer, producer = make(FailingWriter())
     feed(runner, consumer, move_message(), completed_message(), history_message(1), context_message(1),
          articles_message(1))
-    clock.advance(seconds=10)
-    runner.run_once()
-    feed(runner, consumer, articles_message(2))
 
     assert [(f.reason, f.attempts) for f in store.failures] == [(FailureReason.LLM_ERROR, 3)]
     assert sent(producer, "briefing.generated") == []
@@ -445,7 +451,7 @@ def test_jobs_left_unfinished_by_the_previous_run_are_only_marked_and_nothing_is
 
     _, consumer, producer = make()
 
-    # 표시만 하고 리포트를 다시 만들지 않는다: 이벤트도, 새 작업도, 요청도 없다.
+    # 표시만 하고 리포트를 다시 만들지 않는다: 이벤트도, 새 작업도, 조회도 없다.
     assert len(store.unfinished_calls) == 1
     assert producer.sent == [] and store.starts == [] and store.entries == []
 
@@ -458,9 +464,10 @@ def test_start_and_stop_run_the_loop_in_the_background():
         return created["consumer"]
 
     store = FakeStore()
+    api = FakeApi()
     runner = main.BriefingRunner("localhost:9092", RuleBasedWriter(), store,
                                  consumer_factory=consumer_factory, producer_factory=FakeProducer,
-                                 declare_topics=lambda _bootstrap: None)
+                                 declare_topics=lambda _bootstrap: None, api_factory=lambda: api)
 
     runner.start()
     try:
@@ -473,21 +480,20 @@ def test_start_and_stop_run_the_loop_in_the_background():
         runner.stop(timeout=5)
 
     assert not runner.is_running()
-    assert created["consumer"].closed
+    assert created["consumer"].closed and api.closed
     assert runner.error is None
     assert len(store.unfinished_calls) == 1
 
 
 def research_completed_message(incomplete=()):
-    return FakeMessage("collection.completed", envelope("collection.completed", {
+    return FakeMessage("news.stored", stored_envelope("00000000-0000-4000-8000-000000000103", {
         "jobType": "research-news", "scheduledFor": "2026-10-20T16:15:43+09:00",
-        "startedAt": "2026-10-20T16:15:44+09:00", "finishedAt": "2026-10-20T16:15:50+09:00",
-        "publishedCount": 1, "incompleteSymbols": list(incomplete),
+        "startedAt": "2026-10-20T16:15:44+09:00", "incompleteSymbols": list(incomplete),
         "researchJobId": research_job_id(JOB_ID, WHOLE_REPORT, 1)}))
 
 
 def research_articles_message(seq):
-    return FakeMessage("news.articles.responded", envelope("news.articles.responded", {
+    return Answer(envelope("news.articles.responded", {
         "jobId": research_job_id(JOB_ID, WHOLE_REPORT, 1), "seq": seq, "symbol": "TEST01",
         "articles": [{"articleId": "r1", "title": "다시 찾은 기사", "summary": "",
                       "publishedAt": "2026-10-20T06:00:00Z", "publisher": "news.example.com",
@@ -508,33 +514,25 @@ def test_insufficient_evidence_flows_through_research_request_completion_and_rew
 
     feed(runner, consumer, move_message(), completed_message(), history_message(1), context_message(1),
          articles_message(1))
-    clock.advance(seconds=10)
-    runner.run_once()
-    feed(runner, consumer, articles_message(2))
 
     (key, request), = sent(producer, "news.research.requested")
     assert key == "TEST01"
     assert validate("news.research.requested.v1.schema.json", request) == []
     assert sent(producer, "briefing.generated") == []
 
-    # 재검색 완료는 근거 조회 작업이 아니라 재검색 쪽으로 가서 researchJobId를 단 기사 조회가 나간다.
+    # 재검색의 저장 끝은 근거 조회 작업이 아니라 재검색 쪽으로 가서 researchJobId를 단 기사 조회를 한 번 한다.
     feed(runner, consumer, research_completed_message())
-    (_, research_request), = [(k, v) for k, v in sent(producer, "news.articles.requested")
-                              if "researchJobId" in v["payload"]]
-    # 재검색 작업은 자기 id로 따로 돌므로 기사 조회 순번이 1부터 시작한다.
-    assert research_request["payload"]["seq"] == 1
-    assert research_request["payload"]["researchJobId"] == research_job_id(JOB_ID, WHOLE_REPORT, 1)
+    (research_request,) = [p for p in asked(runner, QueryKind.ARTICLES) if "researchJobId" in p]
+    assert research_request["seq"] == 1
+    assert research_request["researchJobId"] == research_job_id(JOB_ID, WHOLE_REPORT, 1)
     feed(runner, consumer, research_articles_message(1))
-    clock.advance(seconds=10)
-    runner.run_once()  # 재검색 쪽 제한 시각도 실행부가 깨워 확인 라운드를 보낸다
-    feed(runner, consumer, research_articles_message(2))
 
     (_, event), = sent(producer, "briefing.generated")
     assert [e["articleId"] for e in event["payload"]["evidence"]] == ["r1"]
     assert report_llm.calls == 3 and query_llm.calls == 1
     assert [e.reason for e in store.of_type(EntryType.FINAL_CHECK)] == ["code-checked", "reviewed", "body-chosen"]
     assert store.failures == []
-    assert len(runner.core._completions) == 1  # 재검색 완료는 정기 수집 완료 목록에 쌓이지 않는다
+    assert len(runner.core._completions) == 1  # 재검색의 저장 끝은 정기 수집 목록에 쌓이지 않는다
 
 
 def test_build_runner_falls_back_to_rule_based_without_a_key_and_hides_the_db_password():
@@ -600,59 +598,45 @@ def sentence_research_id(no):
     return research_job_id(JOB_ID, no, 1)
 
 
-def fake_news_answers(producer, consumer, answered):
-    """아직 답하지 않은 재검색 기사 조회마다 즉시 응답을 큐 끝에 넣는다(뉴스 서비스는 요청에 바로 답한다)."""
-    for topic, _, value in producer.sent:
-        payload = value["payload"]
-        if topic != "news.articles.requested" or "researchJobId" not in payload:
+def fake_news_answers(runner):
+    """아직 답하지 않은 재검색 기사 조회마다 답을 실행부가 꺼내 갈 결과로 쌓는다(뉴스처리기는 요청에 바로 답한다)."""
+    for query in runner.api.waiting(QueryKind.ARTICLES):
+        payload = query.payload
+        if "researchJobId" not in payload:
             continue
-        key = (payload["jobId"], payload["seq"])
-        if key in answered:
-            continue
-        answered.add(key)
         no = next(n for n in range(1, WEAK_SENTENCES + 1) if sentence_research_id(n) == payload["jobId"])
-        consumer.queue.append(FakeMessage("news.articles.responded", envelope("news.articles.responded", {
+        runner.api.queue_reply(envelope("news.articles.responded", {
             "jobId": payload["jobId"], "seq": payload["seq"], "symbol": "TEST01",
             "articles": [{"articleId": f"r{no}", "title": f"다시 찾은 기사 {no}", "summary": "",
                           "publishedAt": "2026-10-20T06:00:00Z", "publisher": "news.example.com",
                           "url": f"https://news.example.com/articles/r{no}"}],
-            "truncated": False})))
+            "truncated": False}))
 
 
 def research_completed_for(no):
-    return FakeMessage("collection.completed", envelope("collection.completed", {
+    return FakeMessage("news.stored", stored_envelope(f"00000000-0000-4000-8000-0000000003{no:02d}", {
         "jobType": "research-news", "scheduledFor": "2026-10-20T16:15:43+09:00",
-        "startedAt": "2026-10-20T16:15:44+09:00", "finishedAt": "2026-10-20T16:15:50+09:00",
-        "publishedCount": 1, "incompleteSymbols": [], "researchJobId": sentence_research_id(no)}))
+        "startedAt": "2026-10-20T16:15:44+09:00", "incompleteSymbols": [], "researchJobId": sentence_research_id(no)}))
 
 
-def test_slow_rewrites_do_not_make_other_sentences_time_out_with_their_answers_already_waiting(setup):
+def test_slow_rewrites_do_not_lose_other_sentences_answers_already_waiting(setup):
     make, clock, store, _ = setup
     query_llm = FakeLlm(*[json.dumps({"queries": [f"가짜검색어 {n}"]}) for n in range(1, WEAK_SENTENCES + 1)])
     runner, consumer, producer = make(LlmWriter(SlowRewriteLlm(clock)), query_writer=QueryWriter(query_llm))
 
     feed(runner, consumer, move_message(), completed_message(), history_message(1), context_message(1),
          articles_message(1))
-    clock.advance(seconds=10)
-    runner.run_once()
-    feed(runner, consumer, articles_message(2))
     assert len(sent(producer, "news.research.requested")) == WEAK_SENTENCES
 
     feed(runner, consumer, *[research_completed_for(n) for n in range(1, WEAK_SENTENCES + 1)])
-    answered = set()
-    for _ in range(200):
-        fake_news_answers(producer, consumer, answered)
-        if not consumer.queue:
-            if runner.sentences.next_deadline() is None:
-                break
-            clock.advance(seconds=10)  # 응답이 더 없으면 시간이 흘러 확인 라운드·재요청 시각이 온다
-        runner.run_once()
+    # 다섯 문장의 답이 한꺼번에 쌓여 있어도, 다시 쓰기 하나가 오래 걸리는 동안 다른 답이 버려지지 않는다.
+    fake_news_answers(runner)
+    runner.run_once()
 
     (_, briefing), = sent(producer, "briefing.generated")
     text = briefing["payload"]["text"]
     assert all(f"다시 쓴 문장 {n}입니다." in text for n in range(1, WEAK_SENTENCES + 1))
     assert [e for e in store.entries if e.reason == "articles_no_response"] == []
-    assert [e for e in store.entries if e.reason == "articles_resent"] == []
 
 
 def test_reading_queued_messages_stops_at_the_time_cap_and_goes_on_to_the_ticks(setup):
@@ -681,3 +665,49 @@ def test_reading_queued_messages_stops_at_the_count_cap(setup):
     runner.run_once()
 
     assert len(handled) == main.MAX_MESSAGES_PER_RUN
+
+
+# ---- 저장 끝 알림과 조회 결과 전달 ----
+
+def test_the_same_stored_notice_twice_starts_the_evidence_fetch_once(setup, caplog):
+    make, _, _, _ = setup
+    runner, consumer, _ = make()
+
+    with caplog.at_level("INFO", logger="briefing"):
+        feed(runner, consumer, move_message(), completed_message(), completed_message())
+
+    # 뉴스처리기는 같은 수집 완료의 저장 끝을 같은 eventId로 다시 낼 수 있다. 두 번째는 아무것도 하지 않는다.
+    assert len(asked(runner, QueryKind.HISTORY)) == 1 and len(asked(runner, QueryKind.ARTICLES)) == 1
+    assert "duplicate news.stored" in caplog.text
+
+
+def test_collection_completed_alone_no_longer_starts_the_evidence_fetch(setup):
+    make, _, _, _ = setup
+    runner, consumer, _ = make()
+    plain = FakeMessage("collection.completed", envelope("collection.completed", {
+        "jobType": "collect-news", "scheduledFor": "2026-10-20T16:15:00+09:00",
+        "startedAt": "2026-10-20T16:15:01+09:00", "finishedAt": "2026-10-20T16:15:42+09:00",
+        "publishedCount": 1, "incompleteSymbols": []}))
+
+    feed(runner, consumer, move_message(), plain)
+
+    # 수집 완료는 기사를 보냈다는 뜻일 뿐이라 저장 끝(news.stored)을 기다린다.
+    assert asked(runner, QueryKind.HISTORY) == []
+
+
+def test_a_query_result_is_handed_over_on_the_loop_with_its_trace_id_and_job(setup):
+    from briefing.job_step import current_job
+    from briefing.trace import current as current_trace
+    make, _, _, _ = setup
+    runner, consumer, _ = make()
+    feed(runner, consumer, move_message(), completed_message())
+    query = runner.api.of(QueryKind.HISTORY)[0]
+    seen = []
+    runner.api.done.append((lambda result, now: seen.append((current_trace(), current_job(), result.attempts)),
+                            main.QueryResult(query, None, 2, "timeout")))
+
+    runner.run_once()
+
+    # 결과를 넘기는 동안 로그 줄의 추적 ID와 LLM 호출 기록(job_step)의 작업이 그 조회의 것이다.
+    assert seen == [(MOVE["correlationId"], JOB_ID, 2)]
+    assert current_trace() is None and current_job() is None

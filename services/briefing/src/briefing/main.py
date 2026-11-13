@@ -1,8 +1,10 @@
-"""Kafka 실행부: market.move -> 시세 이력·배경 자료·기사·공시 조회 -> briefing.generated,
-daily.collection.completed(데일리 판 시작 알림) 또는 한도 시각 -> 데일리 자료·공시 조회 -> 멤버마다 briefing.daily.generated. 실행: python -m briefing.main
+"""Kafka 실행부: market.move + 저장 끝 알림(news.stored) -> 시세 이력·배경 자료·기사·공시 조회 -> briefing.generated,
+daily.collection.completed(데일리 판 시작 알림) 또는 한도 시각 -> 데일리 자료·기사·공시 조회 -> 멤버마다 briefing.daily.generated.
+실행: python -m briefing.main
 
-Kafka를 import하는 곳은 이 파일뿐이다. 근거 조회(jobs), 리포트(report), 작업 기록(job_log_store)은
-메시지와 시각을 인자로 받기만 하고, 여기서 받은 메시지를 넘기고 그쪽이 낸 이벤트를 발행한다.
+Kafka를 import하는 곳은 이 파일뿐이다. 알림(이벤트)은 Kafka로 받고 내며, 시세처리기·뉴스처리기의 자료는 내부 조회 API를
+직접 부른다(http_queries). 근거 조회(jobs), 리포트(report), 작업 기록(job_log_store)은 메시지·조회 결과와 시각을 인자로 받기만
+하고, 여기서 받은 메시지와 끝난 조회의 결과를 넘기고 그쪽이 낸 이벤트를 발행한다.
 """
 from __future__ import annotations
 
@@ -12,9 +14,10 @@ import os
 import signal
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import replace
 from datetime import datetime
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Protocol
 
 from confluent_kafka import Consumer, KafkaError, Producer
 from confluent_kafka.admin import AdminClient, NewTopic
@@ -26,23 +29,23 @@ from briefing.daily_members import MemberPort
 from briefing.daily_final_check import daily_final_check
 from briefing.daily_report import DailyLlmWriter, build_daily_writer
 from briefing.events import (
-    ARTICLES_REQUESTED_TOPIC,
     BRIEFING_GENERATED_TOPIC,
-    CONTEXT_REQUESTED_TOPIC,
     DAILY_BRIEFING_GENERATED_TOPIC,
-    FILINGS_REQUESTED_TOPIC,
-    HISTORY_REQUESTED_TOPIC,
+    NEWS_STORED,
     RESEARCH_REQUESTED_TOPIC,
     OutboundEvent,
 )
+from briefing.http_queries import HttpQueries, base_urls
 from briefing.job_log import JobLogPort
 from briefing.job_log_store import PostgresJobLog, psycopg_connector
+from briefing.job_step import StepRecordingLlm, job_scope
 from briefing.jobs import BriefingCore
 from briefing.llm import AnthropicClient
 from briefing.member_store import PostgresMemberStore
 from briefing.move_group import MoveGrouper
 from briefing.move_merge import MorningMerge
 from briefing.move_final_check import move_final_check
+from briefing.queries import OnResult, QueryPort, QueryResult
 from briefing.report import ReportStage, ReportWriter, build_report_writer
 from briefing.research import QueryWriter, build_query_writer
 from briefing.sentence_research import ResearchReportStage, SentenceResearch
@@ -54,36 +57,20 @@ log = logging.getLogger("briefing")
 
 MOVE_TOPIC = "market.move"
 COLLECTION_COMPLETED_TOPIC = "collection.completed"
-HISTORY_RESPONDED_TOPIC = "market.history.responded"
-ARTICLES_RESPONDED_TOPIC = "news.articles.responded"
-CONTEXT_RESPONDED_TOPIC = "market.context.responded"
-FILINGS_RESPONDED_TOPIC = "news.filings.responded"
-DAILY_DATA_REQUESTED_TOPIC = "market.daily.requested"
-DAILY_DATA_RESPONDED_TOPIC = "market.daily.responded"
+NEWS_STORED_TOPIC = NEWS_STORED
 DAILY_COLLECTION_COMPLETED_TOPIC = "daily.collection.completed"
 
 # 같은 토픽을 선언하는 다른 서비스(Topics.java)와 파티션 수가 같아야 한다. 어긋나면 일부 종목이 오류 없이 누락된다.
 TOPIC_PARTITIONS = {
     MOVE_TOPIC: 3,                   # market
     COLLECTION_COMPLETED_TOPIC: 1,   # collector
-    HISTORY_REQUESTED_TOPIC: 3,      # market
-    HISTORY_RESPONDED_TOPIC: 3,      # market
-    ARTICLES_REQUESTED_TOPIC: 3,     # news
-    ARTICLES_RESPONDED_TOPIC: 3,     # news
-    CONTEXT_REQUESTED_TOPIC: 3,      # market
-    CONTEXT_RESPONDED_TOPIC: 3,      # market
-    FILINGS_REQUESTED_TOPIC: 3,      # news
-    FILINGS_RESPONDED_TOPIC: 3,      # news
+    NEWS_STORED_TOPIC: 1,            # news
     RESEARCH_REQUESTED_TOPIC: 3,     # collector
     BRIEFING_GENERATED_TOPIC: 3,     # notifier
     DAILY_BRIEFING_GENERATED_TOPIC: 1,  # notifier
-    DAILY_DATA_REQUESTED_TOPIC: 3,   # market
-    DAILY_DATA_RESPONDED_TOPIC: 3,   # market
     DAILY_COLLECTION_COMPLETED_TOPIC: 1,  # collector
 }
-SUBSCRIBED_TOPICS = (MOVE_TOPIC, COLLECTION_COMPLETED_TOPIC, HISTORY_RESPONDED_TOPIC, ARTICLES_RESPONDED_TOPIC,
-                     CONTEXT_RESPONDED_TOPIC, FILINGS_RESPONDED_TOPIC, DAILY_DATA_RESPONDED_TOPIC,
-                     DAILY_COLLECTION_COMPLETED_TOPIC)
+SUBSCRIBED_TOPICS = (MOVE_TOPIC, COLLECTION_COMPLETED_TOPIC, NEWS_STORED_TOPIC, DAILY_COLLECTION_COMPLETED_TOPIC)
 
 # 로컬 브로커는 IPv4만 받는다. 이 설정이 없으면 클라이언트가 먼저 ::1로 접속을 시도하며 연결 오류를 로그에 남긴다.
 COMMON = {"broker.address.family": "v4"}
@@ -122,6 +109,14 @@ JobLogStore = JobLogPort
 StatusStore = StatusPort
 
 
+class QueryRunner(QueryPort, Protocol):
+    """수신 루프가 끝난 조회의 결과를 꺼내 가는 조회 구현(HttpQueries)."""
+
+    def drain(self) -> list[tuple[OnResult, QueryResult]]: ...
+
+    def close(self) -> None: ...
+
+
 class KafkaPublisher:
     """RequestPort 구현. 이벤트 키(종목코드)를 메시지 키로 쓴다."""
 
@@ -133,7 +128,7 @@ class KafkaPublisher:
         self._producer.produce(event.topic, key=event.key,
                                value=json.dumps(event.value, ensure_ascii=False), headers=kafka_headers(event.value),
                                on_delivery=_on_delivery)
-        # 요청은 응답 제한 시간을 재므로 버퍼에 묵히지 않고 바로 내보낸다.
+        # 재검색 요청은 저장 끝을 기다리는 상한을 재므로 버퍼에 묵히지 않고 바로 내보낸다.
         remaining = self._producer.flush(FLUSH_SECONDS)
         if remaining:
             log.error("%d message(s) not delivered within %ds (topic=%s)", remaining, FLUSH_SECONDS, event.topic)
@@ -148,6 +143,17 @@ def message_correlation_id(message) -> str | None:
     return from_headers(message.headers()) or from_event(message.value())
 
 
+def _event_id(message: str | bytes) -> str:
+    """알림의 eventId. 없으면 ValueError(형식이 잘못된 메시지로 건너뛴다)."""
+    try:
+        event_id = json.loads(message)["eventId"]
+    except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ValueError(f"event without eventId: {error!r}") from error
+    if not isinstance(event_id, str) or not event_id:
+        raise ValueError("event without eventId")
+    return event_id
+
+
 def _on_delivery(error, message) -> None:
     if error is not None:
         log.error("delivery failed for %s[%s]: %s", message.topic(), message.key(), error)
@@ -156,7 +162,8 @@ def _on_delivery(error, message) -> None:
 class BriefingRunner:
     """Kafka 수신·발행 실행부. start()로 시작하고 stop()으로 멈춘다.
 
-    수신 루프는 자기 스레드 하나에서만 돌고 BriefingCore도 그 스레드에서만 부르므로 잠금이 필요 없다.
+    수신 루프는 자기 스레드 하나에서만 돌고 BriefingCore도 그 스레드에서만 부르므로 잠금이 필요 없다. 내부 조회 API 호출은
+    조회 구현의 작업 스레드에서 돌고, 끝난 결과는 수신 루프가 꺼내 이 스레드에서 작업에 넘긴다.
     main()뿐 아니라 다른 프로그램(예: 어드민 화면)도 같은 실행부를 시작·멈출 수 있게 분리했다.
     """
 
@@ -170,7 +177,8 @@ class BriefingRunner:
                  daily_writer: DailyLlmWriter | None = None,
                  daily_settings: DailySettings = DEFAULT_DAILY_SETTINGS,
                  status_store: StatusStore | None = None,
-                 member_store: MemberPort | None = None) -> None:
+                 member_store: MemberPort | None = None,
+                 api_factory: Callable[[], QueryRunner] | None = None) -> None:
         self.bootstrap = bootstrap
         self.writer = writer
         self.job_log = job_log
@@ -183,6 +191,10 @@ class BriefingRunner:
         self.daily_settings = daily_settings
         self.status_store = status_store
         self.member_store = member_store
+        self._api_factory = api_factory
+        self.api: QueryRunner | None = None
+        # 저장 끝 알림은 같은 eventId로 다시 올 수 있어(뉴스처리기 재시작·재시도) 처리한 eventId를 기억한다.
+        self._stored_ids: OrderedDict[str, None] = OrderedDict()
         self.daily: DailyCore | None = None
         self.query_writer = query_writer
         self._consumer: Consumer | None = None
@@ -207,9 +219,7 @@ class BriefingRunner:
         self._thread = threading.Thread(target=self._loop, name="briefing-kafka", daemon=True)
         self._thread.start()
         log.info("briefing started: %s -> %s", ", ".join(SUBSCRIBED_TOPICS),
-                 ", ".join((HISTORY_REQUESTED_TOPIC, CONTEXT_REQUESTED_TOPIC, ARTICLES_REQUESTED_TOPIC,
-                            FILINGS_REQUESTED_TOPIC, RESEARCH_REQUESTED_TOPIC, BRIEFING_GENERATED_TOPIC,
-                            DAILY_DATA_REQUESTED_TOPIC, DAILY_BRIEFING_GENERATED_TOPIC)))
+                 ", ".join((RESEARCH_REQUESTED_TOPIC, BRIEFING_GENERATED_TOPIC, DAILY_BRIEFING_GENERATED_TOPIC)))
 
     def request_stop(self) -> None:
         """루프에 멈추라고만 알린다. 시그널 처리기에서 부를 수 있도록 기다리지 않는다."""
@@ -239,17 +249,20 @@ class BriefingRunner:
         self.job_log.fail_unfinished(self.clock())
         self._producer = self._producer_factory({"bootstrap.servers": self.bootstrap, "acks": "all", **COMMON})
         publisher = KafkaPublisher(self._producer)
+        # 조회 시도마다 작업 기록 저장소의 job_step에 한 줄씩 남긴다.
+        self.api = self._api_factory() if self._api_factory is not None else HttpQueries(
+            base_urls(os.environ), self.job_log, self.clock)
         stage = ReportStage(self.writer, publisher, self.job_log, clock=self.clock)
         # 급변동과 데일리 판이 문장 단위 재검색 흐름 하나를 함께 쓴다.
-        self.sentences = SentenceResearch(self.query_writer, publisher, self.job_log, self.settings)
+        self.sentences = SentenceResearch(self.query_writer, publisher, self.api, self.job_log, self.settings)
         # LLM 본문은 발행 직전에 마지막 검사(코드 검사, 필요하면 LLM 검토와 고침)를 거친다.
         self.research = ResearchReportStage(stage, self.sentences, move_final_check(self.writer, self.job_log))
-        self.core = BriefingCore(publisher, self.research, self.settings, self.job_log)
+        self.core = BriefingCore(publisher, self.api, self.research, self.settings, self.job_log)
         # 같은 종목의 급변동은 모아서 작업 하나로 넘긴다.
         self.grouper = MoveGrouper(self.core.on_move, self.job_log, self.settings)
         # 장 시작부터 아침 판 시작 사이의 급변동은 따로 리포트를 만들지 않고 아침 판에 합친다(실패하면 리포트로 넘긴다).
         self.merge = MorningMerge(self.grouper.on_move, self.job_log, self.daily_settings)
-        self.daily = DailyCore(publisher, self.daily_writer, self.job_log, self.daily_settings,
+        self.daily = DailyCore(publisher, self.api, self.daily_writer, self.job_log, self.daily_settings,
                                sentences=self.sentences, status=self.status_store, members=self.member_store,
                                on_morning_result=self.merge.on_morning_result,
                                final=daily_final_check(self.daily_writer, self.job_log))
@@ -264,11 +277,11 @@ class BriefingRunner:
         self._consumer.subscribe(list(SUBSCRIBED_TOPICS))
 
     def run_once(self) -> None:
-        """다음 제한 시각까지만 메시지를 기다리고, 받은 메시지와 지난 제한 시간을 처리한다."""
+        """다음 제한 시각까지만 메시지를 기다리고, 받은 메시지·끝난 조회의 결과와 지난 제한 시간을 처리한다."""
         message = self._consumer.poll(self._poll_timeout())
         started = self.clock()
-        # 메시지 하나를 처리하는 데 LLM 호출로 오래 걸릴 수 있다. 그동안 이미 도착한 다른 응답을 읽지 않고 제한 시간부터
-        # 보면 응답을 받아 두고도 무응답으로 처리하므로, 쌓인 메시지를 먼저 읽은 뒤 제한 시간을 본다.
+        # 메시지 하나를 처리하는 데 LLM 호출로 오래 걸릴 수 있다. 그동안 이미 도착한 알림을 읽지 않고 제한 시간부터
+        # 보면 알림을 받아 두고도 기다림 한도로 처리하므로, 쌓인 메시지를 먼저 읽은 뒤 제한 시간을 본다.
         for _ in range(MAX_MESSAGES_PER_RUN):
             if message is None:
                 break
@@ -279,7 +292,19 @@ class BriefingRunner:
             if (self.clock() - started).total_seconds() >= MAX_READ_SECONDS:
                 break
             message = self._consumer.poll(0)
+        self.deliver_results()
         self._tick()
+
+    def deliver_results(self) -> None:
+        """끝난 조회의 결과를 그 조회를 맡긴 작업에 넘긴다. 결과를 받은 작업이 리포트·판을 쓰면 LLM을 부를 수 있다."""
+        for on_result, result in self.api.drain():
+            query = result.query
+            # 결과 처리 중 로그 줄에 그 작업의 추적 ID를, LLM 호출 기록(job_step)에 그 작업 id를 건다.
+            with correlation_context(query.correlation_id), job_scope(query.job_id):
+                try:
+                    on_result(result, self.clock())
+                except ValueError as error:
+                    log.error("skipping %s result for job %s: %s", query.kind.value, query.job_id, error)
 
     def handle_message(self, message) -> None:
         # 작업 상태와 모으는 중인 변동은 메모리에만 두므로, 읽은 위치를 처리 전에 바로 확정한다. 브리핑이 재시작되면
@@ -290,13 +315,9 @@ class BriefingRunner:
         self._consumer.commit(message=message, asynchronous=False)
         handler = {
             MOVE_TOPIC: self._on_move,
-            # 재검색 완료 알림과 재검색 기사 응답은 재검색 쪽이 먼저 가져가고, 아니면 근거 조회 작업으로 넘긴다.
             COLLECTION_COMPLETED_TOPIC: self._on_collection_completed,
-            HISTORY_RESPONDED_TOPIC: self.core.on_history_responded,
-            ARTICLES_RESPONDED_TOPIC: self._on_articles_responded,
-            CONTEXT_RESPONDED_TOPIC: self.core.on_context_responded,
-            FILINGS_RESPONDED_TOPIC: self._on_filings_responded,
-            DAILY_DATA_RESPONDED_TOPIC: self.daily.on_daily_data_responded,
+            # 재검색의 저장 끝은 재검색 쪽이 먼저 가져가고, 아니면 근거 조회 작업으로 넘긴다.
+            NEWS_STORED_TOPIC: self._on_news_stored,
             DAILY_COLLECTION_COMPLETED_TOPIC: self.daily.on_collection_ready,
         }.get(message.topic())
         with correlation_context(message_correlation_id(message)):
@@ -315,32 +336,34 @@ class BriefingRunner:
             self.grouper.on_move(message, now)
 
     def _on_collection_completed(self, message: str | bytes, now: datetime) -> None:
-        # 서버 상태 절이 센다. 저장은 eventId로 멱등하다. 저장에 실패해도 근거 조회 흐름은 막지 않는다.
-        if self.status_store is not None:
-            try:
-                record = parse_collection(message)
-            except ValueError as error:
-                # 상태용 해석이 틀려도 근거 조회는 계속 받아야 한다. 원문과 외부 값은 로그에 남기지 않는다.
-                log.warning("collection.completed not saved for server status: %s", type(error).__name__)
-            else:
-                self.status_store.save_collection(record)
-        # T+5분 재검색의 완료 알림은 급변동 작업이 먼저 가져간다. 문장 단위 재검색의 알림이면 그쪽이 가져가고, 아니면 정기 수집 완료다.
-        (self.core.on_research_completed(message, now) or self.sentences.on_collection_completed(message, now)
-         or self.core.on_collection_completed(message, now))
-
-    def _on_articles_responded(self, message: str | bytes, now: datetime) -> None:
-        # 재검색 기사 응답은 재검색 쪽이 먼저 가져가고, 아니면 급변동 작업과 마감 후 판 작업이 각자 모르는 jobId는 넘긴다.
-        if self.sentences.on_articles_responded(message, now):
+        # 서버 상태 절이 센다. 저장은 eventId로 멱등하다. 근거 조회는 이 알림이 아니라 뉴스처리기의 저장 끝 알림으로 시작한다.
+        if self.status_store is None:
             return
-        self.core.on_articles_responded(message, now)
-        self.daily.on_articles_responded(message, now)
+        try:
+            record = parse_collection(message)
+        except ValueError as error:
+            # 원문과 외부 값은 로그에 남기지 않는다.
+            log.warning("collection.completed not saved for server status: %s", type(error).__name__)
+        else:
+            self.status_store.save_collection(record)
 
-    def _on_filings_responded(self, message: str | bytes, now: datetime) -> None:
-        # 급변동 작업과 데일리 판 작업이 같은 토픽으로 공시 응답을 받는다. 각자 모르는 jobId는 넘긴다.
-        self.core.on_filings_responded(message, now)
-        self.daily.on_filings_responded(message, now)
+    def _on_news_stored(self, message: str | bytes, now: datetime) -> None:
+        # 같은 수집 완료의 저장 끝은 같은 eventId로 다시 올 수 있다. 두 번째부터는 근거 조회를 다시 시작하지 않는다.
+        event_id = _event_id(message)
+        if event_id in self._stored_ids:
+            log.info("duplicate %s %s ignored", NEWS_STORED, event_id)
+            return
+        # T+5분 재검색의 저장 끝은 급변동 작업이 먼저 가져간다. 문장 단위 재검색의 것이면 그쪽이 가져가고, 아니면 정기 수집이다.
+        (self.core.on_research_stored(message, now) or self.sentences.on_stored(message, now)
+         or self.core.on_news_stored(message, now))
+        # 해석에 실패한 알림(ValueError)은 기억하지 않는다. 처리한 알림만 기억한다.
+        self._stored_ids[event_id] = None
+        while len(self._stored_ids) > self.settings.remembered_jobs:
+            self._stored_ids.popitem(last=False)
 
     def close(self) -> None:
+        if self.api is not None:
+            self.api.close()
         if self._consumer is not None:
             self._consumer.close()
             self._consumer = None
@@ -352,7 +375,7 @@ class BriefingRunner:
 
     def _next_deadline(self) -> datetime | None:
         deadlines = [d for d in (self.grouper.next_deadline(), self.merge.next_deadline(), self.core.next_deadline(),
-                                 self.sentences.next_deadline(), self.daily.next_deadline()) if d is not None]
+                                 self.sentences.next_deadline()) if d is not None]
         return min(deadlines) if deadlines else None
 
     def _poll_timeout(self) -> float:
@@ -378,9 +401,6 @@ class BriefingRunner:
         deadline = self.sentences.next_deadline()
         if deadline is not None and now >= deadline:
             self.sentences.on_tick(now)
-        deadline = self.daily.next_deadline()
-        if deadline is not None and now >= deadline:
-            self.daily.on_tick(now)
         # 판 시작 알림의 한도 시각은 루프가 최대 MAX_POLL_SECONDS마다 깨어나므로 그 간격으로 본다.
         self.daily.check_deadlines(now)
 
@@ -424,7 +444,7 @@ def db_conninfo(env: Mapping[str, str]) -> str:
 
 
 def build_runner(env: Mapping[str, str]) -> BriefingRunner:
-    """환경변수로 실제 구성(Kafka, Postgres 작업 기록, LLM 또는 규칙 기반 작성기)을 만든다."""
+    """환경변수로 실제 구성(Kafka, 내부 조회 API 주소, Postgres 작업 기록, LLM 또는 규칙 기반 작성기)을 만든다."""
     bootstrap = env.get("KAFKA_BOOTSTRAP", "localhost:9092")
     connect = psycopg_connector(db_conninfo(env))
     store = PostgresJobLog(connect)
@@ -434,11 +454,20 @@ def build_runner(env: Mapping[str, str]) -> BriefingRunner:
     daily_settings = replace(DEFAULT_DAILY_SETTINGS, morning_merge_enabled=daily_on, deadline_enabled=daily_on)
     # 같은 사건 기사 묶기 기준값은 급변동·데일리 작성기와 서비스가 같은 CoreSettings를 쓴다.
     settings = DEFAULT_SETTINGS
-    return BriefingRunner(bootstrap, build_report_writer(env, settings=settings), store, settings=settings,
-                          daily_writer=build_daily_writer(env, core=settings),
+    def clock() -> datetime:
+        return datetime.now(KST)
+
+    def llm(api_key: str, model: str) -> StepRecordingLlm:
+        # LLM 호출마다 job_step 한 줄을 남긴다(시세처리기·뉴스처리기 조회는 HttpQueries가 남긴다).
+        return StepRecordingLlm(AnthropicClient(api_key, model), store, clock)
+
+    return BriefingRunner(bootstrap, build_report_writer(env, llm, settings=settings), store, settings=settings,
+                          clock=clock,
+                          daily_writer=build_daily_writer(env, llm, core=settings),
                           daily_settings=daily_settings,
-                          query_writer=build_query_writer(env, AnthropicClient),
-                          status_store=PostgresStatusStore(connect), member_store=PostgresMemberStore(connect))
+                          query_writer=build_query_writer(env, llm),
+                          status_store=PostgresStatusStore(connect), member_store=PostgresMemberStore(connect),
+                          api_factory=lambda: HttpQueries(base_urls(env), store, clock))
 
 
 def main() -> None:

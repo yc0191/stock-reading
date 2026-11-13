@@ -175,7 +175,7 @@ class EtfDay:
     tickers_truncated: bool
     # 응답의 ETF 정보(선택 칸). 이전 형식 응답에는 없다.
     etf: EtfInfo | None = None
-    # 값 칸이 빈 이유(market.daily.responded v2). 값이 있으면 None이고, v1 응답에도 없다.
+    # 값 칸이 빈 이유(데일리 자료 응답 v2의 missingReason). 값이 있으면 None이고, v1 응답에도 없다.
     missing_reason: str | None = None
     # 보유(HELD)·관심(WATCH) 구분. 멤버마다 달라 응답에는 없고, 멤버의 판을 짤 때 그 멤버의 포트폴리오 값으로 붙인다.
     relation: str | None = None

@@ -3,52 +3,33 @@ package dev.stockreading.market.history;
 import java.time.OffsetDateTime;
 import java.util.List;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
-import dev.stockreading.market.Topics;
 import dev.stockreading.market.event.EventFactory;
 import dev.stockreading.market.event.HistoryPayload;
-import tools.jackson.databind.ObjectMapper;
 
 @Component
-class HistoryRequestListener {
+class HistoryQuery {
 
     /**
-     * 요청이 몇 건을 달라고 하든 이 건수까지만 읽는다. 응답 한 건이 Kafka 메시지 한도(기본 1MB)를 넘으면
-     * 발행이 거부되어 브리핑이 응답을 영영 받지 못하기 때문이다(행 하나는 약 50바이트).
+     * 요청이 몇 건을 달라고 하든 이 건수까지만 읽는다. 응답 본문이 끝없이 커지지 않게 한다(행 하나는 약 50바이트).
+     * Kafka 응답 때 메시지 한도(기본 1MB)에 맞춰 정한 값을 그대로 두어, 같은 요청에 예전과 같은 내용을 준다.
      */
     static final int MAX_POINTS_CAP = 5000;
 
-    private static final Logger log = LoggerFactory.getLogger(HistoryRequestListener.class);
-
     private final PriceHistoryRepository repository;
-    private final HistoryPublisher publisher;
-    private final ObjectMapper mapper;
 
-    HistoryRequestListener(PriceHistoryRepository repository, HistoryPublisher publisher, ObjectMapper mapper) {
+    HistoryQuery(PriceHistoryRepository repository) {
         this.repository = repository;
-        this.publisher = publisher;
-        this.mapper = mapper;
     }
 
-    @KafkaListener(topics = Topics.MARKET_HISTORY_REQUESTED, groupId = "market")
-    void onRequest(String message) {
-        HistoryRequestEnvelope event = mapper.readValue(message, HistoryRequestEnvelope.class);
-        HistoryPayload payload = answer(event.payload());
-        publisher.publish(payload.jobId(), payload.seq(), payload.symbol(), payload.points(), payload.truncated(),
-                event.correlationId());
-    }
-
-    /** Kafka 요청과 내부 조회 API 가 함께 쓴다. 같은 요청에는 같은 내용을 돌려준다. */
-    HistoryPayload answer(HistoryRequestEnvelope.RequestPayload request) {
+    /** 내부 조회 API 가 부른다. 같은 요청에는 같은 내용을 돌려준다. */
+    HistoryPayload answer(HistoryRequest request) {
         OffsetDateTime since = OffsetDateTime.parse(request.since());
         OffsetDateTime until = OffsetDateTime.parse(request.until());
         Integer interval = request.intervalSeconds();
         if (request.maxPoints() < 1 || since.isAfter(until) || (interval != null && interval < 1)) {
-            // 잘못된 요청은 응답하지 않는다. 브리핑이 제한 시간 뒤 다시 보내거나 실패로 기록한다.
+            // 잘못된 요청은 답하지 않는다. 내부 조회 API 는 먼저 400 으로 거른다.
             throw new IllegalArgumentException("invalid history request jobId=" + request.jobId()
                     + " seq=" + request.seq());
         }

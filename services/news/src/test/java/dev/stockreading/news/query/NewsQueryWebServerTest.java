@@ -3,11 +3,9 @@ package dev.stockreading.news.query;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.net.URI;
@@ -25,7 +23,6 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
@@ -41,11 +38,9 @@ import org.springframework.kafka.core.KafkaTemplate;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import dev.stockreading.news.Topics;
 import dev.stockreading.news.etfmap.EtfStockMembers;
 import dev.stockreading.news.trace.CorrelationId;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -71,7 +66,7 @@ class NewsQueryWebServerTest {
     @ComponentScan(basePackages = {"dev.stockreading.news.query", "dev.stockreading.news.api",
             "dev.stockreading.news.trace"}, useDefaultFilters = false,
             includeFilters = @ComponentScan.Filter(type = FilterType.REGEX,
-                    pattern = ".*\\.(NewsQueryController|InvalidRequestHandler|CorrelationIdHttpFilter)"))
+                    pattern = ".*\\.(NewsQueryController|ArticlesQuery|FilingsQuery|InvalidRequestHandler|CorrelationIdHttpFilter)"))
     static class Wiring {
 
         @Bean
@@ -84,23 +79,9 @@ class NewsQueryWebServerTest {
             return mock(FilingQueryRepository.class);
         }
 
-        @SuppressWarnings("unchecked")
         @Bean
-        KafkaTemplate<String, String> kafka() {
-            return mock(KafkaTemplate.class);
-        }
-
-        @Bean
-        ArticlesRequestListener articlesRequestListener(ArticleQueryRepository repository,
-                KafkaTemplate<String, String> kafka, ObjectMapper mapper) {
-            return new ArticlesRequestListener(repository, new ArticlesPublisher(kafka, mapper, CLOCK), mapper,
-                    mock(EtfStockMembers.class));
-        }
-
-        @Bean
-        FilingsRequestListener filingsRequestListener(FilingQueryRepository repository,
-                KafkaTemplate<String, String> kafka, ObjectMapper mapper) {
-            return new FilingsRequestListener(repository, new FilingsPublisher(kafka, mapper, CLOCK), mapper);
+        EtfStockMembers etfStockMembers() {
+            return mock(EtfStockMembers.class);
         }
     }
 
@@ -110,21 +91,18 @@ class NewsQueryWebServerTest {
     private final ListAppender<ILoggingEvent> appender = new ListAppender<>();
     private final int port;
     private final FilingQueryRepository repository;
-    private final KafkaTemplate<String, String> kafka;
-    private final FilingsRequestListener listener;
+    private final FilingsQuery listener;
 
     @Autowired
-    NewsQueryWebServerTest(@LocalServerPort int port, FilingQueryRepository repository,
-            KafkaTemplate<String, String> kafka, FilingsRequestListener listener) {
+    NewsQueryWebServerTest(@LocalServerPort int port, FilingQueryRepository repository, FilingsQuery listener) {
         this.port = port;
         this.repository = repository;
-        this.kafka = kafka;
         this.listener = listener;
     }
 
     @BeforeEach
     void setUp() {
-        reset(repository, kafka);
+        reset(repository);
         appender.start();
         controllerLog.addAppender(appender);
     }
@@ -147,7 +125,7 @@ class NewsQueryWebServerTest {
     }
 
     @Test
-    void theRealServerAnswersTheSameJsonAsTheKafkaResponseAndLogsTheCorrelationId() throws Exception {
+    void theRealServerAnswersTheSameJsonAsTheQueryAndLogsTheCorrelationId() throws Exception {
         // DB 드라이버처럼 UTC 로 돌려줘, 응답이 KST 로 바꿔 쓰는 것까지 같이 비교한다.
         when(repository.findByTickers(eq(List.of("TESTA", "FAKEB")), eq(FILINGS_SINCE), eq(FILINGS_UNTIL), anyInt()))
                 .thenReturn(IntStream.range(0, 3).mapToObj(i -> new FilingQueryRepository.StoredFiling(
@@ -156,14 +134,13 @@ class NewsQueryWebServerTest {
                         "https://filings.example.com/" + i, List.of("FAKEB", "TESTA"))).toList());
         String request = request();
 
-        listener.onRequest(request);
-        ArgumentCaptor<String> message = ArgumentCaptor.captor();
-        verify(kafka).send(eq(Topics.NEWS_FILINGS_RESPONDED), anyString(), message.capture());
+        JsonNode answer = reader.readTree(reader.writeValueAsString(listener.answer(
+                reader.treeToValue(reader.readTree(request).get("payload"), FilingsRequest.class))));
         HttpResponse<String> response = post(reader.readTree(request).get("payload").toString());
 
         assertThat(response.statusCode()).isEqualTo(200);
         JsonNode api = reader.readTree(response.body());
-        assertThat(api).isEqualTo(reader.readTree(message.getValue()).get("payload"));
+        assertThat(api).isEqualTo(answer);
         assertThat(api.get("filings").size()).isEqualTo(3);
         // 필터가 자동 등록되어 컨트롤러 로그 줄에 요청 헤더의 추적 ID 가 붙는다.
         assertThat(appender.list).hasSize(1);

@@ -5,55 +5,42 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
-import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
-import dev.stockreading.market.Topics;
 import dev.stockreading.market.event.ContextPayload;
 import dev.stockreading.market.constituent.EtfInfo;
 import dev.stockreading.market.constituent.HoldingsPort;
 import dev.stockreading.market.insight.OverseasCloseRateQuery;
-import tools.jackson.databind.ObjectMapper;
 
 /**
  * 변동 종목 한 개의 배경 자료, 담긴 미국 종목 티커, 티커별 직전 정규장 등락률을 답한다.
  *
  * <p>상태형 자료라 기준 시각(asOf) 뒤에 받은 자료는 쓰지 않는다. 받은 시각 하한은 요청 since와 기준 시각에서
- * 안전 상한 기간을 뺀 시각 중 늦은 쪽이다. 저장 상태를 바꾸지 않는 조회라 같은 요청(eventId)을 다시 받아도
- * 같은 내용으로 다시 답할 뿐 부작용이 없고, 브리핑은 jobId·seq로 짝을 지어 중복 응답을 버린다.
+ * 안전 상한 기간을 뺀 시각 중 늦은 쪽이다. 저장 상태를 바꾸지 않는 조회라 같은 요청을 다시 받아도
+ * 같은 내용으로 다시 답할 뿐 부작용이 없다(브리핑은 연결 실패·시간 초과 때 같은 요청을 다시 부른다).
  */
 @Component
-class ContextRequestListener {
+class ContextQuery {
 
     private final MarketBackground marketBackground;
     private final OverseasCloseRateQuery closeRateQuery;
     private final HoldingsPort holdings;
     private final ContextProperties properties;
-    private final ContextPublisher publisher;
-    private final ObjectMapper mapper;
 
-    ContextRequestListener(BackgroundRepository repository, WorldIndexRates worldIndexRates,
-            OverseasCloseRateQuery closeRateQuery, HoldingsPort holdings, ContextProperties properties,
-            ContextPublisher publisher, ObjectMapper mapper) {
+    ContextQuery(BackgroundRepository repository, WorldIndexRates worldIndexRates,
+            OverseasCloseRateQuery closeRateQuery, HoldingsPort holdings, ContextProperties properties) {
         this.marketBackground = new MarketBackground(repository, worldIndexRates, properties.worldIndexPrevLookback());
         this.closeRateQuery = closeRateQuery;
         this.holdings = holdings;
         this.properties = properties;
-        this.publisher = publisher;
-        this.mapper = mapper;
     }
 
-    @KafkaListener(topics = Topics.MARKET_CONTEXT_REQUESTED, groupId = "market")
-    void onRequest(String message) {
-        ContextRequestEnvelope event = mapper.readValue(message, ContextRequestEnvelope.class);
-        publisher.publish(answer(event.payload()), event.eventId(), event.correlationId());
-    }
-
-    ContextPayload answer(ContextRequestEnvelope.RequestPayload request) {
+    /** 내부 조회 API 가 부른다. 같은 요청에는 같은 내용을 돌려준다. */
+    ContextPayload answer(ContextRequest request) {
         OffsetDateTime asOf = OffsetDateTime.parse(request.asOf());
         OffsetDateTime requestedSince = OffsetDateTime.parse(request.since());
         if (request.maxResponseBytes() < 1 || request.maxTickers() < 1 || requestedSince.isAfter(asOf)) {
-            // 잘못된 요청은 응답하지 않는다. 브리핑이 제한 시간 뒤 다시 보내거나 실패로 기록한다.
+            // 잘못된 요청은 답하지 않는다. 내부 조회 API 는 먼저 400 으로 거른다.
             throw new IllegalArgumentException("invalid context request jobId=" + request.jobId()
                     + " seq=" + request.seq());
         }

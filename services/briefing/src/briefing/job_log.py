@@ -16,6 +16,7 @@ from enum import Enum
 from typing import Any, Mapping, Protocol
 
 from briefing.events import parse_timestamp
+from briefing.job_step import JobStep
 
 log = logging.getLogger("briefing.job_log")
 
@@ -50,6 +51,7 @@ class EntryType(str, Enum):
     RESEARCH_REQUESTED = "research-requested"  # 문장 하나의 재검색 요청을 보냄
     ARTICLES_RECEIVED = "articles-received"    # 재검색 기사를 받음(받은·쓴·버린 기사와 이유)
     SENTENCE_REWRITTEN = "sentence-rewritten"  # 문장 하나를 다시 씀(before·after)
+    # 아래 둘은 Kafka 요청·응답 때(2026-11-13까지)의 기록에만 있다. 지금은 조회 시도마다 job_step에 남는다.
     CHECK_ROUND = "check-round"                # 기사 안정 판정을 위한 확인 라운드
     RESENT = "resent"                          # 무응답이라 같은 요청을 다시 보냄
     MISSING_ITEMS = "missing-items"            # 판은 나갔지만 빠진 항목이 있음
@@ -61,21 +63,18 @@ class EntryType(str, Enum):
     SENTENCE_FIXED = "sentence-fixed"          # 마지막 검사의 검토로 문장 하나를 고침(before·after)
 
 
-# 급변동 단계: 근거 조회의 어느 요청인지, 또는 LLM 작성
+# 급변동 단계: 근거 조회의 어느 조회인지, 또는 LLM 작성. 조회 단계 이름은 job_step의 단계에도 쓴다.
 STAGE_COLLECTION = "collection-wait"
 STAGE_HISTORY = "market.history"
 STAGE_CONTEXT = "market.context"
 STAGE_FILINGS = "news.filings"
 STAGE_ARTICLES = "news.articles"
-STAGE_ARTICLES_RECHECK = "news.articles.recheck"
 STAGE_LLM = "llm-report"
 STAGE_PUBLISH = "publish"
 STAGE_MOVE_GROUP = "move-group"
 STAGE_RESTART = "restart"
 
 # 급변동 사유. 끝내 실패한 경우는 ports.FailureReason 값을 그대로 쓴다.
-REASON_RESENT = "resent-after-timeout"
-REASON_RECHECK_ROUND = "article-recheck-round"
 REASON_LLM_REJECTED = "llm-output-rejected"
 REASON_LLM_CALL_FAILED = "llm-call-failed"
 REASON_LLM_ACCEPTED = "llm-output-accepted"
@@ -202,6 +201,9 @@ class JobLogPort(Protocol):
     def market_closed(self, kind: JobKind, day: date) -> bool | None:
         """그날(한국 시간) 이 판에 휴장 기록이 있는가. 읽지 못하면 None."""
 
+    def record_step(self, step: JobStep) -> bool:
+        """호출 한 번(job_step)을 남긴다. 조회 작업 스레드에서도 불린다. 끝내 저장하지 못했으면 False."""
+
 
 class DiscardJobLog:
     """받기만 하고 버린다. 저장소가 필요 없는 곳의 기본 구현이다."""
@@ -231,6 +233,9 @@ class DiscardJobLog:
         return False
 
     def mark_market_closed(self, kind: JobKind, day: date, event_id: str, at: datetime) -> bool:
+        return True
+
+    def record_step(self, step: JobStep) -> bool:
         return True
 
     def market_closed(self, kind: JobKind, day: date) -> bool | None:
