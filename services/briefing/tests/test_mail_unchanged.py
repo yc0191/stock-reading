@@ -2,7 +2,7 @@
 
 기준 파일 golden/mail_before_direct_calls.json은 바꾸기 전 코드(Kafka 요청·응답, 기사 안정 확인 라운드)로 같은 가짜 응답과
 가짜 LLM을 넣어 만든 결과다. 메일 이벤트(본문, 근거와 번호, 자료 없음 목록, HTML)와 LLM이 받은 입력 전체가 같아야 한다.
-그림(차트)은 그리는 환경에 따라 바이트가 달라질 수 있어 길이만 비교한다. 기준을 다시 만들면 안 되며, 다르면 원인을 고친다.
+그림(차트)은 설치된 한글 글꼴과 그림 도구에 따라 바이트와 길이가 달라지므로 있는지·형식·cid만 비교한다(차트 자체는 차트 테스트가 본다). 기준을 다시 만들면 안 되며, 다르면 원인을 고친다.
 """
 import json
 from pathlib import Path
@@ -42,7 +42,8 @@ ARTICLES = {"TEST01": [news_article("n1", "TEST 하나 관련 소식", "2026-10-
 def strip_images(value):
     value = json.loads(json.dumps(value))
     for image in value["payload"].get("images", []):
-        image["data"] = f"<{len(image['data'])} chars>"
+        # 글꼴이 없는 환경(CI)에서는 같은 차트도 바이트·길이가 달라, 비어 있지 않은지만 남긴다.
+        image["data"] = "<image>" if image["data"] else "<empty>"
     return value
 
 
@@ -99,7 +100,7 @@ def test_the_same_input_makes_the_same_mail_and_the_same_llm_input_as_before(nam
     assert now.get("queryInputs") == before.get("queryInputs")
     # 메일 이벤트(본문, 인용한 근거 번호와 근거 목록, 자료 없음 목록, HTML, eventId)가 같다. 발행 시각(producedAt)만은
     # 다를 수 있다: 기사 안정 확인 라운드(10초씩)가 없어져 같은 가짜 시계에서 더 일찍 발행된다. 늦어지지는 않는다.
-    assert {**now["event"], "producedAt": None} == {**before["event"], "producedAt": None}
+    assert {**now["event"], "producedAt": None} == {**strip_images(before["event"]), "producedAt": None}
     assert now["event"]["producedAt"] <= before["event"]["producedAt"]
 
 
