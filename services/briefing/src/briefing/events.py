@@ -1,26 +1,22 @@
 """브리핑 코어가 내보내고 받는 이벤트의 모양. Kafka는 모르고, 통신은 main.py가 맡는다."""
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-HISTORY_REQUESTED_TOPIC = "market.history.requested"
-ARTICLES_REQUESTED_TOPIC = "news.articles.requested"
-CONTEXT_REQUESTED_TOPIC = "market.context.requested"
-FILINGS_REQUESTED_TOPIC = "news.filings.requested"
 RESEARCH_REQUESTED_TOPIC = "news.research.requested"
 BRIEFING_GENERATED_TOPIC = "briefing.generated"
 DAILY_BRIEFING_GENERATED_TOPIC = "briefing.daily.generated"
+# 뉴스처리기의 저장 끝 알림. 수집 완료(collection.completed)가 가리킨 기사가 모두 저장(또는 대기 한도)된 뒤 온다.
+NEWS_STORED = "news.stored"
 
-# 데일리 브리핑의 판 종류(briefing.daily.generated 의 edition)와 그 판을 시작시키는 schedule.tick 의 jobType.
+# 데일리 브리핑의 판 종류. briefing.daily.generated 와 판 시작 알림(daily.collection.completed)의 edition 값이다.
 EDITION_MORNING = "morning"
 EDITION_POST_CLOSE = "post-close"
-JOB_TYPE_BY_EDITION = {
-    EDITION_MORNING: "daily-briefing-morning",
-    EDITION_POST_CLOSE: "daily-briefing-post-close",
-}
+EDITIONS = (EDITION_MORNING, EDITION_POST_CLOSE)
 
 # 재검색을 부른 작업의 종류(news.research.requested 의 jobKind). 데일리 판은 판 종류 값을 그대로 쓴다.
 JOB_KIND_MOVE = "move"
@@ -78,15 +74,26 @@ def research_request_event(job_id: str, seq: int, job_kind: str, symbol: str, qu
     })
 
 
-def daily_briefing_event(tick_event_id: str, correlation_id: str, scheduled_for: datetime, now: datetime,
+def stored_payload(message: str | bytes) -> dict[str, Any]:
+    """저장 끝 알림(news.stored)의 payload. JSON이 아니거나 종류가 다르면 ValueError."""
+    try:
+        event = json.loads(message)
+        if event["eventType"] != NEWS_STORED:
+            raise ValueError(f"unexpected eventType: {event['eventType']}")
+        return event["payload"]
+    except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ValueError(f"malformed {NEWS_STORED} event: {error!r}") from error
+
+
+def daily_briefing_event(job_id: str, correlation_id: str, scheduled_for: datetime, now: datetime,
                          edition: str, range_start: datetime, range_end: datetime, text: str,
                          missing_items: list[str], generated_by: str, member_id: int, html: str | None = None,
                          images: list[dict[str, str]] | None = None) -> OutboundEvent:
     """멤버 한 명의 데일리 브리핑 결과 봉투를 만든다(schemaVersion 2). 받는 사람은 멤버 번호로만 가리키고 메일 주소는 싣지 않는다.
-    html·images는 선택 칸이라 있을 때만 싣는다. eventId는 (tick, 판, 멤버)에서 정해져 같은 tick을 다시 처리해도 같다."""
-    if edition not in JOB_TYPE_BY_EDITION:
+    html·images는 선택 칸이라 있을 때만 싣는다. eventId는 (판 작업, 판, 멤버)에서 정해져 같은 작업을 다시 처리해도 같다."""
+    if edition not in EDITIONS:
         raise ValueError(f"unknown edition: {edition}")
-    event_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{DAILY_BRIEFING_GENERATED_TOPIC}:{tick_event_id}:{edition}:{member_id}")
+    event_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{DAILY_BRIEFING_GENERATED_TOPIC}:{job_id}:{edition}:{member_id}")
     payload: dict[str, Any] = {
         "memberId": member_id,
         "edition": edition,

@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 import pytest
 
 from briefing.compose import KST
-from briefing.events import (EDITION_MORNING, EDITION_POST_CLOSE, JOB_TYPE_BY_EDITION, RESEARCH_JOB_KINDS,
+from briefing.daily_start import SOURCE_LABELS, STATUS_COLLECTED, STATUS_MARKET_CLOSED
+from briefing.events import (EDITION_MORNING, EDITION_POST_CLOSE, EDITIONS, RESEARCH_JOB_KINDS,
                              daily_briefing_event, research_request_event)
 from briefing.jobs import parse_move
 from contracts import CONTRACTS_DIR, sample, validate
@@ -128,7 +129,9 @@ def test_evidence_samples_match_their_schemas(schema_file, sample_file):
 
 
 # 계약에서 선택 칸인 payload 필드. 없어도 유효해야 하므로 "빠지면 거부" 검사에서 뺀다.
-OPTIONAL_PAYLOAD_FIELDS = {"market.context.responded.sample.json": {"etf", "name"}}
+OPTIONAL_PAYLOAD_FIELDS = {"market.context.responded.sample.json": {"etf", "name"},
+                           # 기사 이벤트 id 목록은 뒤에 더한 칸이라 이전 수집기가 낸 완료에는 없다.
+                           "collection.completed.sample.json": {"articleEventIds"}}
 
 
 @pytest.mark.parametrize("schema_file, sample_file", EVIDENCE_CONTRACTS)
@@ -524,7 +527,7 @@ def test_daily_briefing_carries_no_personal_fields():
 def test_daily_briefing_event_built_by_the_producer_matches_the_schema(edition, generated_by, missing):
     at = datetime(2026, 10, 20, 17, 0, tzinfo=KST)
     event = daily_briefing_event(
-        tick_event_id="0b8c2d3e-4f50-4a6b-9c7d-1e2f3a4b5c6d", correlation_id="tick-correlation",
+        job_id="0b8c2d3e-4f50-4a6b-9c7d-1e2f3a4b5c6d", correlation_id="tick-correlation",
         scheduled_for=at, now=at + timedelta(seconds=40), edition=edition,
         range_start=at - timedelta(days=1), range_end=at, text="본문", missing_items=missing,
         generated_by=generated_by, member_id=7)
@@ -541,7 +544,7 @@ def test_daily_briefing_event_carries_html_and_images_only_when_given():
     at = datetime(2026, 10, 20, 17, 0, tzinfo=KST)
 
     def build(**extra):
-        return daily_briefing_event(tick_event_id="t", correlation_id="c", scheduled_for=at, now=at,
+        return daily_briefing_event(job_id="t", correlation_id="c", scheduled_for=at, now=at,
                                     edition=EDITION_POST_CLOSE, range_start=at, range_end=at, text="본문",
                                     missing_items=[], generated_by="llm", member_id=1, **extra)
 
@@ -560,7 +563,7 @@ def test_daily_briefing_event_id_is_the_same_for_the_same_tick_and_edition():
     at = datetime(2026, 10, 20, 8, 45, tzinfo=KST)
 
     def build(tick_id, edition, now, member_id=1):
-        return daily_briefing_event(tick_event_id=tick_id, correlation_id="c", scheduled_for=at, now=now,
+        return daily_briefing_event(job_id=tick_id, correlation_id="c", scheduled_for=at, now=now,
                                     edition=edition, range_start=at - timedelta(days=1), range_end=at,
                                     text="본문", missing_items=[], generated_by="llm",
                                     member_id=member_id).value["eventId"]
@@ -577,17 +580,41 @@ def test_daily_briefing_event_rejects_an_unknown_edition():
     at = datetime(2026, 10, 20, 8, 45, tzinfo=KST)
 
     with pytest.raises(ValueError):
-        daily_briefing_event(tick_event_id="t", correlation_id="c", scheduled_for=at, now=at, edition="noon",
+        daily_briefing_event(job_id="t", correlation_id="c", scheduled_for=at, now=at, edition="noon",
                              range_start=at, range_end=at, text="본문", missing_items=[], generated_by="llm", member_id=1)
 
 
-def test_daily_briefing_job_types_are_the_ones_listed_in_the_tick_schema():
-    schema = json.loads((CONTRACTS_DIR / "schedule.tick.v1.schema.json").read_text(encoding="utf-8"))
-    description = schema["properties"]["payload"]["properties"]["jobType"]["description"]
+DAILY_START_SCHEMA = "daily.collection.completed.v1.schema.json"
 
-    assert set(JOB_TYPE_BY_EDITION) == {"morning", "post-close"}
-    for job_type in JOB_TYPE_BY_EDITION.values():
-        assert job_type in description
+
+def test_daily_start_notice_sample_matches_its_schema_and_tolerates_unknown_fields():
+    notice = sample("daily.collection.completed.sample.json")
+    assert validate(DAILY_START_SCHEMA, notice) == []
+    notice["newTopLevelHint"] = "x"
+    notice["payload"]["venue"] = "future"
+    assert validate(DAILY_START_SCHEMA, notice) == []
+    for field in sample("daily.collection.completed.sample.json")["payload"]:
+        broken = sample("daily.collection.completed.sample.json")
+        del broken["payload"][field]
+        assert validate(DAILY_START_SCHEMA, broken) != [], field
+
+
+def test_daily_start_notice_editions_statuses_and_sources_are_the_ones_the_briefing_knows():
+    schema = json.loads((CONTRACTS_DIR / DAILY_START_SCHEMA).read_text(encoding="utf-8"))
+    payload = schema["properties"]["payload"]["properties"]
+
+    assert set(payload["edition"]["enum"]) == set(EDITIONS) == {"morning", "post-close"}
+    assert set(payload["status"]["enum"]) == {STATUS_COLLECTED, STATUS_MARKET_CLOSED}
+    # 판에 한글 이름으로 쓰는 자료 종류는 계약 설명에 적힌 것과 같다.
+    for source in SOURCE_LABELS:
+        assert source in payload["missingSources"]["description"]
+
+
+def test_daily_start_notice_rejects_ticker_like_missing_sources():
+    broken = sample("daily.collection.completed.sample.json")
+    broken["payload"]["missingSources"] = ["TESTA"]
+
+    assert validate(DAILY_START_SCHEMA, broken) != []
 
 
 DAILY_DATA_CONTRACTS = [

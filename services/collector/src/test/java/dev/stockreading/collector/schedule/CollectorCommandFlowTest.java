@@ -29,6 +29,7 @@ import org.springframework.kafka.core.KafkaTemplate;
 import dev.stockreading.collector.CollectorProperties;
 import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import dev.stockreading.collector.Topics;
+import dev.stockreading.collector.members.MembersPublisher;
 import dev.stockreading.collector.event.ContractSchemas;
 import dev.stockreading.collector.insight.InsightProperties;
 import dev.stockreading.collector.insight.IntradayProperties;
@@ -89,6 +90,11 @@ class CollectorCommandFlowTest {
         @Bean
         FilingPublisher filingPublisher() {
             return mock(FilingPublisher.class);
+        }
+
+        @Bean
+        MembersPublisher membersPublisher() {
+            return mock(MembersPublisher.class);
         }
     }
 

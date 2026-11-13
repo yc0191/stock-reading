@@ -16,16 +16,9 @@ public class Topics {
     public static final String MARKET_SNAPSHOT_FAILED = "market.snapshot.failed";
     public static final String MARKET_MOVE = "market.move";
     public static final String MARKET_INSIGHT = "market.insight";
-    public static final String MARKET_HISTORY_REQUESTED = "market.history.requested";
-    public static final String MARKET_HISTORY_RESPONDED = "market.history.responded";
-    public static final String MARKET_CONTEXT_REQUESTED = "market.context.requested";
-    public static final String MARKET_CONTEXT_RESPONDED = "market.context.responded";
-    public static final String MARKET_DAILY_REQUESTED = "market.daily.requested";
-    public static final String MARKET_DAILY_RESPONDED = "market.daily.responded";
-    public static final String SCHEDULE_TICK = "schedule.tick";
+    // 수집기가 받은 ETF 구성 종목 결과. 키는 ETF 종목코드이고 수집기의 선언과 파티션 수가 같아야 한다.
+    public static final String ETF_MEMBERS_FETCHED = "etf.members.fetched";
     public static final int PARTITIONS = 3;
-    // 수집기의 선언과 같아야 한다. 파티션이 1개라서 이 토픽을 받는 리스너는 서로 다른 consumer group을 쓴다.
-    public static final int SCHEDULE_TICK_PARTITIONS = 1;
 
     @Bean
     NewTopic marketSnapshotTopic() {
@@ -48,37 +41,7 @@ public class Topics {
     }
 
     @Bean
-    NewTopic marketHistoryRequestedTopic() {
-        return TopicBuilder.name(MARKET_HISTORY_REQUESTED).partitions(PARTITIONS).replicas(1).build();
-    }
-
-    @Bean
-    NewTopic marketHistoryRespondedTopic() {
-        return TopicBuilder.name(MARKET_HISTORY_RESPONDED).partitions(PARTITIONS).replicas(1).build();
-    }
-
-    @Bean
-    NewTopic marketContextRequestedTopic() {
-        return TopicBuilder.name(MARKET_CONTEXT_REQUESTED).partitions(PARTITIONS).replicas(1).build();
-    }
-
-    @Bean
-    NewTopic marketContextRespondedTopic() {
-        return TopicBuilder.name(MARKET_CONTEXT_RESPONDED).partitions(PARTITIONS).replicas(1).build();
-    }
-
-    @Bean
-    NewTopic marketDailyRequestedTopic() {
-        return TopicBuilder.name(MARKET_DAILY_REQUESTED).partitions(PARTITIONS).replicas(1).build();
-    }
-
-    @Bean
-    NewTopic marketDailyRespondedTopic() {
-        return TopicBuilder.name(MARKET_DAILY_RESPONDED).partitions(PARTITIONS).replicas(1).build();
-    }
-
-    @Bean
-    NewTopic scheduleTickTopic() {
-        return TopicBuilder.name(SCHEDULE_TICK).partitions(SCHEDULE_TICK_PARTITIONS).replicas(1).build();
+    NewTopic etfMembersFetchedTopic() {
+        return TopicBuilder.name(ETF_MEMBERS_FETCHED).partitions(PARTITIONS).replicas(1).build();
     }
 }

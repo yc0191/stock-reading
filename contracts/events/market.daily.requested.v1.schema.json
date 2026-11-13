@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://stock-reading.local/contracts/market.daily.requested.v1",
   "title": "market.daily.requested v1",
-  "description": "브리핑이 데일리 판(아침·마감 후)을 만들 때 market 서비스에 보유 ETF 전체의 하루 등락(국내 일봉), 담긴 미국 종목과 직전 정규장 등락률, 시장 배경(환율종합, 시장종합, 세계지수 대륙별)을 한 번에 요청한다. 읽기 전용 요청이라 같은 요청을 다시 보내도 부작용이 없다. 기간과 상한의 원본은 브리핑 설정이고, market은 요청값이 자기 안전 상한보다 크면 안전 상한까지만 준다. 선택 칸 includeOperations가 true일 때만 응답에 시세처리기 운영 상태가 붙는다(마감 후 판의 서버 상태 절용). 없거나 false면 붙지 않는다. 메시지 키는 jobId다.",
+  "description": "더 이상 쓰지 않음(2026-11-13). 브리핑은 이 자료를 시세처리기 내부 조회 API(POST /internal/market/daily)로 직접 부르고, 그 요청 본문이 이 이벤트의 payload 와 같은 모양이다. 토픽은 없앴고 옛 이벤트와 본문 모양을 확인할 수 있게 스키마와 샘플만 남긴다(ADR-010 호환 규칙). 브리핑이 데일리 판(아침·마감 후)을 만들 때 market 서비스에 보유 ETF 전체의 하루 등락(국내 일봉), 담긴 미국 종목과 직전 정규장 등락률, 시장 배경(환율종합, 시장종합, 세계지수 대륙별)을 한 번에 요청한다. 읽기 전용 요청이라 같은 요청을 다시 보내도 부작용이 없다. 기간과 상한의 원본은 브리핑 설정이고, market은 요청값이 자기 안전 상한보다 크면 안전 상한까지만 준다. 선택 칸 includeOperations가 true일 때만 응답에 시세처리기 운영 상태가 붙는다(마감 후 판의 서버 상태 절용). 없거나 false면 붙지 않는다. 메시지 키는 jobId다.",
   "type": "object",
   "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
   "properties": {
@@ -11,12 +11,12 @@
     "schemaVersion": { "const": 1 },
     "occurredAt": { "type": "string", "format": "date-time", "description": "요청을 만든 시각." },
     "producedAt": { "type": "string", "format": "date-time" },
-    "correlationId": { "type": "string", "minLength": 1, "description": "데일리 판을 시작시킨 schedule.tick의 correlationId를 이어받는다." },
+    "correlationId": { "type": "string", "minLength": 1, "description": "데일리 판의 correlationId를 이어받는다(판 시작 알림 daily.collection.completed의 것, 한도 시각에 시작한 판은 브리핑이 정한 것)." },
     "payload": {
       "type": "object",
       "required": ["jobId", "seq", "asOf", "since", "maxResponseBytes", "maxEtfs", "maxTickers"],
       "properties": {
-        "jobId": { "type": "string", "format": "uuid", "description": "작업 키. 데일리 판을 시작시킨 schedule.tick의 eventId다." },
+        "jobId": { "type": "string", "format": "uuid", "description": "작업 키. 데일리 판을 시작시킨 판 시작 알림(daily.collection.completed)의 eventId이고, 한도 시각에 시작한 판은 판과 날짜로 정한 uuid다." },
         "seq": { "type": "integer", "minimum": 1, "description": "요청 순번. 재전송은 새 순번을 쓰고, 응답이 같은 값을 되돌려준다." },
         "asOf": { "type": "string", "format": "date-time", "description": "기준 시각(판의 예정 시각). 모든 자료는 받은 시각 <= asOf인 것만 쓰고, 등락률은 asOf 이하로 마감한 직전 정규장 1건을 고른다." },
         "since": { "type": "string", "format": "date-time", "description": "받은 시각 하한(포함). 보유 ETF는 받은 시각이 since~asOf 안인 국내 일봉이 저장된 종목이고, 시장 배경도 이 범위 안의 최신 1건만 쓴다." },

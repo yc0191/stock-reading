@@ -33,6 +33,7 @@ from briefing.job_log import (
     record_result,
 )
 from briefing.jobs import parse_move
+from briefing.trace import correlation_context, from_event
 
 log = logging.getLogger("briefing.move_group")
 
@@ -102,7 +103,9 @@ class MoveGrouper:
     def _flush(self, group: _Group, now: datetime) -> None:
         latest = group.moves[-1]["eventId"]
         try:
-            self.sink(group.raws[-1], now)
+            # 조용한 시간이 지나 메시지 처리 밖에서 작업을 시작하므로, 넘기는 변동의 추적 ID를 로그 줄에 직접 건다.
+            with correlation_context(from_event(group.raws[-1])):
+                self.sink(group.raws[-1], now)
         except ValueError as error:
             # 받을 때 같은 해석을 이미 통과했으므로 일어나지 않는 경로다. 일어나도 수신 루프는 죽이지 않는다.
             log.error("could not start the job for grouped moves: %s", error)

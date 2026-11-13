@@ -7,6 +7,8 @@ import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.util.backoff.FixedBackOff;
 
+import dev.stockreading.market.trace.CorrelationIdRecordInterceptor;
+
 @Configuration
 class InsightErrorHandling {
 
@@ -27,6 +29,8 @@ class InsightErrorHandling {
         var factory = new ConcurrentKafkaListenerContainerFactory<String, String>();
         factory.setConsumerFactory(consumerFactory);
         factory.setCommonErrorHandler(errorHandler(recoverer));
+        // 따로 만든 팩토리는 기본 팩토리의 레코드 인터셉터를 받지 않으므로 직접 건다(로그 줄의 correlationId).
+        factory.setRecordInterceptor(new CorrelationIdRecordInterceptor<>());
         return factory;
     }
 }

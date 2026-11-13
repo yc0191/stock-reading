@@ -1,0 +1,21 @@
+{
+  "eventId": "7a2b3c4d-5e6f-4a1b-9c2d-3e4f5a6b7c80",
+  "eventType": "etf.members.fetched",
+  "schemaVersion": 1,
+  "occurredAt": "2026-11-09T08:00:01.200+09:00",
+  "producedAt": "2026-11-09T08:00:01.250+09:00",
+  "correlationId": "collect-etf-members-2026-11-09T08:00:00+09:00",
+  "payload": {
+    "etfSymbol": "TEST01",
+    "baseDate": "2026-11-06",
+    "fetchedOn": "2026-11-09",
+    "fetchedAt": "2026-11-09T08:00:01.200+09:00",
+    "httpStatus": 200,
+    "response": " {\"pdf\": {\"list\": [{\"itmNo\": \"TESTA US Equity\", \"secNm\": \"TEST A\", \"ratio\": \" 9.50 \"}, {\"itmNo\": \"0TEST2\", \"secNm\": \"TEST TWO\", \"ratio\": \"4.25\"}, {\"itmNo\": \"CASH\", \"secNm\": \"CASH\", \"ratio\": \"\"}]}}\n",
+    "members": [
+      { "market": "US", "symbol": "TESTA", "name": "TEST A", "weight": "9.50", "rank": 1 },
+      { "market": "KR", "symbol": "0TEST2", "name": "TEST TWO", "weight": "4.25", "rank": 2 }
+    ],
+    "failure": null
+  }
+}

@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 import dev.stockreading.collector.insight.IntradayProperties;
 import dev.stockreading.collector.marketdata.MarketDayPort;
 import dev.stockreading.collector.schedule.CollectorJobs.Job;
+import dev.stockreading.collector.trace.CorrelationId;
 
 /**
  * 장중 수집의 타이머. cron 이 주기를 정하고, 평일과 시작·끝 시각(한국 시간) 밖이면 실행하지 않는다.
@@ -37,15 +38,18 @@ class IntradayTimer {
 
     @Scheduled(cron = "${collector.intraday.cron}", zone = "Asia/Seoul")
     void collectIntraday() {
-        OffsetDateTime now = OffsetDateTime.now(clock);
-        if (!WeekdayHours.contains(now, properties.startTime(), properties.endTime())) {
-            log.debug("intraday collect skipped outside hours at={}", now);
-            return;
-        }
-        if (!marketDay.isBusinessDay()) {
-            log.info("collect skipped on market holiday job={}", Job.COLLECT_INTRADAY);
-            return;
-        }
-        jobs.run(Job.COLLECT_INTRADAY);
+        // 메시지 처리 밖(타이머 스레드)에서 찍는 줄이라 이 실행의 correlationId 를 직접 로그 문맥에 둔다.
+        CorrelationId.within(jobs.correlationId(Job.COLLECT_INTRADAY), () -> {
+            OffsetDateTime now = OffsetDateTime.now(clock);
+            if (!WeekdayHours.contains(now, properties.startTime(), properties.endTime())) {
+                log.debug("intraday collect skipped outside hours at={}", now);
+                return;
+            }
+            if (!marketDay.isBusinessDay()) {
+                log.info("collect skipped on market holiday job={}", Job.COLLECT_INTRADAY);
+                return;
+            }
+            jobs.run(Job.COLLECT_INTRADAY);
+        });
     }
 }

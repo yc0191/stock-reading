@@ -9,13 +9,13 @@
   계정·암호는 비우고 인증·암호화는 끈다. 스프링은 이 값을 SPRING_MAIL_* 환경변수보다 먼저 쓰므로 셸에 남은 값이 새지 않는다.
 - seed: 가짜 수집 자료(market.insight 국내 일봉·세계지수·환율종합·시장종합·해외 일봉, filing.collected 공시)를
   계약 스키마로 검사한 뒤 일회용 Kafka 에 발행한다. 값은 모두 TEST·FAKE 접두의 가짜다.
-- ticks: 아침 판·마감 후 판 시작 신호(schedule.tick) 한 건씩을 발행한다.
+- notices: 아침 판·마감 후 판 시작 알림(daily.collection.completed, 못 받은 자료 없음) 한 건씩을 발행한다.
 - check: briefing.daily.generated 를 처음부터 읽어 이번 실행의 두 판을 찾고, 계약 검사와 함께 결과 파일에 본문을 쓴다.
 
 설정은 환경변수로만 받는다(값은 manual-daily-briefing.sh 가 넣음).
   DAILY_E2E_KAFKA     일회용 Kafka 주소
   DAILY_E2E_RUN_ID    이 실행의 이름(추적 ID 에 씀)
-  DAILY_E2E_NOW       시작 신호의 예정 시각(RFC 3339). 수집 자료의 받은 시각은 이 시각보다 앞에 둔다
+  DAILY_E2E_NOW       시작 알림의 판 기준 시각(RFC 3339). 수집 자료의 받은 시각은 이 시각보다 앞에 둔다
   DAILY_E2E_RESULT    check 가 본문을 쓰는 파일(저장소 밖)
 """
 from __future__ import annotations
@@ -38,9 +38,9 @@ CONTRACTS = ROOT / "contracts" / "events"
 
 INSIGHT_TOPIC = "market.insight"
 FILING_TOPIC = "filing.collected"
-TICK_TOPIC = "schedule.tick"
+NOTICE_TOPIC = "daily.collection.completed"
 DAILY_TOPIC = "briefing.daily.generated"
-JOB_TYPES = {"morning": "daily-briefing-morning", "post-close": "daily-briefing-post-close"}
+EDITIONS = ("morning", "post-close")
 
 # 시세처리기 종목 표를 채울 가짜 대응표. TEST02 는 미국 종목이 없는 ETF 로 둔다.
 HOLDINGS = {"TEST01": ("TESTA", "FAKEB"), "TEST02": ()}
@@ -175,15 +175,20 @@ def seed_events(now: datetime, run_id: str) -> list[tuple[str, str | None, dict]
     return events
 
 
-def tick_events(now: datetime) -> list[tuple[str, str, dict]]:
+def correlation_id(edition: str, stamp: str) -> str:
+    """수집기가 내는 판 시작 알림의 추적 ID 형식(아침 판). 마감 후 판도 이 실행에서는 같은 형식을 쓴다."""
+    return f"daily-{edition}-{stamp}"
+
+
+def notice_events(now: datetime) -> list[tuple[str, str, dict]]:
     scheduled = now.astimezone(KST).replace(microsecond=0)
     out = []
-    for job_type in JOB_TYPES.values():
+    for edition in EDITIONS:
         stamp = scheduled.isoformat()
-        event = {"eventId": str(uuid.uuid4()), "eventType": TICK_TOPIC, "schemaVersion": 1, "occurredAt": stamp,
-                 "producedAt": stamp, "correlationId": f"{job_type}-{stamp}",
-                 "payload": {"jobType": job_type, "scheduledFor": stamp}}
-        out.append((TICK_TOPIC, job_type, event))
+        event = {"eventId": str(uuid.uuid4()), "eventType": NOTICE_TOPIC, "schemaVersion": 1, "occurredAt": stamp,
+                 "producedAt": stamp, "correlationId": correlation_id(edition, stamp),
+                 "payload": {"edition": edition, "status": "collected", "scheduledFor": stamp, "missingSources": []}}
+        out.append((NOTICE_TOPIC, edition, event))
     return out
 
 
@@ -327,10 +332,10 @@ def seed() -> None:
     print("발행: " + ", ".join(f"{name} {n}건" for name, n in counts.items()))
 
 
-def ticks() -> None:
-    events = tick_events(_now())
+def notices() -> None:
+    events = notice_events(_now())
     _produce(events)
-    print("발행: " + ", ".join(e["payload"]["jobType"] for _, _, e in events))
+    print("발행: " + ", ".join(e["payload"]["edition"] for _, _, e in events))
 
 
 def read_dailies(bootstrap: str, correlation_ids: set[str], timeout_seconds: float = 15) -> list[dict]:
@@ -357,12 +362,12 @@ def read_dailies(bootstrap: str, correlation_ids: set[str], timeout_seconds: flo
 
 def check() -> None:
     scheduled = _now().astimezone(KST).replace(microsecond=0).isoformat()
-    wanted = {f"{job_type}-{scheduled}" for job_type in JOB_TYPES.values()}
+    wanted = {correlation_id(edition, scheduled) for edition in EDITIONS}
     dailies = read_dailies(os.environ["DAILY_E2E_KAFKA"], wanted)
     lines: list[str] = []
     ok = True
     by_edition = {d["payload"]["edition"]: d for d in dailies}
-    for edition in JOB_TYPES:
+    for edition in EDITIONS:
         daily = by_edition.get(edition)
         if daily is None:
             print(f"{edition}: briefing.daily.generated 없음")
@@ -443,10 +448,10 @@ def main(argv: list[str]) -> None:
         serve_smtp_sink(argv[2], argv[3])
     elif len(argv) == 3 and argv[1] == "smtp-json" and argv[2].isdigit():
         print(smtp_sink_json(int(argv[2])))
-    elif len(argv) == 2 and argv[1] in ("seed", "ticks", "check"):
-        {"seed": seed, "ticks": ticks, "check": check}[argv[1]]()
+    elif len(argv) == 2 and argv[1] in ("seed", "notices", "check"):
+        {"seed": seed, "notices": notices, "check": check}[argv[1]]()
     else:
-        raise SystemExit("사용법: daily_e2e.py fake-llm <포트 파일> | smtp-sink <포트 파일> <메일 폴더> | smtp-json <포트> | seed | ticks | check")
+        raise SystemExit("사용법: daily_e2e.py fake-llm <포트 파일> | smtp-sink <포트 파일> <메일 폴더> | smtp-json <포트> | seed | notices | check")
 
 
 if __name__ == "__main__":

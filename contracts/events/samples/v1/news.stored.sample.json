@@ -1,0 +1,20 @@
+{
+  "eventId": "1405950e-112c-3480-bf3d-ba4cf2dfc6ad",
+  "eventType": "news.stored",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T16:15:44+09:00",
+  "producedAt": "2026-10-20T16:15:44.120+09:00",
+  "correlationId": "collect-news-2026-10-20T16:15:00+09:00",
+  "payload": {
+    "collectionEventId": "b3f1a6d2-84c7-4e0b-9a52-1d7c3e8f6a40",
+    "jobType": "collect-news",
+    "scheduledFor": "2026-10-20T16:15:00+09:00",
+    "startedAt": "2026-10-20T16:15:01+09:00",
+    "incompleteSymbols": ["TEST02"],
+    "articleCount": 12,
+    "storedCount": 9,
+    "mergedCount": 2,
+    "failedCount": 0,
+    "unprocessedEventIds": ["e0000012-0000-4000-8000-000000000012"]
+  }
+}

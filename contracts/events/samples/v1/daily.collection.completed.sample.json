@@ -1,0 +1,14 @@
+{
+  "eventId": "5e2a7c1d-3b4f-4d8e-a9c6-0f1b2d3e4a50",
+  "eventType": "daily.collection.completed",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T16:31:05+09:00",
+  "producedAt": "2026-10-20T16:31:05.210+09:00",
+  "correlationId": "collect-post-close-2026-10-20T16:30:00+09:00",
+  "payload": {
+    "edition": "post-close",
+    "status": "collected",
+    "scheduledFor": "2026-10-20T16:31:05+09:00",
+    "missingSources": ["world-index"]
+  }
+}

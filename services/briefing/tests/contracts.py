@@ -29,3 +29,13 @@ def sample(sample_file: str, version: str = "v1") -> dict:
 
 def sample_text(sample_file: str) -> str:
     return (CONTRACTS_DIR / "samples" / "v1" / sample_file).read_text(encoding="utf-8")
+
+
+def validate_payload(schema_file: str, payload: dict) -> list[str]:
+    """요청·응답 이벤트 스키마의 payload 부분만으로 본문을 검사한다. 내부 조회 API의 요청·응답 본문은 그 payload와 같다."""
+    schema = json.loads((CONTRACTS_DIR / schema_file).read_text(encoding="utf-8"))
+    body = {"$schema": schema.get("$schema"), **schema["properties"]["payload"]}
+    if "$defs" in schema:
+        body["$defs"] = schema["$defs"]
+    validator = Draft202012Validator(body, format_checker=_format_checker)
+    return [error.message for error in validator.iter_errors(payload)]

@@ -70,6 +70,9 @@ services:
       COLLECTOR_INSIGHT_SCHEDULE_ENABLED: ${COLLECTOR_INSIGHT_SCHEDULE_ENABLED:-false}
       COLLECTOR_DAILY_BRIEFING_ENABLED: ${COLLECTOR_DAILY_BRIEFING_ENABLED:-false}
       COLLECTOR_MEMBERS_ENABLED: ${COLLECTOR_MEMBERS_ENABLED:-false}
+      # ETF 구성 종목 조회 출처. 비어 있으면 조회하지 않는다.
+      MEMBERS_URL_TEMPLATE: ${MEMBERS_URL_TEMPLATE:-}
+      MEMBERS_USER_AGENT: ${MEMBERS_USER_AGENT:-stock-reading-members/1.0}
       COLLECTOR_MARKET_DATA_SOURCE: ${COLLECTOR_MARKET_DATA_SOURCE:-simulator}
       BROKER_BASE_URL: ${BROKER_BASE_URL:-}
       BROKER_APP_KEY: ${BROKER_APP_KEY:-}
@@ -102,8 +105,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-stock}
       MARKET_DB_USER: ${MARKET_DB_USER:-market_svc}
       MARKET_DB_PASSWORD: ${MARKET_DB_PASSWORD:?MARKET_DB_PASSWORD 값이 비어 있음}
-      MEMBERS_URL_TEMPLATE: ${MEMBERS_URL_TEMPLATE:-}
-      MEMBERS_USER_AGENT: ${MEMBERS_USER_AGENT:-stock-reading-members/1.0}
+      # 내부 조회 API 를 컨테이너 네트워크에서 받는다(기본은 127.0.0.1 이라 브리핑 컨테이너가 닿지 못한다). ports 를 두지 않아 서버 밖에는 열리지 않는다.
+      SERVER_ADDRESS: 0.0.0.0
 
   news:
     <<: *service
@@ -122,6 +125,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-stock}
       NEWS_DB_USER: ${NEWS_DB_USER:-news_svc}
       NEWS_DB_PASSWORD: ${NEWS_DB_PASSWORD:?NEWS_DB_PASSWORD 값이 비어 있음}
+      # 내부 조회 API 를 컨테이너 네트워크에서 받는다(기본은 127.0.0.1 이라 브리핑 컨테이너가 닿지 못한다). ports 를 두지 않아 서버 밖에는 열리지 않는다.
+      SERVER_ADDRESS: 0.0.0.0
 
   notifier:
     <<: *service
@@ -173,3 +178,6 @@ services:
       # 수집기와 같은 값. 브리핑이 이 값으로 09:00~09:10 급변동 합침을 켠다.
       COLLECTOR_DAILY_BRIEFING_ENABLED: ${COLLECTOR_DAILY_BRIEFING_ENABLED:-false}
       BRIEFING_LLM_MODEL: ${BRIEFING_LLM_MODEL:-claude-sonnet-5-5}
+      # 시세처리기·뉴스처리기 내부 조회 API 주소. 같은 Compose 네트워크 안의 서비스 이름과 각 서비스의 server.port 다.
+      MARKET_API_URL: http://market:8091
+      NEWS_API_URL: http://news:8092

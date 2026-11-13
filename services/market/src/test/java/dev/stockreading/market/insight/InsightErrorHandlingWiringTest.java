@@ -11,6 +11,8 @@ import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 
+import dev.stockreading.market.trace.CorrelationIdRecordInterceptor;
+
 /** 복구기가 market.insight 전용 팩토리에만 붙고, 기본 팩토리(market.snapshot)에는 퍼지지 않아야 한다. */
 class InsightErrorHandlingWiringTest {
 
@@ -29,6 +31,9 @@ class InsightErrorHandlingWiringTest {
                     assertThat(insight).isNotSameAs(snapshot);
                     assertThat(errorHandlerOf(insight)).isInstanceOf(DefaultErrorHandler.class);
                     assertThat(errorHandlerOf(snapshot)).isNull();
+                    // 전용 팩토리도 처리 중 로그 줄에 correlationId 를 붙인다.
+                    assertThat(org.springframework.test.util.ReflectionTestUtils.getField(insight, "recordInterceptor"))
+                            .isInstanceOf(CorrelationIdRecordInterceptor.class);
                 });
     }
 

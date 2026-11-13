@@ -18,7 +18,7 @@
 | 칸 | 쓰는 것 |
 |---|---|
 | 기능 | 이 행이 지키는 기능을 쉬운 말로 |
-| 대상 | 그 기능을 이루는 본 코드 이름을 `, `로 나열. Java는 최상위 타입 이름(class, interface, enum, record, @interface 모두), 파이썬·셸은 확장자를 붙인 파일 이름(`config.py`, `publish-tick.sh`). 설명은 쓰지 않습니다 |
+| 대상 | 그 기능을 이루는 본 코드 이름을 `, `로 나열. Java는 최상위 타입 이름(class, interface, enum, record, @interface 모두), 파이썬·셸은 확장자를 붙인 파일 이름(`config.py`, `publish-daily-notice.sh`). 설명은 쓰지 않습니다 |
 | 단위 | 함수나 클래스 하나의 로직을 보는 테스트. 설정 바인딩·스프링 조립 확인, 이벤트 스키마(계약) 검사처럼 외부 의존을 부르지 않는 테스트도 여기에 씁니다 |
 | 가상 | 외부 의존(외부 API, Kafka, DB, LLM, SMTP)을 가짜로 바꾸고 기능 흐름을 돌리는 테스트. 가짜 HTTP 서버, mock 처리한 포트·저장소·`KafkaTemplate`, 프로세스 안 테스트용 서버가 여기에 해당합니다 |
 | 실제 | 실제 DB, 실제 서비스 흐름, 실제 외부 API를 쓰는 테스트 |

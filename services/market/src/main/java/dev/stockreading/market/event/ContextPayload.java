@@ -4,7 +4,7 @@ import java.util.List;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 
-/** market.context.responded의 payload. jobId와 seq는 요청 값을 그대로 되돌려준다. */
+/** 내부 조회 API 의 응답 본문(옛 market.context 응답 이벤트의 payload 와 같은 모양). jobId와 seq는 요청 값을 그대로 되돌려준다. */
 public record ContextPayload(
         String jobId,
         int seq,
@@ -33,7 +33,7 @@ public record ContextPayload(
             this(name, tracks, sector, members, membersTruncated, null);
         }
 
-        /** 상위 구성 변경을 더한 사본. 데일리 응답(market.daily.responded v2)에만 쓴다. */
+        /** 상위 구성 변경을 더한 사본. 데일리 응답(market.daily 응답 v2)에만 쓴다. */
         public EtfInfo withMemberChanges(MemberChanges changes) {
             return new EtfInfo(name, tracks, sector, members, membersTruncated, changes);
         }

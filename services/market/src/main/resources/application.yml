@@ -1,8 +1,6 @@
 spring:
   application:
     name: market
-  main:
-    web-application-type: none
   config:
     # 로컬 개발용 비밀값은 저장소 루트의 git 제외 .env에서 가져온다.
     import: optional:file:./.env[.properties],optional:file:../../.env[.properties]
@@ -27,6 +25,9 @@ spring:
       compression-type: gzip
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        # 보내는 모든 메시지 헤더에 본문 correlationId 를 싣는다(추적 ID, docs/local-development.md).
+        interceptor.classes: dev.stockreading.market.trace.CorrelationIdProducerInterceptor
 
 market:
   # 유형 1(window): 최근 window-minutes분 이력의 가장 오래된 스냅샷 대비 변동의 절댓값이 이 값(%) 이상이면 "변동"으로 본다.
@@ -64,23 +65,25 @@ market:
     # 세계지수 직전 영업일 행을 찾는 기간. 기준 시각보다 이 기간까지 이르게 받은 행에서 찾으며 판 범위와는 따로 둔다.
     # 연휴가 길어도 직전 영업일 행이 남도록 max-age보다 길게 둔다.
     world-index-prev-lookback: P7D
-  members:
-    # ETF 상위 구성 종목 자동 조회. 출처 주소는 저장소에 두지 않고 환경변수로만 받는다.
-    # url-template이 비어 있으면 자동 조회를 하지 않고, 구성 종목은 etf_stock_map을 직접 고친다.
-    # url-template에는 {fundId}(출처가 ETF를 부르는 번호, etf.constituent_source_id)와 {date}(yyyy.MM.dd, 기준일) 자리가 있다.
-    # 번호가 없는 ETF는 자동 조회하지 않는다.
-    url-template: ${MEMBERS_URL_TEMPLATE:}
-    # 요청마다 보내는 식별 문자열. 연락처가 필요하면 환경변수로 바꾼다(ASCII만).
-    user-agent: ${MEMBERS_USER_AGENT:stock-reading-members/1.0}
-    # 구성 종목에 담을 상위 개수(주식만).
-    top-count: 10
-    # 평소에 구성을 받는 요일. 지수 교체일이 든 달에는 매일 받는다(index_rebalance_schedule 테이블).
-    fetch-day: MONDAY
-    # 출처를 연달아 부르는 사이의 쉬는 시간과 요청 제한 시간.
-    call-interval: PT2S
-    timeout: PT10S
   daily:
     # 데일리 판 자료 응답(market.daily)에 담을 보유 ETF의 최대 개수(안전 상한). 기간·원문 크기·티커 수·세계지수 대륙은 context 설정을 함께 쓴다.
     max-etfs: 50
     # 개장 흐름(아침 판)이 판 기준 시각부터 거슬러 읽는 시세 구간의 안전 상한. 요청 구간이 이보다 길면 이 기간까지만 읽는다.
     open-flow-max-window: PT30M
+
+# 브리핑이 부르는 내부 조회 API(docs/local-development.md 의 "내부 조회 API"). 서버 밖으로 열지 않는다.
+server:
+  # 로컬에서는 시세처리기(8091)·뉴스처리기(8092)가 한 기계에 함께 뜨고, 로컬 compose 가 쓰는 8080·8081 과 겹치지 않게 둔다.
+  port: 8091
+  # 로컬은 이 기계 안에서만 받는다. 운영 compose 는 SERVER_ADDRESS=0.0.0.0 으로 컨테이너 네트워크에만 열고 바깥 포트는 연결하지 않는다.
+  address: 127.0.0.1
+  tomcat:
+    threads:
+      # 부르는 쪽이 브리핑 하나라 요청이 많지 않다. 기본 200개 스레드의 스택 메모리를 아끼려고 줄인다.
+      max: 8
+      min-spare: 1
+
+logging:
+  pattern:
+    # 메시지를 처리하는 동안 찍히는 로그 줄마다 그 메시지의 correlationId 를 붙인다(추적 ID, docs/local-development.md).
+    correlation: "[%X{correlationId:-}] "

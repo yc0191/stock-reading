@@ -1,9 +1,6 @@
 package dev.stockreading.market.history;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -12,7 +9,6 @@ import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
-import org.mockito.ArgumentCaptor;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
@@ -86,14 +82,13 @@ class PriceHistoryIntegrationTest {
 
     @Test
     void responseIsCutAtMaxPointsAndMarkedTruncated() {
-        HistoryPublisher publisher = mock(HistoryPublisher.class);
-        HistoryRequestListener listener = new HistoryRequestListener(repository, publisher, JsonMapper.builder().build());
+        HistoryQuery listener = new HistoryQuery(repository);
 
-        listener.onRequest(request(3));
-
-        ArgumentCaptor<List<HistoryPayload.Point>> points = ArgumentCaptor.captor();
-        verify(publisher).publish(eq("it-job"), eq(1), eq("ITH001"), points.capture(), eq(true), eq("it"));
-        assertThat(points.getValue()).containsExactly(
+        HistoryPayload answer = answer(listener, request(3));
+        assertThat(answer.truncated()).isTrue();
+        assertThat(answer.jobId()).isEqualTo("it-job");
+        List<HistoryPayload.Point> points = answer.points();
+        assertThat(points).containsExactly(
                 new HistoryPayload.Point("2026-03-10T10:00:00+09:00", 10_000L),
                 new HistoryPayload.Point("2026-03-10T10:01:00+09:00", 10_010L),
                 new HistoryPayload.Point("2026-03-10T10:02:00+09:00", 10_020L));
@@ -101,14 +96,13 @@ class PriceHistoryIntegrationTest {
 
     @Test
     void responseWithinMaxPointsIsNotTruncated() {
-        HistoryPublisher publisher = mock(HistoryPublisher.class);
-        HistoryRequestListener listener = new HistoryRequestListener(repository, publisher, JsonMapper.builder().build());
+        HistoryQuery listener = new HistoryQuery(repository);
 
-        listener.onRequest(request(4));
-
-        ArgumentCaptor<List<HistoryPayload.Point>> points = ArgumentCaptor.captor();
-        verify(publisher).publish(eq("it-job"), eq(1), eq("ITH001"), points.capture(), eq(false), eq("it"));
-        assertThat(points.getValue()).hasSize(4);
+        HistoryPayload answer = answer(listener, request(4));
+        assertThat(answer.truncated()).isFalse();
+        assertThat(answer.jobId()).isEqualTo("it-job");
+        List<HistoryPayload.Point> points = answer.points();
+        assertThat(points).hasSize(4);
     }
 
     @Test
@@ -152,5 +146,11 @@ class PriceHistoryIntegrationTest {
                  "payload":{"jobId":"it-job","seq":1,"symbol":"ITH001",
                             "since":"2026-03-10T10:00:00+09:00","until":"2026-03-10T10:05:00+09:00","maxPoints":%d}}
                 """.formatted(maxPoints);
+    }
+
+    // 요청 이벤트 모양의 JSON 에서 payload 를 꺼내 내부 조회 API 요청 본문으로 조회 클래스에 넣는다.
+    private static HistoryPayload answer(HistoryQuery query, String request) {
+        JsonMapper mapper = JsonMapper.builder().build();
+        return query.answer(mapper.treeToValue(mapper.readTree(request).get("payload"), HistoryRequest.class));
     }
 }

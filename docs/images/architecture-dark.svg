@@ -11,12 +11,12 @@
 <text x="275" y="68" text-anchor="start" font-size="12" font-weight="400" fill="#9198a1">Java</text>
 <text x="216" y="94" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 타이머: 1초 시세, 주기마다 뉴스·공시·지수·환율</text>
 <text x="216" y="115" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 시세 응답 칸 검사, 휴장일 판정</text>
-<text x="216" y="136" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 판 시작 시각에 신호 발행</text>
+<text x="216" y="136" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 판 수집 끝나면 판 시작 알림 발행</text>
 <rect x="700" y="40" width="420" height="140" rx="12" fill="#132339" stroke="#4c8eda" stroke-width="1.6"/>
 <text x="716" y="68" text-anchor="start" font-size="17" font-weight="700" fill="#e6edf3">브리핑</text>
 <text x="775" y="68" text-anchor="start" font-size="12" font-weight="400" fill="#9198a1">Python</text>
 <text x="716" y="94" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 급변동 한 건 / 하루 두 번 판마다 작업 시작</text>
-<text x="716" y="115" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 시세처리기·뉴스처리기에서 범위 안 근거 조회</text>
+<text x="716" y="115" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 근거는 시세·뉴스처리기에 직접 조회(HTTP)</text>
 <text x="716" y="136" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· LLM 문장의 근거 번호를 코드가 검사</text>
 <text x="716" y="157" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 근거 약한 문장만 다시 검색해 고쳐 씀</text>
 <rect x="24" y="428" width="400" height="110" rx="12" fill="#132339" stroke="#4c8eda" stroke-width="1.6"/>
@@ -47,8 +47,11 @@
 <rect x="499.5" y="271" width="121.0" height="22" rx="11" fill="#0d1117" stroke="#ff7b72" stroke-width="1.5"/>
 <text x="560" y="286.5" text-anchor="middle" font-size="12" font-weight="600" fill="#ff7b72" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">market.snapshot</text>
 <polyline points="628,180 628,332 740,332 740,180" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linejoin="round" marker-end="url(#mb)"/>
-<rect x="630.5" y="321" width="107.0" height="22" rx="11" fill="#0d1117" stroke="#58a6ff" stroke-width="1.5"/>
-<text x="684" y="336.5" text-anchor="middle" font-size="12" font-weight="600" fill="#58a6ff" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">schedule.tick</text>
+<rect x="585.0" y="321" width="198.0" height="22" rx="11" fill="#0d1117" stroke="#58a6ff" stroke-width="1.5"/>
+<text x="684" y="336.5" text-anchor="middle" font-size="12" font-weight="600" fill="#58a6ff" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">daily.collection.completed</text>
+<polyline points="404,428 404,356 716,356 716,180" fill="none" stroke="#ff7b72" stroke-width="2" stroke-linejoin="round" marker-end="url(#mr)"/>
+<rect x="423.5" y="345" width="93.0" height="22" rx="11" fill="#0d1117" stroke="#ff7b72" stroke-width="1.5"/>
+<text x="470" y="360.5" text-anchor="middle" font-size="12" font-weight="600" fill="#ff7b72" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">news.stored</text>
 <polyline points="800,428 800,180" fill="none" stroke="#ff7b72" stroke-width="2" stroke-linejoin="round" marker-end="url(#mr)"/>
 <rect x="753.5" y="271" width="93.0" height="22" rx="11" fill="#0d1117" stroke="#ff7b72" stroke-width="1.5"/>
 <text x="800" y="286.5" text-anchor="middle" font-size="12" font-weight="600" fill="#ff7b72" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">market.move</text>

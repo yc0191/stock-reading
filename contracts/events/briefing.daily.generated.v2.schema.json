@@ -9,9 +9,9 @@
     "eventId": { "type": "string", "format": "uuid" },
     "eventType": { "const": "briefing.daily.generated" },
     "schemaVersion": { "const": 2 },
-    "occurredAt": { "type": "string", "format": "date-time", "description": "이 판을 시작시킨 schedule.tick 의 scheduledFor." },
+    "occurredAt": { "type": "string", "format": "date-time", "description": "이 판의 기준 시각. 판 시작 알림(daily.collection.completed)의 scheduledFor, 알림 없이 한도 시각에 시작한 판은 한도 시각." },
     "producedAt": { "type": "string", "format": "date-time" },
-    "correlationId": { "type": "string", "minLength": 1, "description": "이 판을 시작시킨 schedule.tick 의 correlationId." },
+    "correlationId": { "type": "string", "minLength": 1, "description": "이 판을 시작시킨 판 시작 알림(daily.collection.completed)의 correlationId. 알림 없이 한도 시각에 시작한 판은 daily-<edition>-deadline-<한도 시각>." },
     "payload": {
       "type": "object",
       "required": ["memberId", "edition", "rangeStart", "rangeEnd", "text", "missingItems", "generatedBy"],

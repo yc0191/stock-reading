@@ -29,6 +29,7 @@ import org.springframework.kafka.core.KafkaTemplate;
 
 import dev.stockreading.collector.CollectorProperties;
 import dev.stockreading.collector.Topics;
+import dev.stockreading.collector.members.MembersPublisher;
 import dev.stockreading.collector.holdings.QuoteSymbolsPort;
 import dev.stockreading.collector.marketdata.BrokerProperties;
 import dev.stockreading.collector.marketdata.FakeBrokerServer;
@@ -86,6 +87,11 @@ class QuoteRotationFlowTest {
         @Bean
         FilingPublisher filingPublisher() {
             return mock(FilingPublisher.class);
+        }
+
+        @Bean
+        MembersPublisher membersPublisher() {
+            return mock(MembersPublisher.class);
         }
     }
 

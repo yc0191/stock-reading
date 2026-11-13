@@ -20,7 +20,9 @@ from briefing.config import DEFAULT_SETTINGS, CoreSettings
 from briefing.final_check import FinalCheck
 from briefing.job_log import DiscardJobLog, JobKind, JobLogPort
 from briefing.jobs import ReportInput
+from briefing.job_step import job_scope
 from briefing.ports import RequestPort
+from briefing.queries import QueryPort
 from briefing.report import Cause, Report, ReportStage, build_llm_input
 from briefing.research import (
     NewsResearch,
@@ -34,6 +36,7 @@ from briefing.research import (
     research_entry,
 )
 from briefing.sources import Article, etf_info_input
+from briefing.trace import correlation_context
 
 log = logging.getLogger("briefing.sentence_research")
 
@@ -63,6 +66,9 @@ class SentenceAdapter(Protocol):
         """검색어 LLM 입력. 문장, 부족한 점, ETF 정보, 이미 찾은 기사 제목, 배경 숫자를 담는다."""
 
     def target(self, draft: Any, research_id: str, sentence_no: int, round: int) -> ResearchTarget: ...
+
+    def correlation_id(self, draft: Any) -> str:
+        """작업의 추적 ID. 메시지 처리 밖(전체 시간 상한)에서 찍는 로그 줄에 건다."""
 
     def rewrite_sentence(self, draft: Any, sentence_no: int, round: int, articles: tuple[Article, ...],
                          research_articles: tuple[Article, ...], now: datetime) -> Any | None:
@@ -108,6 +114,8 @@ class SentenceResearch:
 
     queries: QueryWriter | None
     requests: RequestPort
+    # 재검색 기사 조회(뉴스처리기 내부 조회 API)
+    api: QueryPort
     job_log: JobLogPort = field(default_factory=DiscardJobLog)
     settings: CoreSettings = DEFAULT_SETTINGS
     research: NewsResearch = field(init=False)
@@ -115,7 +123,7 @@ class SentenceResearch:
     _runs: dict[str, _Run] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
-        self.research = NewsResearch(self.requests, self.job_log, self, self.settings)
+        self.research = NewsResearch(self.requests, self.api, self.job_log, self, self.settings)
 
     def register(self, job_kind: str, adapter: SentenceAdapter) -> None:
         self._adapters[job_kind] = adapter
@@ -228,17 +236,16 @@ class SentenceResearch:
 
     # ---- 시간 ----
 
-    def on_collection_completed(self, message: str | bytes, now: datetime) -> bool:
-        return self.research.on_collection_completed(message, now)
-
-    def on_articles_responded(self, message: str | bytes, now: datetime) -> bool:
-        return self.research.on_articles_responded(message, now)
+    def on_stored(self, message: str | bytes, now: datetime) -> bool:
+        return self.research.on_stored(message, now)
 
     def on_tick(self, now: datetime) -> None:
         self.research.on_tick(now)
         for run in list(self._runs.values()):
             if run.job_id in self._runs and now >= run.deadline:
-                self._expire(run, now)
+                # 메시지 처리 밖에서 판을 내보내므로 그 작업의 추적 ID를 로그 줄에, 작업 id를 LLM 호출 기록(job_step)에 직접 건다.
+                with correlation_context(run.adapter.correlation_id(run.draft)), job_scope(run.job_id):
+                    self._expire(run, now)
 
     def next_deadline(self) -> datetime | None:
         deadlines = [run.deadline for run in self._runs.values()]
@@ -345,6 +352,9 @@ class MoveSentences:
             round=round, correlation_id=i.correlation_id, tag=i.symbol, reply_symbol=i.symbol,
             since=i.as_of - s.evidence_window, until=i.as_of + s.delta,
             known_article_ids=frozenset(a.article_id for a in i.articles))
+
+    def correlation_id(self, draft: MoveDraft) -> str:
+        return draft.input.correlation_id
 
     def rewrite_sentence(self, draft: MoveDraft, sentence_no: int, round: int, articles: tuple[Article, ...],
                          research_articles: tuple[Article, ...], now: datetime) -> MoveDraft | None:

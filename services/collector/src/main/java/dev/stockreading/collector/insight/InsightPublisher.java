@@ -2,8 +2,10 @@ package dev.stockreading.collector.insight;
 
 import java.time.Clock;
 import java.time.OffsetDateTime;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
@@ -33,11 +35,12 @@ import tools.jackson.databind.ObjectMapper;
 public class InsightPublisher {
 
     static final String EVENT_TYPE = "market.insight";
-    static final String DAILY_PRICE = "daily-price";
-    static final String WORLD_INDEX = "world-index";
-    static final String EXCHANGE_RATE_SUMMARY = "exchange-rate-summary";
-    static final String MARKET_SUMMARY = "market-summary";
-    static final String OVERSEAS_DAILY_PRICE = "overseas-daily-price";
+    // 아래 자료 종류 이름(apiType)은 데일리 판 시작 알림(daily.collection.completed)의 missingSources 에도 쓴다.
+    public static final String DAILY_PRICE = "daily-price";
+    public static final String WORLD_INDEX = "world-index";
+    public static final String EXCHANGE_RATE_SUMMARY = "exchange-rate-summary";
+    public static final String MARKET_SUMMARY = "market-summary";
+    public static final String OVERSEAS_DAILY_PRICE = "overseas-daily-price";
     // 해외 일봉 실패 종류 중 시세 호출 전에 난 것. 시세 호출 실패는 FailureType 이름을 쓴다.
     static final String EXCHANGE_LOOKUP_FAILED = "EXCHANGE_LOOKUP_FAILED";
     static final String EXCHANGE_UNKNOWN = "EXCHANGE_UNKNOWN";
@@ -71,20 +74,24 @@ public class InsightPublisher {
         this.clock = clock;
     }
 
-    public void publishAll(String correlationId, String scheduledFor) {
+    /** 마감 후 조회. 하나라도 받지 못한 자료 종류(apiType)를 돌려준다(데일리 판 시작 알림의 missingSources). */
+    public Set<String> publishAll(String correlationId, String scheduledFor) {
         int published = 0;
         int failed = 0;
+        Set<String> missing = new LinkedHashSet<>();
         for (String symbol : quoteSymbols.symbols()) {
             if (!SYMBOL.matcher(symbol).matches()) {
                 // 스키마를 어기는 종목코드는 조회하지 않고 건너뛴다.
                 log.warn("insight skipped apiType={} reason=invalid-target corr={}", DAILY_PRICE, correlationId);
                 failed++;
+                missing.add(DAILY_PRICE);
                 continue;
             }
             if (publishOne(DAILY_PRICE, symbol, () -> source.dailyPrice(symbol), correlationId, scheduledFor)) {
                 published++;
             } else {
                 failed++;
+                missing.add(DAILY_PRICE);
             }
         }
         List<String> continents = properties.continents() == null ? List.of() : properties.continents();
@@ -93,37 +100,53 @@ public class InsightPublisher {
                 published++;
             } else {
                 failed++;
+                missing.add(WORLD_INDEX);
             }
         }
         if (publishOne(EXCHANGE_RATE_SUMMARY, null, source::exchangeRateSummary, correlationId, scheduledFor)) {
             published++;
         } else {
             failed++;
+            missing.add(EXCHANGE_RATE_SUMMARY);
         }
         if (publishOne(MARKET_SUMMARY, null, source::marketSummary, correlationId, scheduledFor)) {
             published++;
         } else {
             failed++;
+            missing.add(MARKET_SUMMARY);
         }
         log.info("sent {} market.insight events corr={} failed={}", published, correlationId, failed);
         // 해외 일봉은 장 시작 전에만 받는다. 국내 장 마감 무렵에는 미국 장이 열리지 않아 같은 값을 다시 받게 된다.
+        return missing;
     }
 
-    /** 장 시작 전 조회: 세계지수 아메리카와 보유 미국 종목 해외 일봉. 이벤트와 키는 장 마감 후 조회와 같다. */
-    public void publishPreOpen(String correlationId, String scheduledFor) {
+    /**
+     * 장 시작 전 조회: 세계지수 아메리카와 보유 미국 종목 해외 일봉. 이벤트와 키는 장 마감 후 조회와 같다.
+     * 하나라도 받지 못한 자료 종류(apiType)를 돌려준다(데일리 판 시작 알림의 missingSources).
+     */
+    public Set<String> publishPreOpen(String correlationId, String scheduledFor) {
+        Set<String> missing = new LinkedHashSet<>();
         boolean published = publishOne(WORLD_INDEX, PRE_OPEN_CONTINENT,
                 () -> source.worldIndex(PRE_OPEN_CONTINENT), correlationId, scheduledFor);
         log.info("sent {} pre-open world index events corr={} failed={}",
                 published ? 1 : 0, correlationId, published ? 0 : 1);
-        publishOverseas(correlationId, scheduledFor);
+        if (!published) {
+            missing.add(WORLD_INDEX);
+        }
+        if (!publishOverseas(correlationId, scheduledFor)) {
+            missing.add(OVERSEAS_DAILY_PRICE);
+        }
+        return missing;
     }
 
     // 종목 수만큼 상한 장치를 기다리며 차례로 호출하므로 세계지수 조회가 늦어지지 않게 맨 뒤에 둔다.
     // 티커는 보유 종목이 드러나므로 로그에는 순번과 실패 종류, 개수만 남긴다.
-    private void publishOverseas(String correlationId, String scheduledFor) {
+    // 상한을 넘어 건너뛴 종목이나 실패한 종목이 있으면 false.
+    private boolean publishOverseas(String correlationId, String scheduledFor) {
         List<String> tickers = holdings.allTickers();
         int limit = properties.overseasMaxTickers();
-        if (tickers.size() > limit) {
+        boolean skipped = tickers.size() > limit;
+        if (skipped) {
             log.warn("overseas daily price skipped {} tickers over the limit {} corr={}",
                     tickers.size() - limit, limit, correlationId);
             tickers = tickers.subList(0, limit);
@@ -141,6 +164,7 @@ public class InsightPublisher {
         int failed = failures.values().stream().mapToInt(Integer::intValue).sum();
         log.info("sent {} overseas daily price events corr={} tickers={} failed={} failures={}",
                 published, correlationId, tickers.size(), failed, failures);
+        return !skipped && failed == 0;
     }
 
     /** 성공하면 null, 실패하면 실패 종류. */

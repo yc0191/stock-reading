@@ -1,6 +1,7 @@
-"""작업 기록을 briefing 스키마의 테이블 둘에 저장한다(JobLogPort의 DB 구현).
+"""작업 기록을 briefing 스키마의 테이블에 저장한다(JobLogPort의 DB 구현).
 
-job_run은 작업마다 한 줄(시작 때 만들고 끝날 때 고침), job_log는 그 작업에서 일어난 일마다 한 줄이다.
+job_run은 작업마다 한 줄(시작 때 만들고 끝날 때 고침), job_log는 그 작업에서 일어난 일마다 한 줄,
+job_step은 그 작업이 한 호출(조회, LLM)의 시도마다 한 줄이다.
 DB 연결은 connect 함수로 주입받는다. 드라이버는 psycopg_connector 안에서만 import하므로 실제 DB 없이 시험할 수 있다.
 테이블은 이 코드가 만들지 않는다. Flyway가 services/briefing/db/migration의 번호 파일로 먼저 만들어 둔다.
 """
@@ -16,6 +17,7 @@ from typing import Any, Callable, Mapping, Protocol
 
 from briefing.config import DEFAULT_STORE_SETTINGS, StoreSettings
 from briefing.compose import KST
+from briefing.job_step import JobStep
 from briefing.job_log import (
     REASON_INTERRUPTED,
     STAGE_RESTART,
@@ -33,6 +35,8 @@ log = logging.getLogger("briefing.job_log_store")
 
 RUN_TABLE = "briefing.job_run"
 LOG_TABLE = "briefing.job_log"
+STEP_TABLE = "briefing.job_step"
+CLOSED_TABLE = "briefing.market_closed_edition"
 
 # 이전 실행이 끝내지 못하고 남긴 작업. started_at 조건은 이번 실행이 시작한 뒤에 만든 작업을 건드리지 않기 위한 것이다.
 FAIL_UNFINISHED_SQL = f"""
@@ -61,6 +65,11 @@ INSERT INTO {LOG_TABLE} (job_id, entry_type, stage, sentence_no, round, before, 
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::json, %s)
 """
 
+INSERT_STEP_SQL = f"""
+INSERT INTO {STEP_TABLE} (job_id, step, target, started_at, finished_at, result, failure_kind, attempt, correlation_id)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+"""
+
 # 그날 아침 판이 남긴 ETF별 예상(etf-outlook). 기록이 늦은 것부터 읽는다.
 SELECT_OUTLOOKS_SQL = f"""
 SELECT l.data::text
@@ -74,6 +83,28 @@ SELECT job_id, input::text, target::text, status, generated_by, failure_reason
 FROM {RUN_TABLE}
 WHERE job_kind = %s AND started_at >= %s AND started_at <= %s
 ORDER BY started_at, job_id
+"""
+
+# 그날(한국 시간 하루) 이 종류의 작업이 시작됐는가. 데일리 판을 하루 한 번만 만드는 데 쓴다.
+SELECT_EDITION_STARTED_SQL = f"""
+SELECT 1
+FROM {RUN_TABLE}
+WHERE job_kind = %s AND started_at >= %s AND started_at < %s
+LIMIT 1
+"""
+
+# 휴장 알림을 받은 날의 판. 같은 날 같은 판의 알림이 다시 와도 첫 줄만 남긴다.
+INSERT_MARKET_CLOSED_SQL = f"""
+INSERT INTO {CLOSED_TABLE} (edition_day, edition, event_id, recorded_at)
+VALUES (%s, %s, %s, %s)
+ON CONFLICT (edition_day, edition) DO NOTHING
+"""
+
+SELECT_MARKET_CLOSED_SQL = f"""
+SELECT 1
+FROM {CLOSED_TABLE}
+WHERE edition_day = %s AND edition = %s
+LIMIT 1
 """
 
 # 저장에 실패한 작업 id를 기억하는 수. 메모리가 무한히 늘지 않게 한다.
@@ -124,6 +155,12 @@ class PostgresJobLog:
                   result.job_id)
         return self._save(FINISH_RUN_SQL, params, result.job_id, f"finish/{result.status.value}")
 
+    def record_step(self, step: JobStep) -> bool:
+        # 호출 기록은 진단용이라 저장하지 못해도 작업을 '기록 실패'로 표시하지 않는다(조회 작업 스레드에서도 불린다).
+        params = (step.job_id, step.step, step.target, step.started_at, step.finished_at, step.result.value,
+                  step.failure_kind, step.attempt, step.correlation_id)
+        return self._save(INSERT_STEP_SQL, params, step.job_id, f"step/{step.step}", mark_failed=False)
+
     def fail_unfinished(self, now: datetime) -> list[str]:
         """진행 중으로 남은 이전 실행의 작업을 모두 실패(재시작으로 중단)로 끝낸다. 리포트는 다시 만들지 않는다.
 
@@ -156,6 +193,18 @@ class PostgresJobLog:
         parsed = (parse_move_run(r[0], r[1], r[2], r[3], r[4], r[5]) for r in rows)
         return [m for m in parsed if m is not None]
 
+    def edition_started(self, kind: JobKind, day: date) -> bool | None:
+        start = datetime.combine(day, day_time.min, tzinfo=KST)
+        rows = self._read(SELECT_EDITION_STARTED_SQL, (kind.value, start, start + timedelta(days=1)))
+        return None if rows is None else bool(rows)
+
+    def mark_market_closed(self, kind: JobKind, day: date, event_id: str, at: datetime) -> bool:
+        return self._save(INSERT_MARKET_CLOSED_SQL, (day, kind.value, event_id, at), event_id, "market-closed")
+
+    def market_closed(self, kind: JobKind, day: date) -> bool | None:
+        rows = self._read(SELECT_MARKET_CLOSED_SQL, (day, kind.value))
+        return None if rows is None else bool(rows)
+
     def _read(self, sql: str, params: tuple) -> list[tuple] | None:
         """조회에 실패하면 None. 예외 메시지에는 접속 정보가 섞일 수 있어 종류 이름만 남긴다."""
         try:
@@ -170,7 +219,7 @@ class PostgresJobLog:
             log.warning("reading the job log failed: %s", type(error).__name__)
             return None
 
-    def _save(self, sql: str, params: tuple, job_id: str, what: str) -> bool:
+    def _save(self, sql: str, params: tuple, job_id: str, what: str, mark_failed: bool = True) -> bool:
         attempts = self.settings.record_attempts
         for attempt in range(1, attempts + 1):
             try:
@@ -183,6 +232,8 @@ class PostgresJobLog:
                 if attempt < attempts:
                     self.sleep(self.settings.record_retry_interval.total_seconds())
         log.error("could not save job log: job=%s what=%s", job_id, what)
+        if not mark_failed:
+            return False
         self._failed[job_id] = None
         while len(self._failed) > REMEMBERED_FAILED_JOBS:
             self._failed.popitem(last=False)

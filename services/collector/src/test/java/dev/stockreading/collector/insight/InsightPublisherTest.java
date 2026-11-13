@@ -294,6 +294,35 @@ class InsightPublisherTest {
         assertThat(String.join("\n", messages)).doesNotContain("TESTA", "TESTB");
     }
 
+    @Test
+    void postCloseReturnsTheKindsItCouldNotGetForTheDailyNotice() {
+        when(source.dailyPrice("TEST01")).thenThrow(new BrokerApiException(FailureType.HTTP_ERROR, "시세 API 오류 http=500"));
+        when(source.marketSummary()).thenReturn("  ");
+
+        assertThat(publisher.publishAll("corr", "2026-10-20T16:30:00+09:00"))
+                .containsExactly("daily-price", "market-summary");
+        assertThat(publisher(List.of("TEST01"), List.of("C")).publishAll("corr", "2026-10-20T16:30:00+09:00"))
+                .containsExactly("daily-price", "market-summary");
+    }
+
+    @Test
+    void postCloseThatGotEverythingReturnsNoMissingKind() {
+        assertThat(publisher.publishAll("corr", "2026-10-20T16:30:00+09:00")).isEmpty();
+    }
+
+    @Test
+    void preOpenReturnsTheKindsItCouldNotGetIncludingTickersSkippedOverTheLimit() {
+        when(holdings.allTickers()).thenReturn(List.of("TESTA", "TESTB"));
+
+        assertThat(publisher(List.of(), List.of(), 2).publishPreOpen("corr", "2026-10-21T08:30:00+09:00")).isEmpty();
+        assertThat(publisher(List.of(), List.of(), 1).publishPreOpen("corr", "2026-10-21T08:30:00+09:00"))
+                .containsExactly("overseas-daily-price");
+        when(source.worldIndex("C")).thenThrow(new BrokerApiException(FailureType.TICK_SKIPPED, "호출 상한 대기 시간 초과"));
+        when(source.overseasDailyPrice("NAS", "TESTB")).thenReturn(" ");
+        assertThat(publisher.publishPreOpen("corr", "2026-10-21T08:30:00+09:00"))
+                .containsExactly("world-index", "overseas-daily-price");
+    }
+
     private List<String> messages() {
         return logs.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
     }

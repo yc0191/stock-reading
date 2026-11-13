@@ -6,8 +6,8 @@ import java.util.Map;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 /**
- * market.daily.responded v2의 payload. jobId와 seq는 요청 값을 그대로 되돌려준다.
- * 해외 등락률과 시장 배경은 market.context.responded와 같은 모양이라 그 타입을 그대로 쓴다.
+ * 내부 조회 API 의 응답 본문(옛 market.daily 응답 이벤트 v2의 payload 와 같은 모양). jobId와 seq는 요청 값을 그대로 되돌려준다.
+ * 해외 등락률과 시장 배경은 시장 배경 응답(ContextPayload)과 같은 모양이라 그 타입을 그대로 쓴다.
  */
 public record DailyPayload(
         String jobId,
@@ -23,7 +23,7 @@ public record DailyPayload(
         this(jobId, seq, etfs, closeRates, background, truncated, null);
     }
 
-    /** 일봉이 없어 하루 등락 칸이 비었을 때의 이유. 값은 market.daily.responded v2 스키마의 enum과 같다. */
+    /** 일봉이 없어 하루 등락 칸이 비었을 때의 이유. 값은 market.daily 응답 v2 스키마의 enum과 같다. */
     public static final String NO_DAILY_PRICE_IN_RANGE = "no-daily-price-in-range";
     public static final String DAILY_PRICE_UNREADABLE = "daily-price-unreadable";
 
@@ -102,7 +102,7 @@ public record DailyPayload(
 
     /**
      * 시세처리기 운영 상태. 요청이 includeOperations를 보냈을 때만 담긴다. 종목코드는 담지 않는다.
-     * quoteFailures의 키는 market.daily.responded v2 스키마가 정한 종류 이름이다.
+     * quoteFailures의 키는 market.daily 응답 v2 스키마가 정한 종류 이름이다.
      */
     public record Operations(
             List<CollectionStatus> collections,

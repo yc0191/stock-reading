@@ -20,7 +20,7 @@ def test_every_seeded_event_passes_its_contract():
         assert de.schema_errors(topic, event) == [], topic
 
 
-def test_seeded_data_is_received_after_the_previous_weekday_and_before_the_tick():
+def test_seeded_data_is_received_after_the_previous_weekday_and_before_the_notice():
     previous_weekday = NOW - timedelta(days=1)
     for topic, _, event in de.seed_events(NOW, "RUN1"):
         payload = event["payload"]
@@ -57,12 +57,13 @@ def test_us_close_is_the_latest_new_york_close_before_the_time():
     assert de.last_ny_close(datetime(2026, 11, 9, 9, 0, tzinfo=ny)) == date(2026, 11, 6)
 
 
-def test_ticks_are_one_per_edition_with_the_same_scheduled_time():
-    ticks = de.tick_events(NOW)
-    assert [e["payload"]["jobType"] for _, _, e in ticks] == ["daily-briefing-morning", "daily-briefing-post-close"]
-    assert {e["payload"]["scheduledFor"] for _, _, e in ticks} == {"2026-11-05T08:45:00+09:00"}
-    for topic, _, event in ticks:
-        assert de.schema_errors(topic, event) == []
+def test_notices_are_one_per_edition_with_the_same_edition_time():
+    notices = de.notice_events(NOW)
+    assert [e["payload"]["edition"] for _, _, e in notices] == ["morning", "post-close"]
+    assert [key for _, key, _ in notices] == ["morning", "post-close"]
+    assert {e["payload"]["scheduledFor"] for _, _, e in notices} == {"2026-11-05T08:45:00+09:00"}
+    for topic, _, event in notices:
+        assert topic == "daily.collection.completed" and de.schema_errors(topic, event) == []
 
 
 def test_fake_llm_cites_the_first_ref_given():

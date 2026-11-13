@@ -1,6 +1,7 @@
 """README 구성도(docs/images/architecture-light.svg, -dark.svg)를 그린다. 실행: python3 docs/images/architecture.py docs/images
 
-서비스마다 하는 일과, Kafka를 거쳐 서비스에서 서비스로 가는 핵심 이벤트만 보여 준다(근거 조회 요청·응답, 재검색, 수동 명령 등은 뺌). 이벤트 목록의 원본은 각 서비스의 Topics와 브리핑 main.py다.
+서비스마다 하는 일과, Kafka를 거쳐 서비스에서 서비스로 가는 핵심 이벤트만 보여 준다(재검색, 수동 명령 등은 뺌). 브리핑이 근거를
+시세처리기·뉴스처리기에 묻는 내부 조회(HTTP)는 Kafka를 거치지 않아 브리핑 칸의 글로만 적는다. 이벤트 목록의 원본은 각 서비스의 Topics와 브리핑 main.py다.
 """
 import sys
 from xml.sax.saxutils import escape
@@ -19,10 +20,10 @@ SERVICES = {
     "collector": dict(title="수집기", lang="Java", logic=[
         "타이머: 1초 시세, 주기마다 뉴스·공시·지수·환율",
         "시세 응답 칸 검사, 휴장일 판정",
-        "판 시작 시각에 신호 발행"]),
+        "판 수집 끝나면 판 시작 알림 발행"]),
     "briefing": dict(title="브리핑", lang="Python", logic=[
         "급변동 한 건 / 하루 두 번 판마다 작업 시작",
-        "시세처리기·뉴스처리기에서 범위 안 근거 조회",
+        "근거는 시세·뉴스처리기에 직접 조회(HTTP)",
         "LLM 문장의 근거 번호를 코드가 검사",
         "근거 약한 문장만 다시 검색해 고쳐 씀"]),
     "market": dict(title="시세처리기", lang="Java", logic=[
@@ -47,8 +48,9 @@ def chip_width(name):
 # 이벤트 흐름: (내보내는 서비스, 받는 서비스, 이벤트, 색). 원본은 각 서비스의 Topics와 브리핑 main.py다.
 FLOWS = [
     ("collector", "news", "news.collected", "g"),
+    ("news", "briefing", "news.stored", "r"),
     ("collector", "market", "market.snapshot", "r"),
-    ("collector", "briefing", "schedule.tick", "b"),
+    ("collector", "briefing", "daily.collection.completed", "b"),
     ("market", "briefing", "market.move", "r"),
     ("briefing", "notifier", "briefing.generated", "r"),
     ("briefing", "notifier", "briefing.daily.generated", "b"),
@@ -126,7 +128,11 @@ def svg(theme):
     chip(560, mid1, "market.snapshot", "r")
     # 수집기 → 브리핑 (허브 안에서 돌아 올라감)
     path([(628, top_b), (628, mid2), (740, mid2), (740, top_b)], "b")
-    chip(684, mid2, "schedule.tick", "b")
+    chip(684, mid2, "daily.collection.completed", "b")
+    # 뉴스처리기 → 브리핑: 수집기가 보낸 기사를 모두 저장했다는 알림. 브리핑은 이 알림 뒤 기사를 한 번만 조회한다.
+    low3 = BUS + 120
+    path([(404, low_t), (404, low3), (716, low3), (716, top_b)], "r")
+    chip(470, low3, "news.stored", "r")
     # 시세처리기 → 브리핑 (아래 → 위)
     path([(800, low_t), (800, top_b)], "r")
     chip(800, mid1, "market.move", "r")

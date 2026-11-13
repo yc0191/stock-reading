@@ -11,12 +11,12 @@
     "schemaVersion": { "const": 1 },
     "occurredAt": { "type": "string", "format": "date-time", "description": "요청을 만든 시각." },
     "producedAt": { "type": "string", "format": "date-time" },
-    "correlationId": { "type": "string", "minLength": 1, "description": "작업을 시작시킨 이벤트(market.move 또는 데일리 판의 schedule.tick)의 correlationId를 이어받는다." },
+    "correlationId": { "type": "string", "minLength": 1, "description": "작업을 시작시킨 이벤트(market.move 또는 데일리 판 시작 알림 daily.collection.completed)의 correlationId를 이어받는다." },
     "payload": {
       "type": "object",
       "required": ["jobId", "seq", "jobKind", "symbol", "queries"],
       "properties": {
-        "jobId": { "type": "string", "format": "uuid", "description": "재검색을 부른 작업 id. 급변동은 market.move의 eventId, 데일리 판은 그 판을 시작시킨 schedule.tick의 eventId다. 수집기는 이 값을 news.collected와 collection.completed의 researchJobId로 돌려준다." },
+        "jobId": { "type": "string", "format": "uuid", "description": "재검색을 부른 작업 id. 급변동은 market.move의 eventId, 데일리 판은 그 판의 작업 id(판 시작 알림의 eventId, 한도 시각에 시작한 판은 판과 날짜로 정한 uuid)다. 수집기는 이 값을 news.collected와 collection.completed의 researchJobId로 돌려준다." },
         "seq": { "type": "integer", "minimum": 1, "description": "요청 순번. 재전송은 새 순번을 쓴다." },
         "jobKind": { "enum": ["move", "morning", "post-close"], "description": "재검색을 부른 작업의 종류. move는 급변동, morning과 post-close는 데일리 판이다." },
         "symbol": { "type": "string", "pattern": "^([0-9A-Z]{6}|\\*)$", "description": "찾은 기사에 태그로 붙일 종목. 급변동은 그 종목코드(6자리), 데일리 판은 시장 전체를 뜻하는 \"*\"다." },

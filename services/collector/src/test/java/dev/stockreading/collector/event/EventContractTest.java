@@ -7,6 +7,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
@@ -20,13 +21,9 @@ class EventContractTest {
     // 정각 16:00:00: OffsetDateTime.toString()이 초를 생략하는 경우.
     private static final Clock SHARP_CLOCK = Clock.fixed(Instant.parse("2026-10-20T07:00:00Z"), KST);
 
-    private final ObjectMapper mapper = JsonMapper.builder().build();
+    private static final String DAILY_SCHEMA = "daily.collection.completed.v1.schema.json";
 
-    @Test
-    void committedSampleTickMatchesSchema() throws IOException {
-        var errors = ContractSchemas.validate("schedule.tick.v1.schema.json", ContractSchemas.sample("schedule.tick.sample.json"));
-        assertThat(errors).isEmpty();
-    }
+    private final ObjectMapper mapper = JsonMapper.builder().build();
 
     @Test
     void committedSampleSnapshotMatchesSchema() throws IOException {
@@ -35,16 +32,40 @@ class EventContractTest {
     }
 
     @Test
-    void producedTickMatchesSchemaEvenWhenSecondsAreZero() throws IOException {
-        OffsetDateTime scheduledFor = OffsetDateTime.now(SHARP_CLOCK);
-        String text = EventFactory.format(scheduledFor);
-        Envelope<TickPayload> tick = EventFactory.create(
-                SHARP_CLOCK, "schedule.tick", scheduledFor, "collect-" + text, new TickPayload("collect", text));
+    void committedOldTickSampleStillMatchesItsSchemaForReplay() throws IOException {
+        // schedule.tick 은 더 이상 쓰지 않지만 옛 이벤트를 읽을 수 있게 스키마와 샘플을 남긴다(ADR-010).
+        assertThat(ContractSchemas.validate("schedule.tick.v1.schema.json", ContractSchemas.sample("schedule.tick.sample.json")))
+                .isEmpty();
+    }
 
-        var errors = ContractSchemas.validate("schedule.tick.v1.schema.json", mapper.writeValueAsString(tick));
+    @Test
+    void producedDailyCollectionNoticeMatchesSchemaEvenWhenSecondsAreZero() throws IOException {
+        OffsetDateTime at = OffsetDateTime.now(SHARP_CLOCK);
+        String text = EventFactory.format(at);
+        Envelope<DailyCollectionPayload> notice = EventFactory.create(SHARP_CLOCK, "daily.collection.completed", at,
+                "daily-morning-" + text, new DailyCollectionPayload("morning", "collected", text, List.of("world-index")));
+
+        var errors = ContractSchemas.validate(DAILY_SCHEMA, mapper.writeValueAsString(notice));
 
         assertThat(errors).isEmpty();
         assertThat(text).isEqualTo("2026-10-20T16:00:00+09:00");
+    }
+
+    @Test
+    void committedDailyCollectionSampleMatchesSchema() throws IOException {
+        assertThat(ContractSchemas.validate(DAILY_SCHEMA, ContractSchemas.sample("daily.collection.completed.sample.json")))
+                .isEmpty();
+    }
+
+    @Test
+    void dailyCollectionNoticeRejectsUnknownEditionStatusAndTickerLikeSources() throws IOException {
+        String sample = ContractSchemas.sample("daily.collection.completed.sample.json");
+
+        assertThat(ContractSchemas.validate(DAILY_SCHEMA, sample.replace("\"post-close\"", "\"evening\""))).isNotEmpty();
+        assertThat(ContractSchemas.validate(DAILY_SCHEMA, sample.replace("\"collected\"", "\"partial\""))).isNotEmpty();
+        // 보유 종목이 드러나는 종목코드·티커는 못 받은 자료 목록에 싣지 않는다.
+        assertThat(ContractSchemas.validate(DAILY_SCHEMA, sample.replace("[\"world-index\"]", "[\"TESTA\"]")))
+                .isNotEmpty();
     }
 
     @Test

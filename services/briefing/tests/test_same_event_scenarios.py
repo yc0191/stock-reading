@@ -79,7 +79,7 @@ def test_move_groups_same_event_articles_in_the_first_report_and_the_rewrite_and
     assert all("ref" not in x for x in first["articles"] if SAME_EVENT_KEY in x)
 
     flow.complete_research(research_id=rid(2))
-    flow.stable_research([news("r1", SAME_RESEARCH, T - timedelta(hours=1)),
+    flow.answer_research([news("r1", SAME_RESEARCH, T - timedelta(hours=1)),
                           news("r2", OTHER_RESEARCH, T - timedelta(hours=2))], research_id=rid(2))
 
     # 다시 쓰기 입력: 재검색으로 찾은 같은 사건 기사는 처음 모은 기사의 묶음에 더해지고 재검색 기사 표시가 붙는다.
@@ -264,7 +264,7 @@ def test_the_daily_writer_groups_with_the_core_settings_the_service_passes(monke
 
     # 서비스 구성에서도 작성기들과 실행부가 같은 CoreSettings를 받는다.
     monkeypatch.setattr(main, "DEFAULT_SETTINGS", narrow)
-    monkeypatch.setattr(main, "build_daily_writer", lambda env, core: build_daily_writer(
+    monkeypatch.setattr(main, "build_daily_writer", lambda env, client_factory, core: build_daily_writer(
         {"ANTHROPIC_API_KEY": "sk-test-value"}, lambda key, model: Sequence(), core=core))
     for name in ("PostgresJobLog", "PostgresStatusStore", "PostgresMemberStore"):
         monkeypatch.setattr(main, name, lambda connect: None)

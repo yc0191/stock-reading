@@ -1,0 +1,170 @@
+{
+ "dailyMorning": {
+  "event": {
+   "correlationId": "daily-morning-2026-10-20T08:45:00+09:00",
+   "eventId": "18603d78-44eb-5cb0-906e-7f5a9025b6c4",
+   "eventType": "briefing.daily.generated",
+   "occurredAt": "2026-10-20T08:45:00+09:00",
+   "payload": {
+    "edition": "morning",
+    "generatedBy": "llm",
+    "html": "<html lang=\"ko\"><body style=\"margin:0;padding:16px;background:#ffffff;color:#212121;font-family:'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic','맑은 고딕',sans-serif;font-size:15px;line-height:1.6\"><div style=\"max-width:640px;margin:0 auto\"><h1 style=\"margin:0 0 4px;font-size:20px;font-weight:700;line-height:1.4\">[아침 판] 2026-10-20(화) 08:45 데일리 브리핑</h1><p style=\"margin:0 0 14px;font-size:13px;color:#757575\">다룬 범위: 10-19(월) 08:45 ~ 10-20(화) 08:45</p><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">■ 미국 지수</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">TEST INDEX(TESTIX) <span style=\"color:#d32f2f;font-weight:700\">2.04%</span> (20261019 종가 100.00, 직전 20261016 98.00)</li></ul><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">■ 환율</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">환율종합 10-20(화) 08:30 받은 값 있음</li></ul><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">■ 미국 종목 직전 장 등락</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">자료 없음 (미국 종목 1개의 직전 장 등락률을 찾지 못함)</li></ul><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">■ 범위 안 미국 공시</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">범위 안에 접수된 공시 없음</li></ul><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">■ 전날 한국 증시</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">시장종합 10-19(월) 16:30 받은 값 있음</li></ul><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">■ ETF별 개장 흐름</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">자료 없음 (장 시작 전이라 개장 시세가 없음)</li></ul><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">요약</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">미국 지수가 오른 가운데 공시가 나왔을 수 있습니다. [근거 1]</li></ul><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">환율 이슈</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">환율이 영향을 줄 수 있습니다. [근거 1]</li></ul><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">금리 이슈</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">받은 자료에 금리 관련 기사가 없습니다.<p style=\"margin:2px 0 6px;font-size:13px;color:#757575\">근거 약함: 금리 기사가 더 있어야 합니다.</p></li></ul><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">■ ETF별 예상</p><p style=\"margin:10px 0 2px;font-size:14px;font-weight:700\">관심</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">TEST 넷(TEST04) 상승 예상<p style=\"margin:2px 0 6px;font-size:13px;color:#757575\">이유: 미국 지수가 오른 영향을 줄 수 있습니다. [근거 1]</p></li></ul><p style=\"margin:18px 0 6px;font-size:12px;color:#9e9e9e\">※ 투자 조언이 아니며, 위 내용은 받은 자료를 정리한 것일 뿐 원인을 단정하지 않습니다.</p><p style=\"margin:2px 0;font-size:12px;color:#9e9e9e\">※ ETF별 예상은 받은 자료로 짐작한 것이며 실제 등락과 다를 수 있습니다.</p><p style=\"margin:2px 0;font-size:12px;color:#9e9e9e\">근거:</p><ol style=\"margin:0;padding-left:20px;font-size:12px;color:#9e9e9e\"><li style=\"margin:2px 0;font-size:12px;color:#9e9e9e\">세계지수 — 시세 자료(배경), 10-20(화) 08:30 받음</li></ol></div></body></html>",
+    "memberId": 1,
+    "missingItems": [
+     "미국 종목 직전 장 등락",
+     "ETF별 개장 흐름"
+    ],
+    "rangeEnd": "2026-10-20T08:45:00+09:00",
+    "rangeStart": "2026-10-19T08:45:00+09:00",
+    "text": "[아침 판] 2026-10-20(화) 08:45 데일리 브리핑\n다룬 범위: 10-19(월) 08:45 ~ 10-20(화) 08:45\n\n■ 미국 지수\n  - TEST INDEX(TESTIX) 2.04% (20261019 종가 100.00, 직전 20261016 98.00)\n\n■ 환율\n  - 환율종합 10-20(화) 08:30 받은 값 있음\n\n■ 미국 종목 직전 장 등락\n  - 자료 없음 (미국 종목 1개의 직전 장 등락률을 찾지 못함)\n\n■ 범위 안 미국 공시\n  - 범위 안에 접수된 공시 없음\n\n■ 전날 한국 증시\n  - 시장종합 10-19(월) 16:30 받은 값 있음\n\n■ ETF별 개장 흐름\n  - 자료 없음 (장 시작 전이라 개장 시세가 없음)\n\n요약:\n  - 미국 지수가 오른 가운데 공시가 나왔을 수 있습니다. [근거 1]\n\n환율 이슈:\n  - 환율이 영향을 줄 수 있습니다. [근거 1]\n\n금리 이슈:\n  - 받은 자료에 금리 관련 기사가 없습니다.\n    근거 약함: 금리 기사가 더 있어야 합니다.\n\n■ ETF별 예상\n  [관심]\n  - TEST 넷(TEST04) 상승 예상\n    이유: 미국 지수가 오른 영향을 줄 수 있습니다. [근거 1]\n\n※ 투자 조언이 아니며, 위 내용은 받은 자료를 정리한 것일 뿐 원인을 단정하지 않습니다.\n※ ETF별 예상은 받은 자료로 짐작한 것이며 실제 등락과 다를 수 있습니다.\n\n근거:\n  1. 세계지수 — 시세 자료(배경), 10-20(화) 08:30 받음"
+   },
+   "producedAt": "2026-10-20T08:45:00+09:00",
+   "schemaVersion": 2
+  },
+  "llmInputs": [
+   "{\"edition\": \"아침 판\", \"rangeStart\": \"2026-10-19T08:45:00+09:00\", \"asOf\": \"2026-10-20T08:45:00+09:00\", \"items\": [{\"name\": \"미국 지수\", \"status\": \"있음\", \"entries\": [{\"ref\": \"B1\", \"category\": \"배경\", \"kind\": \"세계지수\", \"target\": \"C\", \"status\": \"있음\", \"receivedAt\": \"2026-10-20T08:30:02+09:00\", \"minutesBeforeAsOf\": 14, \"response\": \"{\\\"raw\\\": \\\"TEST\\\"}\", \"indexRates\": [{\"code\": \"TESTIX\", \"name\": \"TEST INDEX\", \"businessDay\": \"20261019\", \"close\": \"100.00\", \"prevBusinessDay\": \"20261016\", \"prevClose\": \"98.00\", \"rate\": \"2.04\"}]}]}, {\"name\": \"환율\", \"status\": \"있음\", \"entries\": [{\"ref\": \"B2\", \"category\": \"배경\", \"kind\": \"환율종합\", \"target\": null, \"status\": \"있음\", \"receivedAt\": \"2026-10-20T08:30:03+09:00\", \"minutesBeforeAsOf\": 14, \"response\": \"{\\\"fx\\\": \\\"TEST\\\"}\"}]}, {\"name\": \"미국 종목 직전 장 등락\", \"status\": \"있음\", \"entries\": [{\"ref\": \"U1\", \"ticker\": \"TESTA\", \"date\": \"20261019\", \"rate\": \"-1.25\", \"hoursBeforeAsOf\": 3.8}]}, {\"name\": \"범위 안 미국 공시\", \"status\": \"있음\", \"entries\": []}, {\"name\": \"전날 한국 증시\", \"status\": \"있음\", \"entries\": [{\"ref\": \"B3\", \"category\": \"배경\", \"kind\": \"시장종합\", \"target\": null, \"status\": \"있음\", \"receivedAt\": \"2026-10-19T16:30:05+09:00\", \"minutesBeforeAsOf\": 974, \"response\": \"{\\\"kr\\\": \\\"TEST\\\"}\"}]}, {\"name\": \"ETF별 개장 흐름\", \"status\": \"없음\", \"entries\": []}, {\"name\": \"ETF별 기사\", \"status\": \"있음\", \"entries\": []}], \"etfInfo\": [{\"symbol\": \"TEST04\", \"name\": \"TEST 넷\", \"members\": [], \"membersTruncated\": false}], \"outlookEtfs\": [{\"symbol\": \"TEST04\", \"name\": \"TEST 넷\"}]}"
+  ]
+ },
+ "dailyPostClose": {
+  "event": {
+   "correlationId": "daily-post-close-2026-10-20T17:00:00+09:00",
+   "eventId": "619fb51a-b4f8-51b7-9dd4-fc1593067a88",
+   "eventType": "briefing.daily.generated",
+   "occurredAt": "2026-10-20T17:00:00+09:00",
+   "payload": {
+    "edition": "post-close",
+    "generatedBy": "llm",
+    "html": "<html lang=\"ko\"><body style=\"margin:0;padding:16px;background:#ffffff;color:#212121;font-family:'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic','맑은 고딕',sans-serif;font-size:15px;line-height:1.6\"><div style=\"max-width:640px;margin:0 auto\"><h1 style=\"margin:0 0 4px;font-size:20px;font-weight:700;line-height:1.4\">[마감 후 판] 2026-10-20(화) 17:00 데일리 브리핑</h1><p style=\"margin:0 0 14px;font-size:13px;color:#757575\">다룬 범위: 10-19(월) 17:00 ~ 10-20(화) 17:00</p><p style=\"margin:0 0 14px;font-size:16px;font-weight:700\">결론: 보유 2개 중 1개 상승 · 관심 2개 중 1개 상승(자료 없음 1) · 가장 크게 오름 TEST 둘 <span style=\"color:#d32f2f;font-weight:700\">+2.1%</span> · 가장 크게 내림 TEST 하나 <span style=\"color:#1565c0;font-weight:700\">−1.5%</span></p><p style=\"margin:2px 0\">그날 한국 증시: 코스피 자료 없음 · 코스닥 자료 없음</p><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">요약</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">국내 증시와 ETF가 함께 움직였습니다.</li><li style=\"margin:2px 0\">일부 ETF는 근거가 약합니다.</li></ul><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">환율 이슈</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">자료 없음</li></ul><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">금리 이슈</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">자료 없음 (이 판에서는 금리 기사를 정리하지 못했습니다)</li></ul><img src=\"cid:chart-day\" alt=\"ETF 하루 등락률 막대 그래프\" style=\"display:block;max-width:100%;height:auto;margin:0 0 6px;border:0\"><p style=\"margin:2px 0;font-size:12px;color:#9e9e9e\">등락 자료 없음(차트에서 뺌): TEST 넷</p><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">■ 보유·관심 ETF별 하루 등락</p><p style=\"margin:10px 0 2px;font-size:14px;font-weight:700\">보유</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">TEST 하나(TEST01) <span style=\"color:#1565c0;font-weight:700\">-1.50%</span> (종가 9850, 전일 10000, 20261019)<p style=\"margin:2px 0 6px;font-size:13px;color:#757575\">이유: 시장 흐름과 함께 움직였을 수 있습니다. [출처 1]</p></li><li style=\"margin:2px 0\">TEST 둘(TEST02) <span style=\"color:#d32f2f;font-weight:700\">+2.10%</span> (종가 9850, 전일 10000, 20261019)<p style=\"margin:2px 0 6px;font-size:13px;color:#757575\">이유: 시장 흐름과 함께 움직였을 수 있습니다. [출처 2]</p></li></ul><p style=\"margin:10px 0 2px;font-size:14px;font-weight:700\">관심</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">TEST 셋(TEST03) <span style=\"color:#d32f2f;font-weight:700\">+0.40%</span> (종가 9850, 전일 10000, 20261019)<p style=\"margin:2px 0 6px;font-size:13px;color:#757575\">이유: 시장 흐름과 함께 움직였을 수 있습니다. [출처 3]</p></li><li style=\"margin:2px 0\">자료 없음: TEST 넷, 범위 안에 받은 일봉이 없음</li></ul><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">■ 아침 예상 대조</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">같은 날 아침 판의 ETF별 예상 기록이 없어 대조하지 못했습니다.</li></ul><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">■ 그날 급변동</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">없음</li></ul><p style=\"margin:18px 0 6px;font-size:12px;color:#9e9e9e\">※ 투자 조언이 아니며, 위 내용은 받은 자료를 정리한 것일 뿐 원인을 단정하지 않습니다.</p><p style=\"margin:2px 0;font-size:12px;color:#9e9e9e\">출처:</p><ol style=\"margin:0;padding-left:20px;font-size:12px;color:#9e9e9e\"><li style=\"margin:2px 0;font-size:12px;color:#9e9e9e\">일봉 · TEST01 하루 등락 -1.50% (20261019) — 시세 자료(배경)</li><li style=\"margin:2px 0;font-size:12px;color:#9e9e9e\">일봉 · TEST02 하루 등락 2.10% (20261019) — 시세 자료(배경)</li><li style=\"margin:2px 0;font-size:12px;color:#9e9e9e\">일봉 · TEST03 하루 등락 0.40% (20261019) — 시세 자료(배경)</li></ol></div></body></html>",
+    "images": [
+     {
+      "contentId": "chart-day",
+      "contentType": "image/png",
+      "data": "<10672 chars>"
+     }
+    ],
+    "memberId": 1,
+    "missingItems": [
+     "보유 ETF별 하루 등락: TEST 넷, 범위 안에 받은 일봉이 없음"
+    ],
+    "rangeEnd": "2026-10-20T17:00:00+09:00",
+    "rangeStart": "2026-10-19T17:00:00+09:00",
+    "text": "[마감 후 판] 2026-10-20(화) 17:00 데일리 브리핑\n다룬 범위: 10-19(월) 17:00 ~ 10-20(화) 17:00\n\n결론: 보유 2개 중 1개 상승 · 관심 2개 중 1개 상승(자료 없음 1) · 가장 크게 오름 TEST 둘 +2.1% · 가장 크게 내림 TEST 하나 −1.5%\n그날 한국 증시: 코스피 자료 없음 · 코스닥 자료 없음\n\n요약:\n  - 국내 증시와 ETF가 함께 움직였습니다.\n  - 일부 ETF는 근거가 약합니다.\n\n환율 이슈:\n  - 자료 없음\n\n금리 이슈:\n  - 자료 없음 (이 판에서는 금리 기사를 정리하지 못했습니다)\n\n■ 보유·관심 ETF별 하루 등락\n  [보유]\n  - TEST 하나(TEST01) -1.50% (종가 9850, 전일 10000, 20261019)\n    이유: 시장 흐름과 함께 움직였을 수 있습니다. [출처 1]\n  - TEST 둘(TEST02) +2.10% (종가 9850, 전일 10000, 20261019)\n    이유: 시장 흐름과 함께 움직였을 수 있습니다. [출처 2]\n  [관심]\n  - TEST 셋(TEST03) +0.40% (종가 9850, 전일 10000, 20261019)\n    이유: 시장 흐름과 함께 움직였을 수 있습니다. [출처 3]\n  - 자료 없음: TEST 넷, 범위 안에 받은 일봉이 없음\n\n■ 아침 예상 대조\n  - 같은 날 아침 판의 ETF별 예상 기록이 없어 대조하지 못했습니다.\n\n■ 그날 급변동\n  - 없음\n\n※ 투자 조언이 아니며, 위 내용은 받은 자료를 정리한 것일 뿐 원인을 단정하지 않습니다.\n\n출처:\n  1. 일봉 · TEST01 하루 등락 -1.50% (20261019) — 시세 자료(배경)\n  2. 일봉 · TEST02 하루 등락 2.10% (20261019) — 시세 자료(배경)\n  3. 일봉 · TEST03 하루 등락 0.40% (20261019) — 시세 자료(배경)"
+   },
+   "producedAt": "2026-10-20T17:00:00+09:00",
+   "schemaVersion": 2
+  },
+  "llmInputs": [
+   "{\"edition\": \"마감 후 판\", \"rangeStart\": \"2026-10-19T17:00:00+09:00\", \"asOf\": \"2026-10-20T17:00:00+09:00\", \"items\": [{\"name\": \"그날 한국 증시\", \"status\": \"있음\", \"entries\": [{\"ref\": \"B1\", \"category\": \"배경\", \"kind\": \"시장종합\", \"target\": null, \"status\": \"있음\", \"receivedAt\": \"2026-10-20T16:30:05+09:00\", \"minutesBeforeAsOf\": 29, \"response\": \"{\\\"kr\\\": \\\"TEST\\\"}\"}]}, {\"name\": \"미국 지수\", \"status\": \"있음\", \"entries\": [{\"ref\": \"B2\", \"category\": \"배경\", \"kind\": \"세계지수\", \"target\": \"C\", \"status\": \"있음\", \"receivedAt\": \"2026-10-20T08:30:02+09:00\", \"minutesBeforeAsOf\": 509, \"response\": \"{\\\"raw\\\": \\\"TEST\\\"}\", \"indexRates\": [{\"code\": \"TESTIX\", \"name\": \"TEST INDEX\", \"businessDay\": \"20261019\", \"close\": \"100.00\", \"prevBusinessDay\": \"20261016\", \"prevClose\": \"98.00\", \"rate\": \"2.04\"}]}]}, {\"name\": \"환율\", \"status\": \"있음\", \"entries\": [{\"ref\": \"B3\", \"category\": \"배경\", \"kind\": \"환율종합\", \"target\": null, \"status\": \"있음\", \"receivedAt\": \"2026-10-20T08:30:03+09:00\", \"minutesBeforeAsOf\": 509, \"response\": \"{\\\"fx\\\": \\\"TEST\\\"}\"}]}, {\"name\": \"보유 ETF별 하루 등락\", \"status\": \"있음\", \"entries\": [{\"ref\": \"E1\", \"symbol\": \"TEST01\", \"date\": \"20261019\", \"close\": \"9850\", \"prevClose\": \"10000\", \"rate\": \"-1.50\", \"receivedAt\": \"2026-10-20T16:30:02+09:00\", \"tickers\": [\"TESTA\", \"FAKEB\"]}, {\"ref\": \"E2\", \"symbol\": \"TEST02\", \"date\": \"20261019\", \"close\": \"9850\", \"prevClose\": \"10000\", \"rate\": \"2.10\", \"receivedAt\": \"2026-10-20T16:30:02+09:00\", \"tickers\": [\"TESTA\", \"FAKEB\"]}, {\"ref\": \"E3\", \"symbol\": \"TEST03\", \"date\": \"20261019\", \"close\": \"9850\", \"prevClose\": \"10000\", \"rate\": \"0.40\", \"receivedAt\": \"2026-10-20T16:30:02+09:00\", \"tickers\": [\"TESTA\", \"FAKEB\"]}], \"missing\": [{\"symbol\": \"TEST04\", \"name\": \"TEST 넷\", \"status\": \"없음\", \"reason\": \"범위 안에 받은 일봉이 없음\"}]}, {\"name\": \"ETF별 기사\", \"status\": \"있음\", \"entries\": [{\"ref\": \"n1\", \"etf\": [\"TEST01\"], \"articleId\": \"n1\", \"title\": \"TEST 하나 관련 소식\", \"summary\": \"TEST 요약\", \"source\": \"TEST 신문\", \"publishedAt\": \"2026-10-20T10:00:00+09:00\", \"minutesBeforeAsOf\": 420}]}, {\"name\": \"범위 안 미국 공시\", \"status\": \"있음\", \"entries\": []}, {\"name\": \"미국 구성 종목 이슈\", \"status\": \"있음\", \"entries\": []}], \"etfInfo\": [{\"symbol\": \"TEST01\", \"name\": \"TEST 하나\", \"members\": [], \"membersTruncated\": false}, {\"symbol\": \"TEST02\", \"name\": \"TEST 둘\", \"members\": [], \"membersTruncated\": false}, {\"symbol\": \"TEST03\", \"name\": \"TEST 셋\", \"members\": [], \"membersTruncated\": false}, {\"symbol\": \"TEST04\", \"name\": \"TEST 넷\", \"members\": [], \"membersTruncated\": false}], \"notableCandidates\": []}"
+  ]
+ },
+ "moveUs": {
+  "event": {
+   "correlationId": "collect-2026-10-20T16:00:30+09:00",
+   "eventId": "dfd3a96b-26b2-5453-8ad9-58883cddfad8",
+   "eventType": "briefing.generated",
+   "occurredAt": "2026-10-20T16:00:31+09:00",
+   "payload": {
+    "asOf": "2026-10-20T16:00:31+09:00",
+    "changePercent": -1.5,
+    "evidence": [
+     {
+      "kind": "filing",
+      "publishedAt": "2026-10-20T06:00:31+09:00",
+      "ref": "0000000001-26-000001",
+      "source": "미국 공시",
+      "title": "TESTA 8-K 공시 항목 2.02",
+      "url": "https://www.sec.gov/Archives/test/0000000001-26-000001.htm"
+     },
+     {
+      "articleId": "a1",
+      "kind": "article",
+      "publishedAt": "2026-10-20T15:30:31+09:00",
+      "ref": "a1",
+      "source": "news.example.com",
+      "title": "기사 a1",
+      "url": "https://news.example.com/a1"
+     },
+     {
+      "kind": "overseas-close-rate",
+      "publishedAt": "2026-10-20T05:00:31+09:00",
+      "ref": "U1",
+      "source": "해외 시세 자료",
+      "title": "TESTA 직전 정규장 등락률 -1.25% (20261019)"
+     },
+     {
+      "kind": "exchange-rate-summary",
+      "publishedAt": "2026-10-20T15:55:31+09:00",
+      "ref": "B1",
+      "source": "시세 자료(배경)",
+      "title": "환율종합 (배경)"
+     },
+     {
+      "kind": "world-index",
+      "publishedAt": "2026-10-20T15:55:31+09:00",
+      "ref": "B2",
+      "source": "시세 자료(배경)",
+      "title": "세계지수 S (배경)"
+     }
+    ],
+    "generatedBy": "llm",
+    "moveMinutes": 1,
+    "name": "TEST ETF ONE",
+    "symbol": "TEST01",
+    "text": "[TEST ETF ONE(TEST01)] 16:00 기준 오늘 -2.10% · 1분 새 -1.50% 하락 (10,000 → 9,850)\n\n1. 공시가 영향을 줬을 수 있습니다.\n- 공시가 영향을 줬을 수 있습니다. [근거 1, 2]\n- 공시가 영향을 줬을 수 있습니다. [근거 1, 2]\n  근거 1. TESTA 8-K 공시 항목 2.02 — 미국 공시, 접수 10-20 06:00 https://www.sec.gov/Archives/test/0000000001-26-000001.htm\n  근거 2. 기사 a1 — news.example.com, 발행 10-20 15:30 https://news.example.com/a1\n\n2. 미국 종목 하락과 환율이 함께 나타났습니다.\n- 미국 종목 하락과 환율이 함께 나타났습니다. [근거 3, 4]\n- 미국 종목 하락과 환율이 함께 나타났습니다. [근거 3, 4]\n  근거 3. TESTA 직전 정규장 등락률 -1.25% (20261019) — 해외 시세 자료, 마감 10-20 05:00\n  근거 4. 환율종합 (배경) — 시세 자료(배경), 받음 10-20 15:55\n\n3. 세계지수 흐름도 배경으로 있습니다.\n- 세계지수 흐름도 배경으로 있습니다. [근거 5]\n- 세계지수 흐름도 배경으로 있습니다. [근거 5]\n  근거 5. 세계지수 S (배경) — 시세 자료(배경), 받음 10-20 15:55\n\n확인하지 못한 것:\n- 미국 종목 직전 정규장 등락률: 2개 가운데 1개 받지 못함\n- 시장종합: 원문이 커서 빠짐\n- 국내 일봉: 기간 안에 받은 자료 없음\n- 원/달러 환율: 환율종합 원문에서 값을 찾지 못함\n※ 투자 조언이 아니며, 위 내용은 변동 시점 전후에 공개된 자료로 추정한 것일 뿐 원인을 단정하지 않습니다.",
+    "todayChangePercent": -2.1
+   },
+   "producedAt": "2026-10-20T16:20:31+09:00",
+   "schemaVersion": 1
+  },
+  "llmInputs": [
+   "{\"symbol\": \"TEST01\", \"direction\": \"하락\", \"changePercent\": -1.5, \"moveAt\": \"2026-10-20T16:00:31+09:00\", \"priceHistoryStatus\": \"있음\", \"priceHistory\": [{\"at\": \"2026-10-20T16:00:31+09:00\", \"price\": 10000}, {\"at\": \"2026-10-20T16:00:21+09:00\", \"price\": 10001}], \"articlesStatus\": \"있음\", \"articles\": [{\"ref\": \"a1\", \"articleId\": \"a1\", \"title\": \"기사 a1\", \"summary\": \"\", \"source\": \"news.example.com\", \"publishedAt\": \"2026-10-20T15:30:31+09:00\", \"minutesFromMove\": -30}], \"filingsStatus\": \"있음\", \"filings\": [{\"ref\": \"0000000001-26-000001\", \"tickers\": [\"TESTA\"], \"form\": \"8-K\", \"items\": [\"2.02\"], \"acceptedAt\": \"2026-10-20T06:00:31+09:00\", \"hoursBeforeMove\": 10.0}], \"overseasCloseRatesStatus\": \"있음\", \"overseasCloseRates\": [{\"ref\": \"U1\", \"ticker\": \"TESTA\", \"date\": \"20261019\", \"rate\": \"-1.25\", \"closeAt\": \"2026-10-20T05:00:31+09:00\", \"hoursBeforeMove\": 11.0, \"receivedAt\": \"2026-10-20T09:00:31+09:00\"}], \"overseasCloseRatesMissing\": [\"FAKEB\"], \"background\": [{\"category\": \"배경\", \"name\": \"환율종합\", \"apiType\": \"exchange-rate-summary\", \"target\": null, \"status\": \"있음\", \"ref\": \"B1\", \"receivedAt\": \"2026-10-20T15:55:31+09:00\", \"minutesBeforeMove\": 5, \"response\": \"{\\\"api\\\": \\\"exchange-rate-summary\\\"}\"}, {\"category\": \"배경\", \"name\": \"시장종합\", \"apiType\": \"market-summary\", \"target\": null, \"status\": \"너무 큼\", \"receivedAt\": \"2026-10-20T15:55:31+09:00\", \"minutesBeforeMove\": 5, \"responseBytes\": 40000}, {\"category\": \"배경\", \"name\": \"세계지수\", \"apiType\": \"world-index\", \"target\": \"S\", \"status\": \"있음\", \"ref\": \"B2\", \"receivedAt\": \"2026-10-20T15:55:31+09:00\", \"minutesBeforeMove\": 5, \"response\": \"{\\\"dataHeader\\\": {\\\"resultCode\\\": \\\"0000\\\"}, \\\"dataBody\\\": {\\\"items\\\": [{\\\"code\\\": \\\"TESTIX\\\", \\\"name\\\": \\\"TEST INDEX\\\", \\\"day\\\": \\\"20261020\\\", \\\"close\\\": \\\" 100.00 \\\", \\\"rate\\\": \\\" 0.00 \\\"}, {\\\"code\\\": \\\"FAKEIX\\\", \\\"name\\\": \\\"FAKE INDEX\\\", \\\"day\\\": \\\"20261020\\\", \\\"close\\\": \\\" 50.00 \\\", \\\"rate\\\": \\\" 0.00 \\\"}]}}\", \"indexRates\": [{\"code\": \"TESTIX\", \"name\": \"TEST INDEX\", \"businessDay\": \"20261020\", \"close\": \"100.00\", \"prevBusinessDay\": \"20261019\", \"prevClose\": \"98.00\", \"rate\": \"2.04\"}, {\"code\": \"FAKEIX\", \"name\": \"FAKE INDEX\", \"businessDay\": \"20261020\", \"close\": \"50.00\", \"prevBusinessDay\": \"없음\", \"prevClose\": \"없음\", \"rate\": \"없음\"}]}, {\"category\": \"배경\", \"name\": \"국내 일봉\", \"apiType\": \"daily-price\", \"target\": \"TEST01\", \"status\": \"없음\"}], \"figures\": [{\"name\": \"원/달러 환율\", \"status\": \"없음\"}, {\"name\": \"코스피종합\", \"status\": \"없음\"}, {\"name\": \"코스닥종합\", \"status\": \"없음\"}, {\"name\": \"오늘 등락률 - 코스피종합 등락률\", \"status\": \"없음\"}, {\"name\": \"오늘 등락률 - 코스닥종합 등락률\", \"status\": \"없음\"}, {\"name\": \"미국 종목 직전 정규장 등락 집계\", \"status\": \"있음\", \"ref\": \"F1\", \"source\": \"해외 시세 자료로 코드가 계산\", \"up\": \"0\", \"down\": \"1\", \"flat\": \"0\", \"averageRatePercent\": \"-1.25\", \"basedOn\": \"2026-10-20T05:00:31+09:00\", \"minutesBeforeMove\": 660}], \"todayChangePercent\": -2.1, \"etf\": {\"name\": \"TEST ETF ONE\", \"tracks\": \"TEST INDEX\", \"sector\": \"TEST SECTOR\", \"members\": [{\"rank\": 1, \"market\": \"US\", \"symbol\": \"TESTA\", \"name\": \"TEST CORP A\", \"weightPercent\": \"12.5\"}, {\"rank\": 2, \"market\": \"US\", \"symbol\": \"FAKEB\", \"weightPercent\": \"8.25\"}, {\"rank\": 3, \"market\": \"KR\", \"symbol\": \"TEST09\", \"name\": \"TEST CORP KR\"}], \"membersTruncated\": false}}"
+  ]
+ },
+ "moveWeakResearch": {
+  "event": {
+   "correlationId": "collect-2026-10-20T16:00:30+09:00",
+   "eventId": "dfd3a96b-26b2-5453-8ad9-58883cddfad8",
+   "eventType": "briefing.generated",
+   "occurredAt": "2026-10-20T16:00:31+09:00",
+   "payload": {
+    "asOf": "2026-10-20T16:00:31+09:00",
+    "changePercent": -1.5,
+    "evidence": [
+     {
+      "articleId": "a1",
+      "kind": "article",
+      "publishedAt": "2026-10-20T15:30:31+09:00",
+      "ref": "a1",
+      "source": "news.example.com",
+      "title": "기사 a1",
+      "url": "https://news.example.com/a1"
+     },
+     {
+      "articleId": "r1",
+      "kind": "article",
+      "publishedAt": "2026-10-20T13:00:31+09:00",
+      "ref": "r1",
+      "source": "news.example.com",
+      "title": "기사 r1",
+      "url": "https://news.example.com/r1"
+     }
+    ],
+    "generatedBy": "llm",
+    "moveMinutes": 1,
+    "name": "TEST ETF ONE",
+    "symbol": "TEST01",
+    "text": "[TEST ETF ONE(TEST01)] 16:00 기준 오늘 -2.10% · 1분 새 -1.50% 하락 (10,000 → 9,850)\n\n1. 기사가 영향을 줬을 수 있습니다.\n- 기사가 영향을 줬을 수 있습니다. [근거 1]\n- 기사가 영향을 줬을 수 있습니다. [근거 1]\n  근거 1. 기사 a1 — news.example.com, 발행 10-20 15:30 https://news.example.com/a1\n\n2. 다시 찾은 기사가 영향을 줬을 수 있습니다.\n- 다시 찾은 기사가 영향을 줬을 수 있습니다. [근거 2]\n- 다시 찾은 기사가 영향을 줬을 수 있습니다. [근거 2]\n  근거 2. 기사 r1 — news.example.com, 발행 10-20 13:00 https://news.example.com/r1\n\n확인하지 못한 것:\n- 미국 공시·미국 종목 등락률: 변동 종목에 미국 종목이 없어 조회하지 않음\n※ 투자 조언이 아니며, 위 내용은 변동 시점 전후에 공개된 자료로 추정한 것일 뿐 원인을 단정하지 않습니다.",
+    "todayChangePercent": -2.1
+   },
+   "producedAt": "2026-10-20T16:00:55+09:00",
+   "schemaVersion": 1
+  },
+  "llmInputs": [
+   "{\"symbol\": \"TEST01\", \"direction\": \"하락\", \"changePercent\": -1.5, \"moveAt\": \"2026-10-20T16:00:31+09:00\", \"priceHistoryStatus\": \"있음\", \"priceHistory\": [{\"at\": \"2026-10-20T16:00:21+09:00\", \"price\": 10000}], \"articlesStatus\": \"있음\", \"articles\": [{\"ref\": \"a1\", \"articleId\": \"a1\", \"title\": \"기사 a1\", \"summary\": \"\", \"source\": \"news.example.com\", \"publishedAt\": \"2026-10-20T15:30:31+09:00\", \"minutesFromMove\": -30}], \"filingsStatus\": \"해당 없음\", \"filings\": [], \"overseasCloseRatesStatus\": \"해당 없음\", \"overseasCloseRates\": [], \"overseasCloseRatesMissing\": [], \"background\": [], \"figures\": [{\"name\": \"원/달러 환율\", \"status\": \"없음\"}, {\"name\": \"코스피종합\", \"status\": \"없음\"}, {\"name\": \"코스닥종합\", \"status\": \"없음\"}, {\"name\": \"오늘 등락률 - 코스피종합 등락률\", \"status\": \"없음\"}, {\"name\": \"오늘 등락률 - 코스닥종합 등락률\", \"status\": \"없음\"}, {\"name\": \"미국 종목 직전 정규장 등락 집계\", \"status\": \"없음\"}], \"todayChangePercent\": -2.1, \"etf\": {\"name\": \"TEST ETF ONE\", \"tracks\": \"TEST INDEX\", \"sector\": \"TEST SECTOR\", \"members\": [{\"rank\": 1, \"market\": \"US\", \"symbol\": \"TESTA\", \"name\": \"TEST CORP A\", \"weightPercent\": \"12.5\"}, {\"rank\": 2, \"market\": \"US\", \"symbol\": \"FAKEB\", \"weightPercent\": \"8.25\"}, {\"rank\": 3, \"market\": \"KR\", \"symbol\": \"TEST09\", \"name\": \"TEST CORP KR\"}], \"membersTruncated\": false}}",
+   "{\"symbol\": \"TEST01\", \"direction\": \"하락\", \"changePercent\": -1.5, \"moveAt\": \"2026-10-20T16:00:31+09:00\", \"priceHistoryStatus\": \"있음\", \"priceHistory\": [{\"at\": \"2026-10-20T16:00:21+09:00\", \"price\": 10000}], \"articlesStatus\": \"있음\", \"articles\": [{\"ref\": \"a1\", \"articleId\": \"a1\", \"title\": \"기사 a1\", \"summary\": \"\", \"source\": \"news.example.com\", \"publishedAt\": \"2026-10-20T15:30:31+09:00\", \"minutesFromMove\": -30}], \"filingsStatus\": \"해당 없음\", \"filings\": [], \"overseasCloseRatesStatus\": \"해당 없음\", \"overseasCloseRates\": [], \"overseasCloseRatesMissing\": [], \"background\": [], \"figures\": [{\"name\": \"원/달러 환율\", \"status\": \"없음\"}, {\"name\": \"코스피종합\", \"status\": \"없음\"}, {\"name\": \"코스닥종합\", \"status\": \"없음\"}, {\"name\": \"오늘 등락률 - 코스피종합 등락률\", \"status\": \"없음\"}, {\"name\": \"오늘 등락률 - 코스닥종합 등락률\", \"status\": \"없음\"}, {\"name\": \"미국 종목 직전 정규장 등락 집계\", \"status\": \"없음\"}], \"todayChangePercent\": -2.1, \"etf\": {\"name\": \"TEST ETF ONE\", \"tracks\": \"TEST INDEX\", \"sector\": \"TEST SECTOR\", \"members\": [{\"rank\": 1, \"market\": \"US\", \"symbol\": \"TESTA\", \"name\": \"TEST CORP A\", \"weightPercent\": \"12.5\"}, {\"rank\": 2, \"market\": \"US\", \"symbol\": \"FAKEB\", \"weightPercent\": \"8.25\"}, {\"rank\": 3, \"market\": \"KR\", \"symbol\": \"TEST09\", \"name\": \"TEST CORP KR\"}], \"membersTruncated\": false}, \"researchArticlesStatus\": \"있음\", \"researchArticles\": [{\"ref\": \"r1\", \"articleId\": \"r1\", \"title\": \"기사 r1\", \"summary\": \"\", \"source\": \"news.example.com\", \"publishedAt\": \"2026-10-20T13:00:31+09:00\", \"minutesFromMove\": -180}], \"rewrite\": {\"sentenceNo\": 2, \"sentence\": {\"title\": \"업종 소식이 영향을 줬을 수 있습니다.\", \"detail\": \"업종 소식이 영향을 줬을 수 있습니다.\", \"refs\": [\"a1\"], \"meaning\": \"업종 소식이 영향을 줬을 수 있습니다.\", \"meaningRefs\": [\"a1\"]}, \"shortfall\": \"변동 직전에 나온 해당 업종 기사가 더 필요합니다.\", \"newRefs\": [\"r1\"]}}"
+  ],
+  "queryInputs": [
+   "{\"symbol\": \"TEST01\", \"direction\": \"하락\", \"changePercent\": -1.5, \"moveAt\": \"2026-10-20T16:00:31+09:00\", \"foundArticleTitles\": [\"기사 a1\"], \"figures\": [{\"name\": \"원/달러 환율\", \"status\": \"없음\"}, {\"name\": \"코스피종합\", \"status\": \"없음\"}, {\"name\": \"코스닥종합\", \"status\": \"없음\"}, {\"name\": \"오늘 등락률 - 코스피종합 등락률\", \"status\": \"없음\"}, {\"name\": \"오늘 등락률 - 코스닥종합 등락률\", \"status\": \"없음\"}, {\"name\": \"미국 종목 직전 정규장 등락 집계\", \"status\": \"없음\"}], \"etf\": {\"name\": \"TEST ETF ONE\", \"tracks\": \"TEST INDEX\", \"sector\": \"TEST SECTOR\", \"members\": [{\"rank\": 1, \"market\": \"US\", \"symbol\": \"TESTA\", \"name\": \"TEST CORP A\", \"weightPercent\": \"12.5\"}, {\"rank\": 2, \"market\": \"US\", \"symbol\": \"FAKEB\", \"weightPercent\": \"8.25\"}, {\"rank\": 3, \"market\": \"KR\", \"symbol\": \"TEST09\", \"name\": \"TEST CORP KR\"}], \"membersTruncated\": false}, \"sentence\": \"업종 소식이 영향을 줬을 수 있습니다.: 업종 소식이 영향을 줬을 수 있습니다. 업종 소식이 영향을 줬을 수 있습니다.\", \"shortfall\": \"변동 직전에 나온 해당 업종 기사가 더 필요합니다.\"}"
+  ]
+ }
+}

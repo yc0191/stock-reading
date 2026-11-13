@@ -18,7 +18,7 @@ class OperationsReader {
     /** 응답에 항상 담는 수집 종류와 순서. */
     static final List<String> COLLECTION_KINDS = List.of("pre-open", "quote-1s", "intraday", "post-close");
 
-    /** 건수가 0이어도 항상 담는 시세 실패 종류. market.daily.responded v2 스키마의 required와 같다. */
+    /** 건수가 0이어도 항상 담는 시세 실패 종류. market.daily 응답 v2 스키마의 required와 같다. */
     static final List<String> QUOTE_FAILURE_KINDS = List.of("TOKEN_ISSUE_FAILED", "HTTP_ERROR", "RESULT_CODE_FAILED",
             "EMPTY_PRICE", "PRICE_PARSE_FAILED", "CONNECTION_FAILED", "TIMEOUT", "FIELD_MISMATCH",
             "TICK_SKIPPED_RATE_LIMITED", "TICK_SKIPPED_SUPERSEDED", "TICK_SKIPPED_OTHER");

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stock-reading.local/contracts/daily.collection.completed.v1",
+  "title": "daily.collection.completed v1",
+  "description": "데일리 판(아침 판, 마감 후 판)의 시작 신호. 수집기가 그 판의 자료 수집이 끝났거나(일부 실패 포함) 휴장이라 수집하지 않았음을 판마다 한 건 알린다. 아침 판은 평일 개장 흐름 구간이 끝나는 시각(기본 09:10)에 장 시작 전 수집 결과를 담아, 마감 후 판은 마감 후 수집(타이머 또는 수동 실행 명령)이 끝나는 즉시 낸다. 휴장일 판단은 수집기에만 있고, 휴장일에는 그 판 시각에 status market-closed 를 낸다. 브리핑은 같은 날 같은 판을 한 번만 만들고, 한도 시각까지 이 알림이 없으면 있는 자료로 판을 시작한다. 메시지 키는 edition 이다. 기사 수집 완료(collection.completed)와는 다른 알림이다.",
+  "type": "object",
+  "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "const": "daily.collection.completed" },
+    "schemaVersion": { "const": 1 },
+    "occurredAt": { "type": "string", "format": "date-time", "description": "알림을 만든 시각." },
+    "producedAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1, "description": "마감 후 판은 마감 후 수집 회차의 correlationId를 이어받는다. 아침 판과 휴장 알림은 daily-<edition>-<scheduledFor>다. 브리핑은 이 값으로 판을 만든다." },
+    "payload": {
+      "type": "object",
+      "required": ["edition", "status", "scheduledFor", "missingSources"],
+      "properties": {
+        "edition": { "enum": ["morning", "post-close"], "description": "시작할 판. briefing.daily.generated 의 edition 과 같은 값이다." },
+        "status": { "enum": ["collected", "market-closed"], "description": "collected: 수집이 끝났다(못 받은 자료는 missingSources). market-closed: 휴장이라 수집하지 않았고 브리핑은 그날 그 판을 만들지 않는다." },
+        "scheduledFor": { "type": "string", "format": "date-time", "description": "판의 기준 시각. 판은 이 시각까지 받은 자료만 쓴다. 아침 판은 알림 시각(개장 흐름 구간 끝), 마감 후 판은 마감 후 수집이 끝난 시각이다. 이 시각의 한국 날짜가 판의 날짜다." },
+        "missingSources": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z-]*$" },
+          "description": "이번 수집에서 하나라도 받지 못한 자료 종류 이름. 아침 판: world-index(세계지수 아메리카), overseas-daily-price(보유 미국 종목 해외 일봉), sec-filings(SEC 공시). 마감 후 판: daily-price(일봉), world-index(세계지수), exchange-rate-summary(환율종합), market-summary(시장종합). 장 시작 전 수집이 그날 돌지 않았거나 시세 출처가 증권사가 아니면 그 수집의 종류를 모두 넣는다. 보유 종목이 드러나므로 종목코드·티커는 싣지 않는다. 빈 배열이면 모두 받은 것이고, market-closed 이면 늘 빈 배열이다."
+        }
+      }
+    }
+  }
+}

@@ -1,4 +1,4 @@
-"""작업 기록(job_run·job_log)을 실제 Postgres에 저장한 뒤 다시 읽어 확인한다.
+"""작업 기록(job_run·job_log·job_step)을 실제 Postgres에 저장한 뒤 다시 읽어 확인한다.
 
 BRIEFING_IT_DB_URL·BRIEFING_IT_DB_USER·BRIEFING_IT_DB_PASSWORD가 모두 있을 때만 실행하고, 없으면 건너뛴다.
 대상은 Flyway가 briefing 스키마에 services/briefing/db/migration을 적용해 둔 테스트 전용 DB라고 가정한다(scripts/test-all.sh가 준비한다).
@@ -61,14 +61,15 @@ def entry(job_id, entry_type=EntryType.RESENT, data=None, **changes):
     return JobLogEntry(**values)
 
 
-def test_flyway_created_the_briefing_tables_and_recorded_versions_1_to_3(store, connect):
+def test_flyway_created_the_briefing_tables_and_recorded_versions_1_to_5(store, connect):
     rows = fetch(connect, "SELECT table_name FROM information_schema.tables WHERE table_schema = 'briefing' "
-                          "AND table_name IN ('job_run', 'job_log', 'collection_completed', 'failed_jobs') "
-                          "ORDER BY table_name")
-    applied = fetch(connect, "SELECT version, success FROM briefing.flyway_schema_history WHERE version IS NOT NULL")
+                          "AND table_name IN ('job_run', 'job_log', 'collection_completed', 'failed_jobs', "
+                          "'market_closed_edition', 'job_step') ORDER BY table_name")
+    applied = fetch(connect, "SELECT version, success FROM briefing.flyway_schema_history WHERE version IS NOT NULL "
+                             "ORDER BY installed_rank")
 
-    assert rows == [("collection_completed",), ("job_log",), ("job_run",)]
-    assert applied == [("1", True), ("2", True), ("3", True)]
+    assert rows == [("collection_completed",), ("job_log",), ("job_run",), ("job_step",), ("market_closed_edition",)]
+    assert applied == [("1", True), ("2", True), ("3", True), ("4", True), ("5", True)]
 
 
 def test_job_run_line_is_made_running_and_updated_when_the_job_ends(store, connect):
@@ -301,3 +302,72 @@ def test_the_moves_started_in_the_range_are_read_back_with_their_results(store):
             for r in runs] == [
         ("it-review-move-1", "ITR001", first, 2.1, "succeeded", "llm", None),
         ("it-review-move-2", "ITR001", second, -1.8, "failed", None, "test-failure")]
+
+
+# 다른 테스트가 쓰지 않는 날짜(it-edition- 접두 작업만 이 날짜에 둔다).
+EDITION_DAY = datetime(2026, 2, 10, tzinfo=KST)
+
+
+def test_whether_an_edition_was_started_that_korean_day_is_read_back(store):
+    start_at(store, "it-edition-post-close-1", JobKind.POST_CLOSE, EDITION_DAY.replace(hour=16, minute=31))
+    # 한국 시간 다음 날 00:30(UTC로는 같은 날)에 시작한 아침 판은 다음 날 것으로 센다.
+    start_at(store, "it-edition-morning-1", JobKind.MORNING, EDITION_DAY + timedelta(days=1, minutes=30))
+
+    assert store.edition_started(JobKind.POST_CLOSE, EDITION_DAY.date()) is True
+    assert store.edition_started(JobKind.MORNING, EDITION_DAY.date()) is False
+    assert store.edition_started(JobKind.MORNING, (EDITION_DAY + timedelta(days=1)).date()) is True
+    assert store.edition_started(JobKind.POST_CLOSE, (EDITION_DAY - timedelta(days=1)).date()) is False
+
+
+# 다른 테스트가 쓰지 않는 날짜(휴장 기록만 이 날짜에 둔다).
+CLOSED_DAY = datetime(2026, 2, 17, tzinfo=KST)
+
+
+def test_a_market_closed_edition_is_kept_once_and_not_counted_as_a_job_run(store, connect):
+    day = CLOSED_DAY.date()
+    assert store.mark_market_closed(JobKind.MORNING, day, "it-closed-1", CLOSED_DAY.replace(hour=9, minute=10)) is True
+    # 같은 날 같은 판의 두 번째 알림은 오류 없이 첫 줄만 남긴다.
+    assert store.mark_market_closed(JobKind.MORNING, day, "it-closed-2", CLOSED_DAY.replace(hour=9, minute=11)) is True
+
+    assert store.market_closed(JobKind.MORNING, day) is True
+    assert store.market_closed(JobKind.POST_CLOSE, day) is False
+    assert store.market_closed(JobKind.MORNING, (CLOSED_DAY + timedelta(days=1)).date()) is False
+    assert fetch(connect, "SELECT event_id FROM briefing.market_closed_edition WHERE edition_day = %s", (day,)) == [
+        ("it-closed-1",)]
+    assert store.edition_started(JobKind.MORNING, day) is False
+
+
+def test_job_steps_are_kept_one_line_per_call_under_the_job_and_found_by_the_trace_id(store, connect):
+    from briefing.job_step import JobStep, StepResult
+    job_id = "it-step-1"
+    start(store, job_id)
+    later = AT + timedelta(seconds=3)
+    calls = [JobStep(job_id, "market.history", "market/history", AT, later, StepResult.FAILED, 1, "it-trace-1",
+                     "timeout"),
+             JobStep(job_id, "market.history", "market/history", later, later, StepResult.SUCCEEDED, 2, "it-trace-1"),
+             JobStep(job_id, "llm", "llm/test-model", later, later, StepResult.SUCCEEDED, 1, "it-trace-1")]
+    assert all(store.record_step(step) for step in calls)
+
+    rows = fetch(connect, "SELECT step, target, started_at, finished_at, result, failure_kind, attempt "
+                          "FROM briefing.job_step WHERE correlation_id = %s ORDER BY id", ("it-trace-1",))
+    assert rows == [("market.history", "market/history", AT, later, "failed", "timeout", 1),
+                    ("market.history", "market/history", later, later, "succeeded", None, 2),
+                    ("llm", "llm/test-model", later, later, "succeeded", None, 1)]
+
+
+def test_a_job_step_needs_its_run_line_and_a_known_result(store, connect):
+    from briefing.job_step import JobStep, StepResult
+    # 작업 줄이 없는 호출 기록은 저장되지 않고, 작업을 '기록 실패'로 표시하지도 않는다(진단용 기록이다).
+    orphan = JobStep("it-step-missing", "llm", "llm/test-model", AT, AT, StepResult.SUCCEEDED, 1, "it-trace-2")
+    assert store.record_step(orphan) is False
+    assert store.has_failed("it-step-missing") is False
+    import psycopg
+    start(store, "it-step-2")
+    with pytest.raises(psycopg.errors.CheckViolation):
+        connection = connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("INSERT INTO briefing.job_step (job_id, step, target, started_at, finished_at, result, "
+                               "attempt) VALUES (%s, 'llm', 'llm/x', %s, %s, 'resent', 1)", ("it-step-2", AT, AT))
+        finally:
+            connection.close()

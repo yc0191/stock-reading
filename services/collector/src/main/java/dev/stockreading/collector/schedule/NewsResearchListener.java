@@ -44,7 +44,7 @@ class NewsResearchListener {
         this.mapper = mapper;
     }
 
-    // schedule.tick 리스너들과 그룹을 나눠 둔다. 같은 그룹이면 토픽 배정이 섞여 어느 한쪽이 메시지를 놓칠 수 있다.
+    // 다른 리스너(수동 실행 명령)와 그룹을 나눠 둔다. 같은 그룹이면 토픽 배정이 섞여 어느 한쪽이 메시지를 놓칠 수 있다.
     // 검색어와 종목은 보유 종목을 드러낼 수 있어 로그에 남기지 않고 요청 식별자와 개수만 남긴다.
     @KafkaListener(topics = Topics.NEWS_RESEARCH_REQUESTED, groupId = "collector-news-research")
     void onRequest(String message) {
