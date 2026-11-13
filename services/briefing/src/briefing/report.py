@@ -701,7 +701,7 @@ def _rewrite_cause(writer: LlmWriter, report_input: ReportInput, current: Cause,
     for attempt in range(1, writer.max_attempts + 1):
         response: str | None = None
         try:
-            response = writer.client.complete(SYSTEM_PROMPT + REWRITE_ADDENDUM, user, OUTPUT_SCHEMA)
+            response = writer.client.complete(SYSTEM_PROMPT, user, OUTPUT_SCHEMA, REWRITE_ADDENDUM)
             output = parse_output(response, allowed, tickers)
             if output.insufficient_evidence or len(output.causes) != 1:
                 raise InvalidOutput("rewrite must return exactly one cause")

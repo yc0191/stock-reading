@@ -11,7 +11,7 @@ KEY_PLACEHOLDERS = frozenset({"", "change-me"})
 
 
 class LlmClient(Protocol):
-    def complete(self, system: str, user: str, output_schema: dict[str, Any]) -> str: ...
+    def complete(self, system: str, user: str, output_schema: dict[str, Any], addendum: str = "") -> str: ...
 
 
 @dataclass(frozen=True)
@@ -57,12 +57,17 @@ class AnthropicClient:
     def __repr__(self) -> str:
         return f"AnthropicClient(model={self.model!r})"
 
-    def complete(self, system: str, user: str, output_schema: dict[str, Any]) -> str:
+    def complete(self, system: str, user: str, output_schema: dict[str, Any], addendum: str = "") -> str:
+        # 캐싱 표시는 지시문 블록에만 붙인다. 다시 쓰기 덧붙임은 별도 블록이라, 같은 종류의 처음 작성 호출과
+        # 첫 블록이 같아 그 캐시를 그대로 읽는다.
+        blocks: list[dict[str, Any]] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        if addendum:
+            blocks.append({"type": "text", "text": addendum})
         try:
             response = self._client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
-                system=system,
+                system=blocks,
                 messages=[{"role": "user", "content": user}],
                 output_config={"format": {"type": "json_schema", "schema": output_schema}},
             )

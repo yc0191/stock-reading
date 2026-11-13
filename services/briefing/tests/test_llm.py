@@ -51,7 +51,7 @@ def test_client_sends_model_system_and_the_given_json_schema_and_reads_the_text(
     assert client.complete("system", "user", SCHEMA) == VALID
     [request] = client._client.messages.requests
     assert request["model"] == "claude-sonnet-5-5"
-    assert request["system"] == "system"
+    assert request["system"] == [{"type": "text", "text": "system", "cache_control": {"type": "ephemeral"}}]
     assert request["messages"] == [{"role": "user", "content": "user"}]
     assert request["output_config"] == {"format": {"type": "json_schema", "schema": SCHEMA}}
 
@@ -66,3 +66,30 @@ def test_client_treats_refusal_or_truncation_as_a_failed_attempt(fake_sdk):
 
 def test_client_repr_hides_the_key(fake_sdk):
     assert FAKE_KEY not in repr(AnthropicClient(FAKE_KEY, DEFAULT_MODEL))
+
+
+def test_rewrite_addendum_goes_in_a_second_block_so_the_first_block_matches_the_original_call(fake_sdk):
+    fake_sdk.behaviour = lambda _kwargs: types.SimpleNamespace(
+        stop_reason="end_turn", content=[types.SimpleNamespace(type="text", text=VALID)])
+    client = AnthropicClient(FAKE_KEY, DEFAULT_MODEL)
+
+    client.complete("system", "user", SCHEMA)
+    client.complete("system", "user", SCHEMA, "addendum")
+    first, rewrite = client._client.messages.requests
+
+    assert rewrite["system"][0] == first["system"][0]
+    assert rewrite["system"][1] == {"type": "text", "text": "addendum"}
+    assert len(rewrite["system"]) == 2
+
+
+def test_search_query_call_also_carries_the_cache_mark(fake_sdk):
+    from briefing.research import QUERY_SYSTEM_PROMPT
+
+    fake_sdk.behaviour = lambda _kwargs: types.SimpleNamespace(
+        stop_reason="end_turn", content=[types.SimpleNamespace(type="text", text=VALID)])
+    client = AnthropicClient(FAKE_KEY, DEFAULT_MODEL)
+
+    client.complete(QUERY_SYSTEM_PROMPT.format(max_queries=3), "user", SCHEMA)
+
+    [request] = client._client.messages.requests
+    assert [b.get("cache_control") for b in request["system"]] == [{"type": "ephemeral"}]

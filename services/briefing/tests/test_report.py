@@ -15,7 +15,9 @@ from briefing.report import (
     LLM_DISCLAIMER,
     LLM_INSUFFICIENT,
     OUTPUT_SCHEMA,
+    REWRITE_ADDENDUM,
     SYSTEM_PROMPT,
+    Cause,
     LlmWriter,
     ReportStage,
     RuleBasedWriter,
@@ -73,7 +75,8 @@ class FakeLlm:
         self.calls = []
         self.schemas = []
 
-    def complete(self, system, user, output_schema):
+    def complete(self, system, user, output_schema, addendum=""):
+        system = system + addendum
         self.calls.append((system, user))
         self.schemas.append(output_schema)
         response = self.responses.pop(0)
@@ -666,3 +669,20 @@ def test_headline_uses_the_symbol_alone_when_the_response_has_no_etf_info():
     payload = published[0].value["payload"]
     assert payload["text"].startswith("[TEST01] 16:00")
     assert "name" not in payload
+
+
+def test_a_move_rewrite_sends_the_original_prompt_and_the_addendum_separately():
+    class Split:
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, system, user, output_schema, addendum=""):
+            self.calls.append((system, addendum))
+            return output([("금리 결정", "금리 결정이 영향을 줬을 수 있습니다.", ["a1"], "같은 시기 금리 기사가 있었습니다.", ["a1"])])
+
+    llm = Split()
+    current = Cause("제목", "구체 문장", ("a1",), "뜻 문장", ("a1",), "더 필요한 자료")
+    LlmWriter(llm).rewrite_cause(report_input(), current, 1, ())
+
+    # 첫 블록(system)이 처음 작성 호출과 같아야 캐시를 읽는다.
+    assert llm.calls == [(SYSTEM_PROMPT, REWRITE_ADDENDUM)]

@@ -495,7 +495,8 @@ class DailyLlm(FakeLlm):
         super().__init__(*outputs)
         self.edition = edition
 
-    def complete(self, system, user, output_schema):
+    def complete(self, system, user, output_schema, addendum=""):
+        system = system + addendum
         output = super().complete(system, user, output_schema)
         if "다시 쓰기 요청" in system or isinstance(output, Exception):
             return output

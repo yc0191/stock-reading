@@ -57,7 +57,8 @@ class FakeLlm:
         self.responses = list(responses)
         self.calls = []
 
-    def complete(self, system, user, output_schema):
+    def complete(self, system, user, output_schema, addendum=""):
+        system = system + addendum
         self.calls.append((system, user, output_schema))
         response = self.responses.pop(0)
         if isinstance(response, Exception):

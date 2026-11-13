@@ -67,7 +67,8 @@ class FakeLlm:
         self.outputs = list(outputs)
         self.calls = 0
 
-    def complete(self, system, user, output_schema):
+    def complete(self, system, user, output_schema, addendum=""):
+        system = system + addendum
         self.calls += 1
         return self.outputs.pop(0)
 

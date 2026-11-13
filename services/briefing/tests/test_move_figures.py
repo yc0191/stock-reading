@@ -259,7 +259,8 @@ def test_existing_inputs_stay_as_they_were():
 
 def test_a_cited_figure_reaches_the_event_and_passes_the_schema():
     class OneAnswer:
-        def complete(self, system, user, output_schema):
+        def complete(self, system, user, output_schema, addendum=""):
+            system = system + addendum
             return json.dumps({"causes": [{"title": "시장 전체 하락", "detail": "시장 전체가 내렸습니다.", "refs": ["F2"],
                                            "meaning": "시장 전체보다 더 내렸을 수 있습니다.", "meaningRefs": ["F4", "F2"]}],
                                "insufficientEvidence": False}, ensure_ascii=False)

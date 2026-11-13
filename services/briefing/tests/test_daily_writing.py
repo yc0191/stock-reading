@@ -245,7 +245,8 @@ def test_each_edition_asks_with_its_own_prompt_and_schema():
         def __init__(self, reply):
             self.reply, self.calls = reply, []
 
-        def complete(self, system, user, schema):
+        def complete(self, system, user, schema, addendum=""):
+            system = system + addendum
             self.calls.append((system, schema))
             return self.reply
 
@@ -266,7 +267,8 @@ class Sequence:
     def __init__(self, *replies):
         self.replies, self.calls = list(replies), []
 
-    def complete(self, system, user, schema):
+    def complete(self, system, user, schema, addendum=""):
+        system = system + addendum
         self.calls.append(user)
         return self.replies.pop(0)
 
@@ -687,3 +689,25 @@ def test_the_post_close_prompt_reads_us_assets_with_the_exchange_rate_and_ends_s
     assert "관련 없는 기사는 인용하지 않습니다" in SYSTEM_PROMPT_POST_CLOSE
     assert '"~습니다"로 끝맺습니다' in SYSTEM_PROMPT_POST_CLOSE
     assert "refs는 빈 목록" in SYSTEM_PROMPT_POST_CLOSE and "찾지 못했다" not in SYSTEM_PROMPT_POST_CLOSE
+
+
+@pytest.mark.parametrize("edition", ["post-close", "morning"])
+def test_a_daily_rewrite_sends_the_original_prompt_and_the_addendum_separately(edition):
+    from briefing.daily_prompts import REWRITE_ADDENDUM, REWRITE_ADDENDUM_POST_CLOSE
+
+    class Split:
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, system, user, schema, addendum=""):
+            self.calls.append((system, addendum))
+            return "{}"
+
+    i = replace(issue_input(), edition=edition)
+    split = Split()
+    current = Point("이유입니다.", ("E1",), "더 필요한 자료", POINT_ETF, "TEST01")
+    DailyLlmWriter(split).rewrite_point(i, build_sections(i), current, 1, ())
+
+    expected = (SYSTEM_PROMPT_POST_CLOSE, REWRITE_ADDENDUM_POST_CLOSE) if edition == "post-close" \
+        else (SYSTEM_PROMPT, REWRITE_ADDENDUM)
+    assert set(split.calls) == {expected}

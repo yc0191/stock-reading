@@ -1229,13 +1229,13 @@ class DailyLlmWriter:
         user = json.dumps(data, ensure_ascii=False)
         allowed = frozenset(e.ref for s in sections for e in s.entries)
         tickers = self._forbidden_tickers(i)
-        prompt = SYSTEM_PROMPT_POST_CLOSE + REWRITE_ADDENDUM_POST_CLOSE if i.edition == EDITION_POST_CLOSE \
-            else SYSTEM_PROMPT + REWRITE_ADDENDUM
+        prompt, addendum = (SYSTEM_PROMPT_POST_CLOSE, REWRITE_ADDENDUM_POST_CLOSE) \
+            if i.edition == EDITION_POST_CLOSE else (SYSTEM_PROMPT, REWRITE_ADDENDUM)
         rejected: list[LlmAttempt] = []
         for attempt in range(1, self.max_attempts + 1):
             raw: str | None = None
             try:
-                raw = self.client.complete(prompt, user, OUTPUT_SCHEMA)
+                raw = self.client.complete(prompt, user, OUTPUT_SCHEMA, addendum)
                 output = parse_output(raw, allowed, tickers, weak_without_refs=current.kind == POINT_ETF)
                 if output.insufficient_evidence or len(output.points) != 1:
                     raise InvalidDailyOutput("rewrite must return exactly one point")
