@@ -20,31 +20,30 @@ THEMES = {
 
 SERVICES = {
     "collector": dict(title="수집기", lang="Java", logic=[
-        "타이머: 1초 시세, 주기마다 뉴스·공시·지수·환율",
+        "1초 시세, 주기마다 뉴스·공시·지수·환율",
         "평일 아침 ETF 구성 종목 조회",
         "마감 후 실패분 재시도 → 판 시작 알림"]),
     "briefing": dict(title="브리핑", lang="Python", logic=[
-        "급변동 한 건 / 하루 두 번 판마다 작업",
-        "LLM 문장의 근거 번호를 코드가 검사",
-        "근거 약한 문장만 다시 검색해 고쳐 씀",
-        "보내기 전 전체 검사, 단계별 실행 기록"]),
+        "급변동 한 건 / 판마다 작업",
+        "근거 번호 검사, 약한 문장 재검색",
+        "보내기 전 전체 검사, 단계 기록"]),
     "market": dict(title="시세처리기", lang="Java", logic=[
         "시세·지수·환율·구성 종목 저장",
-        "급변동 감지: 연속 확인, 재발행 간격",
+        "급변동 감지(연속 확인)",
         "조회 API: 시세 이력·배경 자료"]),
     "news": dict(title="뉴스처리기", lang="Java", logic=[
         "기사·공시 저장(중복 제거)",
         "조회 API: 시각 범위 안 기사·공시",
-        "ETF로 꺼내면 구성 종목 기사까지"]),
+        "ETF면 구성 종목 기사까지"]),
     "notifier": dict(title="발송기", lang="Java", logic=[
-        "멤버 수신 설정으로 받는 사람 고름",
-        "글자판 + HTML·그림 메일",
+        "멤버별로 받는 사람 고름",
+        "글자판 + HTML·차트 메일",
         "기본 드라이런, 주소 마스킹"]),
 }
 
 
 def chip_width(name):
-    return sum(12.5 if ord(ch) > 127 else 7.0 for ch in name) + 22
+    return sum(14.0 if ord(ch) > 127 else 7.8 for ch in name) + 24
 
 
 def svg(theme):
@@ -79,23 +78,23 @@ def svg(theme):
 
     def chip(cx, cy, name, kind):
         w = chip_width(name)
-        a(f'<rect x="{cx - w / 2}" y="{cy - 11}" width="{w}" height="22" rx="11" fill="{c["chip"]}" stroke="{col[kind]}" stroke-width="1.5"/>')
-        text(cx, cy + 4.5, name, 12.5, 600, color=col[kind], anchor="middle")
+        a(f'<rect x="{cx - w / 2}" y="{cy - 13}" width="{w}" height="26" rx="13" fill="{c["chip"]}" stroke="{col[kind]}" stroke-width="1.5"/>')
+        text(cx, cy + 5, name, 14, 600, color=col[kind], anchor="middle")
 
     def ext(x, y, w, h, title, sub=None):
         a(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="10" fill="{c["ext"]}" stroke="{c["extline"]}" '
           f'stroke-width="1.5" stroke-dasharray="5 4"/>')
-        text(x + w / 2, y + h / 2 + (-3 if sub else 5), title, 14, 600, anchor="middle")
+        text(x + w / 2, y + h / 2 + (-3 if sub else 6), title, 16, 600, anchor="middle")
         if sub:
-            text(x + w / 2, y + h / 2 + 15, sub, 11.5, color=c["sub"], anchor="middle")
+            text(x + w / 2, y + h / 2 + 17, sub, 13, color=c["sub"], anchor="middle")
 
     def service(key, x, y, w, h):
         s = SERVICES[key]
         a(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="12" fill="{c["svc"]}" stroke="{c["svcline"]}" stroke-width="1.6"/>')
-        text(x + 16, y + 28, s["title"], 17, 700)
-        text(x + 16 + len(s["title"]) * 17 + 8, y + 28, s["lang"], 12, color=c["sub"])
+        text(x + 16, y + 30, s["title"], 20, 700)
+        text(x + 16 + len(s["title"]) * 20 + 10, y + 30, s["lang"], 13, color=c["sub"])
         for i, line in enumerate(s["logic"]):
-            text(x + 16, y + 54 + i * 21, "· " + line, 13)
+            text(x + 16, y + 60 + i * 24, "· " + line, 15)
 
     # 위: 수집기·발송기, 가운데: Kafka, 아래: 시세처리기·브리핑·뉴스처리기
     TOP, TOP_H = 44, 128
@@ -108,8 +107,8 @@ def svg(theme):
     service("news", 916, LOW, 360, LOW_H)
 
     a(f'<rect x="24" y="{BUS}" width="1252" height="{BUS_H}" rx="16" fill="{c["bus"]}" stroke="{c["busline"]}" stroke-width="2"/>')
-    text(44, BUS + 30, "Kafka", 18, 700)
-    text(44, BUS + 50, "이벤트 허브", 12, color=c["sub"])
+    text(44, BUS + 32, "Kafka", 20, 700)
+    text(44, BUS + 54, "이벤트 허브", 14, color=c["sub"])
 
     top_b, low_t = TOP + TOP_H, LOW
     lane1, lane2, lane3, lane4 = BUS + 40, BUS + 80, BUS + 118, BUS + 154
@@ -139,9 +138,9 @@ def svg(theme):
     # 내부 조회(HTTP): 브리핑이 시세처리기·뉴스처리기에 직접 묻는다. Kafka를 거치지 않는다.
     qy = LOW + 70
     path([(454, qy), (394, qy)], "p", dash=True)
-    text(424, qy - 8, "조회", 11.5, 600, color=c["purple"], anchor="middle")
+    text(424, qy - 9, "조회", 13, 600, color=c["purple"], anchor="middle")
     path([(856, qy), (916, qy)], "p", dash=True)
-    text(886, qy - 8, "조회", 11.5, 600, color=c["purple"], anchor="middle")
+    text(886, qy - 9, "조회", 13, 600, color=c["purple"], anchor="middle")
 
     # 외부
     ext(24, 64, 128, 88, "외부 API", "시세 · 뉴스 · 공시")
@@ -155,21 +154,21 @@ def svg(theme):
     # 저장소
     DB = LLM + 72
     a(f'<rect x="24" y="{DB}" width="1252" height="52" rx="10" fill="{c["db"]}" stroke="{c["dbline"]}" stroke-width="1.5"/>')
-    text(650, DB + 24, "PostgreSQL", 15, 600, anchor="middle")
-    text(650, DB + 42, "서비스별 스키마 · 종목·멤버 표는 필요한 서비스(수집기·발송기 포함)만 읽기 전용", 12, color=c["sub"], anchor="middle")
+    text(650, DB + 24, "PostgreSQL", 17, 600, anchor="middle")
+    text(650, DB + 43, "서비스별 스키마 · 종목·멤버 표는 필요한 서비스(수집기·발송기 포함)만 읽기 전용", 14, color=c["sub"], anchor="middle")
     for x in (210, 560, 1096):
         path([(x, LOW + LOW_H), (x, DB)], head=False)
 
     # 범례
     ly = DB + 84
-    text(24, ly, "실선 = Kafka 이벤트(내보내는 서비스 → 받는 서비스)", 12.5, 600)
-    x = 420
+    text(24, ly, "실선 = Kafka 이벤트(보내는 쪽 → 받는 쪽)", 14, 600)
+    x = 400
     for kind, label, dash in (("r", "급변동 경로", False), ("b", "데일리 판", False), ("g", "수집·저장", False),
                               ("p", "내부 조회(HTTP, Kafka 안 거침)", True)):
         da = ' stroke-dasharray="6 4"' if dash else ''
         a(f'<line x1="{x}" y1="{ly - 4}" x2="{x + 28}" y2="{ly - 4}" stroke="{col[kind]}" stroke-width="2.5"{da}/>')
-        text(x + 36, ly, label, 12.5)
-        x += 36 + len(label) * 12 + 34
+        text(x + 36, ly, label, 14)
+        x += 36 + len(label) * 13 + 40
     a('</svg>')
     return "\n".join(out)
 
