@@ -97,7 +97,15 @@ class SnapshotContractTest {
     void moveSampleWithDetectionFieldsMatchesSchema() throws IOException {
         assertThat(ContractSchemas.validate("market.move.v1.schema.json", ContractSchemas.sample("market.move.sample.json"))).isEmpty();
         assertThat(ContractSchemas.sample("market.move.sample.json"))
-                .contains("\"detectionType\": \"window\"").contains("moveStartedAt");
+                .contains("\"detectionType\": \"window\"").contains("moveStartedAt").contains("todayChangePercent");
+    }
+
+    @Test
+    void moveWithoutTodayChangeStillMatchesSchema() throws IOException {
+        String older = ContractSchemas.sample("market.move.sample.json").replaceAll(",\\s*\"todayChangePercent\": [-0-9.]+", "");
+
+        assertThat(older).doesNotContain("todayChangePercent");
+        assertThat(ContractSchemas.validate("market.move.v1.schema.json", older)).isEmpty();
     }
 
     @Test
@@ -111,7 +119,7 @@ class SnapshotContractTest {
     void producedMoveMatchesSchemaWithAndWithoutDetectionFields() throws IOException {
         var withFields = new dev.stockreading.market.event.MovePayload(
                 "TEST01", 10_000, 9_850, new java.math.BigDecimal("-1.50"), new java.math.BigDecimal("1.0"),
-                "2026-10-20T16:00:31+09:00", "prevClose", "2026-10-20T16:00:31+09:00");
+                "2026-10-20T16:00:31+09:00", "prevClose", "2026-10-20T16:00:31+09:00", new java.math.BigDecimal("-1.50"));
         var legacy = new dev.stockreading.market.event.MovePayload(
                 "TEST01", 10_000, 9_850, new java.math.BigDecimal("-1.50"), new java.math.BigDecimal("1.0"),
                 "2026-10-20T16:00:31+09:00");
@@ -123,6 +131,7 @@ class SnapshotContractTest {
                     clock, "market.move", at, "collect-x", payload));
             assertThat(ContractSchemas.validate("market.move.v1.schema.json", json)).isEmpty();
         }
-        assertThat(mapper.writeValueAsString(legacy)).doesNotContain("detectionType").doesNotContain("null");
+        assertThat(mapper.writeValueAsString(legacy)).doesNotContain("detectionType").doesNotContain("todayChangePercent")
+                .doesNotContain("null");
     }
 }

@@ -1,10 +1,12 @@
 package dev.stockreading.news.article;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
@@ -22,12 +24,14 @@ class NewsListenerTest {
     private static final UUID EVENT_ID = UUID.fromString("7a1f9e60-2b3c-4d5e-8f90-a1b2c3d4e5f6");
 
     private NewsArticleRepository repository;
+    private ArticleResultRepository results;
     private NewsListener listener;
 
     @BeforeEach
     void setUp() {
         repository = mock(NewsArticleRepository.class);
-        listener = new NewsListener(repository, JsonMapper.builder().build());
+        results = mock(ArticleResultRepository.class);
+        listener = new NewsListener(repository, results, JsonMapper.builder().build());
     }
 
     @Test
@@ -45,6 +49,30 @@ class NewsListenerTest {
                 OffsetDateTime.parse("2026-10-20T15:30:00+09:00"),
                 List.of("TEST01"),
                 List.of("테스트검색어")));
+    }
+
+    // 저장 끝 알림이 결과별로 셀 수 있게, 새 기사는 '새로 저장', 이미 있던 기사(URL 중복)는 '합침'으로 남긴다.
+    @Test
+    void recordsWhetherTheEventStoredANewArticleOrMergedIntoAnExistingOne() {
+        when(repository.save(any())).thenReturn(true, false);
+        UUID otherEventId = UUID.fromString("8b2f0f71-3c4d-4e6f-9fa1-b2c3d4e5f607");
+
+        listener.onNews(event(EVENT_ID, "https://news.example.com/article/1", "[\"TEST01\"]", null, ""));
+        listener.onNews(event(otherEventId, "https://news.example.com/article/1", "[\"TEST02\"]", null, ""));
+
+        verify(results).record(EVENT_ID, ArticleResult.STORED, "collect-2026-10-20T16:00:00+09:00");
+        verify(results).record(otherEventId, ArticleResult.MERGED, "collect-2026-10-20T16:00:00+09:00");
+    }
+
+    @Test
+    void failedStorageRecordsNoResultSoTheErrorHandlerRetries() {
+        when(repository.save(any())).thenThrow(new IllegalStateException("db down"));
+
+        assertThatThrownBy(() -> listener.onNews(
+                event(EVENT_ID, "https://news.example.com/article/1", "[\"TEST01\"]", null, "")))
+                .isInstanceOf(IllegalStateException.class);
+
+        verifyNoInteractions(results);
     }
 
     @Test

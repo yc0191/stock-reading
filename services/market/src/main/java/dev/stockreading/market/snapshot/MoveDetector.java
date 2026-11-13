@@ -38,8 +38,14 @@ class MoveDetector {
         return fields != null && !fields.isEmpty();
     }
 
+    /**
+     * 전일 종가는 한 번만 읽어 두 유형이 함께 쓴다. 유형 1도 오늘 등락률(전일 종가 대비)을 담아, 받는 쪽이 짧은 변동률이 아니라
+     * 같은 하루 기준으로 시장과 비교하게 한다.
+     */
     List<Evaluation> evaluate(String symbol, OffsetDateTime asOf, long price, String raw) {
-        return List.of(evaluateWindow(symbol, asOf, price), evaluatePrevClose(symbol, asOf, price, raw));
+        Long prevClose = prevCloseEnabled() ? readPrevClose(symbol, raw) : null;
+        BigDecimal today = prevClose == null ? null : ChangeRate.percent(prevClose, price);
+        return List.of(evaluateWindow(symbol, asOf, price, today), evaluatePrevClose(asOf, price, prevClose, today));
     }
 
     /**
@@ -47,7 +53,7 @@ class MoveDetector {
      * 변동 시각은 기준 이후 스냅샷 중 기준 대비 변동률이 임계값 미만이던 가장 최근 것의 시각이고,
      * 그런 스냅샷이 없으면 기준의 시각이다.
      */
-    private Evaluation evaluateWindow(String symbol, OffsetDateTime asOf, long price) {
+    private Evaluation evaluateWindow(String symbol, OffsetDateTime asOf, long price, BigDecimal today) {
         BigDecimal threshold = properties.windowThresholdPercent();
         OffsetDateTime windowStart = asOf.minusMinutes(properties.windowMinutes());
         List<PricePoint> history = baseline(symbol, windowStart, repository.findBetween(symbol, windowStart, asOf, firstTradeFields()));
@@ -73,7 +79,7 @@ class MoveDetector {
                 break;
             }
         }
-        return Evaluation.detected(new Detection(DetectionType.WINDOW, base.price(), price, change, threshold, startedAt));
+        return Evaluation.detected(new Detection(DetectionType.WINDOW, base.price(), price, change, threshold, startedAt, today));
     }
 
     private List<String> firstTradeFields() {
@@ -129,21 +135,17 @@ class MoveDetector {
     }
 
     /** 전일 종가는 원문의 여러 칸을 다수결로 정한다. 다수가 없으면 이 스냅샷은 판단하지 않는다. */
-    private Evaluation evaluatePrevClose(String symbol, OffsetDateTime asOf, long price, String raw) {
-        if (!prevCloseEnabled()) {
-            return Evaluation.unknown(DetectionType.PREV_CLOSE);
-        }
-        BigDecimal threshold = properties.prevCloseThresholdPercent();
-        Long prevClose = readPrevClose(symbol, raw);
+    private Evaluation evaluatePrevClose(OffsetDateTime asOf, long price, Long prevClose, BigDecimal change) {
         if (prevClose == null) {
             return Evaluation.unknown(DetectionType.PREV_CLOSE);
         }
-        BigDecimal change = ChangeRate.percent(prevClose, price);
+        BigDecimal threshold = properties.prevCloseThresholdPercent();
         if (change.abs().compareTo(threshold) < 0) {
             return Evaluation.clear(DetectionType.PREV_CLOSE);
         }
         // 처음 넘은 시각은 이 스냅샷이다. 이미 발행한 변동이면 MoveTracker가 저장된 시각으로 바꾼다.
-        return Evaluation.detected(new Detection(DetectionType.PREV_CLOSE, prevClose, price, change, threshold, asOf));
+        return Evaluation.detected(
+                new Detection(DetectionType.PREV_CLOSE, prevClose, price, change, threshold, asOf, change));
     }
 
     /**

@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 
 import dev.stockreading.collector.marketdata.MarketDayPort;
 import dev.stockreading.collector.schedule.CollectorJobs.Job;
+import dev.stockreading.collector.trace.CorrelationId;
 
 /**
  * 1초 현재가와 뉴스 수집의 타이머. collector.schedule.enabled 가 true 일 때만 빈이 만들어진다(기본 꺼짐).
@@ -41,12 +42,15 @@ class CollectTimer {
         if (!WeekdayHours.contains(OffsetDateTime.now(clock), quoteHours.startTime(), quoteHours.endTime())) {
             return;
         }
-        // 시간대 안일 때만 묻는다. 결과는 하루 단위로 기억하므로 1초마다 불러도 조회는 하루 한 번이다.
-        if (!marketDay.isBusinessDay()) {
-            log.debug("collect skipped on market holiday job={}", Job.COLLECT);
-            return;
-        }
-        jobs.start(Job.COLLECT);
+        // 메시지 처리 밖(타이머 스레드)에서 찍는 줄이라 이 실행의 correlationId 를 직접 로그 문맥에 둔다.
+        CorrelationId.within(jobs.correlationId(Job.COLLECT), () -> {
+            // 시간대 안일 때만 묻는다. 결과는 하루 단위로 기억하므로 1초마다 불러도 조회는 하루 한 번이다.
+            if (!marketDay.isBusinessDay()) {
+                log.debug("collect skipped on market holiday job={}", Job.COLLECT);
+                return;
+            }
+            jobs.start(Job.COLLECT);
+        });
     }
 
     @Scheduled(fixedRateString = "${collector.schedule.news-interval-ms}")

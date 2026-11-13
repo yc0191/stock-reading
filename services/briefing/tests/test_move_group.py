@@ -13,6 +13,7 @@ from briefing.job_log import EntryType
 from briefing.jobs import BriefingCore
 from briefing.move_group import MoveGrouper
 from contracts import sample
+from fake_api import FakeApi
 from fake_job_log import FakeJobLog
 
 KST = timezone(timedelta(hours=9))
@@ -177,7 +178,7 @@ def test_runner_waits_for_the_quiet_time_and_then_starts_one_move_job_with_the_g
         return created["consumers"][-1]
 
     runner = main.BriefingRunner("localhost:9092", None, store, settings=CoreSettings(move_quiet_period=LONG_WAIT), clock=clock, consumer_factory=consumer_factory,
-                                 producer_factory=FakeProducer, declare_topics=lambda _bootstrap: None)
+                                 producer_factory=FakeProducer, declare_topics=lambda _bootstrap: None, api_factory=FakeApi)
     runner.open()
     consumer = created["consumers"][-1]  # 마지막이 market.move를 받는 소비자다
 
@@ -200,7 +201,7 @@ def test_core_receives_the_latest_move_of_the_group_as_its_job():
     from test_jobs import Recorder
 
     rec = Recorder()
-    core = BriefingCore(rec, rec, job_log=rec.log)
+    core = BriefingCore(rec, rec.api, rec, job_log=rec.log)
     grouper = MoveGrouper(core.on_move, rec.log, CoreSettings(move_quiet_period=LONG_WAIT))
     grouper.on_move(move("m1", price=10000), T0)
     grouper.on_move(move("m2", price=10300, as_of=T0 + timedelta(minutes=3)), T0 + timedelta(minutes=3))
@@ -259,7 +260,7 @@ def test_runner_shutdown_records_pending_groups_before_closing_and_a_record_fail
             order.append(("close", len(store.finishes)))  # 닫을 때 이미 실패 기록이 끝나 있어야 한다
 
     runner = main.BriefingRunner("localhost:9092", None, store, settings=CoreSettings(move_quiet_period=LONG_WAIT), clock=clock, consumer_factory=Closing,
-                                 producer_factory=FakeProducer, declare_topics=lambda _bootstrap: None)
+                                 producer_factory=FakeProducer, declare_topics=lambda _bootstrap: None, api_factory=FakeApi)
     runner.open()
     runner._consumer.queue.append(FakeMessage("market.move", move("s1", symbol="TEST01")))
     runner.run_once()
@@ -278,7 +279,7 @@ def test_runner_shutdown_records_pending_groups_before_closing_and_a_record_fail
     broken = FakeStore()
     broken.start = lambda run: (_ for _ in ()).throw(RuntimeError("db down"))
     runner = main.BriefingRunner("localhost:9092", None, broken, settings=CoreSettings(move_quiet_period=LONG_WAIT), clock=clock, consumer_factory=Closing,
-                                 producer_factory=FakeProducer, declare_topics=lambda _bootstrap: None)
+                                 producer_factory=FakeProducer, declare_topics=lambda _bootstrap: None, api_factory=FakeApi)
     runner.open()
     runner._consumer.queue.append(FakeMessage("market.move", move("s3")))
     runner.run_once()

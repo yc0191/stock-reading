@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from fake_anthropic import as_reply
 from briefing.config import CoreSettings
 from briefing.jobs import BriefingCore
 from briefing.ports import FailureReason
@@ -29,7 +30,9 @@ from briefing.sources import (
     MARK_TOO_LARGE,
     MARK_TRUNCATED,
 )
-from contracts import sample, validate
+from briefing.queries import QueryKind
+from contracts import sample, validate, validate_payload
+from fake_api import FakeApi
 from fake_job_log import FakeJobLog
 
 KST = timezone(timedelta(hours=9))
@@ -43,10 +46,14 @@ ACCESSION = "0000000001-26-000001"
 INDEX_RAW = sample("market.context.responded.sample.json")["payload"]["background"][2]["response"]
 
 
+HISTORY, CONTEXT, ARTICLES, FILINGS = QueryKind.HISTORY, QueryKind.CONTEXT, QueryKind.ARTICLES, QueryKind.FILINGS
+
+
 class Recorder:
     def __init__(self):
         self.sent, self.readied = [], []
         self.log = FakeJobLog()
+        self.api = FakeApi()
 
     @property
     def failed(self):
@@ -70,7 +77,9 @@ class FakeLlm:
         self.responses = list(responses)
         self.calls = []
 
-    def complete(self, system, user, output_schema):
+    @as_reply
+    def complete(self, system, user, output_schema, addendum=""):
+        system = system + addendum
         self.calls.append((system, user))
         return self.responses.pop(0)
 
@@ -82,7 +91,7 @@ def rec():
 
 @pytest.fixture
 def core(rec):
-    return BriefingCore(rec, rec, job_log=rec.log)
+    return BriefingCore(rec, rec.api, rec, job_log=rec.log)
 
 
 # ---- 가짜 응답 ----
@@ -96,8 +105,9 @@ def move():
 
 
 def completed():
-    event = sample("collection.completed.sample.json")
-    event["payload"].update(jobType="collect-news", startedAt=(T + S.delta).isoformat(), incompleteSymbols=[])
+    event = sample("news.stored.sample.json")
+    event["payload"].update(jobType="collect-news", startedAt=(T + S.delta).isoformat(), incompleteSymbols=[],
+                            unprocessedEventIds=[])
     return json.dumps(event)
 
 
@@ -178,24 +188,22 @@ def filings(seq=1, items=None, truncated=False):
 
 def start(core):
     core.on_move(move(), T)
-    core.on_collection_completed(completed(), T)
+    core.on_news_stored(completed(), T)
 
 
-def stable_articles(core, items=None, truncated=False, now=T + SEC):
-    """기사는 같은 목록이 두 번 연속 와야 안정이다."""
-    core.on_articles_responded(articles(1, items, truncated), now)
-    core.on_tick(now + S.recheck_interval)
-    core.on_articles_responded(articles(2, items, truncated), now + S.recheck_interval)
+def answer_articles(core, items=None, truncated=False, now=T + SEC):
+    """기사는 저장 끝 알림 뒤라 한 번 받으면 끝이다."""
+    core.api.reply(articles(1, items, truncated), now)
 
 
 def run_us(core, context_event=None, filings_event=None, history_event=None, article_items=None,
            articles_truncated=False):
     """미국 종목을 담은 ETF의 변동 1건을 모든 응답이 오는 경우로 끝까지 돌린다."""
     start(core)
-    core.on_history_responded(history_event or history(), T + SEC)
-    core.on_context_responded(json.dumps(context_event or context()), T + SEC)
-    core.on_filings_responded(json.dumps(filings_event or filings()), T + 2 * SEC)
-    stable_articles(core, article_items, articles_truncated)
+    core.api.reply(history_event or history(), T + SEC)
+    core.api.reply(json.dumps(context_event or context()), T + SEC)
+    core.api.reply(json.dumps(filings_event or filings()), T + 2 * SEC)
+    answer_articles(core, article_items, articles_truncated)
 
 
 # ---- 요청 구간과 순서 ----
@@ -203,28 +211,26 @@ def run_us(core, context_event=None, filings_event=None, history_event=None, art
 def test_us_etf_requests_history_context_and_articles_first_then_filings_with_the_tickers(core, rec):
     start(core)
 
-    assert [e.topic for e in rec.sent] == [
-        "market.history.requested", "market.context.requested", "news.articles.requested"]
-    (ctx,) = rec.of("market.context.requested")
-    assert validate("market.context.requested.v1.schema.json", ctx.value) == []
-    c = ctx.value["payload"]
-    assert ctx.key == SYMBOL and (c["jobId"], c["seq"], c["symbol"]) == (JOB_ID, 1, SYMBOL)
+    assert [q.kind for q in rec.api.submitted] == [HISTORY, CONTEXT, ARTICLES]
+    (ctx,) = rec.api.of(CONTEXT)
+    assert validate_payload("market.context.requested.v1.schema.json", ctx.payload) == []
+    c = ctx.payload
+    assert (c["jobId"], c["seq"], c["symbol"]) == (JOB_ID, 1, SYMBOL)
     assert datetime.fromisoformat(c["asOf"]) == T
     assert datetime.fromisoformat(c["since"]) == T - timedelta(days=4)
     assert (c["maxResponseBytes"], c["maxTickers"]) == (32 * 1024, 100)
-    (hist,) = rec.of("market.history.requested")
-    h = hist.value["payload"]
+    (hist,) = rec.api.of(HISTORY)
+    h = hist.payload
     assert datetime.fromisoformat(h["since"]) == T - timedelta(minutes=5)
     assert datetime.fromisoformat(h["until"]) == T + S.delta
     assert (h["intervalSeconds"], h["maxPoints"]) == (10, 61)
-    assert rec.of("news.articles.requested")[0].value["payload"]["maxArticles"] == 50
+    assert rec.api.of(ARTICLES)[0].payload["maxArticles"] == 50
 
-    core.on_context_responded(json.dumps(context()), T + SEC)
+    core.api.reply(json.dumps(context()), T + SEC)
 
-    (fil,) = rec.of("news.filings.requested")
-    assert validate("news.filings.requested.v1.schema.json", fil.value) == []
-    f = fil.value["payload"]
-    assert fil.key == SYMBOL
+    (fil,) = rec.api.of(FILINGS)
+    assert validate_payload("news.filings.requested.v1.schema.json", fil.payload) == []
+    f = fil.payload
     assert (f["jobId"], f["seq"], f["symbol"], f["tickers"], f["maxFilings"]) == (
         JOB_ID, 1, SYMBOL, list(TICKERS), 20)
     assert datetime.fromisoformat(f["since"]) == T - timedelta(hours=72)
@@ -247,25 +253,23 @@ def test_us_etf_report_input_holds_every_kind_of_evidence(core, rec):
 
 def test_report_waits_for_the_filings_response_of_a_us_etf(core, rec):
     start(core)
-    core.on_history_responded(history(), T)
-    core.on_context_responded(json.dumps(context()), T + 5 * SEC)
-    stable_articles(core)
+    core.api.reply(history(), T)
+    core.api.reply(json.dumps(context()), T + 5 * SEC)
+    answer_articles(core)
     assert rec.readied == []
 
-    core.on_filings_responded(json.dumps(filings()), T + 12 * SEC)
+    core.api.reply(json.dumps(filings()), T + 12 * SEC)
 
     assert len(rec.readied) == 1
 
 
 def test_etf_without_us_stocks_never_requests_filings_and_marks_them_not_applicable(core, rec):
     start(core)
-    core.on_history_responded(history(), T + SEC)
-    core.on_context_responded(json.dumps(context(tickers=(), close_rates=[])), T + SEC)
-    stable_articles(core)
-    for step in range(1, 5):
-        core.on_tick(T + step * S.response_timeout)
+    core.api.reply(history(), T + SEC)
+    core.api.reply(json.dumps(context(tickers=(), close_rates=[])), T + SEC)
+    answer_articles(core)
 
-    assert rec.of("news.filings.requested") == []
+    assert rec.api.of(FILINGS) == []
     (ready,) = rec.readied
     assert ready.tickers == () and ready.filings == () and ready.close_rates == ()
     data = build_llm_input(ready)
@@ -276,105 +280,88 @@ def test_etf_without_us_stocks_never_requests_filings_and_marks_them_not_applica
 
 # ---- 응답이 끝내 오지 않을 때 ----
 
-def test_context_no_response_is_retried_with_new_seq_then_fails_without_a_report(core, rec):
+def test_context_that_finally_fails_fails_without_a_report_or_filings(core, rec):
     start(core)
-    core.on_history_responded(history(), T)
-    stable_articles(core, now=T)
-    for step in (1, 2, 3):
-        core.on_tick(T + step * S.response_timeout)
+    core.api.reply(history(), T)
+    answer_articles(core, now=T)
+    core.api.fail(CONTEXT, T + timedelta(minutes=1), attempts=4)
 
-    assert [e.value["payload"]["seq"] for e in rec.of("market.context.requested")] == [1, 2, 3]
     (failure,) = rec.failed
-    assert (failure.reason, failure.attempts, failure.job_id) == (FailureReason.CONTEXT_NO_RESPONSE, 3, JOB_ID)
-    assert rec.readied == [] and rec.of("news.filings.requested") == []
+    assert (failure.reason, failure.attempts, failure.job_id) == (FailureReason.CONTEXT_NO_RESPONSE, 4, JOB_ID)
+    assert rec.readied == [] and rec.api.of(FILINGS) == []
 
 
-def test_filings_no_response_is_timed_from_its_own_request_then_fails_without_a_report(core, rec):
+def test_filings_that_finally_fail_fail_without_a_report(core, rec):
     start(core)
-    core.on_history_responded(history(), T)
-    sent_at = T + 5 * SEC
-    core.on_context_responded(json.dumps(context()), sent_at)
-    stable_articles(core, now=T)
+    core.api.reply(history(), T)
+    core.api.reply(json.dumps(context()), T + 5 * SEC)
+    answer_articles(core, now=T)
+    core.api.fail(FILINGS, T + timedelta(minutes=1), attempts=4)
 
-    core.on_tick(sent_at + S.response_timeout - SEC)
-    assert len(rec.of("news.filings.requested")) == 1
-    for step in (1, 2, 3):
-        core.on_tick(sent_at + step * S.response_timeout)
-
-    assert [e.value["payload"]["seq"] for e in rec.of("news.filings.requested")] == [1, 2, 3]
     (failure,) = rec.failed
-    assert (failure.reason, failure.attempts) == (FailureReason.FILINGS_NO_RESPONSE, 3)
+    assert (failure.reason, failure.attempts) == (FailureReason.FILINGS_NO_RESPONSE, 4)
     assert rec.readied == []
 
 
-def test_history_no_response_fails_even_when_every_other_response_arrived(core, rec):
+def test_history_failure_fails_even_when_every_other_response_arrived(core, rec):
     start(core)
-    core.on_context_responded(json.dumps(context()), T)
-    core.on_filings_responded(json.dumps(filings()), T)
-    core.on_articles_responded(articles(1), T)
-    for step in (1, 2, 3):
-        core.on_tick(T + step * S.response_timeout)
-        core.on_articles_responded(articles(step + 1), T + step * S.response_timeout)
+    core.api.reply(json.dumps(context()), T)
+    core.api.reply(json.dumps(filings()), T)
+    core.api.reply(articles(1), T)
+    core.api.fail(HISTORY, T + timedelta(minutes=1))
 
     assert [f.reason for f in rec.failed] == [FailureReason.MARKET_NO_RESPONSE]
     assert rec.readied == []
 
 
-def test_articles_no_response_fails_even_when_every_other_response_arrived(core, rec):
+def test_articles_failure_fails_even_when_every_other_response_arrived(core, rec):
     start(core)
-    core.on_history_responded(history(), T)
-    core.on_context_responded(json.dumps(context()), T)
-    core.on_filings_responded(json.dumps(filings()), T)
-    for step in (1, 2, 3):
-        core.on_tick(T + step * S.response_timeout)
+    core.api.reply(history(), T)
+    core.api.reply(json.dumps(context()), T)
+    core.api.reply(json.dumps(filings()), T)
+    core.api.fail(ARTICLES, T + timedelta(minutes=1))
 
     assert [f.reason for f in rec.failed] == [FailureReason.NEWS_NO_RESPONSE]
     assert rec.readied == []
 
 
-def test_next_deadline_follows_context_and_filings_requests(core):
+def test_waiting_for_query_results_sets_no_deadline(core):
     start(core)
-    core.on_history_responded(history(), T)
-    core.on_articles_responded(articles(1), T)
-    assert core.next_deadline() == T + S.response_timeout  # 배경 자료 응답 대기
-
-    core.on_context_responded(json.dumps(context()), T + 3 * SEC)
-    assert core.next_deadline() == T + S.recheck_interval  # 기사 재확인이 공시 제한 시간보다 이르다
-    core.on_tick(T + S.recheck_interval)
-    core.on_articles_responded(articles(2), T + S.recheck_interval)
-    assert core.next_deadline() == T + 3 * SEC + S.response_timeout
+    core.api.reply(history(), T)
+    # 조회 결과는 콜백으로 오고 재시도는 조회 구현이 하므로, 근거 조회 중에는 깨어날 시각이 없다.
+    assert core.next_deadline() is None
+    core.api.reply(json.dumps(context()), T + 3 * SEC)
+    assert core.next_deadline() is None
 
 
-def test_stale_or_repeated_context_and_filings_responses_are_ignored(core, rec, caplog):
+def test_a_context_result_for_a_finished_job_is_ignored(core, rec, caplog):
     start(core)
-    core.on_tick(T + S.response_timeout)  # 배경 자료 seq 2로 재요청
+    core.api.fail(HISTORY, T)
     with caplog.at_level("INFO", logger="briefing.jobs"):
-        core.on_context_responded(json.dumps(context(seq=1)), T + 11 * SEC)
-    assert rec.of("news.filings.requested") == []
-    assert "stale context response" in caplog.text
-
-    core.on_context_responded(json.dumps(context(seq=2)), T + 12 * SEC)
-    core.on_context_responded(json.dumps(context(seq=2)), T + 12 * SEC)  # 같은 응답 재도착
-    assert len(rec.of("news.filings.requested")) == 1
-    with caplog.at_level("INFO", logger="briefing.jobs"):
-        core.on_filings_responded(json.dumps(filings(seq=9)), T + 13 * SEC)
-    assert "stale filings response" in caplog.text
+        core.api.reply(json.dumps(context()), T + SEC)
+    assert rec.api.of(FILINGS) == []
+    assert "context result for unknown or finished job" in caplog.text
 
 
-@pytest.mark.parametrize("handler", ["on_context_responded", "on_filings_responded"])
-def test_malformed_context_or_filings_response_raises_value_error(core, handler):
+@pytest.mark.parametrize("kind", [CONTEXT, FILINGS])
+def test_a_context_or_filings_result_without_its_fields_counts_as_not_received(core, rec, kind):
     start(core)
-    with pytest.raises(ValueError):
-        getattr(core, handler)(json.dumps({"eventType": handler, "payload": {}}), T)
+    if kind is FILINGS:
+        core.api.reply(json.dumps(context()), T)
+    core.api.reply({"jobId": JOB_ID, "seq": 1}, T, kind=kind)
+
+    (failure,) = rec.failed
+    assert failure.error_type == "MalformedResponse"
 
 
-def test_malformed_items_in_a_context_response_raise_value_error(core):
+def test_malformed_items_in_a_context_response_count_as_not_received(core, rec):
     start(core)
     event = context()
     del event["payload"]["closeRates"][0]["closeAt"]
 
-    with pytest.raises(ValueError):
-        core.on_context_responded(json.dumps(event), T)
+    core.api.reply(json.dumps(event), T)
+    (failure,) = rec.failed
+    assert (failure.reason, failure.error_type) == (FailureReason.CONTEXT_NO_RESPONSE.value, "MalformedResponse")
 
 
 # ---- 받은 자료 재검사 ----
@@ -466,10 +453,10 @@ def test_one_collection_log_line_per_move_with_counts_and_without_symbol_or_tick
 
 def test_collection_log_marks_filings_and_close_rates_not_applicable_without_us_stocks(core, caplog):
     start(core)
-    core.on_history_responded(history(), T)
-    core.on_context_responded(json.dumps(context(tickers=(), close_rates=[])), T)
+    core.api.reply(history(), T)
+    core.api.reply(json.dumps(context(tickers=(), close_rates=[])), T)
     with caplog.at_level("INFO", logger="briefing.jobs"):
-        stable_articles(core)
+        answer_articles(core)
 
     (line,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith("collection ")]
     assert "filings=n/a" in line and "closeRates=n/a" in line and "closeRatesMissing=n/a" in line
@@ -615,9 +602,9 @@ def test_rule_based_report_lists_articles_and_filings_with_kind_and_ref_and_pass
 
 def test_rule_based_report_without_us_stocks_passes_the_schema(core, rec):
     start(core)
-    core.on_history_responded(history(), T)
-    core.on_context_responded(json.dumps(context(tickers=(), close_rates=[])), T)
-    stable_articles(core)
+    core.api.reply(history(), T)
+    core.api.reply(json.dumps(context(tickers=(), close_rates=[])), T)
+    answer_articles(core)
     stage, published, _ = report_stage(RuleBasedWriter())
 
     stage.on_ready(rec.readied[0])
@@ -659,10 +646,10 @@ def test_sample_context_and_filings_responses_are_accepted_unchanged(core, rec):
     ctx = copy.deepcopy(sample("market.context.responded.sample.json"))
     fil = copy.deepcopy(sample("news.filings.responded.sample.json"))
     start(core)
-    core.on_history_responded(history(), T)
-    core.on_context_responded(json.dumps(ctx), T)
-    core.on_filings_responded(json.dumps(fil), T)
-    stable_articles(core)
+    core.api.reply(history(), T)
+    core.api.reply(json.dumps(ctx), T)
+    core.api.reply(json.dumps(fil), T)
+    answer_articles(core)
 
     (ready,) = rec.readied
     assert ready.tickers == ("TESTA", "FAKEB")
@@ -708,10 +695,11 @@ def figure_ref(report_input, name):
 def test_meaning_sentence_cites_the_market_comparison_and_the_report_shows_the_article_link(core, rec):
     run_with_figures(core)
     ready = rec.readied[0]
-    vs_kospi = figure_ref(ready, "변동률 - 코스피종합 등락률")
+    # 샘플 변동은 짧은 시간 변동이라 오늘 등락률로 시장과 비교한다.
+    vs_kospi = figure_ref(ready, "오늘 등락률 - 코스피종합 등락률")
     llm_out = json.dumps({"causes": [{
         "title": "미국 종목 실적 공시", "detail": "미국 종목이 8-K 항목 2.02를 냈으며 어느 부분이 부진했는지는 자료에 없음.",
-        "refs": [ACCESSION, "a1"], "meaning": "변동률이 코스피종합 등락률보다 낮아 시장 전체보다 더 빠졌습니다.",
+        "refs": [ACCESSION, "a1"], "meaning": "오늘 등락률이 코스피종합 등락률보다 낮아 시장 전체보다 더 빠졌습니다.",
         "meaningRefs": [vs_kospi]}], "insufficientEvidence": False}, ensure_ascii=False)
     stage, published, _ = report_stage(LlmWriter(FakeLlm(llm_out)))
 
@@ -738,9 +726,9 @@ def test_rule_based_report_states_code_computed_comparisons_without_guessing_cau
     event = published.sent[0].value
     assert validate("briefing.generated.v1.schema.json", event) == []
     text = event["payload"]["text"]
-    # 변동률 -1.5, 코스피종합 -0.45 → 차이 -1.05%p
-    assert "변동률이 코스피종합 등락률보다 1.05%p 낮습니다 (차이 -1.05%p" in text
-    assert "변동률이 코스닥종합 등락률보다 1.80%p 낮습니다" in text
+    # 샘플 변동은 짧은 시간 변동이라 오늘 등락률 -2.1로 비교한다. 코스피종합 -0.45 → 차이 -1.65%p, 코스닥종합 0.30 → -2.40%p
+    assert "오늘 등락률이 코스피종합 등락률보다 1.65%p 낮습니다 (차이 -1.65%p" in text
+    assert "오늘 등락률이 코스닥종합 등락률보다 2.40%p 낮습니다" in text
     assert "담긴 미국 종목은 직전 정규장에서 0개 오르고 1개 내렸으며 0개는 보합이었고, 평균 등락률은 -1.25%" in text
     assert "https://news.example.com/a1" in text and "확인하지 못한 것:" in text
     assert "1. " not in text.split("근거 후보:")[0]  # 원인 묶음 없음
@@ -785,9 +773,9 @@ ETF_WITH_NAME = {"name": "가짜 반도체 ETF", "membersTruncated": False,
 
 
 def early_research_completed(research_id):
-    event = sample("collection.completed.sample.json")
+    event = sample("news.stored.sample.json")
     event["payload"].update(jobType="research-news", startedAt=(T + S.early_research_delay).isoformat(),
-                            incompleteSymbols=[], researchJobId=research_id)
+                            incompleteSymbols=[], unprocessedEventIds=[], researchJobId=research_id)
     return json.dumps(event)
 
 
@@ -799,15 +787,15 @@ def run_without_the_regular_collection(core, rec):
     request_at = T + S.early_research_delay
     context_event = context(tickers=())
     context_event["payload"]["etf"] = ETF_WITH_NAME
-    core.on_context_responded(json.dumps(context_event), request_at + SEC)
-    assert core.on_research_completed(early_research_completed(early_research_id(JOB_ID)), request_at + 20 * SEC)
-    core.on_history_responded(history(), request_at + 21 * SEC)
-    stable_articles(core, now=request_at + 21 * SEC)
+    core.api.reply(json.dumps(context_event), request_at + SEC)
+    assert core.on_research_stored(early_research_completed(early_research_id(JOB_ID)), request_at + 20 * SEC)
+    core.api.reply(history(), request_at + 21 * SEC)
+    answer_articles(core, now=request_at + 21 * SEC)
 
 
 def test_a_move_finishes_into_a_briefing_event_without_the_regular_news_collection(core, rec):
     run_without_the_regular_collection(core, rec)
-    (research,) = [e for e in rec.sent if e.topic == "news.research.requested"]
+    (research,) = rec.of("news.research.requested")
     assert validate("news.research.requested.v1.schema.json", research.value) == []
     assert research.value["payload"]["queries"] == ["가짜 반도체 ETF", "첫째회사"]
     assert rec.failed == []
@@ -843,7 +831,7 @@ def failure_log(rec):
 
 @pytest.fixture
 def logged_core(rec):
-    return BriefingCore(rec, rec, job_log=rec.log)
+    return BriefingCore(rec, rec.api, rec, job_log=rec.log)
 
 
 def filled(record):
@@ -853,64 +841,22 @@ def filled(record):
     return all(getattr(record, f.name) not in (None, "", {}, []) for f in fields(record) if f.name not in optional)
 
 
-def test_a_request_resent_after_the_time_limit_is_recorded_even_when_the_job_succeeds(logged_core, rec, failure_log):
-    from briefing.job_log import REASON_RESENT, STAGE_CONTEXT
-    start(logged_core)
-    logged_core.on_history_responded(history(), T + SEC)
-    logged_core.on_articles_responded(articles(1), T + SEC)
-    logged_core.on_tick(T + S.response_timeout)  # 배경 자료 응답이 없어 다시 보낸다
-    logged_core.on_context_responded(json.dumps(context(seq=2)), T + S.response_timeout + SEC)
-    logged_core.on_filings_responded(json.dumps(filings()), T + S.response_timeout + 2 * SEC)
-    logged_core.on_tick(T + SEC + S.recheck_interval)
-    logged_core.on_articles_responded(articles(2), T + SEC + S.recheck_interval)
-
-    assert len(rec.readied) == 1 and rec.failed == []
-    resent = [r for r in failure_log.entries if r.reason == REASON_RESENT]
-    (record,) = resent
-    assert filled(record)
-    assert (record.stage, record.error_type, record.attempts) == (STAGE_CONTEXT, "ResponseTimeout", 2)
-    assert record.data["requestRange"]["since"] == (T - S.background_window).isoformat()
-    assert [r["seq"] for r in record.data["requests"][STAGE_CONTEXT]] == [1, 2]
-    assert "market.history" in record.data["received"] and STAGE_CONTEXT in record.data["notReceived"]
-    assert record.data["missingItems"] == record.data["notReceived"]
-    # 받은 응답은 내용 전부가 그대로 담기고, 받지 못한 응답은 이름으로만 남는다.
-    responses = record.data["receivedResponses"]
-    assert set(responses) == set(record.data["received"])
-    assert responses["market.history"] == json.loads(history())["payload"]
-    assert responses["news.articles"] == json.loads(articles(1))["payload"]
-    assert STAGE_CONTEXT not in responses
-
-
-def test_each_article_recheck_round_is_recorded_with_the_articles_received_in_it(logged_core, rec, failure_log):
-    from briefing.job_log import REASON_RECHECK_ROUND, REASON_RESENT, STAGE_ARTICLES_RECHECK
+def test_a_job_that_succeeds_leaves_no_resend_or_recheck_lines(logged_core, rec, failure_log):
     run_us(logged_core)
 
-    assert len(rec.readied) == 1
-    (record,) = [r for r in failure_log.entries if r.reason == REASON_RECHECK_ROUND]
-    assert filled(record) and record.stage == STAGE_ARTICLES_RECHECK
-    assert record.data["round"] == 2 and record.data["stable"] is True
-    assert [a["articleId"] for a in record.data["receivedArticles"]] == ["a1"]
-    assert record.data["receivedArticles"][0]["url"] == "https://news.example.com/a1"
-    assert record.data["receivedArticles"][0]["publisher"] == "news.example.com"
-    assert "summary" in record.data["receivedArticles"][0]
-    # 확인 라운드 기록에도 그때까지 받은 응답 내용이 모두 담긴다.
-    responses = record.data["receivedResponses"]
-    assert set(responses) == {"market.history", "market.context", "news.filings", "news.articles"}
-    assert responses["market.context"] == context()["payload"]
-    assert responses["news.filings"] == filings()["payload"]
-    assert responses["news.articles"] == json.loads(articles(2))["payload"]
-    # 다시 보낸 요청과 확인 라운드는 단계와 사유가 모두 다르다.
-    assert record.stage != "news.articles" and record.reason != REASON_RESENT
+    assert len(rec.readied) == 1 and rec.failed == []
+    # 다시 부른 시도는 조회 구현이 job_step에 남기고, 기사 안정 확인 라운드는 없다.
+    assert failure_log.of_type("resent") == [] and failure_log.of_type("check-round") == []
+    assert len(rec.api.of(ARTICLES)) == 1
 
 
 def test_a_job_that_finally_fails_records_both_the_old_failure_and_a_full_move_failure(logged_core, rec, failure_log):
     from briefing.job_log import STAGE_FILINGS
     start(logged_core)
-    logged_core.on_history_responded(history(), T + SEC)
-    logged_core.on_context_responded(json.dumps(context()), T + SEC)
-    stable_articles(logged_core)
-    for n in range(1, S.max_attempts + 1):
-        logged_core.on_tick(T + SEC + n * S.response_timeout)
+    logged_core.api.reply(history(), T + SEC)
+    logged_core.api.reply(json.dumps(context()), T + SEC)
+    answer_articles(logged_core)
+    logged_core.api.fail(FILINGS, T + timedelta(minutes=1), attempts=4, failure_kind="http-5xx")
 
     (old,) = rec.failed
     assert old.reason == FailureReason.FILINGS_NO_RESPONSE
@@ -918,10 +864,11 @@ def test_a_job_that_finally_fails_records_both_the_old_failure_and_a_full_move_f
     (result,) = failure_log.results()
     assert result.status == "failed" and result.failure_reason == "filings_no_response"
     assert filled(final)
-    assert (final.stage, final.reason, final.attempts) == (STAGE_FILINGS, "filings_no_response", 3)
+    assert (final.stage, final.reason, final.attempts, final.error_type) == (
+        STAGE_FILINGS, "filings_no_response", 4, "http-5xx")
     assert final.data["notReceived"] == [STAGE_FILINGS]
     assert final.data["requestRange"]["tickers"] == list(TICKERS)
-    assert len(final.data["requests"][STAGE_FILINGS]) == 3
+    assert len(final.data["requests"][STAGE_FILINGS]) == 1
     # 끝내 실패한 기록에도 받은 응답 내용 전부: 시세 점, 배경 자료 원문·지수별 계산값, 등락률, 기사
     responses = final.data["receivedResponses"]
     assert set(responses) == {"market.history", "market.context", "news.articles"}
@@ -943,59 +890,36 @@ def test_waiting_for_collection_until_the_limit_is_recorded(logged_core, rec, fa
     assert result.failure_reason == "collection_not_covered" and result.status == "failed"
     assert filled(record)
     assert (record.stage, record.reason, record.attempts) == (STAGE_COLLECTION, "collection_not_covered", 0)
-    assert record.data["missingItems"] == ["collection.completed"]
-
-
-def test_unstable_articles_are_recorded_with_every_round_and_the_last_articles(logged_core, rec, failure_log):
-    from briefing.job_log import REASON_RECHECK_ROUND, STAGE_ARTICLES_RECHECK
-    start(logged_core)
-    logged_core.on_history_responded(history(), T + SEC)
-    logged_core.on_context_responded(json.dumps(context(tickers=(), close_rates=[])), T + SEC)
-    now = T + SEC
-    for n in range(1, S.max_rounds + 1):
-        logged_core.on_articles_responded(articles(n, [article(f"a{n}", T - timedelta(minutes=n))]), now)
-        now += S.recheck_interval
-        logged_core.on_tick(now)
-
-    assert [f.reason for f in rec.failed] == [FailureReason.NEWS_UNSTABLE]
-    rounds = [r for r in failure_log.entries if r.reason == REASON_RECHECK_ROUND]
-    assert [r.data["round"] for r in rounds] == list(range(2, S.max_rounds + 1))
-    (final,) = failure_log.failed
-    assert (final.stage, final.reason) == (STAGE_ARTICLES_RECHECK, "news_unstable")
-    assert [a["articleId"] for a in final.data["lastArticles"]] == [f"a{S.max_rounds}"]
+    assert record.data["missingItems"] == ["news.stored"]
 
 
 def test_move_failure_logs_never_contain_the_symbol_or_tickers(logged_core, rec, failure_log, caplog):
     with caplog.at_level(logging.DEBUG, logger="briefing"):
         start(logged_core)
-        logged_core.on_history_responded(history(), T + SEC)
-        logged_core.on_context_responded(json.dumps(context()), T + SEC)
-        stable_articles(logged_core)
-        for n in range(1, S.max_attempts + 1):
-            logged_core.on_tick(T + SEC + n * S.response_timeout)
+        logged_core.api.reply(history(), T + SEC)
+        logged_core.api.reply(json.dumps(context()), T + SEC)
+        answer_articles(logged_core)
+        logged_core.api.fail(FILINGS, T + timedelta(minutes=1))
 
     assert failure_log.entries
     for secret in (SYMBOL, *TICKERS):
         assert secret not in caplog.text
 
 
-def test_a_move_that_succeeds_after_a_resent_request_leaves_every_kind_of_line_under_one_job_id(rec):
+def test_a_move_that_succeeds_after_a_rejected_llm_attempt_leaves_every_kind_of_line_under_one_job_id(rec):
     published = Recorder()
     stage = ReportStage(LlmWriter(FakeLlm("not json", output([("기사가 영향을 줬을 수 있습니다.", ["a1"])]))),
                         published, rec.log, clock=lambda: T + timedelta(minutes=20))
-    core = BriefingCore(rec, stage, job_log=rec.log)
+    core = BriefingCore(rec, rec.api, stage, job_log=rec.log)
     start(core)
-    core.on_history_responded(history(), T + SEC)
-    core.on_articles_responded(articles(1), T + SEC)
-    core.on_tick(T + S.response_timeout)  # 배경 자료 응답이 없어 다시 보낸다
-    core.on_context_responded(json.dumps(context(seq=2)), T + S.response_timeout + SEC)
-    core.on_filings_responded(json.dumps(filings()), T + S.response_timeout + 2 * SEC)
-    core.on_tick(T + SEC + S.recheck_interval)
-    core.on_articles_responded(articles(2), T + SEC + S.recheck_interval)
+    core.api.reply(history(), T + SEC)
+    core.api.reply(articles(1), T + SEC)
+    core.api.reply(json.dumps(context()), T + 20 * SEC)
+    core.api.reply(json.dumps(filings()), T + 21 * SEC)
 
     entries = rec.log.entries
     assert {e.job_id for e in entries} == {JOB_ID} and [r.job_kind for r in rec.log.starts] == ["move"]
-    assert [e.entry_type for e in entries] == ["resent", "check-round", "llm-rejected", "report-written", "missing-items"]
+    assert [e.entry_type for e in entries] == ["llm-rejected", "report-written", "missing-items"]
     assert rec.log.failed == [] and len(published.sent) == 1
     (result,) = rec.log.results()
     assert result.status == "succeeded" and result.job_id == JOB_ID and result.final_text

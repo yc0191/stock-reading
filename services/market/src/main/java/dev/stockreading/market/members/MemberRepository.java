@@ -5,6 +5,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -13,7 +14,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
-/** 구성 종목 이력(etf_stock_history)과 교체 일정을 읽고 쓰며, 구성이 바뀌면 ETF 구성 연결 표(etf_stock_map)도 맞춘다. */
+/** 구성 종목 원문(etf_stock_raw)과 이력(etf_stock_history)을 읽고 쓰며, 구성이 바뀌면 ETF 구성 연결 표(etf_stock_map)도 맞춘다. */
 @Repository
 class MemberRepository implements MemberChangesPort {
 
@@ -32,33 +33,10 @@ class MemberRepository implements MemberChangesPort {
         this.mapper = mapper;
     }
 
-    /** 자동 조회 대상: 출처 번호(constituent_source_id)가 있는 국내 ETF. 번호가 없는 ETF는 구성 종목을 직접 고친다. */
-    List<Target> targets() {
-        return jdbc.sql("""
-                        SELECT id, symbol, tracks, constituent_source_id FROM etf
-                        WHERE market = 'KR' AND constituent_source_id IS NOT NULL AND btrim(constituent_source_id) <> ''
-                        ORDER BY symbol
-                        """)
-                .query((rs, rowNum) -> new Target(rs.getLong("id"), rs.getString("symbol"), rs.getString("tracks"),
-                        rs.getString("constituent_source_id").strip()))
-                .list();
-    }
-
-    record Target(long etfId, String symbol, String tracks, String fundId) {
-    }
-
-    /** today가 든 달에 이 지수의 교체일이 있으면 true. */
-    boolean inRebalanceMonth(String tracks, LocalDate today) {
-        if (tracks == null) {
-            return false;
-        }
-        LocalDate first = today.withDayOfMonth(1);
-        return jdbc.sql("""
-                        SELECT EXISTS (SELECT 1 FROM index_rebalance_schedule
-                                       WHERE tracks = :tracks AND effective_date >= :first AND effective_date < :next)
-                        """)
-                .param("tracks", tracks).param("first", first).param("next", first.plusMonths(1))
-                .query(Boolean.class).single();
+    /** 국내 ETF 종목코드로 표의 id를 찾는다. 없으면 빈 값. */
+    Optional<Long> etfId(String symbol) {
+        return jdbc.sql("SELECT id FROM etf WHERE market = 'KR' AND symbol = :symbol")
+                .param("symbol", symbol).query(Long.class).optional();
     }
 
     /** 가장 최근 이력 행. 아직 없으면 빈 값. */
@@ -96,14 +74,21 @@ class MemberRepository implements MemberChangesPort {
         });
     }
 
-    /** 받은 응답 원문을 그대로 남긴다(실패한 응답 포함). 이력(etf_stock_history)은 이 원문에서 계산한 결과다. */
-    void saveRaw(long etfId, LocalDate baseDate, int httpStatus, String body) {
-        jdbc.sql("""
-                        INSERT INTO etf_stock_raw (etf_id, base_date, http_status, body)
-                        VALUES (:etf, :baseDate, :status, :body)
+    /**
+     * 수집기가 받은 응답 원문을 그대로 남긴다(실패한 응답 포함). 받은 시각은 수집기가 응답을 받은 시각이다.
+     * 이력(etf_stock_history)은 이 원문에서 계산한 결과다.
+     *
+     * @return 처음 받은 이벤트면 true. 같은 eventId가 이미 있으면 남기지 않고 false
+     */
+    boolean saveRaw(UUID eventId, long etfId, LocalDate baseDate, int httpStatus, String body, OffsetDateTime fetchedAt) {
+        return jdbc.sql("""
+                        INSERT INTO etf_stock_raw (event_id, etf_id, base_date, http_status, body, fetched_at)
+                        VALUES (:eventId, :etf, :baseDate, :status, :body, :fetchedAt)
+                        ON CONFLICT (event_id) DO NOTHING
                         """)
-                .param("etf", etfId).param("baseDate", baseDate).param("status", httpStatus).param("body", body)
-                .update();
+                .param("eventId", eventId).param("etf", etfId).param("baseDate", baseDate).param("status", httpStatus)
+                .param("body", body).param("fetchedAt", fetchedAt)
+                .update() == 1;
     }
 
     /**

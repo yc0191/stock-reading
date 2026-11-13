@@ -322,6 +322,6 @@ class SharedCallRateLimitTest {
 
     private static InsightProperties insightProperties() {
         return new InsightProperties(new InsightProperties.Schedule(false, "0 30 16 * * MON-FRI"), "0", 30,
-                List.of(), 30, 100);
+                List.of(), 30, 100, null);
     }
 }

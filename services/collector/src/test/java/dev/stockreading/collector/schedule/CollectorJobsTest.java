@@ -2,6 +2,7 @@ package dev.stockreading.collector.schedule;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
@@ -12,12 +13,16 @@ import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -28,11 +33,14 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InOrder;
 import org.mockito.stubbing.Answer;
+import org.slf4j.MDC;
 
 import dev.stockreading.collector.insight.InsightPublisher;
 import dev.stockreading.collector.insight.IntradayPublisher;
+import dev.stockreading.collector.members.MembersPublisher;
 import dev.stockreading.collector.schedule.CollectorJobs.Job;
 import dev.stockreading.collector.schedule.CollectorJobs.Outcome;
+import dev.stockreading.collector.trace.CorrelationId;
 
 class CollectorJobsTest {
 
@@ -45,6 +53,7 @@ class CollectorJobsTest {
     private final FilingPublisher filings = mock(FilingPublisher.class);
     private final InsightPublisher insight = mock(InsightPublisher.class);
     private final IntradayPublisher intraday = mock(IntradayPublisher.class);
+    private final MembersPublisher members = mock(MembersPublisher.class);
     // 막아 둔 작업을 테스트가 끝나면 풀어 준다.
     private final CountDownLatch release = new CountDownLatch(1);
 
@@ -54,23 +63,173 @@ class CollectorJobsTest {
     }
 
     private CollectorJobs broker() {
-        return new CollectorJobs(quotes, news, filings, Optional.of(insight), Optional.of(intraday), CLOCK);
+        return new CollectorJobs(quotes, news, filings, Optional.of(insight), Optional.of(intraday), members,
+                Optional.empty(), CLOCK);
     }
 
     private CollectorJobs simulator() {
-        return new CollectorJobs(quotes, news, filings, Optional.empty(), Optional.empty(), CLOCK);
+        return new CollectorJobs(quotes, news, filings, Optional.empty(), Optional.empty(), members,
+                Optional.empty(), CLOCK);
+    }
+
+    private final DailyCollectionPublisher daily = mock(DailyCollectionPublisher.class);
+
+    private CollectorJobs withDaily(Optional<InsightPublisher> source) {
+        return new CollectorJobs(quotes, news, filings, source, Optional.of(intraday), members, Optional.of(daily), CLOCK);
+    }
+
+    @Test
+    void preOpenRecordsWhatItMissedForTheMorningNotice() {
+        when(insight.publishPreOpen(anyString(), anyString())).thenReturn(Set.of("overseas-daily-price"));
+        when(filings.publishCollected(anyString())).thenReturn(false);
+
+        withDaily(Optional.of(insight)).run(Job.COLLECT_PRE_OPEN);
+
+        verify(daily).recordPreOpen(Set.of("overseas-daily-price", "sec-filings"));
+    }
+
+    @Test
+    void preOpenThatGotEverythingRecordsNothingMissing() {
+        when(insight.publishPreOpen(anyString(), anyString())).thenReturn(Set.of());
+        when(filings.publishCollected(anyString())).thenReturn(true);
+
+        withDaily(Optional.of(insight)).run(Job.COLLECT_PRE_OPEN);
+
+        verify(daily).recordPreOpen(Set.of());
+    }
+
+    @Test
+    void preOpenWhoseInsightPartFailsOrIsNotTheBrokerCountsBothOfItsSourcesAsMissing() {
+        doThrow(new IllegalStateException("insight down")).when(insight).publishPreOpen(anyString(), anyString());
+        when(filings.publishCollected(anyString())).thenReturn(true);
+
+        withDaily(Optional.of(insight)).run(Job.COLLECT_PRE_OPEN);
+        withDaily(Optional.empty()).run(Job.COLLECT_PRE_OPEN);
+
+        verify(daily, times(2)).recordPreOpen(Set.of("world-index", "overseas-daily-price"));
+    }
+
+    @Test
+    void preOpenStillRecordsAResultWhenTheFilingsPartThrows() {
+        when(insight.publishPreOpen(anyString(), anyString())).thenReturn(Set.of());
+        doThrow(new IllegalStateException("edgar down")).when(filings).publishCollected(anyString());
+
+        assertThatThrownBy(() -> withDaily(Optional.of(insight)).run(Job.COLLECT_PRE_OPEN))
+                .isInstanceOf(IllegalStateException.class);
+
+        verify(daily).recordPreOpen(Set.of("world-index", "overseas-daily-price", "sec-filings"));
+    }
+
+    @Test
+    void postCloseSendsTheNoticeWithWhatItMissedWhenItEnds() {
+        when(insight.publishAll(anyString(), anyString())).thenReturn(Set.of("market-summary"));
+
+        withDaily(Optional.of(insight)).run(Job.COLLECT_POST_CLOSE);
+
+        verify(daily).publishPostClose("collect-post-close-" + AT, Set.of("market-summary"));
+    }
+
+    @Test
+    void postCloseThatFailsOrIsNotTheBrokerStillSendsTheNoticeWithEverySourceMissing() {
+        doThrow(new IllegalStateException("insight down")).when(insight).publishAll(anyString(), anyString());
+        Set<String> all = Set.of("daily-price", "world-index", "exchange-rate-summary", "market-summary");
+
+        withDaily(Optional.of(insight)).run(Job.COLLECT_POST_CLOSE);
+        withDaily(Optional.empty()).run(Job.COLLECT_POST_CLOSE);
+
+        verify(daily, times(2)).publishPostClose("collect-post-close-" + AT, all);
+    }
+
+    @Test
+    void anInterruptDuringTheRetryWaitStillSendsTheNoticeOnceAndKeepsTheInterruptForShutdown() {
+        // 재시도 대기 중 종료(인터럽트)로 반복이 끊긴 상태를 흉내 낸다.
+        when(insight.publishAll(anyString(), anyString())).thenAnswer(invocation -> {
+            Thread.currentThread().interrupt();
+            return Set.of("market-summary");
+        });
+        List<Boolean> interruptedWhileSending = new ArrayList<>();
+        doAnswer(invocation -> interruptedWhileSending.add(Thread.currentThread().isInterrupted()))
+                .when(daily).publishPostClose(anyString(), any());
+
+        try {
+            withDaily(Optional.of(insight)).run(Job.COLLECT_POST_CLOSE);
+
+            verify(daily).publishPostClose("collect-post-close-" + AT, Set.of("market-summary"));
+            assertThat(interruptedWhileSending).containsExactly(false);
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+        } finally {
+            // 다른 테스트로 인터럽트 표시가 새지 않게 지운다.
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    void aManualPostCloseRunAlsoSendsTheNotice() throws Exception {
+        when(insight.publishAll(anyString(), anyString())).thenReturn(Set.of());
+
+        withDaily(Optional.of(insight)).startOnDemand(Job.COLLECT_POST_CLOSE);
+
+        verify(daily, timeout(5_000)).publishPostClose("collect-post-close-" + AT, Set.of());
+    }
+
+    @Test
+    void otherJobsSendNoDailyNotice() {
+        CollectorJobs jobs = withDaily(Optional.of(insight));
+
+        for (Job job : new Job[] {Job.COLLECT, Job.COLLECT_NEWS, Job.COLLECT_INTRADAY, Job.COLLECT_ETF_MEMBERS}) {
+            jobs.run(job);
+        }
+
+        verifyNoInteractions(daily);
     }
 
     @Test
     void jobNamesAreTheJobTypesAndUnknownNamesAreEmpty() {
         assertThat(Arrays.stream(Job.values()).map(Job::jobType)).containsExactly(
-                "collect", "collect-news", "collect-pre-open", "collect-intraday", "collect-post-close");
+                "collect", "collect-news", "collect-pre-open", "collect-intraday", "collect-post-close",
+                "collect-etf-members");
         for (Job job : Job.values()) {
             assertThat(Job.of(job.jobType())).contains(job);
         }
         assertThat(Job.of("collect-members")).isEmpty();
         assertThat(Job.of("daily-briefing-morning")).isEmpty();
         assertThat(Job.of(null)).isEmpty();
+    }
+
+    @Test
+    void logLinesInsideAJobCarryTheRoundCorrelationId() throws Exception {
+        // 작업 스레드에서 찍는 로그 줄도 회차 correlationId 로 찾을 수 있어야 한다.
+        CompletableFuture<String> during = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            during.complete(MDC.get(CorrelationId.KEY));
+            return null;
+        }).when(news).publishCollected(anyString(), anyString());
+
+        assertThat(simulator().start(Job.COLLECT_NEWS)).isEqualTo(Outcome.STARTED);
+
+        assertThat(during.get(5, TimeUnit.SECONDS)).isEqualTo("collect-news-" + AT);
+    }
+
+    @Test
+    void logLinesOfAJobRunOnTheCallingThreadCarryTheRoundCorrelationIdAndTheOldValueComesBack() {
+        // 장 시작 전·장중·마감 후·뉴스 타이머는 타이머 스레드에서 작업을 끝까지 돌린다.
+        String[] during = new String[1];
+        doAnswer(invocation -> {
+            during[0] = MDC.get(CorrelationId.KEY);
+            return null;
+        }).when(news).publishCollected(anyString(), anyString());
+        MDC.put(CorrelationId.KEY, "timer");
+
+        assertThat(simulator().run(Job.COLLECT_NEWS)).isEqualTo(Outcome.STARTED);
+
+        assertThat(during[0]).isEqualTo("collect-news-" + AT);
+        assertThat(MDC.get(CorrelationId.KEY)).isEqualTo("timer");
+        MDC.remove(CorrelationId.KEY);
+    }
+
+    @Test
+    void theCorrelationIdForTimersIsTheOneTheNextRoundUses() {
+        assertThat(simulator().correlationId(Job.COLLECT_PRE_OPEN)).isEqualTo("collect-pre-open-" + AT);
     }
 
     @Test
@@ -87,6 +246,7 @@ class CollectorJobsTest {
         verify(filings).publishCollected("collect-pre-open-" + AT);
         verify(intraday).publishIntraday("collect-intraday-" + AT, AT);
         verify(insight).publishAll("collect-post-close-" + AT, AT);
+        verify(members).publishFetched("collect-etf-members-" + AT);
     }
 
     @Test
@@ -251,6 +411,7 @@ class CollectorJobsTest {
             case COLLECT_PRE_OPEN -> doAnswer(answer).when(filings).publishCollected(anyString());
             case COLLECT_INTRADAY -> doAnswer(answer).when(intraday).publishIntraday(anyString(), anyString());
             case COLLECT_POST_CLOSE -> doAnswer(answer).when(insight).publishAll(anyString(), anyString());
+            case COLLECT_ETF_MEMBERS -> doAnswer(answer).when(members).publishFetched(anyString());
         }
     }
 

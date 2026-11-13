@@ -15,7 +15,8 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Callable, Mapping
 
 from briefing.compose import KST
-from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
+from briefing.article_groups import RESEARCH_MARK, ArticleRow, GroupedArticles, group_article_lists
+from briefing.config import DEFAULT_DAILY_SETTINGS, DEFAULT_SETTINGS, CoreSettings, DailySettings
 from briefing.daily_inputs import (
     PRE_OPEN_NOTICE,
     EtfArticles,
@@ -51,7 +52,9 @@ from briefing.llm_output import (
     parse_output_object,
     ticker_pattern,
 )
-from briefing.llm import API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCallError, LlmClient, llm_config
+from briefing.llm import (API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCallError, LlmClient, LlmUsage,
+                          attempt_usage,
+                          llm_config)
 from briefing.open_flow import OPEN_SOURCE_TEXT, OpenFlow, signed
 from briefing.move_figures import USD_KRW_NAME, display, exchange_rate_figure
 from briefing.sources import (
@@ -160,7 +163,8 @@ WEEKDAYS = "월화수목금토일"
 
 @dataclass(frozen=True)
 class EtfDay:
-    """보유 ETF 하나의 하루 등락. 값은 일봉 원문 그대로다. 일봉이 없으면 값 칸이 None이고 이유가 missing_reason에 있다."""
+    """보유 ETF 하나의 하루 등락. 값은 일봉 원문 그대로다. 일봉이 없으면 값 칸이 None이고 이유가 missing_reason에 있다.
+    일봉이 없어도 시세처리기가 장중 시세로 계산한 대체값이 있으면 prev_close·rate가 그 값이고 intraday_at이 그 시세를 받은 시각이다."""
 
     symbol: str
     date: str | None
@@ -172,15 +176,28 @@ class EtfDay:
     tickers_truncated: bool
     # 응답의 ETF 정보(선택 칸). 이전 형식 응답에는 없다.
     etf: EtfInfo | None = None
-    # 값 칸이 빈 이유(market.daily.responded v2). 값이 있으면 None이고, v1 응답에도 없다.
+    # 값 칸이 빈 이유(데일리 자료 응답 v2의 missingReason). 값이 있으면 None이고, v1 응답에도 없다.
     missing_reason: str | None = None
     # 보유(HELD)·관심(WATCH) 구분. 멤버마다 달라 응답에는 없고, 멤버의 판을 짤 때 그 멤버의 포트폴리오 값으로 붙인다.
     relation: str | None = None
     # 아침 판의 개장 흐름(선택 칸). 응답에 칸이 없으면 None이고, 범위 안 시세가 없으면 present가 False다.
     open_flow: OpenFlow | None = None
+    # 하루 등락 대체값(응답의 intradayFallback). 마감 후 판에서 판 범위 안에 받은 것만 남는다.
+    intraday_at: datetime | None = None
+    intraday_price: str | None = None
 
     def has_day(self) -> bool:
+        if self.is_fallback():
+            return True
         return self.missing_reason is None and None not in (self.date, self.close, self.prev_close, self.rate)
+
+    def is_fallback(self) -> bool:
+        """일봉 대신 장중 시세로 계산한 하루 등락인가."""
+        return self.intraday_at is not None and None not in (self.prev_close, self.rate)
+
+    def without_fallback(self) -> "EtfDay":
+        """대체값을 버리고 일봉 없음으로 되돌린다."""
+        return replace(self, prev_close=None, rate=None, intraday_at=None, intraday_price=None)
 
     def label(self) -> str:
         """본문에 쓰는 ETF 이름. 이름을 모르면 종목코드."""
@@ -243,6 +260,8 @@ class Entry:
     # 마감 후 판 출처 목록용: 자료 종류와 원문 링크(기사·공시만)
     kind: str = ""
     url: str | None = None
+    # 기사만: 같은 사건 기사 묶기에 쓰는 발행 시각
+    published_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -456,11 +475,20 @@ def etf_name(etf: EtfDay) -> str:
     return etf.symbol if etf.label() == etf.symbol else f"{etf.label()}({etf.symbol})"
 
 
+def fallback_note(etf: EtfDay) -> str:
+    """대체값 뒤에 붙이는 기준 표시. 대체값이 아니면 빈 글."""
+    if not etf.is_fallback():
+        return ""
+    return f"(장중 시세 {etf.intraday_at.astimezone(KST):%H:%M} 기준, 일봉 없음)"
+
+
 def etf_line(etf: EtfDay) -> str:
     if not etf.has_day():
         return f"{NO_DATA}: {etf.label()}, {_etf_missing_reason(etf)}"
     rate = _rate(etf.rate)
     shown = f"+{etf.rate}" if rate is not None and rate > 0 and not etf.rate.startswith("+") else etf.rate
+    if etf.is_fallback():
+        return f"{etf_name(etf)} {shown}% {fallback_note(etf)}"
     return f"{etf_name(etf)} {shown}% (종가 {etf.close}, 전일 {etf.prev_close}, {etf.date})"
 
 
@@ -475,6 +503,13 @@ def _etfs_section(i: DailyInput, refs: Callable[[], str]) -> Section:
             gaps_llm.append({"symbol": etf.symbol, "name": etf.label(), "status": MARK_MISSING, "reason": reason})
             continue
         ref = refs()
+        if etf.is_fallback():
+            note = fallback_note(etf)
+            entries.append(Entry(ref, {"ref": ref, "symbol": etf.symbol, "basis": note, "price": etf.intraday_price,
+                                       "prevClose": etf.prev_close, "rate": etf.rate,
+                                       "receivedAt": _at(etf.intraday_at), "tickers": list(etf.tickers)},
+                                 f"{etf.symbol} 하루 등락 {etf.rate}% {note} — {BACKGROUND_SOURCE}", KIND_DAY))
+            continue
         entries.append(Entry(ref, {"ref": ref, "symbol": etf.symbol, "date": etf.date, "close": etf.close,
                                    "prevClose": etf.prev_close, "rate": etf.rate, "receivedAt": _at(etf.fetched_at),
                                    "tickers": list(etf.tickers)},
@@ -569,7 +604,8 @@ def _etf_articles_section(i: DailyInput) -> Section:
                                   "title": a.title, "summary": a.summary, "source": a.publisher,
                                   "publishedAt": _at(a.published_at),
                                   "minutesBeforeAsOf": _minutes_before(a.published_at, i.as_of)},
-                                 f"{a.title} — {a.publisher}, {_short(a.published_at)} 발행 {a.url}", KIND_NEWS, a.url))
+                                 f"{a.title} — {a.publisher}, {_short(a.published_at)} 발행 {a.url}", KIND_NEWS, a.url,
+                                 a.published_at))
     truncated = any(g.truncated for g in i.etf_articles)
     if not entries and gaps:
         return Section(ITEM_ETF_ARTICLES, MARK_MISSING, tuple(lines), (), tuple(gaps), tuple(gaps_llm), hidden=True)
@@ -609,7 +645,8 @@ def _research_section(i: DailyInput) -> Section:
                              {"ref": a.article_id, "articleId": a.article_id, "title": a.title,
                               "summary": a.summary, "source": a.publisher, "publishedAt": _at(a.published_at),
                               "minutesBeforeAsOf": _minutes_before(a.published_at, i.as_of)},
-                             f"{a.title} — {a.publisher}, {_short(a.published_at)} 발행 {a.url}", KIND_NEWS, a.url))
+                             f"{a.title} — {a.publisher}, {_short(a.published_at)} 발행 {a.url}", KIND_NEWS, a.url,
+                             a.published_at))
     if i.research_articles_truncated:
         lines.append(f"({MARK_TRUNCATED}: 상한까지만 받음)")
     status = MARK_TRUNCATED if i.research_articles_truncated else MARK_PRESENT
@@ -665,21 +702,43 @@ def has_evidence(sections: tuple[Section, ...]) -> bool:
     return any(s.entries for s in sections)
 
 
-def _llm_item(s: Section) -> dict[str, Any]:
-    item: dict[str, Any] = {"name": s.name, "status": s.status, "entries": [e.llm for e in s.entries]}
+def _llm_item(s: Section, entries: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    item: dict[str, Any] = {"name": s.name, "status": s.status,
+                            "entries": entries if entries is not None else [e.llm for e in s.entries]}
     # 값이 빈 대상은 있을 때만 싣는다. 빈 것이 없는 항목의 입력 모양은 바꾸지 않는다.
     if s.gaps_llm:
         item["missing"] = list(s.gaps_llm)
     return item
 
 
+# 같은 사건으로 묶는 기사 항목. 앞 항목이 처음 모은 기사, 뒤 항목이 재검색 기사다(묶음은 앞 항목 자리에 놓인다).
+ARTICLE_ITEMS = (ITEM_ETF_ARTICLES, ITEM_RESEARCH)
+
+
+def _article_sections(sections: tuple[Section, ...]) -> list[Section]:
+    return [s for name in ARTICLE_ITEMS for s in sections if s.name == name]
+
+
+def article_groups(sections: tuple[Section, ...], core: CoreSettings = DEFAULT_SETTINGS) -> GroupedArticles:
+    """ETF별 기사와 재검색 기사를 함께 같은 사건끼리 묶는다. 둘 다 판 범위로 거른 기사다."""
+    found = _article_sections(sections)
+    return group_article_lists(
+        [[ArticleRow(e.llm, e.llm["title"], e.published_at) for e in s.entries]
+         for s in found],
+        core, marks=[RESEARCH_MARK if s.name == ITEM_RESEARCH else {} for s in found])
+
+
 def build_llm_input(i: DailyInput, sections: tuple[Section, ...],
-                    settings: DailySettings = DEFAULT_DAILY_SETTINGS) -> dict[str, Any]:
+                    settings: DailySettings = DEFAULT_DAILY_SETTINGS,
+                    core: CoreSettings = DEFAULT_SETTINGS, *, group: bool = True) -> dict[str, Any]:
+    # 검색어 입력처럼 기사 칸을 쓰지 않는 곳은 group=False로 묶기를 건너뛴다.
+    grouped = dict(zip((s.name for s in _article_sections(sections)), article_groups(sections, core).lists)) \
+        if group else {}
     data: dict[str, Any] = {
         "edition": EDITION_NAMES[i.edition],
         "rangeStart": _at(i.range_start),
         "asOf": _at(i.as_of),
-        "items": [_llm_item(s) for s in sections],
+        "items": [_llm_item(s, grouped.get(s.name)) for s in sections],
     }
     # ETF 정보는 응답에 있을 때만 넣는다. 정보가 없는 이전 형식 응답의 입력 모양은 바꾸지 않는다.
     etf_info = [{"symbol": e.symbol, **etf_info_input(e.etf, settings.max_etf_members)}
@@ -703,10 +762,19 @@ def _outlook_etfs_input(i: DailyInput) -> list[dict[str, Any]]:
 
 
 def _reviews_input(i: DailyInput) -> list[dict[str, Any]]:
-    """코드가 정한 맞음·빗나감을 Claude에 준다. Claude는 판정을 바꾸지 않고 이유만 쓴다."""
-    return [{"symbol": r.symbol, "morningDirection": r.call.direction, "morningReason": r.call.reason,
-             "actualRate": str(r.rate), "verdict": r.verdict}
-            for r in i.reviews() if r.verdict is not None]
+    """코드가 정한 맞음·빗나감을 Claude에 준다. Claude는 판정을 바꾸지 않고 이유만 쓴다.
+    실제 등락이 장중 시세 대체값이면 그 기준(actualBasis)을 함께 준다."""
+    etfs = {e.symbol: e for e in i.etfs or ()}
+    rows = []
+    for r in i.reviews():
+        if r.verdict is None:
+            continue
+        row = {"symbol": r.symbol, "morningDirection": r.call.direction, "morningReason": r.call.reason,
+               "actualRate": str(r.rate), "verdict": r.verdict}
+        if r.symbol in etfs and etfs[r.symbol].is_fallback():
+            row["actualBasis"] = fallback_note(etfs[r.symbol])
+        rows.append(row)
+    return rows
 
 
 def _candidates_input(i: DailyInput, sections: tuple[Section, ...]) -> list[dict[str, Any]]:
@@ -1134,6 +1202,8 @@ class LlmAttempt:
     reason: str
     llm_input: str
     raw_output: str | None
+    # 응답을 받지 못한 호출 실패는 None이다.
+    usage: LlmUsage | None = None
 
 
 @dataclass(frozen=True)
@@ -1175,7 +1245,7 @@ def _issues_by_etf(i: DailyInput) -> dict[str, tuple[MemberIssue, ...]]:
     return {etf: tuple(issues) for etf, issues in grouped.items()}
 
 
-def _etf_names(i: DailyInput) -> frozenset[str]:
+def summary_banned_names(i: DailyInput) -> frozenset[str]:
     """요약에 쓰면 안 되는 ETF 이름과 종목코드. 한 글자 이름은 일반 낱말과 겹쳐 뺀다."""
     return frozenset(n for etf in i.etfs or () for n in (etf.symbol, etf.label()) if len(n) >= 2)
 
@@ -1185,57 +1255,66 @@ class DailyLlmWriter:
     client: LlmClient
     max_attempts: int = DEFAULT_DAILY_SETTINGS.llm_max_attempts
     settings: DailySettings = DEFAULT_DAILY_SETTINGS
+    # 같은 사건 기사 묶기 기준값은 급변동과 같은 CoreSettings를 쓴다.
+    core: CoreSettings = DEFAULT_SETTINGS
 
     @staticmethod
-    def _forbidden_tickers(i: DailyInput) -> frozenset[str]:
+    def forbidden_tickers(i: DailyInput) -> frozenset[str]:
         return frozenset(i.tickers()) | frozenset(r.ticker for r in i.close_rates or ()) \
             | frozenset(t for f in i.filings or () for t in f.tickers) | i.member_us_symbols()
 
     def write(self, i: DailyInput, sections: tuple[Section, ...]) -> DailyWriteResult:
-        user = json.dumps(build_llm_input(i, sections, self.settings), ensure_ascii=False)
+        user = json.dumps(build_llm_input(i, sections, self.settings, self.core), ensure_ascii=False)
+        groups = article_groups(sections, self.core).record()
         allowed = frozenset(e.ref for s in sections for e in s.entries)
-        tickers = self._forbidden_tickers(i)
+        tickers = self.forbidden_tickers(i)
         post_close = i.edition == EDITION_POST_CLOSE
         prompt, schema = (SYSTEM_PROMPT_POST_CLOSE, OUTPUT_SCHEMA_POST_CLOSE) if post_close \
             else (SYSTEM_PROMPT, OUTPUT_SCHEMA_MORNING)
         rejected: list[LlmAttempt] = []
         for attempt in range(1, self.max_attempts + 1):
             raw: str | None = None
+            usage: LlmUsage | None = None
             try:
-                raw = self.client.complete(prompt, user, schema)
+                reply = self.client.complete(prompt, user, schema)
+                raw, usage = reply.text, reply.usage
                 output = parse_post_close_output(raw, allowed, tickers, _etfs_with_day(i), _issues_by_etf(i),
                                                  bool(i.notables), _reviews_to_explain(i),
-                                                 _etf_names(i)) \
+                                                 summary_banned_names(i)) \
                     if post_close else parse_morning_output(raw, allowed, tickers, _etfs_to_forecast(i))
             except (LlmCallError, InvalidDailyOutput) as error:
-                rejected.append(LlmAttempt(attempt, type(error).__name__, str(error), user, raw))
+                rejected.append(LlmAttempt(attempt, type(error).__name__, str(error), user, raw,
+                                            attempt_usage(usage, error)))
                 log.warning("daily LLM attempt %d/%d failed for job %s: %s",
                             attempt, self.max_attempts, i.job_id, error)
                 continue
             return DailyWriteResult(DailyBody(llm_text(i, sections, output), GENERATED_BY_LLM,
                                               output.insufficient_evidence, output.cited_refs(),
                                               output.weak_shortfalls(), output), tuple(rejected),
-                                    AcceptedAttempt(attempt, user, raw))
+                                    AcceptedAttempt(attempt, user, raw, usage, groups))
         return DailyWriteResult(None, tuple(rejected))
 
     def rewrite_point(self, i: DailyInput, sections: tuple[Section, ...], current: Point, no: int,
                       new_refs: tuple[str, ...]) -> PointRewrite:
         """근거가 약한 문장 하나만 다시 쓴다. 나머지 문장은 건드리지 않는다. i와 sections에는 새로 찾은 기사까지 들어 있다."""
-        data = build_llm_input(i, sections, self.settings)
+        data = build_llm_input(i, sections, self.settings, self.core)
+        groups = article_groups(sections, self.core).record()
         data["rewrite"] = {"sentenceNo": no, "sentence": {"statement": current.statement, "refs": list(current.refs)},
                            "shortfall": current.shortfall, "newRefs": list(new_refs)}
         if current.symbol is not None:
             data["rewrite"]["symbol"] = current.symbol
         user = json.dumps(data, ensure_ascii=False)
         allowed = frozenset(e.ref for s in sections for e in s.entries)
-        tickers = self._forbidden_tickers(i)
-        prompt = SYSTEM_PROMPT_POST_CLOSE + REWRITE_ADDENDUM_POST_CLOSE if i.edition == EDITION_POST_CLOSE \
-            else SYSTEM_PROMPT + REWRITE_ADDENDUM
+        tickers = self.forbidden_tickers(i)
+        prompt, addendum = (SYSTEM_PROMPT_POST_CLOSE, REWRITE_ADDENDUM_POST_CLOSE) \
+            if i.edition == EDITION_POST_CLOSE else (SYSTEM_PROMPT, REWRITE_ADDENDUM)
         rejected: list[LlmAttempt] = []
         for attempt in range(1, self.max_attempts + 1):
             raw: str | None = None
+            usage: LlmUsage | None = None
             try:
-                raw = self.client.complete(prompt, user, OUTPUT_SCHEMA)
+                reply = self.client.complete(prompt, user, OUTPUT_SCHEMA, addendum)
+                raw, usage = reply.text, reply.usage
                 output = parse_output(raw, allowed, tickers, weak_without_refs=current.kind == POINT_ETF)
                 if output.insufficient_evidence or len(output.points) != 1:
                     raise InvalidDailyOutput("rewrite must return exactly one point")
@@ -1245,22 +1324,24 @@ class DailyLlmWriter:
                 if repeated is not None:
                     raise _repeat_error(repeated)
             except (LlmCallError, InvalidDailyOutput) as error:
-                rejected.append(LlmAttempt(attempt, type(error).__name__, str(error), user, raw))
+                rejected.append(LlmAttempt(attempt, type(error).__name__, str(error), user, raw,
+                                            attempt_usage(usage, error)))
                 log.warning("daily LLM sentence rewrite attempt %d/%d failed for job %s: %s",
                             attempt, self.max_attempts, i.job_id, error)
                 continue
             # 다시 쓴 문장은 원래 문장의 종류와 ETF를 이어받는다.
             point = replace(output.points[0], kind=current.kind, symbol=current.symbol)
-            return PointRewrite(point, tuple(rejected), AcceptedAttempt(attempt, user, raw))
+            return PointRewrite(point, tuple(rejected), AcceptedAttempt(attempt, user, raw, usage, groups))
         return PointRewrite(None, tuple(rejected))
 
 
 def build_daily_writer(env: Mapping[str, str],
                        client_factory: Callable[[str, str], LlmClient] = AnthropicClient,
-                       settings: DailySettings = DEFAULT_DAILY_SETTINGS) -> DailyLlmWriter | None:
+                       settings: DailySettings = DEFAULT_DAILY_SETTINGS,
+                       core: CoreSettings = DEFAULT_SETTINGS) -> DailyLlmWriter | None:
     """시작할 때 한 번 부른다. 키가 없으면 None이고 데일리 판은 규칙 기반 본문으로 나간다."""
     config = llm_config(env)
     if config is None:
         log.warning("%s is not set; daily briefings will be rule-based", API_KEY_ENV)
         return None
-    return DailyLlmWriter(client_factory(config.api_key, config.model), settings.llm_max_attempts, settings)
+    return DailyLlmWriter(client_factory(config.api_key, config.model), settings.llm_max_attempts, settings, core)

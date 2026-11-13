@@ -9,12 +9,13 @@ ADR = Architecture Decision Record. "무엇을, 왜, 어떤 대안을 놓고 정
 | [002](002-build-and-module-structure.md) | 빌드 도구와 모듈 구조 | 확정 |
 | [003](003-kafka.md) | 메시징: Apache Kafka | 확정 |
 | [004](004-postgresql.md) | DB: PostgreSQL + pgvector | 확정 |
-| [006](006-microservices.md) | MSA 채택과 서비스 분리 기준 | 확정 |
+| [006](006-microservices.md) | MSA 채택과 서비스 분리 기준(알림은 Kafka, 조회는 내부 HTTP) | 확정 |
 | [007](007-outbound-only.md) | 외부 접속 없는 아웃바운드 전용으로 시작 | 확정 |
 | [008](008-redis.md) | 공유 카운터·캐시는 Redis (도입 보류) | 확정 |
-| [010](010-event-format.md) | 이벤트 포맷 (JSON + 스키마 파일) | 초안 |
+| [010](010-event-format.md) | 이벤트 포맷 (JSON + 스키마 파일, 내부 조회 본문도 같은 계약) | 초안 |
 | [011](011-notification-channel.md) | 알림 채널: 이메일(AWS SES) | 확정 |
 | [012](012-collector-timers-and-command-topic.md) | 수집기 자기 수집은 서비스 안 타이머, 수동 실행은 명령 토픽(collector.command) | 확정 |
+| [013](013-lightsail-compose-deploy.md) | 운영 배포: Lightsail 서버 2대 + Docker Compose, 서버가 ECR 이미지를 받아 옴 | 확정 |
 
 ## 상태 표기
 - **확정**: 합의했고, 구현이 있으면 테스트로 검증됨

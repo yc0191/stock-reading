@@ -17,9 +17,13 @@ from briefing.job_log import (
 from briefing.job_log_store import (
     FAIL_UNFINISHED_SQL,
     FINISH_RUN_SQL,
+    INSERT_MARKET_CLOSED_SQL,
     INSERT_SQL,
+    INSERT_STEP_SQL,
     LOG_TABLE,
     RUN_TABLE,
+    SELECT_EDITION_STARTED_SQL,
+    SELECT_MARKET_CLOSED_SQL,
     SELECT_MOVES_SQL,
     SELECT_OUTLOOKS_SQL,
     START_RUN_SQL,
@@ -283,11 +287,65 @@ def test_moves_between_returns_parsed_rows_and_skips_a_row_that_cannot_be_read(s
     assert db.statements == [(SELECT_MOVES_SQL, ("move", since, until))]
 
 
+def test_edition_started_asks_for_that_kind_on_the_korean_day(sleeps):
+    db = FakeDb(answer=[(1,)])
+    assert store_for(db, sleeps).edition_started(JobKind.POST_CLOSE, AT.date()) is True
+    assert db.statements == [(SELECT_EDITION_STARTED_SQL, ("post-close", datetime(2026, 10, 20, 0, 0, tzinfo=AT.tzinfo),
+                                                          datetime(2026, 10, 21, 0, 0, tzinfo=AT.tzinfo)))]
+    assert store_for(FakeDb(answer=[]), sleeps).edition_started(JobKind.MORNING, AT.date()) is False
+
+
+def test_market_closed_is_written_once_per_day_and_edition_and_read_back(sleeps):
+    db = FakeDb()
+    assert store_for(db, sleeps).mark_market_closed(JobKind.MORNING, AT.date(), JOB_ID, AT) is True
+    assert db.statements == [(INSERT_MARKET_CLOSED_SQL, (AT.date(), "morning", JOB_ID, AT))]
+    assert "ON CONFLICT (edition_day, edition) DO NOTHING" in INSERT_MARKET_CLOSED_SQL
+
+    asked = FakeDb(answer=[(1,)])
+    assert store_for(asked, sleeps).market_closed(JobKind.POST_CLOSE, AT.date()) is True
+    assert asked.statements == [(SELECT_MARKET_CLOSED_SQL, (AT.date(), "post-close"))]
+    assert store_for(FakeDb(answer=[]), sleeps).market_closed(JobKind.MORNING, AT.date()) is False
+
+
+def test_a_market_closed_record_that_keeps_failing_returns_false(sleeps):
+    assert store_for(FakeDb(fail_times=3), sleeps).mark_market_closed(JobKind.MORNING, AT.date(), JOB_ID, AT) is False
+
+
 def test_a_failed_read_is_none_and_the_log_names_only_the_error_kind(sleeps, caplog):
     db = FakeDb(fail_times=1)
     with caplog.at_level(logging.WARNING):
         assert store_for(db, sleeps).morning_outlooks(AT.date()) is None
         assert store_for(FakeDb(fail_times=1), sleeps).moves_between(AT, AT) is None
+        assert store_for(FakeDb(fail_times=1), sleeps).edition_started(JobKind.MORNING, AT.date()) is None
+        assert store_for(FakeDb(fail_times=1), sleeps).market_closed(JobKind.MORNING, AT.date()) is None
     assert "ConnectionError" in caplog.text and "hunter2" not in caplog.text and "secret-user" not in caplog.text
     # 읽기는 다시 시도하지 않는다(판 발행을 늦추지 않는다).
     assert sleeps == []
+
+
+def test_a_job_step_is_saved_as_one_line_with_its_trace_id(sleeps):
+    from briefing.job_step import JobStep, StepResult
+    db = FakeDb()
+    step = JobStep(JOB_ID, "news.articles", "news/articles", AT, AT + timedelta(seconds=2), StepResult.FAILED, 3,
+                   "corr-1", "timeout")
+
+    assert store_for(db, sleeps).record_step(step) is True
+
+    ((sql, params),) = db.statements
+    assert sql is INSERT_STEP_SQL and "briefing.job_step" in sql
+    assert params == (JOB_ID, "news.articles", "news/articles", AT, AT + timedelta(seconds=2), "failed", "timeout", 3,
+                      "corr-1")
+
+
+def test_a_job_step_that_cannot_be_saved_does_not_mark_the_job_as_failed(sleeps, caplog):
+    from briefing.job_step import JobStep, StepResult
+    db = FakeDb(fail_times=3)
+    store = store_for(db, sleeps)
+    step = JobStep(JOB_ID, "llm", "llm/test-model", AT, AT, StepResult.SUCCEEDED, 1, None)
+
+    with caplog.at_level(logging.WARNING, logger="briefing.job_log_store"):
+        assert store.record_step(step) is False
+
+    # 호출 기록은 진단용이라 실패해도 작업의 발행을 막지 않는다(job_run·job_log 저장 실패와 다르다).
+    assert store.has_failed(JOB_ID) is False
+    assert len(sleeps) == 2 and "hunter2" not in caplog.text

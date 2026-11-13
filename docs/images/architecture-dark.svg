@@ -1,85 +1,96 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 690" width="1280" height="690" font-family="-apple-system, 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif">
-<rect width="1280" height="690" fill="#0d1117"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 770" width="1300" height="770" font-family="-apple-system, 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif">
+<rect width="1300" height="770" fill="#0d1117"/>
 <defs>
 <marker id="mr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#ff7b72"/></marker>
 <marker id="mb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#58a6ff"/></marker>
 <marker id="mg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9198a1"/></marker>
+<marker id="mp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#d2a8ff"/></marker>
 <marker id="ml" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#656c76"/></marker>
 </defs>
-<rect x="200" y="40" width="440" height="140" rx="12" fill="#132339" stroke="#4c8eda" stroke-width="1.6"/>
-<text x="216" y="68" text-anchor="start" font-size="17" font-weight="700" fill="#e6edf3">수집기</text>
-<text x="275" y="68" text-anchor="start" font-size="12" font-weight="400" fill="#9198a1">Java</text>
-<text x="216" y="94" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 타이머: 1초 시세, 주기마다 뉴스·공시·지수·환율</text>
-<text x="216" y="115" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 시세 응답 칸 검사, 휴장일 판정</text>
-<text x="216" y="136" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 판 시작 시각에 신호 발행</text>
-<rect x="700" y="40" width="420" height="140" rx="12" fill="#132339" stroke="#4c8eda" stroke-width="1.6"/>
-<text x="716" y="68" text-anchor="start" font-size="17" font-weight="700" fill="#e6edf3">브리핑</text>
-<text x="775" y="68" text-anchor="start" font-size="12" font-weight="400" fill="#9198a1">Python</text>
-<text x="716" y="94" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 급변동 한 건 / 하루 두 번 판마다 작업 시작</text>
-<text x="716" y="115" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 시세처리기·뉴스처리기에서 범위 안 근거 조회</text>
-<text x="716" y="136" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· LLM 문장의 근거 번호를 코드가 검사</text>
-<text x="716" y="157" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 근거 약한 문장만 다시 검색해 고쳐 씀</text>
-<rect x="24" y="428" width="400" height="110" rx="12" fill="#132339" stroke="#4c8eda" stroke-width="1.6"/>
-<text x="40" y="456" text-anchor="start" font-size="17" font-weight="700" fill="#e6edf3">뉴스처리기</text>
-<text x="133" y="456" text-anchor="start" font-size="12" font-weight="400" fill="#9198a1">Java</text>
-<text x="40" y="482" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 기사·공시 저장(중복 제거)</text>
-<text x="40" y="503" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 발행 시각 범위 안 기사 조회</text>
-<text x="40" y="524" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· ETF로 꺼내면 구성 종목 기사까지</text>
-<rect x="444" y="428" width="400" height="110" rx="12" fill="#132339" stroke="#4c8eda" stroke-width="1.6"/>
-<text x="460" y="456" text-anchor="start" font-size="17" font-weight="700" fill="#e6edf3">시세처리기</text>
-<text x="553" y="456" text-anchor="start" font-size="12" font-weight="400" fill="#9198a1">Java</text>
-<text x="460" y="482" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 시세·지수·환율 저장</text>
-<text x="460" y="503" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 급변동 감지: 연속 확인, 같은 종목 재발행 간격</text>
-<text x="460" y="524" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· ETF 구성 종목 조회와 변경 기록</text>
-<rect x="864" y="428" width="392" height="110" rx="12" fill="#132339" stroke="#4c8eda" stroke-width="1.6"/>
-<text x="880" y="456" text-anchor="start" font-size="17" font-weight="700" fill="#e6edf3">발송기</text>
-<text x="939" y="456" text-anchor="start" font-size="12" font-weight="400" fill="#9198a1">Java</text>
-<text x="880" y="482" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 멤버 수신 설정으로 받는 사람 고름</text>
-<text x="880" y="503" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 글자판 + HTML·그림 메일</text>
-<text x="880" y="524" text-anchor="start" font-size="13" font-weight="400" fill="#e6edf3">· 기본 드라이런, 주소 마스킹</text>
-<rect x="24" y="236" width="1232" height="136" rx="16" fill="#2b1d0e" stroke="#d9822b" stroke-width="2"/>
-<text x="44" y="266" text-anchor="start" font-size="18" font-weight="700" fill="#e6edf3">Kafka</text>
-<text x="44" y="286" text-anchor="start" font-size="12" font-weight="400" fill="#9198a1">이벤트 허브</text>
-<polyline points="300,180 300,428" fill="none" stroke="#9198a1" stroke-width="2" stroke-linejoin="round" marker-end="url(#mg)"/>
-<rect x="243.0" y="271" width="114.0" height="22" rx="11" fill="#0d1117" stroke="#9198a1" stroke-width="1.5"/>
-<text x="300" y="286.5" text-anchor="middle" font-size="12" font-weight="600" fill="#9198a1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">news.collected</text>
-<polyline points="560,180 560,428" fill="none" stroke="#ff7b72" stroke-width="2" stroke-linejoin="round" marker-end="url(#mr)"/>
-<rect x="499.5" y="271" width="121.0" height="22" rx="11" fill="#0d1117" stroke="#ff7b72" stroke-width="1.5"/>
-<text x="560" y="286.5" text-anchor="middle" font-size="12" font-weight="600" fill="#ff7b72" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">market.snapshot</text>
-<polyline points="628,180 628,332 740,332 740,180" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linejoin="round" marker-end="url(#mb)"/>
-<rect x="630.5" y="321" width="107.0" height="22" rx="11" fill="#0d1117" stroke="#58a6ff" stroke-width="1.5"/>
-<text x="684" y="336.5" text-anchor="middle" font-size="12" font-weight="600" fill="#58a6ff" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">schedule.tick</text>
-<polyline points="800,428 800,180" fill="none" stroke="#ff7b72" stroke-width="2" stroke-linejoin="round" marker-end="url(#mr)"/>
-<rect x="753.5" y="271" width="93.0" height="22" rx="11" fill="#0d1117" stroke="#ff7b72" stroke-width="1.5"/>
-<text x="800" y="286.5" text-anchor="middle" font-size="12" font-weight="600" fill="#ff7b72" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">market.move</text>
-<polyline points="960,180 960,428" fill="none" stroke="#ff7b72" stroke-width="2" stroke-linejoin="round" marker-end="url(#mr)"/>
-<rect x="889.0" y="271" width="142.0" height="22" rx="11" fill="#0d1117" stroke="#ff7b72" stroke-width="1.5"/>
-<text x="960" y="286.5" text-anchor="middle" font-size="12" font-weight="600" fill="#ff7b72" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">briefing.generated</text>
-<polyline points="1090,180 1090,428" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linejoin="round" marker-end="url(#mb)"/>
-<rect x="998.0" y="321" width="184.0" height="22" rx="11" fill="#0d1117" stroke="#58a6ff" stroke-width="1.5"/>
-<text x="1090" y="336.5" text-anchor="middle" font-size="12" font-weight="600" fill="#58a6ff" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">briefing.daily.generated</text>
-<rect x="24" y="62" width="150" height="96" rx="10" fill="#0d1117" stroke="#656c76" stroke-width="1.5" stroke-dasharray="5 4"/>
-<text x="99.0" y="107.0" text-anchor="middle" font-size="14" font-weight="600" fill="#e6edf3">외부 API</text>
-<text x="99.0" y="125.0" text-anchor="middle" font-size="11.5" font-weight="400" fill="#9198a1">시세 · 뉴스 · 공시</text>
-<polyline points="174,110 200,110" fill="none" stroke="#656c76" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ml)"/>
-<rect x="1146" y="62" width="110" height="96" rx="10" fill="#0d1117" stroke="#656c76" stroke-width="1.5" stroke-dasharray="5 4"/>
-<text x="1201.0" y="107.0" text-anchor="middle" font-size="14" font-weight="600" fill="#e6edf3">Claude</text>
-<text x="1201.0" y="125.0" text-anchor="middle" font-size="11.5" font-weight="400" fill="#9198a1">API</text>
-<polyline points="1120,110 1146,110" fill="none" stroke="#656c76" stroke-width="1.6" stroke-linejoin="round" stroke-dasharray="5 4" marker-end="url(#ml)"/>
-<rect x="24" y="582" width="1040" height="52" rx="10" fill="#0f2419" stroke="#3fb970" stroke-width="1.5"/>
-<text x="544" y="606" text-anchor="middle" font-size="15" font-weight="600" fill="#e6edf3">PostgreSQL</text>
-<text x="544" y="624" text-anchor="middle" font-size="12" font-weight="400" fill="#9198a1">서비스별 스키마 · 종목·멤버 표는 필요한 서비스만 읽기 전용</text>
-<polyline points="224,538 224,582" fill="none" stroke="#656c76" stroke-width="1.6" stroke-linejoin="round"/>
-<polyline points="644,538 644,582" fill="none" stroke="#656c76" stroke-width="1.6" stroke-linejoin="round"/>
-<polyline points="960,538 960,582" fill="none" stroke="#656c76" stroke-width="1.6" stroke-linejoin="round"/>
-<rect x="1084" y="582" width="172" height="52" rx="10" fill="#0d1117" stroke="#656c76" stroke-width="1.5" stroke-dasharray="5 4"/>
-<text x="1170.0" y="613.0" text-anchor="middle" font-size="14" font-weight="600" fill="#e6edf3">이메일</text>
-<polyline points="1170,538 1170,582" fill="none" stroke="#656c76" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ml)"/>
-<text x="24" y="672" text-anchor="start" font-size="12.5" font-weight="600" fill="#e6edf3">화살표 = 이벤트를 내보내는 서비스 → 받는 서비스 (모두 Kafka를 거침)</text>
-<line x1="560" y1="668" x2="588" y2="668" stroke="#ff7b72" stroke-width="2.5"/>
-<text x="596" y="672" text-anchor="start" font-size="12.5" font-weight="400" fill="#e6edf3">급변동 한 건의 흐름</text>
-<line x1="769" y1="668" x2="797" y2="668" stroke="#58a6ff" stroke-width="2.5"/>
-<text x="805" y="672" text-anchor="start" font-size="12.5" font-weight="400" fill="#e6edf3">데일리 판 흐름</text>
-<line x1="939" y1="668" x2="967" y2="668" stroke="#9198a1" stroke-width="2.5"/>
-<text x="975" y="672" text-anchor="start" font-size="12.5" font-weight="400" fill="#e6edf3">기사 수집</text>
+<rect x="172" y="44" width="430" height="128" rx="12" fill="#132339" stroke="#4c8eda" stroke-width="1.6"/>
+<text x="188" y="74" text-anchor="start" font-size="20" font-weight="700" fill="#e6edf3">수집기</text>
+<text x="258" y="74" text-anchor="start" font-size="13" font-weight="400" fill="#9198a1">Java</text>
+<text x="188" y="104" text-anchor="start" font-size="15" font-weight="400" fill="#e6edf3">· 1초 시세, 주기마다 뉴스·공시·지수·환율</text>
+<text x="188" y="128" text-anchor="start" font-size="15" font-weight="400" fill="#e6edf3">· 평일 아침 ETF 구성 종목 조회</text>
+<text x="188" y="152" text-anchor="start" font-size="15" font-weight="400" fill="#e6edf3">· 마감 후 실패분 재시도 → 판 시작 알림</text>
+<rect x="640" y="44" width="320" height="128" rx="12" fill="#132339" stroke="#4c8eda" stroke-width="1.6"/>
+<text x="656" y="74" text-anchor="start" font-size="20" font-weight="700" fill="#e6edf3">발송기</text>
+<text x="726" y="74" text-anchor="start" font-size="13" font-weight="400" fill="#9198a1">Java</text>
+<text x="656" y="104" text-anchor="start" font-size="15" font-weight="400" fill="#e6edf3">· 멤버별로 받는 사람 고름</text>
+<text x="656" y="128" text-anchor="start" font-size="15" font-weight="400" fill="#e6edf3">· 글자판 + HTML·차트 메일</text>
+<text x="656" y="152" text-anchor="start" font-size="15" font-weight="400" fill="#e6edf3">· 기본 드라이런, 주소 마스킹</text>
+<rect x="24" y="428" width="370" height="128" rx="12" fill="#132339" stroke="#4c8eda" stroke-width="1.6"/>
+<text x="40" y="458" text-anchor="start" font-size="20" font-weight="700" fill="#e6edf3">시세처리기</text>
+<text x="150" y="458" text-anchor="start" font-size="13" font-weight="400" fill="#9198a1">Java</text>
+<text x="40" y="488" text-anchor="start" font-size="15" font-weight="400" fill="#e6edf3">· 시세·지수·환율·구성 종목 저장</text>
+<text x="40" y="512" text-anchor="start" font-size="15" font-weight="400" fill="#e6edf3">· 급변동 감지(연속 확인)</text>
+<text x="40" y="536" text-anchor="start" font-size="15" font-weight="400" fill="#e6edf3">· 조회 API: 시세 이력·배경 자료</text>
+<rect x="454" y="428" width="402" height="128" rx="12" fill="#132339" stroke="#4c8eda" stroke-width="1.6"/>
+<text x="470" y="458" text-anchor="start" font-size="20" font-weight="700" fill="#e6edf3">브리핑</text>
+<text x="540" y="458" text-anchor="start" font-size="13" font-weight="400" fill="#9198a1">Python</text>
+<text x="470" y="488" text-anchor="start" font-size="15" font-weight="400" fill="#e6edf3">· 급변동 한 건 / 판마다 작업</text>
+<text x="470" y="512" text-anchor="start" font-size="15" font-weight="400" fill="#e6edf3">· 근거 번호 검사, 약한 문장 재검색</text>
+<text x="470" y="536" text-anchor="start" font-size="15" font-weight="400" fill="#e6edf3">· 보내기 전 전체 검사, 단계 기록</text>
+<rect x="916" y="428" width="360" height="128" rx="12" fill="#132339" stroke="#4c8eda" stroke-width="1.6"/>
+<text x="932" y="458" text-anchor="start" font-size="20" font-weight="700" fill="#e6edf3">뉴스처리기</text>
+<text x="1042" y="458" text-anchor="start" font-size="13" font-weight="400" fill="#9198a1">Java</text>
+<text x="932" y="488" text-anchor="start" font-size="15" font-weight="400" fill="#e6edf3">· 기사·공시 저장(중복 제거)</text>
+<text x="932" y="512" text-anchor="start" font-size="15" font-weight="400" fill="#e6edf3">· 조회 API: 시각 범위 안 기사·공시</text>
+<text x="932" y="536" text-anchor="start" font-size="15" font-weight="400" fill="#e6edf3">· ETF면 구성 종목 기사까지</text>
+<rect x="24" y="212" width="1252" height="176" rx="16" fill="#2b1d0e" stroke="#d9822b" stroke-width="2"/>
+<text x="44" y="244" text-anchor="start" font-size="20" font-weight="700" fill="#e6edf3">Kafka</text>
+<text x="44" y="266" text-anchor="start" font-size="14" font-weight="400" fill="#9198a1">이벤트 허브</text>
+<polyline points="250,172 250,428" fill="none" stroke="#ff7b72" stroke-width="2" stroke-linejoin="round" marker-end="url(#mr)"/>
+<rect x="182.0" y="239" width="136.0" height="26" rx="13" fill="#0d1117" stroke="#ff7b72" stroke-width="1.5"/>
+<text x="250" y="257" text-anchor="middle" font-size="14" font-weight="600" fill="#ff7b72">시세·지수·환율</text>
+<polyline points="350,172 350,428" fill="none" stroke="#9198a1" stroke-width="2" stroke-linejoin="round" marker-end="url(#mg)"/>
+<rect x="306.1" y="317" width="87.8" height="26" rx="13" fill="#0d1117" stroke="#9198a1" stroke-width="1.5"/>
+<text x="350" y="335" text-anchor="middle" font-size="14" font-weight="600" fill="#9198a1">구성 종목</text>
+<polyline points="540,172 540,428" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linejoin="round" marker-end="url(#mb)"/>
+<rect x="474.3" y="279" width="131.4" height="26" rx="13" fill="#0d1117" stroke="#58a6ff" stroke-width="1.5"/>
+<text x="540" y="297" text-anchor="middle" font-size="14" font-weight="600" fill="#58a6ff">판 자료 수집 끝</text>
+<polyline points="374,428 374,366 480,366 480,428" fill="none" stroke="#ff7b72" stroke-width="2" stroke-linejoin="round" marker-end="url(#mr)"/>
+<rect x="394.0" y="353" width="66.0" height="26" rx="13" fill="#0d1117" stroke="#ff7b72" stroke-width="1.5"/>
+<text x="427" y="371" text-anchor="middle" font-size="14" font-weight="600" fill="#ff7b72">급변동</text>
+<polyline points="960,428 960,252 836,252 836,428" fill="none" stroke="#ff7b72" stroke-width="2" stroke-linejoin="round" marker-end="url(#mr)"/>
+<rect x="905.2" y="279" width="109.6" height="26" rx="13" fill="#0d1117" stroke="#ff7b72" stroke-width="1.5"/>
+<text x="960" y="297" text-anchor="middle" font-size="14" font-weight="600" fill="#ff7b72">기사 저장 끝</text>
+<polyline points="700,428 700,172" fill="none" stroke="#ff7b72" stroke-width="2" stroke-linejoin="round" marker-end="url(#mr)"/>
+<rect x="642.1" y="239" width="115.8" height="26" rx="13" fill="#0d1117" stroke="#ff7b72" stroke-width="1.5"/>
+<text x="700" y="257" text-anchor="middle" font-size="14" font-weight="600" fill="#ff7b72">급변동 브리핑</text>
+<polyline points="790,428 790,172" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linejoin="round" marker-end="url(#mb)"/>
+<rect x="746.1" y="317" width="87.8" height="26" rx="13" fill="#0d1117" stroke="#58a6ff" stroke-width="1.5"/>
+<text x="790" y="335" text-anchor="middle" font-size="14" font-weight="600" fill="#58a6ff">데일리 판</text>
+<polyline points="560,44 560,20 1200,20 1200,428" fill="none" stroke="#9198a1" stroke-width="2" stroke-linejoin="round" marker-end="url(#mg)"/>
+<rect x="1149.1" y="279" width="101.8" height="26" rx="13" fill="#0d1117" stroke="#9198a1" stroke-width="1.5"/>
+<text x="1200" y="297" text-anchor="middle" font-size="14" font-weight="600" fill="#9198a1">수집한 기사</text>
+<polyline points="454,498 394,498" fill="none" stroke="#d2a8ff" stroke-width="2" stroke-linejoin="round" stroke-dasharray="6 4" marker-end="url(#mp)"/>
+<text x="424" y="489" text-anchor="middle" font-size="13" font-weight="600" fill="#d2a8ff">조회</text>
+<polyline points="856,498 916,498" fill="none" stroke="#d2a8ff" stroke-width="2" stroke-linejoin="round" stroke-dasharray="6 4" marker-end="url(#mp)"/>
+<text x="886" y="489" text-anchor="middle" font-size="13" font-weight="600" fill="#d2a8ff">조회</text>
+<rect x="24" y="64" width="128" height="88" rx="10" fill="#0d1117" stroke="#656c76" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="88.0" y="105.0" text-anchor="middle" font-size="16" font-weight="600" fill="#e6edf3">외부 API</text>
+<text x="88.0" y="125.0" text-anchor="middle" font-size="13" font-weight="400" fill="#9198a1">시세 · 뉴스 · 공시</text>
+<polyline points="152,108 172,108" fill="none" stroke="#656c76" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ml)"/>
+<rect x="990" y="64" width="140" height="88" rx="10" fill="#0d1117" stroke="#656c76" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="1060.0" y="114.0" text-anchor="middle" font-size="16" font-weight="600" fill="#e6edf3">이메일</text>
+<polyline points="960,108 990,108" fill="none" stroke="#656c76" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ml)"/>
+<rect x="700" y="578" width="156" height="50" rx="10" fill="#0d1117" stroke="#656c76" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="778.0" y="609.0" text-anchor="middle" font-size="16" font-weight="600" fill="#e6edf3">Claude API</text>
+<polyline points="778,556 778,578" fill="none" stroke="#656c76" stroke-width="1.6" stroke-linejoin="round" stroke-dasharray="6 4" marker-end="url(#ml)"/>
+<rect x="24" y="650" width="1252" height="52" rx="10" fill="#0f2419" stroke="#3fb970" stroke-width="1.5"/>
+<text x="650" y="674" text-anchor="middle" font-size="17" font-weight="600" fill="#e6edf3">PostgreSQL</text>
+<text x="650" y="693" text-anchor="middle" font-size="14" font-weight="400" fill="#9198a1">서비스별 스키마 · 종목·멤버 표는 필요한 서비스(수집기·발송기 포함)만 읽기 전용</text>
+<polyline points="210,556 210,650" fill="none" stroke="#656c76" stroke-width="1.6" stroke-linejoin="round"/>
+<polyline points="560,556 560,650" fill="none" stroke="#656c76" stroke-width="1.6" stroke-linejoin="round"/>
+<polyline points="1096,556 1096,650" fill="none" stroke="#656c76" stroke-width="1.6" stroke-linejoin="round"/>
+<text x="24" y="734" text-anchor="start" font-size="14" font-weight="600" fill="#e6edf3">실선 = Kafka 이벤트(보내는 쪽 → 받는 쪽)</text>
+<line x1="400" y1="730" x2="428" y2="730" stroke="#ff7b72" stroke-width="2.5"/>
+<text x="436" y="734" text-anchor="start" font-size="14" font-weight="400" fill="#e6edf3">급변동 경로</text>
+<line x1="554" y1="730" x2="582" y2="730" stroke="#58a6ff" stroke-width="2.5"/>
+<text x="590" y="734" text-anchor="start" font-size="14" font-weight="400" fill="#e6edf3">데일리 판</text>
+<line x1="695" y1="730" x2="723" y2="730" stroke="#9198a1" stroke-width="2.5"/>
+<text x="731" y="734" text-anchor="start" font-size="14" font-weight="400" fill="#e6edf3">수집·저장</text>
+<line x1="836" y1="730" x2="864" y2="730" stroke="#d2a8ff" stroke-width="2.5" stroke-dasharray="6 4"/>
+<text x="872" y="734" text-anchor="start" font-size="14" font-weight="400" fill="#e6edf3">내부 조회(HTTP, Kafka 안 거침)</text>
 </svg>

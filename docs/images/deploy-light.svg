@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 560" width="1300" height="560" font-family="-apple-system, 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif">
+<rect width="1300" height="560" fill="#ffffff"/>
+<defs>
+<marker id="dl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8c959f"/></marker>
+<marker id="db" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0969da"/></marker>
+<marker id="dp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8250df"/></marker>
+</defs>
+<rect x="24" y="40" width="290" height="450" rx="14" fill="none" stroke="#59636e" stroke-width="1.6" stroke-dasharray="7 5"/>
+<text x="40" y="64" text-anchor="start" font-size="14" font-weight="700" fill="#59636e">GitHub</text>
+<rect x="44" y="80" width="250" height="96" rx="12" fill="#eef4ff" stroke="#3b6fd4" stroke-width="1.6"/>
+<text x="60" y="108" text-anchor="start" font-size="16" font-weight="700" fill="#1f2328">저장소</text>
+<text x="60" y="132" text-anchor="start" font-size="13" font-weight="400" fill="#1f2328">작업 브랜치 → develop → main</text>
+<text x="60" y="153" text-anchor="start" font-size="13" font-weight="400" fill="#59636e">main 머지는 직접 함</text>
+<rect x="44" y="214" width="250" height="150" rx="12" fill="#eef4ff" stroke="#3b6fd4" stroke-width="1.6"/>
+<text x="60" y="242" text-anchor="start" font-size="16" font-weight="700" fill="#1f2328">GitHub Actions</text>
+<text x="60" y="266" text-anchor="start" font-size="13" font-weight="400" fill="#1f2328">PR마다 테스트</text>
+<text x="60" y="287" text-anchor="start" font-size="13" font-weight="400" fill="#59636e">main 머지 → 이미지 빌드,</text>
+<text x="60" y="308" text-anchor="start" font-size="13" font-weight="400" fill="#59636e">ECR에 올리고 대기 버전 기록</text>
+<text x="60" y="329" text-anchor="start" font-size="13" font-weight="400" fill="#59636e">긴급 버튼 → 긴급 버전 기록</text>
+<text x="60" y="350" text-anchor="start" font-size="13" font-weight="400" fill="#59636e">(장중에는 적용 안 됨)</text>
+<polyline points="169,176 169,214" fill="none" stroke="#8c959f" stroke-width="2" stroke-linejoin="round" marker-end="url(#dl)"/>
+<rect x="344" y="40" width="816" height="450" rx="14" fill="none" stroke="#d9822b" stroke-width="1.6" stroke-dasharray="7 5"/>
+<text x="360" y="64" text-anchor="start" font-size="14" font-weight="700" fill="#d9822b">AWS</text>
+<rect x="430" y="84" width="220" height="76" rx="12" fill="#ffffff" stroke="#8c959f" stroke-width="1.6"/>
+<text x="446" y="112" text-anchor="start" font-size="16" font-weight="700" fill="#1f2328">ECR</text>
+<text x="446" y="136" text-anchor="start" font-size="13" font-weight="400" fill="#1f2328">서비스별 이미지</text>
+<rect x="430" y="200" width="220" height="96" rx="12" fill="#ffffff" stroke="#8c959f" stroke-width="1.6"/>
+<text x="446" y="228" text-anchor="start" font-size="16" font-weight="700" fill="#1f2328">Parameter Store</text>
+<text x="446" y="252" text-anchor="start" font-size="13" font-weight="400" fill="#1f2328">대기·긴급 버전</text>
+<text x="446" y="273" text-anchor="start" font-size="13" font-weight="400" fill="#59636e">비밀 설정(서버만 읽음)</text>
+<rect x="430" y="384" width="220" height="76" rx="12" fill="#ffffff" stroke="#8c959f" stroke-width="1.6"/>
+<text x="446" y="412" text-anchor="start" font-size="16" font-weight="700" fill="#1f2328">S3</text>
+<text x="446" y="436" text-anchor="start" font-size="13" font-weight="400" fill="#1f2328">DB 백업</text>
+<polyline points="294,240 384,240 384,122 430,122" fill="none" stroke="#0969da" stroke-width="2" stroke-linejoin="round" marker-end="url(#db)"/>
+<text x="392" y="186" text-anchor="start" font-size="12" font-weight="600" fill="#0969da">이미지 올림</text>
+<polyline points="294,268 430,268" fill="none" stroke="#0969da" stroke-width="2" stroke-linejoin="round" marker-end="url(#db)"/>
+<text x="392" y="290" text-anchor="middle" font-size="12" font-weight="600" fill="#0969da">버전 기록</text>
+<rect x="710" y="64" width="430" height="410" rx="14" fill="none" stroke="#3b6fd4" stroke-width="1.6" stroke-dasharray="7 5"/>
+<text x="726" y="88" text-anchor="start" font-size="14" font-weight="700" fill="#3b6fd4">Lightsail 서버 2대 (Docker Compose)</text>
+<rect x="728" y="100" width="394" height="160" rx="12" fill="#eef4ff" stroke="#3b6fd4" stroke-width="1.6"/>
+<text x="744" y="128" text-anchor="start" font-size="16" font-weight="700" fill="#1f2328">서비스 서버</text>
+<text x="744" y="152" text-anchor="start" font-size="13" font-weight="400" fill="#1f2328">서비스 5개 + 배포 전 DB 준비(마이그레이션)</text>
+<text x="744" y="173" text-anchor="start" font-size="13" font-weight="400" fill="#59636e">배포 타이머: 매일 07:00 대기 버전 적용</text>
+<text x="744" y="194" text-anchor="start" font-size="13" font-weight="400" fill="#59636e">5분마다 긴급 버전 확인(대기 버전과 같을 때만)</text>
+<text x="744" y="215" text-anchor="start" font-size="13" font-weight="400" fill="#59636e">바뀐 것이 있으면 이미지를 받아 다시 띄움</text>
+<rect x="728" y="330" width="394" height="126" rx="12" fill="#eef4ff" stroke="#3b6fd4" stroke-width="1.6"/>
+<text x="744" y="358" text-anchor="start" font-size="16" font-weight="700" fill="#1f2328">데이터 서버</text>
+<text x="744" y="382" text-anchor="start" font-size="13" font-weight="400" fill="#1f2328">Kafka · PostgreSQL</text>
+<text x="744" y="403" text-anchor="start" font-size="13" font-weight="400" fill="#59636e">백업 타이머: 매주 일요일 03:30</text>
+<text x="744" y="424" text-anchor="start" font-size="13" font-weight="400" fill="#59636e">덤프를 끝까지 받은 것만 S3에 올림</text>
+<polyline points="650,122 728,122" fill="none" stroke="#8250df" stroke-width="2" stroke-linejoin="round" marker-end="url(#dp)"/>
+<text x="680" y="112" text-anchor="middle" font-size="12" font-weight="600" fill="#8250df">받아 옴</text>
+<polyline points="650,232 728,232" fill="none" stroke="#8250df" stroke-width="2" stroke-linejoin="round" marker-end="url(#dp)"/>
+<text x="680" y="222" text-anchor="middle" font-size="12" font-weight="600" fill="#8250df">읽기</text>
+<polyline points="728,422 650,422" fill="none" stroke="#8250df" stroke-width="2" stroke-linejoin="round" marker-end="url(#dp)"/>
+<text x="680" y="412" text-anchor="middle" font-size="12" font-weight="600" fill="#8250df">올림</text>
+<polyline points="925,260 925,330" fill="none" stroke="#8c959f" stroke-width="2" stroke-linejoin="round" marker-end="url(#dl)" marker-start="url(#dl)"/>
+<text x="935" y="300" text-anchor="start" font-size="12" font-weight="600" fill="#59636e">사설 주소로만 (Kafka·DB 접속)</text>
+<rect x="1180" y="120" width="100" height="120" rx="12" fill="#ffffff" stroke="#8c959f" stroke-width="1.6"/>
+<text x="1196" y="148" text-anchor="start" font-size="16" font-weight="700" fill="#1f2328">외부</text>
+<text x="1196" y="172" text-anchor="start" font-size="13" font-weight="400" fill="#1f2328">시세·뉴스</text>
+<text x="1196" y="193" text-anchor="start" font-size="13" font-weight="400" fill="#59636e">Claude API</text>
+<text x="1196" y="214" text-anchor="start" font-size="13" font-weight="400" fill="#59636e">메일 발송</text>
+<polyline points="1122,180 1180,180" fill="none" stroke="#8c959f" stroke-width="2" stroke-linejoin="round" marker-end="url(#dl)"/>
+<text x="24" y="526" text-anchor="start" font-size="12.5" font-weight="600" fill="#1f2328">들어오는 연결 없음: 서버가 먼저 받아 오고 내보내기만 합니다. 관리 접속은 Lightsail 콘솔의 브라우저 SSH만 씁니다.</text>
+</svg>

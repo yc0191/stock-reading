@@ -8,7 +8,8 @@ from briefing.config import CoreSettings
 from briefing.daily_members import MemberPortfolio, member_input, member_sections
 from briefing.daily_report import ITEM_OPEN_FLOW, build_llm_input, build_sections, missing_items
 from briefing.open_flow import OpenFlow, in_range, open_flow_start, parse_open_flow, signed
-from contracts import validate
+from briefing.queries import QueryKind
+from contracts import validate_payload
 from fake_news import answer_news
 from test_daily_jobs import (  # noqa: F401  core는 테스트가 쓰는 fixture
     KST,
@@ -34,9 +35,9 @@ def at(hour, minute, second=0):
 
 
 def start_job(c, now=OPEN_AT, response=None):
-    c.on_schedule_tick(tick(at=now), now, "morning")
-    c.on_daily_data_responded(response or daily_response(etfs=[etf(open_flow=OPEN_FLOW)]), now)
-    c.on_filings_responded(filings_response(), now)
+    c.on_collection_ready(tick(at=now), now)
+    c.api.reply(response or daily_response(etfs=[etf(open_flow=OPEN_FLOW)]), now)
+    c.api.reply(filings_response(), now)
 
 
 # ---- 범위 ----
@@ -93,20 +94,19 @@ def test_signed_rates():
 
 def test_the_morning_request_asks_for_the_open_flow_from_the_market_open(core):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(at=OPEN_AT), OPEN_AT, "morning")
+    c.on_collection_ready(tick(at=OPEN_AT), OPEN_AT)
 
-    [request] = requests.topic("market.daily.requested")
-    assert request.value["payload"]["openFlowSince"] == "2026-10-20T09:00:00+09:00"
-    assert validate("market.daily.requested.v1.schema.json", request.value) == []
+    [request] = requests.api.of(QueryKind.DAILY)
+    assert request.payload["openFlowSince"] == "2026-10-20T09:00:00+09:00"
+    assert validate_payload("market.daily.requested.v1.schema.json", request.payload) == []
 
 
 def test_no_open_flow_is_requested_before_the_market_opens_or_by_the_post_close_edition(core):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
-    c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT, "9d3b5e17-6c2a-4f90-b1e4-7a9c0d2f3e68"),
-                       POST_CLOSE_AT, "post-close")
+    c.on_collection_ready(tick(), MORNING_AT)
+    c.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT, "9d3b5e17-6c2a-4f90-b1e4-7a9c0d2f3e68"), POST_CLOSE_AT)
 
-    assert all("openFlowSince" not in e.value["payload"] for e in requests.topic("market.daily.requested"))
+    assert all("openFlowSince" not in q.payload for q in requests.api.of(QueryKind.DAILY))
 
 
 def test_the_open_flow_goes_into_the_body_the_evidence_list_and_the_llm_input(core):
@@ -176,9 +176,9 @@ def test_an_etf_without_any_quote_in_the_range_is_listed_as_a_gap(core):
 
 def test_the_post_close_edition_drops_an_open_flow_it_did_not_ask_for(core, caplog):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
+    c.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
     with caplog.at_level(logging.WARNING):
-        c.on_daily_data_responded(daily_response(etfs=[etf(fetched="2026-10-20T16:30:00+09:00", open_flow=OPEN_FLOW)]), POST_CLOSE_AT)
+        c.api.reply(daily_response(etfs=[etf(fetched="2026-10-20T16:30:00+09:00", open_flow=OPEN_FLOW)]), POST_CLOSE_AT)
 
     assert "dropped 1 openFlow" in caplog.text
 

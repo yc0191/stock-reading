@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://stock-reading.local/contracts/schedule.tick.v1",
   "title": "schedule.tick v1",
-  "description": "예약된 작업의 실행 시각이 되면 타이머가 발행한다. 임시 봉투 형식(ADR-010 초안).",
+  "description": "더 이상 쓰지 않음(2026-11-13). 수집기 자신의 수집은 수집기 안 타이머와 수동 실행 명령(collector.command, ADR-012), ETF 구성 종목 조회는 수집기 타이머와 etf.members.fetched, 데일리 판 시작은 daily.collection.completed 로 대체했다. 옛 이벤트를 읽을 수 있게 스키마와 샘플만 남긴다(ADR-010 호환 규칙). 예약된 작업의 실행 시각이 되면 타이머가 발행했다. 임시 봉투 형식(ADR-010 초안).",
   "type": "object",
   "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
   "properties": {
@@ -16,7 +16,7 @@
       "type": "object",
       "required": ["jobType", "scheduledFor"],
       "properties": {
-        "jobType": { "type": "string", "minLength": 1, "description": "알려진 값: collect, collect-news, collect-post-close(장 마감 후 일봉·세계지수·환율종합·시장종합 조회), collect-pre-open(평일 장 시작 전 보유 미국 종목 해외 일봉·세계지수 아메리카 조회와 SEC EDGAR 공시 수집), collect-intraday(평일 장중 주기로 환율종합·시장종합·세계지수 아시아·아메리카 조회), daily-briefing-morning(평일 아침 판 데일리 브리핑 시작), daily-briefing-post-close(평일 마감 후 판 데일리 브리핑 시작), collect-members(평일 ETF 상위 구성 종목 조회, 그날 받을 ETF는 시세처리기가 정한다). collect-filings 는 더 이상 발행하지 않는다. collect, collect-news, collect-pre-open, collect-intraday, collect-post-close 도 더 이상 발행하지 않는다(수집기가 자기 타이머로 직접 실행하고, 수동 실행은 collector.command, ADR-012)" },
+        "jobType": { "type": "string", "minLength": 1, "description": "알려진 값: collect, collect-news, collect-post-close(장 마감 후 일봉·세계지수·환율종합·시장종합 조회), collect-pre-open(평일 장 시작 전 보유 미국 종목 해외 일봉·세계지수 아메리카 조회와 SEC EDGAR 공시 수집), collect-intraday(평일 장중 주기로 환율종합·시장종합·세계지수 아시아·아메리카 조회), daily-briefing-morning(평일 아침 판 데일리 브리핑 시작), daily-briefing-post-close(평일 마감 후 판 데일리 브리핑 시작). 구성 종목 조회는 tick 없이 수집기 작업 collect-etf-members 로 대체한다(collect-members 는 더 이상 발행하지 않는다). collect-filings 는 더 이상 발행하지 않는다. collect, collect-news, collect-pre-open, collect-intraday, collect-post-close 도 더 이상 발행하지 않는다(수집기가 자기 타이머로 직접 실행하고, 수동 실행은 collector.command, ADR-012)" },
         "scheduledFor": { "type": "string", "format": "date-time", "description": "작업이 실행되어야 했던 논리적 시각. 늦게 발행돼도 그대로 유지한다." }
       }
     }

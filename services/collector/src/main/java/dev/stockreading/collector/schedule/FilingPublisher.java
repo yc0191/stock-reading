@@ -54,17 +54,18 @@ class FilingPublisher {
         this.clock = clock;
     }
 
-    void publishCollected(String correlationId) {
+    /** 공시를 받지 못했거나 하나라도 발행하지 못했으면 false(데일리 판 시작 알림의 missingSources). */
+    boolean publishCollected(String correlationId) {
         List<CollectedFiling> filings;
         try {
             filings = collector.collect();
         } catch (EdgarApiException e) {
             // 메시지는 실패 종류와 HTTP 상태만 담는다(User-Agent, 티커 없음).
             log.warn("filing collect failed corr={} reason={}", correlationId, e.getMessage());
-            return;
+            return false;
         } catch (RuntimeException e) {
             log.warn("filing collect failed corr={} errorType={}", correlationId, e.getClass().getSimpleName());
-            return;
+            return false;
         }
 
         int published = 0;
@@ -105,6 +106,7 @@ class FilingPublisher {
 
         log.info("sent {} filing.collected events corr={} collected={} alreadyPublished={} invalid={} sendFailed={}",
                 published, correlationId, filings.size(), alreadyPublished, invalid, sendFailed);
+        return sendFailed == 0;
     }
 
     private void remember(SentKey key) {

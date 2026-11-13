@@ -42,6 +42,7 @@ public final class CollectorDb {
         JdbcClient market = market();
         market.sql("DELETE FROM news_keyword WHERE keyword LIKE 'COLL%'").update();
         market.sql("DELETE FROM macro_keyword WHERE name LIKE 'COLL%'").update();
+        market.sql("DELETE FROM index_rebalance_schedule WHERE tracks LIKE 'COLL%'").update();
         market.sql("DELETE FROM etf_stock_map WHERE etf_id IN (SELECT id FROM etf WHERE symbol LIKE 'COLL%')").update();
         market.sql("DELETE FROM etf WHERE symbol LIKE 'COLL%'").update();
         market.sql("DELETE FROM stock WHERE symbol LIKE 'COLL%'").update();

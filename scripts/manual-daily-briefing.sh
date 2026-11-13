@@ -214,20 +214,24 @@ JDBC_URL="jdbc:postgresql://127.0.0.1:5432/$DB_NAME"
 
 # ---------------------------------------------------------------- 서비스
 
-echo "market 기동"
+# 시세처리기·뉴스처리기 내부 조회 API 도 빈 포트로 띄운다. 기본 포트(8091, 8092)는 개발용 서비스와 겹치고, 브리핑이 그쪽을 부를 수 있다.
+free_port() { "$PY" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
+MARKET_HTTP_PORT=$(free_port); NEWS_HTTP_PORT=$(free_port)
+
+echo "market 기동(내부 조회 127.0.0.1:$MARKET_HTTP_PORT)"
 (
   export SPRING_DATASOURCE_URL="$JDBC_URL?currentSchema=market" SPRING_DATASOURCE_USERNAME="$M_USER" SPRING_DATASOURCE_PASSWORD="$M_PW"
-  export SPRING_KAFKA_BOOTSTRAP_SERVERS="$BOOTSTRAP"
+  export SPRING_KAFKA_BOOTSTRAP_SERVERS="$BOOTSTRAP" SERVER_PORT="$MARKET_HTTP_PORT"
   # 전일 종가 기준 감지는 끈다(시세를 넣지 않음). 종목은 위에서 가짜 대응표로 DB 에 넣었다.
   export MARKET_PREV_CLOSE_FIELDS=
   cd "$TMP/market" && exec "$JAVA_HOME_21/bin/java" -jar "$MARKET_JAR"
 ) > "$TMP/market.log" 2>&1 &
 MARKET_PID=$!
 
-echo "news 기동"
+echo "news 기동(내부 조회 127.0.0.1:$NEWS_HTTP_PORT)"
 (
   export SPRING_DATASOURCE_URL="$JDBC_URL?currentSchema=news" SPRING_DATASOURCE_USERNAME="$N_USER" SPRING_DATASOURCE_PASSWORD="$N_PW"
-  export SPRING_KAFKA_BOOTSTRAP_SERVERS="$BOOTSTRAP"
+  export SPRING_KAFKA_BOOTSTRAP_SERVERS="$BOOTSTRAP" SERVER_PORT="$NEWS_HTTP_PORT"
   cd "$TMP/news" && exec "$JAVA_HOME_21/bin/java" -jar "$NEWS_JAR"
 ) > "$TMP/news.log" 2>&1 &
 NEWS_PID=$!
@@ -297,6 +301,8 @@ wait_ready notifier "$TMP/notifier.log" "groupId=notifier\] Adding newly assigne
 echo "briefing 기동"
 (
   export KAFKA_BOOTSTRAP="$BOOTSTRAP" POSTGRES_DB="$DB_NAME" BRIEFING_DB_USER="$B_USER" BRIEFING_DB_PASSWORD="$B_PW"
+  # 근거 자료는 이 실행이 띄운 시세처리기·뉴스처리기 내부 조회 API 로 묻는다.
+  export MARKET_API_URL="http://127.0.0.1:$MARKET_HTTP_PORT" NEWS_API_URL="http://127.0.0.1:$NEWS_HTTP_PORT"
   export PYTHONPATH="$ROOT/services/briefing/src" PYTHONUNBUFFERED=1
   if [ "$REAL_LLM" = 1 ]; then
     unset ANTHROPIC_BASE_URL
@@ -310,16 +316,6 @@ echo "briefing 기동"
 BRIEFING_PID=$!
 wait_ready briefing "$TMP/briefing.log" "briefing started:" "$BRIEFING_PID" 60
 grep -qF "daily briefings will be rule-based" "$TMP/briefing.log" && fail "briefing 이 LLM 없이(규칙 기반으로) 시작됐습니다"
-
-# 판 tick 그룹은 latest 부터 읽으므로 파티션을 받기 전에 보낸 tick 은 놓친다. 두 그룹 모두 받을 때까지 기다린다.
-for group in briefing-daily-morning briefing-daily-post-close; do
-  waited=0
-  until docker exec "$KAFKA_NAME" /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server "$BOOTSTRAP" \
-      --describe --group "$group" --members 2>/dev/null | grep -qE '[[:space:]]1[[:space:]]*$'; do
-    [ "$waited" -ge 60 ] && fail "브리핑 $group 그룹이 60초 안에 파티션을 받지 못했습니다"
-    sleep 2; waited=$((waited + 2))
-  done
-done
 
 # ---------------------------------------------------------------- 흐름
 
@@ -338,8 +334,8 @@ until [ "$(count_rows 'SELECT (SELECT count(*) FROM market.daily_price) + (SELEC
 done
 echo "저장 확인: 시세처리기 8건, 뉴스(공시) 1건"
 
-echo "아침 판·마감 후 판 시작 신호 넣기(예정 시각 $NOW)"
-"$PY" scripts/daily_e2e.py ticks || fail "시작 신호를 넣지 못했습니다"
+echo "아침 판·마감 후 판 시작 알림 넣기(판 기준 시각 $NOW)"
+"$PY" scripts/daily_e2e.py notices || fail "시작 알림을 넣지 못했습니다"
 
 # 실제 Claude 는 근거 약한 문장마다 재검색을 요청하고, 이 실행의 news 는 검색하지 않으므로 판이 재검색 전체 상한
 # (CoreSettings.research_total_limit, 15분)까지 기다렸다가 나간다. 그보다 길게 기다린다.

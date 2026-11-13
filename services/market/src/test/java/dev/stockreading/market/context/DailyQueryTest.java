@@ -1,0 +1,625 @@
+package dev.stockreading.market.context;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.groups.Tuple.tuple;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Optional;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import dev.stockreading.market.MarketProperties;
+import dev.stockreading.market.event.ContextPayload;
+import dev.stockreading.market.event.DailyPayload;
+import dev.stockreading.market.constituent.EtfInfo;
+import dev.stockreading.market.constituent.HoldingsPort;
+import dev.stockreading.market.members.Member;
+import dev.stockreading.market.members.MemberChanges;
+import dev.stockreading.market.members.MemberChangesPort;
+import dev.stockreading.market.insight.OverseasCloseRate;
+import dev.stockreading.market.insight.OverseasCloseRateQuery;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+
+/** 저장소와 해외 등락률 조회를 대역으로 바꿔 데일리 판 자료 요청 한 건의 응답 조립 전체를 돌린다. 값은 모두 가짜다. */
+class DailyQueryTest {
+
+    private static final String JOB_ID = "8d3b5e17-6c2a-4f90-b1e4-7a9c0d2f3e68";
+    // 샘플 요청의 기준 시각과 since(4일 전).
+    private static final OffsetDateTime AS_OF = OffsetDateTime.parse("2026-10-20T17:00:00+09:00");
+    private static final OffsetDateTime SINCE = OffsetDateTime.parse("2026-10-16T17:00:00+09:00");
+
+    private final ObjectMapper mapper = JsonMapper.builder().build();
+    private BackgroundRepository repository;
+    private OverseasCloseRateQuery closeRateQuery;
+    private HoldingsPort holdings;
+    private MemberChangesPort memberChanges;
+    private OperationsReader operationsReader;
+    private OpenFlowPort openFlowPort;
+    private IntradayQuotePort intradayQuotes;
+
+    @BeforeEach
+    void setUp() {
+        repository = mock(BackgroundRepository.class);
+        closeRateQuery = mock(OverseasCloseRateQuery.class);
+        holdings = mock(HoldingsPort.class);
+        memberChanges = mock(MemberChangesPort.class);
+        operationsReader = mock(OperationsReader.class);
+        openFlowPort = mock(OpenFlowPort.class);
+        intradayQuotes = mock(IntradayQuotePort.class);
+        when(intradayQuotes.lastReceived(anyString(), any(), any())).thenReturn(Optional.empty());
+        when(repository.latest(any(), any(), any(), any())).thenReturn(Optional.empty());
+        when(repository.worldIndexRows(anyString(), any(), any())).thenReturn(List.of());
+        when(repository.latestDailyPrices(any(), any())).thenReturn(List.of());
+        when(closeRateQuery.find(anyString(), any(), any())).thenReturn(Optional.empty());
+        when(holdings.topTickers(anyString())).thenReturn(List.of());
+        when(holdings.trackedEtfs()).thenReturn(List.of());
+        when(memberChanges.changes(anyString(), any(), any())).thenReturn(Optional.empty());
+    }
+
+    private DailyQuery listener(int maxTickers, int maxEtfs) {
+        return new DailyQuery(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
+                memberChanges, new ContextProperties(Duration.ofDays(4), 32_768, maxTickers, List.of("C", "S"), Duration.ofDays(7)),
+                new DailyProperties(maxEtfs, null), operationsReader, mapper, openFlowPort, intradayQuotes,
+                new MarketProperties(5, BigDecimal.ONE, List.of("f.a", "f.b", "f.c"), BigDecimal.ONE, List.of("f.open"),
+                        1, List.of(), 0, new BigDecimal("2.00")));
+    }
+
+    private DailyQuery listener() {
+        return listener(100, 50);
+    }
+
+    private static String request() throws IOException {
+        return ContractSchemas.sample("market.daily.requested.sample.json");
+    }
+
+    // 요청 샘플(옛 요청 이벤트)의 payload 가 내부 조회 API 의 요청 본문이다.
+    private DailyPayload answer(DailyQuery query, String request) throws IOException {
+        return query.answer(mapper.treeToValue(mapper.readTree(request).get("payload"), DailyRequest.class));
+    }
+
+    private void tracked(String... symbols) {
+        when(holdings.trackedEtfs()).thenReturn(
+                List.of(symbols));
+    }
+
+    private static BackgroundRepository.StoredTargetResponse daily(String symbol, String rate, OffsetDateTime fetched) {
+        return new BackgroundRepository.StoredTargetResponse(symbol, new BackgroundRepository.StoredResponse(
+                DailyPriceReaderTest.body(
+                        DailyPriceReaderTest.record("20261019", "10000", "9900", "1.01"),
+                        DailyPriceReaderTest.record("20261020", " 9850", " 10000", "  " + rate)),
+                fetched));
+    }
+
+    @Test
+    void echoesJobIdAndSeqAndAnswersTheMarketBackgroundInOrderWithoutAPerSymbolDailyPrice() throws IOException {
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.jobId()).isEqualTo(JOB_ID);
+        assertThat(payload.seq()).isEqualTo(1);
+        assertThat(payload.etfs()).isEmpty();
+        assertThat(payload.truncated()).isFalse();
+        assertThat(payload.background()).extracting(ContextPayload.Background::apiType, ContextPayload.Background::target)
+                .containsExactly(tuple("exchange-rate-summary", null), tuple("market-summary", null),
+                        tuple("world-index", "C"), tuple("world-index", "S"));
+        assertThat(payload.background()).extracting(ContextPayload.Background::status).containsOnly("missing");
+    }
+
+    @Test
+    void trackedEtfsWithDailyPricesCarryTheRawRecordValues() throws IOException {
+        tracked("TEST01", "TEST02");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                daily("TEST01", "-1.50", AS_OF.minusMinutes(30)), daily("TEST02", "0.50", AS_OF.minusMinutes(29))));
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs()).containsExactly(
+                new DailyPayload.Etf("TEST01", "20261020", "9850", "10000", "-1.50", "2026-10-20T16:30:00+09:00",
+                        List.of(), false),
+                new DailyPayload.Etf("TEST02", "20261020", "9850", "10000", "0.50", "2026-10-20T16:31:00+09:00",
+                        List.of(), false));
+    }
+
+    @Test
+    void everyTrackedEtfIsListedIncludingOnesWithoutADailyPrice() throws IOException {
+        when(holdings.trackedEtfs()).thenReturn(List.of("TEST01", "TEST02", "TEST03"));
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                daily("TEST01", "-1.50", AS_OF.minusMinutes(30)), daily("TEST02", "0.50", AS_OF.minusMinutes(29))));
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol, DailyPayload.Etf::missingReason)
+                .containsExactly(tuple("TEST01", null), tuple("TEST02", null),
+                        tuple("TEST03", DailyPayload.NO_DAILY_PRICE_IN_RANGE));
+    }
+
+    @Test
+    void trackedEtfWithoutADailyPriceInRangeStaysWithNullsAndTheReasonButKeepsUsStocksInfoAndCloseRates()
+            throws IOException {
+        tracked("TEST01", "TEST09");
+        when(holdings.topTickers("TEST09")).thenReturn(List.of("FAKEZ"));
+        when(holdings.etfInfo("TEST09")).thenReturn(Optional.of(new EtfInfo("TEST ETF NINE", null, null, List.of())));
+        when(closeRateQuery.find(eq("FAKEZ"), eq(AS_OF), eq(SINCE))).thenReturn(Optional.of(new OverseasCloseRate(
+                "FAKEZ", "20261019", OffsetDateTime.parse("2026-10-19T16:00:00-04:00"), "-0.75",
+                OffsetDateTime.parse("2026-10-19T23:30:02Z"))));
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(daily("TEST01", "-1.50", AS_OF)));
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol, DailyPayload.Etf::missingReason)
+                .containsExactly(tuple("TEST01", null), tuple("TEST09", DailyPayload.NO_DAILY_PRICE_IN_RANGE));
+        DailyPayload.Etf without = payload.etfs().get(1);
+        assertThat(without).extracting(DailyPayload.Etf::date, DailyPayload.Etf::close, DailyPayload.Etf::prevClose,
+                DailyPayload.Etf::rate, DailyPayload.Etf::fetchedAt).containsOnlyNulls();
+        assertThat(without.tickers()).containsExactly("FAKEZ");
+        assertThat(without.etf().name()).isEqualTo("TEST ETF NINE");
+        assertThat(payload.closeRates()).extracting(ContextPayload.CloseRate::ticker).containsExactly("FAKEZ");
+    }
+
+    // #64 재현: 범위 안 일봉이 없으면 장중 시세가 있어도 하루 등락이 비어, 마감 후 판이 '자료 없음'이 됐다.
+    @Test
+    void etfWithoutADailyPriceGetsTheDayRateFromTheLastIntradayQuoteReceivedBeforeTheEdition() throws IOException {
+        tracked("TEST09");
+        when(intradayQuotes.lastReceived("TEST09", SINCE, AS_OF)).thenReturn(Optional.of(new IntradayQuotePort.Quote(
+                OffsetDateTime.parse("2026-10-20T15:29:58+09:00"), 9_705, "{\"f\":{\"a\":10000,\"b\":10000,\"c\":10000}}")));
+
+        DailyPayload.Etf etf = answer(listener(), request()).etfs().get(0);
+
+        assertThat(etf.rate()).isEqualTo("-2.95");
+        assertThat(etf.prevClose()).isEqualTo("10000");
+        assertThat(etf.missingReason()).isEqualTo(DailyPayload.NO_DAILY_PRICE_IN_RANGE);
+        assertThat(etf.intradayFallback()).isEqualTo(
+                new DailyPayload.IntradayFallback("9705", "2026-10-20T15:29:58+09:00"));
+        assertThat(etf).extracting(DailyPayload.Etf::date, DailyPayload.Etf::close, DailyPayload.Etf::fetchedAt)
+                .containsOnlyNulls();
+    }
+
+    private static IntradayQuotePort.Quote quote(OffsetDateTime receivedAt, long price, String raw) {
+        return new IntradayQuotePort.Quote(receivedAt, price, raw);
+    }
+
+    private static final String PREV_CLOSE_10000 = "{\"f\":{\"a\":10000,\"b\":10000,\"c\":10000}}";
+
+    @Test
+    void anEtfWithADailyPriceKeepsTheDailyValuesAndNoQuoteIsRead() throws IOException {
+        tracked("TEST01");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(daily("TEST01", "-1.50", AS_OF)));
+
+        DailyPayload.Etf etf = answer(listener(), request()).etfs().get(0);
+
+        assertThat(etf.rate()).isEqualTo("-1.50");
+        assertThat(etf.intradayFallback()).isNull();
+        verifyNoInteractions(intradayQuotes);
+    }
+
+    @Test
+    void anUnreadableDailyPriceAlsoFallsBackToTheIntradayQuote() throws IOException {
+        tracked("TEST09");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(new BackgroundRepository.StoredTargetResponse(
+                "TEST09", new BackgroundRepository.StoredResponse("{\"broken\": true}", AS_OF.minusMinutes(30)))));
+        when(intradayQuotes.lastReceived("TEST09", SINCE, AS_OF)).thenReturn(Optional.of(
+                quote(AS_OF.minusMinutes(90), 10_250, PREV_CLOSE_10000)));
+
+        DailyPayload.Etf etf = answer(listener(), request()).etfs().get(0);
+
+        assertThat(etf.missingReason()).isEqualTo(DailyPayload.DAILY_PRICE_UNREADABLE);
+        assertThat(etf.rate()).isEqualTo("2.50");
+    }
+
+    @Test
+    void aQuoteReceivedAfterTheEditionOrBeforeTheRangeIsNotUsedEvenIfTheStoreReturnsIt() throws IOException {
+        tracked("TEST09");
+        when(intradayQuotes.lastReceived("TEST09", SINCE, AS_OF)).thenReturn(
+                Optional.of(quote(AS_OF.plusSeconds(1), 9_705, PREV_CLOSE_10000)),
+                Optional.of(quote(SINCE.minusSeconds(1), 9_705, PREV_CLOSE_10000)),
+                Optional.of(quote(AS_OF, 9_705, PREV_CLOSE_10000)));
+
+        assertThat(answer(listener(), request()).etfs().get(0).rate()).isNull();
+        assertThat(answer(listener(), request()).etfs().get(0).rate()).isNull();
+        // 판 기준 시각에 받은 것은 범위 안이다.
+        assertThat(answer(listener(), request()).etfs().get(0).rate()).isEqualTo("-2.95");
+    }
+
+    @Test
+    void withoutAMajorityPrevCloseInTheQuoteTheEtfStaysWithoutADayRate() throws IOException {
+        tracked("TEST09");
+        when(intradayQuotes.lastReceived("TEST09", SINCE, AS_OF)).thenReturn(Optional.of(
+                quote(AS_OF.minusMinutes(90), 9_705, "{\"f\":{\"a\":10000,\"b\":9990,\"c\":9980}}")));
+
+        DailyPayload.Etf etf = answer(listener(), request()).etfs().get(0);
+
+        assertThat(etf).extracting(DailyPayload.Etf::prevClose, DailyPayload.Etf::rate,
+                DailyPayload.Etf::intradayFallback).containsOnlyNulls();
+        assertThat(etf.missingReason()).isEqualTo(DailyPayload.NO_DAILY_PRICE_IN_RANGE);
+    }
+
+    @Test
+    void aZeroPrevCloseInTheQuoteLeavesTheEtfWithoutADayRateInsteadOfFailing() throws IOException {
+        tracked("TEST09");
+        when(intradayQuotes.lastReceived("TEST09", SINCE, AS_OF)).thenReturn(Optional.of(
+                quote(AS_OF.minusMinutes(90), 9_705, "{\"f\":{\"a\":0,\"b\":0,\"c\":0}}")));
+
+        DailyPayload.Etf etf = answer(listener(), request()).etfs().get(0);
+
+        assertThat(etf).extracting(DailyPayload.Etf::prevClose, DailyPayload.Etf::rate,
+                DailyPayload.Etf::intradayFallback).containsOnlyNulls();
+        assertThat(etf.missingReason()).isEqualTo(DailyPayload.NO_DAILY_PRICE_IN_RANGE);
+    }
+
+    @Test
+    void morningRequestsWithoutTheFallbackFlagNeverReadIntradayQuotes() throws IOException {
+        tracked("TEST09");
+        String missing = request().replace(",\n    \"includeIntradayFallback\": true", "");
+        assertThat(missing).doesNotContain("includeIntradayFallback");
+
+        DailyPayload.Etf etf = answer(listener(), missing).etfs().get(0);
+
+        assertThat(etf.rate()).isNull();
+        assertThat(etf.intradayFallback()).isNull();
+        verifyNoInteractions(intradayQuotes);
+
+        String off = request().replace("\"includeIntradayFallback\": true", "\"includeIntradayFallback\": false");
+        assertThat(answer(listener(), off).etfs().get(0).intradayFallback()).isNull();
+        verifyNoInteractions(intradayQuotes);
+    }
+
+    @Test
+    void aFailingQuoteReadLeavesOnlyThatEtfWithoutAFallback() throws IOException {
+        tracked("TEST08", "TEST09");
+        when(intradayQuotes.lastReceived(eq("TEST08"), any(), any())).thenThrow(new IllegalStateException("db down"));
+        when(intradayQuotes.lastReceived(eq("TEST09"), any(), any())).thenReturn(Optional.of(
+                quote(AS_OF.minusMinutes(90), 9_705, PREV_CLOSE_10000)));
+
+        List<DailyPayload.Etf> etfs = answer(listener(), request()).etfs();
+
+        assertThat(etfs.get(0).rate()).isNull();
+        assertThat(etfs.get(1).rate()).isEqualTo("-2.95");
+    }
+
+    @Test
+    void everyTrackedEtfWithoutAnyDailyPriceIsStillListedWithTheReason() throws IOException {
+        tracked("TEST01", "TEST02");
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol, DailyPayload.Etf::missingReason)
+                .containsExactly(tuple("TEST01", DailyPayload.NO_DAILY_PRICE_IN_RANGE),
+                        tuple("TEST02", DailyPayload.NO_DAILY_PRICE_IN_RANGE));
+    }
+
+    @Test
+    void dailyPriceOfASymbolNotInTheInstrumentTableIsNotListed() throws IOException {
+        tracked("TEST01");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                daily("TEST01", "-1.50", AS_OF), daily("TEST77", "0.50", AS_OF)));
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol).containsExactly("TEST01");
+    }
+
+    @Test
+    void dailyPriceFetchedAtTheReferenceTimeIsUsedAndOneSecondLaterCountsAsMissing() throws IOException {
+        tracked("TEST01", "TEST02");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                daily("TEST01", "-1.50", AS_OF), daily("TEST02", "0.50", AS_OF.plusSeconds(1))));
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol, DailyPayload.Etf::missingReason)
+                .containsExactly(tuple("TEST01", null), tuple("TEST02", DailyPayload.NO_DAILY_PRICE_IN_RANGE));
+    }
+
+    @Test
+    void dailyPriceOlderThanTheLowerBoundCountsAsMissingAndTheSafetyLimitRaisesTheLowerBound() throws IOException {
+        tracked("TEST01", "TEST02");
+        // 요청 since가 8일 전이어도 안전 상한 4일이 하한이 된다.
+        String wideRequest = request().replace("2026-10-16T17:00:00+09:00", "2026-10-12T17:00:00+09:00");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                daily("TEST01", "-1.50", SINCE), daily("TEST02", "0.50", SINCE.minusSeconds(1))));
+
+        DailyPayload payload = answer(listener(), wideRequest);
+
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol, DailyPayload.Etf::missingReason)
+                .containsExactly(tuple("TEST01", null), tuple("TEST02", DailyPayload.NO_DAILY_PRICE_IN_RANGE));
+        verify(repository).latestDailyPrices(SINCE, AS_OF);
+    }
+
+    @Test
+    void etfWithoutUsStocksHasNoTickersAndCloseRatesAreAskedOncePerTicker() throws IOException {
+        tracked("TEST01", "TEST02", "TEST03");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                daily("TEST01", "-1.50", AS_OF), daily("TEST02", "0.50", AS_OF), daily("TEST03", "0.10", AS_OF)));
+        when(holdings.topTickers("TEST01")).thenReturn(List.of("FAKEA", "FAKE-B"));
+        when(holdings.topTickers("TEST03")).thenReturn(List.of("FAKEA"));
+        when(closeRateQuery.find(eq("FAKEA"), eq(AS_OF), eq(SINCE))).thenReturn(Optional.of(new OverseasCloseRate(
+                "FAKEA", "20261019", OffsetDateTime.parse("2026-10-19T16:00:00-04:00"), "  -1.25",
+                OffsetDateTime.parse("2026-10-19T23:30:02Z"))));
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol, DailyPayload.Etf::tickers)
+                .containsExactly(tuple("TEST01", List.of("FAKEA", "FAKE-B")), tuple("TEST02", List.of()),
+                        tuple("TEST03", List.of("FAKEA")));
+        assertThat(payload.closeRates()).containsExactly(new ContextPayload.CloseRate(
+                "FAKEA", "20261019", "2026-10-20T05:00:00+09:00", "-1.25", "2026-10-20T08:30:02+09:00"));
+        verify(closeRateQuery, times(1)).find(eq("FAKEA"), any(), any());
+        verify(closeRateQuery, times(1)).find(eq("FAKE-B"), any(), any());
+    }
+
+    @Test
+    void eachEtfCarriesItsOwnEtfInfoAndAnUnknownOneHasNone() throws IOException {
+        tracked("TEST01", "TEST02");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                daily("TEST01", "-1.50", AS_OF), daily("TEST02", "0.50", AS_OF)));
+        when(holdings.etfInfo("TEST01")).thenReturn(Optional.of(new EtfInfo("TEST ETF", null, "TEST SECTOR", List.of(
+                new EtfInfo.Member("US", "FAKEA", null, new BigDecimal("5.25"), 1)))));
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs().get(0).etf()).isEqualTo(new ContextPayload.EtfInfo("TEST ETF", null, "TEST SECTOR",
+                List.of(new ContextPayload.EtfMember("US", "FAKEA", null, "5.25", 1)), false));
+        assertThat(payload.etfs().get(1).etf()).isNull();
+    }
+
+    @Test
+    void memberChangesInTheRequestRangeAreCarriedOnTheEtfInfoAndOtherEtfsStayWithoutThem() throws IOException {
+        tracked("TEST01", "TEST02");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                daily("TEST01", "-1.50", AS_OF), daily("TEST02", "0.50", AS_OF)));
+        when(holdings.etfInfo("TEST01")).thenReturn(Optional.of(new EtfInfo("TEST ETF", null, null, List.of(
+                new EtfInfo.Member("US", "FAKEA", null, null, 1)))));
+        when(holdings.etfInfo("TEST02")).thenReturn(Optional.of(new EtfInfo("TEST ETF TWO", null, null, List.of())));
+        when(memberChanges.changes("TEST01", SINCE, AS_OF)).thenReturn(Optional.of(new MemberChanges(
+                LocalDate.parse("2026-10-12"), LocalDate.parse("2026-10-19"),
+                List.of(new Member("US", "OLDC", "OLD CORP C", "3.1", 3)),
+                List.of(new Member("US", "NEWD", null, "4.0", 2)),
+                List.of(new MemberChanges.Moved("US", "FAKEA", null, 2, 1)))));
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs().get(0).etf().memberChanges()).isEqualTo(new ContextPayload.MemberChanges(
+                "2026-10-12", "2026-10-19",
+                List.of(new ContextPayload.ChangedMember("US", "OLDC", "OLD CORP C", 3)),
+                List.of(new ContextPayload.ChangedMember("US", "NEWD", null, 2)),
+                List.of(new ContextPayload.MovedMember("US", "FAKEA", null, 2, 1))));
+        assertThat(payload.etfs().get(1).etf().memberChanges()).isNull();
+    }
+
+    @Test
+    void failureReadingMemberChangesDoesNotDropTheEtfInfo() throws IOException {
+        tracked("TEST01");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(daily("TEST01", "-1.50", AS_OF)));
+        when(holdings.etfInfo("TEST01")).thenReturn(Optional.of(new EtfInfo("TEST ETF", null, null, List.of())));
+        when(memberChanges.changes(anyString(), any(), any())).thenThrow(new IllegalStateException("boom"));
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs().get(0).etf().name()).isEqualTo("TEST ETF");
+        assertThat(payload.etfs().get(0).etf().memberChanges()).isNull();
+    }
+
+    @Test
+    void etfsOverTheLimitAreCutInSymbolOrderAndMarkedTruncated() throws IOException {
+        tracked("TEST01", "TEST02", "TEST03");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                daily("TEST01", "-1.50", AS_OF), daily("TEST02", "0.50", AS_OF), daily("TEST03", "0.10", AS_OF)));
+        when(holdings.topTickers("TEST03")).thenReturn(List.of("FAKEC"));
+
+        DailyPayload requested = answer(listener(), request().replace("\"maxEtfs\": 50", "\"maxEtfs\": 2"));
+
+        assertThat(requested.etfs()).extracting(DailyPayload.Etf::symbol).containsExactly("TEST01", "TEST02");
+        assertThat(requested.truncated()).isTrue();
+        verify(closeRateQuery, never()).find(eq("FAKEC"), any(), any());
+        verify(holdings, never()).topTickers("TEST03");
+    }
+
+    @Test
+    void requestedEtfLimitAboveTheSafetyLimitIsCappedAndExactlyTheLimitIsNotTruncated() throws IOException {
+        tracked("TEST01", "TEST02");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                daily("TEST01", "-1.50", AS_OF), daily("TEST02", "0.50", AS_OF)));
+
+        DailyPayload payload = answer(listener(100, 2), request());
+
+        assertThat(payload.etfs()).hasSize(2);
+        assertThat(payload.truncated()).isFalse();
+    }
+
+    @Test
+    void tickersOverTheLimitAreCutPerEtfAndMarkedOnThatEtf() throws IOException {
+        tracked("TEST01", "TEST02");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                daily("TEST01", "-1.50", AS_OF), daily("TEST02", "0.50", AS_OF)));
+        when(holdings.topTickers("TEST01")).thenReturn(List.of("FAKEA", "FAKEB", "FAKEC"));
+        when(holdings.topTickers("TEST02")).thenReturn(List.of("FAKED", "FAKEE"));
+
+        DailyPayload payload = answer(listener(), request().replace("\"maxTickers\": 100", "\"maxTickers\": 2"));
+
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::tickers, DailyPayload.Etf::tickersTruncated)
+                .containsExactly(tuple(List.of("FAKEA", "FAKEB"), true), tuple(List.of("FAKED", "FAKEE"), false));
+        assertThat(payload.truncated()).isFalse();
+        verify(closeRateQuery, never()).find(eq("FAKEC"), any(), any());
+    }
+
+    @Test
+    void dailyPriceWithoutAReadableRecordKeepsTheEtfWithTheUnreadableReasonAndTheRestAreAnswered() throws IOException {
+        tracked("TEST01", "TEST02");
+        when(holdings.topTickers("TEST01")).thenReturn(List.of("FAKEA"));
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                new BackgroundRepository.StoredTargetResponse("TEST01",
+                        new BackgroundRepository.StoredResponse("{\"dataBody\": {\"out2\": []}}", AS_OF)),
+                daily("TEST02", "0.50", AS_OF)));
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::symbol, DailyPayload.Etf::missingReason,
+                DailyPayload.Etf::tickers)
+                .containsExactly(tuple("TEST01", DailyPayload.DAILY_PRICE_UNREADABLE, List.of("FAKEA")),
+                        tuple("TEST02", null, List.of()));
+    }
+
+    @Test
+    void dailyPriceThatIsNotJsonCountsAsUnreadableToo() throws IOException {
+        tracked("TEST01");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(
+                new BackgroundRepository.StoredTargetResponse("TEST01",
+                        new BackgroundRepository.StoredResponse("not json", AS_OF))));
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs()).extracting(DailyPayload.Etf::missingReason)
+                .containsExactly(DailyPayload.DAILY_PRICE_UNREADABLE);
+    }
+
+    @Test
+    void sameRequestTwiceGivesTheSameAnswer() throws IOException {
+        tracked("TEST01");
+        when(repository.latestDailyPrices(SINCE, AS_OF)).thenReturn(List.of(daily("TEST01", "-1.50", AS_OF)));
+        DailyQuery listener = listener();
+
+        assertThat(answer(listener, request())).isEqualTo(answer(listener, request()));
+    }
+
+    @Test
+    void invalidRequestIsRejectedWithoutAnAnswer() throws IOException {
+        DailyQuery listener = listener();
+        String sinceAfterAsOf = request().replace("2026-10-16T17:00:00+09:00", "2026-10-21T17:00:00+09:00");
+        String zeroEtfs = request().replace("\"maxEtfs\": 50", "\"maxEtfs\": 0");
+
+        assertThatThrownBy(() -> answer(listener, sinceAfterAsOf)).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(JOB_ID);
+        assertThatThrownBy(() -> answer(listener, zeroEtfs)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private static final DailyPayload.Operations OPERATIONS = new DailyPayload.Operations(
+            List.of(new DailyPayload.CollectionStatus("quote-1s", null, null, 0)), java.util.Map.of("TIMEOUT", 0),
+            List.of());
+
+    @Test
+    void addsOperationsOnlyWhenTheRequestAsksForThem() throws IOException {
+        when(operationsReader.read(any(), any())).thenReturn(OPERATIONS);
+
+        DailyPayload asked = answer(listener(), request());
+
+        assertThat(asked.operations()).isSameAs(OPERATIONS);
+        verify(operationsReader).read(SINCE, AS_OF);
+    }
+
+    @Test
+    void leavesOperationsOutWhenTheFlagIsMissingOrFalse() throws IOException {
+        String missing = request().replace(",\n    \"includeOperations\": true", "");
+        assertThat(missing).doesNotContain("includeOperations");
+
+        assertThat(answer(listener(), missing).operations()).isNull();
+        verifyNoInteractions(operationsReader);
+
+        String off = request().replace("\"includeOperations\": true", "\"includeOperations\": false");
+        assertThat(answer(listener(), off).operations()).isNull();
+        verifyNoInteractions(operationsReader);
+    }
+
+    @Test
+    void operationsUseTheSameClampedRangeAsTheOtherData() throws IOException {
+        when(operationsReader.read(any(), any())).thenReturn(OPERATIONS);
+        // 요청 하한이 안전 기간(4일)보다 오래되면 응답의 다른 자료처럼 안전 기간까지만 본다.
+        String old = request().replace("2026-10-16T17:00:00+09:00", "2026-10-01T17:00:00+09:00");
+
+        answer(listener(), old);
+
+        verify(operationsReader).read(AS_OF.minus(Duration.ofDays(4)), AS_OF);
+    }
+
+    @Test
+    void sendsTheRestOfTheAnswerWithoutOperationsWhenReadingThemFails() throws IOException {
+        when(operationsReader.read(any(), any())).thenThrow(new IllegalStateException("db down"));
+
+        DailyPayload answer = answer(listener(), request());
+
+        assertThat(answer.operations()).isNull();
+        assertThat(mapper.writeValueAsString(answer)).doesNotContain("operations");
+    }
+
+    private static final String OPEN_FLOW_SINCE = "2026-10-20T16:50:00+09:00";
+
+    private static String withOpenFlowSince(String request, String since) {
+        return request.replace("\"maxTickers\": 100", "\"maxTickers\": 100,\n    \"openFlowSince\": \"" + since + "\"");
+    }
+
+    private void quotes() {
+        when(openFlowPort.first(anyString(), any(), any())).thenReturn(Optional.of(new OpenFlowPort.Snapshot(
+                AS_OF.minusMinutes(10), 10_100, null)));
+        when(openFlowPort.last(anyString(), any(), any())).thenReturn(Optional.of(new OpenFlowPort.Snapshot(
+                AS_OF.minusSeconds(2), 10_300, "{\"f\":{\"open\":10200,\"a\":10000,\"b\":10000,\"c\":10000}}")));
+    }
+
+    @Test
+    void withoutOpenFlowSinceNoEtfCarriesAnOpenFlowAndNoQuoteIsRead() throws IOException {
+        tracked("TEST01");
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs()).hasSize(1);
+        assertThat(payload.etfs().get(0).openFlow()).isNull();
+        verifyNoInteractions(openFlowPort);
+    }
+
+    @Test
+    void openFlowSinceAddsAnOpenFlowToEveryEtfEvenWithoutADailyPrice() throws IOException {
+        tracked("TEST01", "TEST02");
+        quotes();
+
+        DailyPayload payload = answer(listener(), withOpenFlowSince(request(), OPEN_FLOW_SINCE));
+
+        assertThat(payload.etfs()).extracting(e -> e.openFlow().open()).containsExactly("10200", "10200");
+        assertThat(payload.etfs().get(0).missingReason()).isNotNull();
+        verify(openFlowPort).first("TEST01", OffsetDateTime.parse(OPEN_FLOW_SINCE), AS_OF);
+        verify(openFlowPort).last("TEST02", OffsetDateTime.parse(OPEN_FLOW_SINCE), AS_OF);
+    }
+
+    @Test
+    void openFlowSinceOlderThanTheSafetyWindowIsCutToTheWindow() throws IOException {
+        tracked("TEST01");
+        quotes();
+
+        answer(listener(), withOpenFlowSince(request(), "2026-10-20T10:00:00+09:00"));
+
+        verify(openFlowPort).first("TEST01", AS_OF.minusMinutes(30), AS_OF);
+    }
+
+    @Test
+    void openFlowSinceAfterAsOfIsInvalidAndNotAnswered() throws IOException {
+        tracked("TEST01");
+        String bad = withOpenFlowSince(request(), "2026-10-20T17:00:01+09:00");
+
+        assertThatThrownBy(() -> answer(listener(), bad)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void aFailedQuoteReadLeavesOnlyThatEtfWithoutAnOpenFlow() throws IOException {
+        tracked("TEST01", "TEST02");
+        quotes();
+        when(openFlowPort.first(eq("TEST01"), any(), any())).thenThrow(new IllegalStateException("db down"));
+
+        DailyPayload payload = answer(listener(), withOpenFlowSince(request(), OPEN_FLOW_SINCE));
+
+        assertThat(payload.etfs().get(0).openFlow()).isNull();
+        assertThat(payload.etfs().get(1).openFlow().open()).isEqualTo("10200");
+    }
+}

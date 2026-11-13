@@ -11,10 +11,6 @@ class CoreSettings:
     delta: timedelta = timedelta(minutes=5)
     evidence_window: timedelta = timedelta(hours=24)
     market_lookback: timedelta = timedelta(minutes=5)
-    response_timeout: timedelta = timedelta(seconds=10)
-    max_attempts: int = 3
-    recheck_interval: timedelta = timedelta(seconds=10)
-    max_rounds: int = 5
     collection_wait_limit: timedelta = timedelta(minutes=30)
     recent_completions: int = 10
     # 시세 이력은 T−5분~T+Δ 구간을 이 간격으로 솎아 받는다. 구간은 양끝을 포함하므로 10분 구간을 10초로 나누면
@@ -28,6 +24,13 @@ class CoreSettings:
     # 배경 자료(환율·지수·시장종합·일봉)와 해외 등락률은 받은 시각이 이 기간보다 오래되면 없음으로 본다.
     background_window: timedelta = timedelta(days=4)
     max_background_bytes: int = 32 * 1024
+    # 급변동의 시장 비교에 쓴 지수(시장종합)를 변동 시각보다 이 시간 넘게 앞서 받았으면, 비교 문장에 그 받은 시각을 밝힌다.
+    # 비교는 그대로 하고, 오래된 값과 비교했다는 것만 드러낸다(#66).
+    market_stale_after: timedelta = timedelta(minutes=10)
+    # 짧은 시간 변동 메일의 'N분 새'에 쓸 수 있는 가장 큰 N. 시세처리기의 짧은 시간 변동 구간 길이(market.window-minutes)와
+    # 같은 값이어야 한다. 변동률은 그 구간 안의 값인데, 이어지는 변동을 다시 보낼 때는 변동 시각이 처음 시각에 고정돼
+    # 감지 시각과의 차이가 구간보다 커진다. 그때 큰 N을 쓰면 거짓이 되므로 분을 쓰지 않는다.
+    window_move_max_minutes: int = 5
     # 아침 판의 개장 시세 범위: 판 날짜의 장 시작 시각(한국 시간)부터 판 시각까지. 판이 늦게 시작해도 판 시각에서 이 길이보다
     # 멀리 거슬러 읽지 않는다. 판 시각 뒤에 받은 시세는 쓰지 않는다(상태형 자료).
     open_flow_start: time = time(9, 0)
@@ -43,7 +46,7 @@ class CoreSettings:
     # 같은 eventId 중복 처리를 위해 기억하는 작업 키 수. 메모리가 무한히 늘지 않게 한다.
     remembered_jobs: int = 10000
     # 근거 부족 시 재검색: 검색어 LLM이 낼 수 있는 검색어 수, 검색어 LLM 시도 횟수, 재검색 완료 알림을 기다리는 상한.
-    # 재검색 기사 조회는 위의 응답 제한 시간·시도 횟수·재확인 간격·라운드 상한을 그대로 쓴다.
+    # 재검색 기사 조회는 저장 끝 알림(news.stored)을 받은 뒤 한 번만 하고, 다시 부르는 규칙은 QuerySettings를 따른다.
     max_research_queries: int = 3
     research_query_attempts: int = 3
     research_wait_limit: timedelta = timedelta(minutes=5)
@@ -56,6 +59,13 @@ class CoreSettings:
     # 정기 뉴스 수집을 기다리지 않고, 변동 시각 T 뒤 이 시간이 되면 ETF 이름과 비중 상위 구성 종목 이름으로 먼저 재검색한다.
     # 그 재검색 완료도 정기 수집 완료와 같이 '수집 완료'로 본다. 검색어 수는 max_research_queries를 쓴다.
     early_research_delay: timedelta = timedelta(minutes=5)
+    # 같은 사건 기사 묶기(급변동·데일리 LLM 입력 공통): 두 기사 제목의 낱말 겹침 비율(공통 낱말 수 / 두 제목 낱말 합집합 수)이
+    # 이 이상이고, 공통 낱말이 이 수 이상이며, 발행 시각 차이가 이 이내이면 같은 사건으로 본다. 묶음 안의 모든 기사 쌍이 맞아야 한다.
+    # 낱말은 제목 앞의 [속보] 같은 괄호 머리말을 떼고 글자·숫자로 자른 것 중 이 길이 이상만 센다.
+    article_group_min_overlap: float = 0.3
+    article_group_min_shared_words: int = 2
+    article_group_max_gap: timedelta = timedelta(hours=6)
+    article_group_min_word_length: int = 2
 
 
 @dataclass(frozen=True)
@@ -65,8 +75,24 @@ class StoreSettings:
     record_retry_interval: timedelta = timedelta(milliseconds=500)
 
 
+@dataclass(frozen=True)
+class QuerySettings:
+    """시세처리기·뉴스처리기 내부 조회 API 호출의 재시도 규칙. 급변동·데일리 판·재검색이 함께 쓴다."""
+
+    # 한 번 호출의 응답 제한. 연결 실패·시간 초과·5xx만 다시 부르고, 4xx(잘못된 요청)는 다시 불러도 같으므로 그만둔다.
+    # 연결부터 응답을 다 읽기까지 시도 전체의 마감이다(http_queries.post_json).
+    call_timeout: timedelta = timedelta(seconds=10)
+    max_attempts: int = 4
+    # 시도 사이 간격. n번째 실패 뒤 n번째 값을 쉰다(최대 시도 4번이라 3개). 최악은 4×10초 + 22초 = 62초다.
+    retry_intervals: tuple[timedelta, ...] = (timedelta(seconds=2), timedelta(seconds=5), timedelta(seconds=15))
+    # 동시에 기다리는 호출 수. 호출은 이 수의 작업 스레드에서 돌고 수신 루프는 기다리지 않는다. 시세처리기·뉴스처리기
+    # 요청 스레드(각 8개)보다 크지 않게 둔다.
+    max_workers: int = 8
+
+
 DEFAULT_SETTINGS = CoreSettings()
 DEFAULT_STORE_SETTINGS = StoreSettings()
+DEFAULT_QUERY_SETTINGS = QuerySettings()
 
 
 @dataclass(frozen=True)
@@ -75,9 +101,7 @@ class DailySettings:
 
     # 범위 시작은 예정 시각에서 직전 평일의 같은 시각이다. 그래도 이보다 오래 거슬러 가지 않는다.
     max_lookback: timedelta = timedelta(days=7)
-    # 재요청 규칙은 급변동 근거 조회와 같다.
-    response_timeout: timedelta = timedelta(seconds=10)
-    max_attempts: int = 3
+    # 다시 부르는 규칙은 급변동 근거 조회와 같다(QuerySettings).
     max_response_bytes: int = 32 * 1024
     max_etfs: int = 50
     max_tickers: int = 100
@@ -102,12 +126,12 @@ class DailySettings:
     us_index_target: str = "C"
     # 마감 후 판 기준 시각(한국 시간)이 이보다 이르면 그날 장이 아직 열리지 않은 것으로 본다(일봉이 모두 등락 0.00일 때만).
     market_open: time = time(9, 0)
-    # 장 시작부터 이 시각 전까지의 급변동은 급변동 리포트를 따로 만들지 않고 아침 판에 합친다. 아침 판 시작 시각(수집기의
-    # collector.daily-briefing.morning-cron 기본 평일 09:10)과 같아야 한다. 합침 구간이 끝난 뒤 이 시간이 지나도 아침 판
+    # 장 시작부터 이 시각 전까지의 급변동은 급변동 리포트를 따로 만들지 않고 아침 판에 합친다. 수집기가 아침 판 시작 알림을 내는
+    # 시각(collector.daily-briefing.morning-cron 기본 평일 09:10)과 같아야 한다. 합침 구간이 끝난 뒤 이 시간이 지나도 아침 판
     # 결과가 없으면 모아 둔 변동을 급변동 리포트로 넘긴다.
     morning_merge_end: time = time(9, 10)
-    # 합침을 켠다. 수집기의 아침 판 tick을 켜는 값(collector.daily-briefing.enabled = COLLECTOR_DAILY_BRIEFING_ENABLED)과
-    # 짝이다. tick이 오지 않는데 켜 두면 합침 구간의 급변동이 grace만큼 늦게 나가므로 꺼져 있으면 바로 리포트를 만든다.
+    # 합침을 켠다. 수집기의 데일리 판 시작 알림을 켜는 값(collector.daily-briefing.enabled = COLLECTOR_DAILY_BRIEFING_ENABLED)과
+    # 짝이다. 알림이 오지 않는데 켜 두면 합침 구간의 급변동이 grace만큼 늦게 나가므로 꺼져 있으면 바로 리포트를 만든다.
     morning_merge_enabled: bool = False
     # 합침 경로가 기억하는 eventId 수. 급변동 묶음기(remembered_jobs)와 같은 상한이다.
     remembered_move_ids: int = 10000
@@ -124,8 +148,15 @@ class DailySettings:
     # 마감 후 판의 그날 급변동 요약에 보여 주는 최대 건수. 넘으면 '외 N건'으로 줄인다.
     max_move_lines: int = 20
     llm_max_attempts: int = 3
-    # 같은 tick 중복 처리를 막기 위해 기억하는 eventId 수.
-    remembered_ticks: int = 1000
+    # 같은 판 시작 알림(daily.collection.completed) 중복 처리를 막기 위해 기억하는 eventId 수.
+    remembered_notices: int = 1000
+    # 한도 시각(한국 시간, 평일): 수집기의 판 시작 알림이 이 시각까지 오지 않으면 있는 자료로 판을 스스로 시작하고 판에
+    # '자료가 낡았을 수 있음'을 표시한다. 수집기 알림 시각(아침 09:10, 마감 후 수집 16:30 뒤)보다 뒤여야 한다.
+    morning_deadline: time = time(9, 20)
+    post_close_deadline: time = time(17, 30)
+    # 한도 시각 안전장치를 켠다. 합침(morning_merge_enabled)과 같은 환경변수(COLLECTOR_DAILY_BRIEFING_ENABLED)로 켠다.
+    # 수집기 알림을 꺼 둔 로컬에서 평일마다 판이 저절로 나가지 않게 한다.
+    deadline_enabled: bool = False
     # 서버 상태 절의 '주의': 판 시각에 시작한 지 이만큼 넘게 진행 중인 작업은 멈춘 것으로 본다.
     stuck_after: timedelta = timedelta(minutes=30)
     # 메일 본문 이벤트(briefing.daily.generated)의 그림 크기 상한. 그림 한 장(base64를 푼 크기)과 이벤트 전체(JSON 바이트)가

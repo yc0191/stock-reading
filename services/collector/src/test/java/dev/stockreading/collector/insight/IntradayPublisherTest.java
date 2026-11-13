@@ -67,9 +67,9 @@ class IntradayPublisherTest {
         HoldingsPort holdings = mock(HoldingsPort.class);
         when(holdings.allTickers()).thenReturn(List.of("TESTA"));
         var insightProperties = new InsightProperties(new InsightProperties.Schedule(false, "0 30 16 * * MON-FRI"), "0", 30,
-                List.of("C", "S", "E"), 30, 100);
+                List.of("C", "S", "E"), 30, 100, null);
         insight = new InsightPublisher(source, (QuoteSymbolsPort) () -> List.of("TEST01"), insightProperties,
-                holdings, mock(ExchangePort.class), kafka, mapper, CLOCK);
+                holdings, mock(ExchangePort.class), kafka, mapper, CLOCK, millis -> { });
         var intraday = new IntradayProperties(true, "0 */5 9-15 * * MON-FRI", "09:00", "15:30", STAGGER_MS);
         InsightCallPause pause = millis -> timeline.add("pause:" + millis);
         publisher = new IntradayPublisher(insight, source, intraday, pause);

@@ -1,8 +1,6 @@
 spring:
   application:
     name: news
-  main:
-    web-application-type: none
   config:
     # 로컬 개발용 비밀값은 저장소 루트의 git 제외 .env에서 가져온다.
     import: optional:file:./.env[.properties],optional:file:../../.env[.properties]
@@ -27,3 +25,32 @@ spring:
       compression-type: gzip
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        # 보내는 모든 메시지 헤더에 본문 correlationId 를 싣는다(추적 ID, docs/local-development.md).
+        interceptor.classes: dev.stockreading.news.trace.CorrelationIdProducerInterceptor
+
+# 수집 완료 알림의 기사들이 모두 처리되면 저장 끝(news.stored)을 낸다. 한도까지 처리되지 않은 기사가 있으면 그 사실을 담아 낸다.
+news:
+  stored:
+    # 브리핑의 재검색 기다림 한도(5분)보다 짧아야 브리핑이 이 알림을 받는다.
+    wait-limit: 60s
+    poll-interval: 1s
+    # 수집 끝 시각에서 이만큼 지난 완료는 기다리지 않는다. 비우면 wait-limit 과 같다.
+    # stale-after: 60s
+
+# 브리핑이 부르는 내부 조회 API(docs/local-development.md 의 "내부 조회 API"). 서버 밖으로 열지 않는다.
+server:
+  # 로컬에서는 시세처리기(8091)·뉴스처리기(8092)가 한 기계에 함께 뜨고, 로컬 compose 가 쓰는 8080·8081 과 겹치지 않게 둔다.
+  port: 8092
+  # 로컬은 이 기계 안에서만 받는다. 운영 compose 는 SERVER_ADDRESS=0.0.0.0 으로 컨테이너 네트워크에만 열고 바깥 포트는 연결하지 않는다.
+  address: 127.0.0.1
+  tomcat:
+    threads:
+      # 부르는 쪽이 브리핑 하나라 요청이 많지 않다. 기본 200개 스레드의 스택 메모리를 아끼려고 줄인다.
+      max: 8
+      min-spare: 1
+
+logging:
+  pattern:
+    # 메시지를 처리하는 동안 찍히는 로그 줄마다 그 메시지의 correlationId 를 붙인다(추적 ID, docs/local-development.md).
+    correlation: "[%X{correlationId:-}] "

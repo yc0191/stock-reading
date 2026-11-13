@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from fake_anthropic import as_reply
 from briefing.config import CoreSettings
 from briefing.jobs import BriefingCore
 from briefing.llm import LlmCallError
@@ -26,7 +27,9 @@ from briefing.research import (
     query_output_schema,
 )
 from briefing.sentence_research import WHOLE_REPORT, ResearchReportStage, SentenceResearch, research_job_id
-from contracts import sample, validate
+from briefing.queries import QueryKind
+from contracts import sample, validate, validate_payload
+from fake_api import FakeApi
 from fake_anthropic import FAKE_KEY, fake_sdk  # noqa: F401 - 픽스처
 from fake_job_log import FakeJobLog
 
@@ -57,7 +60,9 @@ class FakeLlm:
         self.responses = list(responses)
         self.calls = []
 
-    def complete(self, system, user, output_schema):
+    @as_reply
+    def complete(self, system, user, output_schema, addendum=""):
+        system = system + addendum
         self.calls.append((system, user, output_schema))
         response = self.responses.pop(0)
         if isinstance(response, Exception):
@@ -115,56 +120,41 @@ class Flow:
 
     def __init__(self, report_outputs, query_outputs, settings=S):
         self.clock = Clock(T)
-        self.requests, self.records = Requests(), Records()
+        self.requests, self.records, self.api = Requests(), Records(), FakeApi()
         self.failures = self.records
         self.report_llm, self.query_llm = FakeLlm(*report_outputs), FakeLlm(*query_outputs)
         stage = ReportStage(LlmWriter(self.report_llm), self.requests, self.records, clock=self.clock)
         self.sentences = SentenceResearch(
             QueryWriter(self.query_llm, settings.max_research_queries, settings.research_query_attempts),
-            self.requests, self.records, settings)
+            self.requests, self.api, self.records, settings)
         self.research = self.sentences.research
         self.stage = ResearchReportStage(stage, self.sentences)
-        self.core = BriefingCore(self.requests, self.stage, settings, self.records)
+        self.core = BriefingCore(self.requests, self.api, self.stage, settings, self.records)
         self.settings = settings
 
     def to_report(self, article_items=None, background=(), etf=None):
-        """보고서를 처음 쓰기까지(기사 안정 판정 포함) 돌린다."""
-        core = self.core
+        """보고서를 처음 쓰기까지 돌린다. 기사는 저장 끝 알림 뒤라 한 번 받으면 끝이다."""
+        core, api = self.core, self.api
         core.on_move(move(), T)
-        core.on_collection_completed(regular_completed(), T)
-        core.on_history_responded(history(), T + SEC)
-        core.on_context_responded(context(background=background, etf=etf), T + SEC)
-        core.on_articles_responded(articles(1, article_items), T + SEC)
-        core.on_tick(T + SEC + S.recheck_interval)
-        self.clock.now = T + SEC + S.recheck_interval
-        core.on_articles_responded(articles(2, article_items), self.clock.now)
+        core.on_news_stored(regular_completed(), T)
+        self.clock.now = T + SEC
+        api.reply(history(), self.clock.now)
+        api.reply(context(background=background, etf=etf), self.clock.now)
+        api.reply(articles(1, article_items), self.clock.now)
 
-    def complete_research(self, incomplete=(), research_id=RID):
+    def complete_research(self, incomplete=(), research_id=RID, unprocessed=()):
         self.clock.now += SEC
-        return self.research.on_collection_completed(research_completed(incomplete, research_id), self.clock.now)
+        return self.research.on_stored(research_completed(incomplete, research_id, unprocessed), self.clock.now)
 
-    def stable_research(self, items, rounds=2, research_id=RID):
-        """재검색 기사 조회에 같은 목록을 rounds번 돌려준다."""
-        research = self.research
-        for n in range(rounds):
-            seq = 1 + n
-            self.clock.now += SEC
-            assert research.on_articles_responded(articles(seq, items, job_id=research_id), self.clock.now) is True
-            if n < rounds - 1:
-                self.clock.now += S.recheck_interval
-                research.on_tick(self.clock.now)
+    def answer_research(self, items, research_id=RID):
+        """재검색 기사 조회에 답한다. 저장 끝 알림 뒤라 한 번 받으면 끝이다."""
+        self.clock.now += SEC
+        assert self.api.reply(articles(1, items, job_id=research_id), self.clock.now) is True
 
-    def stable_research_jobs(self, items_by_job):
-        """여러 재검색 작업에 같은 목록을 두 라운드 돌려준다. 라운드마다 모든 작업에 먼저 답한 뒤 확인 시각을 지나게 한다."""
-        research = self.research
-        for n in range(2):
-            for research_id, items in items_by_job.items():
-                self.clock.now += SEC
-                assert research.on_articles_responded(articles(1 + n, items, job_id=research_id),
-                                                      self.clock.now) is True
-            if n == 0:
-                self.clock.now += S.recheck_interval
-                research.on_tick(self.clock.now)
+    def answer_research_jobs(self, items_by_job):
+        """여러 재검색 작업의 기사 조회에 차례로 답한다."""
+        for research_id, items in items_by_job.items():
+            self.answer_research(items, research_id)
 
     def briefings(self):
         return self.requests.of("briefing.generated")
@@ -185,16 +175,20 @@ def move():
 
 
 def regular_completed():
-    event = sample("collection.completed.sample.json")
-    event["payload"].update(jobType="collect-news", startedAt=(T + S.delta).isoformat(), incompleteSymbols=[])
+    """정기 수집의 저장 끝 알림(news.stored)"""
+    event = sample("news.stored.sample.json")
+    event["payload"].update(jobType="collect-news", startedAt=(T + S.delta).isoformat(), incompleteSymbols=[],
+                            unprocessedEventIds=[])
     return json.dumps(event)
 
 
-def research_completed(incomplete=(), research_id=RID):
-    event = sample("collection.completed.sample.json")
+def research_completed(incomplete=(), research_id=RID, unprocessed=()):
+    """재검색의 저장 끝 알림(news.stored)"""
+    event = sample("news.stored.sample.json")
     event["payload"].update(jobType="research-news", startedAt=(T + timedelta(minutes=1)).isoformat(),
-                            incompleteSymbols=list(incomplete), researchJobId=research_id)
-    assert validate("collection.completed.v1.schema.json", event) == []
+                            incompleteSymbols=list(incomplete), researchJobId=research_id,
+                            unprocessedEventIds=list(unprocessed))
+    assert validate("news.stored.v1.schema.json", event) == []
     return json.dumps(event)
 
 
@@ -231,7 +225,7 @@ def articles(seq, items=None, truncated=False, job_id=JOB_ID):
 
 
 def research_articles_requests(flow):
-    return [e for e in flow.requests.of("news.articles.requested") if "researchJobId" in e.value["payload"]]
+    return [q for q in flow.api.of(QueryKind.ARTICLES) if "researchJobId" in q.payload]
 
 
 # ---- 근거 충분 ----
@@ -271,15 +265,18 @@ def test_insufficient_evidence_researches_once_and_rewrites_with_the_research_ar
 
     assert flow.complete_research() is True
     (first,) = research_articles_requests(flow)
-    assert validate("news.articles.requested.v1.schema.json", first.value) == []
-    payload = first.value["payload"]
-    # 재검색 작업 id가 따로라 첫 근거 조회의 응답과 섞이지 않아 순번은 1부터이고, 범위는 기존 기사와 같다.
+    assert validate_payload("news.articles.requested.v1.schema.json", first.payload) == []
+    payload = first.payload
+    # 재검색 기사 조회의 job_step은 재검색을 부른 작업(job_run)에 남고, 추적 ID는 변동의 것이다.
+    assert (first.job_id, first.stage, first.correlation_id) == (
+        JOB_ID, ResearchStep.ARTICLES.value, json.loads(move())["correlationId"])
+    # 재검색 작업 id로 조회하고, 범위는 기존 기사와 같다.
     assert (payload["seq"], payload["researchJobId"], payload["symbol"]) == (1, RID, SYMBOL)
     assert payload["jobId"] == RID
     assert payload["since"] == (T - S.evidence_window).isoformat()
     assert payload["until"] == (T + S.delta).isoformat()
 
-    flow.stable_research([R1, A1])
+    flow.answer_research([R1, A1])
 
     assert len(flow.report_llm.calls) == 2
     rewritten = json.loads(flow.report_llm.calls[1][1])
@@ -296,34 +293,27 @@ def test_insufficient_evidence_researches_once_and_rewrites_with_the_research_ar
     assert flow.failures.failed == []
 
 
-def test_research_articles_request_follows_seq_timeout_and_total_attempts_then_reports_existing_evidence():
+def test_research_articles_that_finally_fail_report_existing_evidence():
     flow = Flow([INSUFFICIENT], [queries(*QUERIES)])
     flow.to_report()
     flow.complete_research()
     research = flow.research
+    # 조회 결과를 기다리는 동안 깨어날 시각이 없다. 재시도는 조회 구현이 한다.
+    assert research.next_deadline() is None
 
-    for _ in range(S.max_attempts):
-        assert research.next_deadline() == flow.clock.now + S.response_timeout
-        flow.clock.now += S.response_timeout
-        research.on_tick(flow.clock.now)
+    flow.clock.now += timedelta(minutes=1)
+    flow.api.fail(QueryKind.ARTICLES, flow.clock.now, attempts=4, failure_kind="timeout")
 
-    seqs = [e.value["payload"]["seq"] for e in research_articles_requests(flow)]
-    assert seqs == [1, 2, 3]
+    assert len(research_articles_requests(flow)) == 1
     # 인용한 근거가 없어 메일을 보내지 않고, 결과와 본문은 작업 기록에 남긴다.
     assert flow.briefings() == []
     (skipped,) = flow.not_sent()
     assert LLM_INSUFFICIENT in skipped.final_text
     # 새 실패 사유 없이 보고서를 낸다.
     assert flow.failures.failed == []
-
-    resent = flow.records.of(ResearchReason.ARTICLES_RESENT)
-    assert [(r.stage, r.attempts, r.data["awaited"]["seq"]) for r in resent] == [
-        (ResearchStep.ARTICLES, 1, 1), (ResearchStep.ARTICLES, 2, 2)]
-    assert resent[0].data["request"]["seq"] == 1 and resent[0].data["queries"] == QUERIES
     (gave_up,) = flow.records.of(ResearchReason.ARTICLES_NO_RESPONSE)
-    assert (gave_up.stage, gave_up.attempts, gave_up.data["awaited"]["eventType"], gave_up.data["awaited"]["seq"]) == (
-        ResearchStep.ARTICLES, 3, "news.articles.responded", 3)
-    assert gave_up.data["received"] == []
+    assert (gave_up.stage, gave_up.attempts, gave_up.error_type) == (ResearchStep.ARTICLES, 4, "timeout")
+    assert gave_up.data["request"]["researchJobId"] == RID and gave_up.data["received"] == []
     assert research.next_deadline() is None
 
 
@@ -332,47 +322,35 @@ def test_research_completion_is_matched_by_the_research_job_id_only():
     flow.to_report()
     research = flow.research
 
-    # 정기 수집 완료는 재검색이 가져가지 않고, 다른 작업의 재검색 완료는 이 작업을 움직이지 않는다.
-    assert research.on_collection_completed(regular_completed(), flow.clock.now) is False
+    # 정기 수집의 저장 끝은 재검색이 가져가지 않고, 다른 작업의 재검색 저장 끝은 이 작업을 움직이지 않는다.
+    assert research.on_stored(regular_completed(), flow.clock.now) is False
     other = research_completed(research_id="00000000-0000-4000-8000-0000000000ff")
-    assert research.on_collection_completed(other, flow.clock.now) is True
+    assert research.on_stored(other, flow.clock.now) is True
     assert research_articles_requests(flow) == []
 
     assert flow.complete_research() is True
     assert len(research_articles_requests(flow)) == 1
 
 
-def test_late_first_round_articles_response_is_left_to_the_core_and_stale_research_seq_is_ignored():
+def test_research_articles_are_fetched_once_and_a_second_stored_notice_changes_nothing():
     flow = Flow([INSUFFICIENT, WITH_RESEARCH], [queries(*QUERIES)])
     flow.to_report()
     flow.complete_research()
-    research = flow.research
+    flow.complete_research()  # 같은 재검색의 저장 끝이 다시 와도(실행부의 eventId 확인을 지나쳐도) 다시 조회하지 않는다
 
-    assert research.on_articles_responded(articles(2, [A1]), flow.clock.now) is False
-    flow.clock.now += S.response_timeout
-    research.on_tick(flow.clock.now)  # seq 1 무응답 -> seq 2로 재요청
-    # 보내지 않은 순번(3)의 응답은 낡은 것으로 보고 무시한다. 여전히 seq 2를 기다린다.
-    assert research.on_articles_responded(articles(3, [R1], job_id=RID), flow.clock.now) is True
-    assert research.next_deadline() == flow.clock.now + S.response_timeout
+    assert len(research_articles_requests(flow)) == 1
+    flow.answer_research([R1])
+    assert len(flow.briefings()) == 1
 
 
-def test_response_to_the_first_send_is_accepted_after_the_request_was_resent():
-    # 두 값이 다르면 "응답을 받았다"(다음 기한이 recheck_interval 뒤)와 "무시하고 재전송을 기다린다"(response_timeout 뒤)가 갈린다.
-    settings = CoreSettings(recheck_interval=timedelta(seconds=3))
-    flow = Flow([INSUFFICIENT, WITH_RESEARCH], [queries(*QUERIES)], settings)
+def test_research_stored_notice_with_unprocessed_articles_still_fetches_once(caplog):
+    flow = Flow([INSUFFICIENT, WITH_RESEARCH], [queries(*QUERIES)])
     flow.to_report()
-    flow.complete_research()
-    research = flow.research
+    with caplog.at_level("WARNING", logger="briefing.research"):
+        flow.complete_research(unprocessed=["e0000012-0000-4000-8000-000000000012"])
 
-    flow.clock.now += settings.response_timeout
-    research.on_tick(flow.clock.now)  # seq 1 무응답 -> seq 2로 재요청
-    # 브리핑이 다른 일로 막혀 늦게 읽었을 뿐 seq 1의 응답도 같은 조회의 응답이므로 받고 안정 확인 라운드로 간다.
-    assert research.on_articles_responded(articles(1, [R1], job_id=RID), flow.clock.now) is True
-    assert research.next_deadline() == flow.clock.now + settings.recheck_interval
-    # 이미 받았으니 재전송한 seq 2의 응답은 두 번 세지 않는다.
-    assert research.on_articles_responded(articles(2, [R1], job_id=RID), flow.clock.now) is True
-    assert flow.records.of(ResearchReason.ARTICLES_NO_RESPONSE) == []
-    assert len(flow.records.of(ResearchReason.ARTICLES_RECEIVED)) == 0  # 아직 안정 판정 전
+    assert len(research_articles_requests(flow)) == 1
+    assert "1 article(s) were not stored in time" in caplog.text
 
 
 # ---- 검색어 LLM ----
@@ -400,6 +378,8 @@ def test_query_llm_failing_every_attempt_reports_existing_evidence_and_records_e
     assert [r.data["llm"]["rejectReason"] for r in attempts] == ["output is not valid JSON", "output does not have queries",
                                                "LLM call failed: APIError"]
     assert [r.error_type for r in attempts] == ["InvalidQueries", "InvalidQueries", "LlmCallError"]
+    # 응답을 받은 시도는 사용량이 남고, 호출 실패는 사용량 없음으로 남는다.
+    assert [r.data["llm"]["usage"] for r in attempts] == [{"cacheWrite": 11, "cacheRead": 22, "input": 33, "output": 44}] * 2 + [None]
     assert all(r.data["llm"]["input"] == flow.query_llm.calls[0][1] for r in attempts)
     (gave_up,) = flow.records.of(ResearchReason.QUERY_GAVE_UP)
     assert (gave_up.stage, gave_up.attempts, gave_up.data["llm"]["rejectReason"]) == (
@@ -421,35 +401,22 @@ def test_query_llm_with_no_queries_reports_existing_evidence_without_research():
         ResearchStep.QUERY, ResearchReason.NO_QUERIES, queries("  ", ""), None)
 
 
-def test_rejected_query_attempt_and_resent_request_are_recorded_even_when_research_succeeds():
+def test_rejected_query_attempt_is_recorded_even_when_research_succeeds():
     over_limit = queries("하나", "둘", "셋", "넷")
     flow = Flow([INSUFFICIENT, WITH_RESEARCH], [over_limit, queries(*QUERIES)])
     flow.to_report()
     flow.complete_research()
-    research = flow.research
-
-    flow.clock.now += S.response_timeout
-    research.on_tick(flow.clock.now)  # seq 1 무응답 -> seq 2
-    flow.clock.now += SEC
-    research.on_articles_responded(articles(2, [R1], job_id=RID), flow.clock.now)
-    flow.clock.now += S.recheck_interval
-    research.on_tick(flow.clock.now)  # 확인 라운드 seq 3
-    flow.clock.now += SEC
-    research.on_articles_responded(articles(3, [R1], job_id=RID), flow.clock.now)
+    flow.answer_research([R1])
 
     assert len(flow.briefings()) == 1
     (rejected,) = flow.records.of(ResearchReason.QUERY_REJECTED)
     assert (rejected.attempts, rejected.data["llm"]["rawOutput"], rejected.data["llm"]["rejectReason"]) == (
         1, over_limit, "4 queries over the limit of 3")
     assert rejected.data["llm"]["input"] == flow.query_llm.calls[0][1]
-    (resent,) = flow.records.of(ResearchReason.ARTICLES_RESENT)
-    assert (resent.stage, resent.attempts, resent.data["awaited"]["seq"], resent.data["request"]["seq"]) == (
-        ResearchStep.ARTICLES, 1, 1, 1)
-    # 확인 라운드는 무응답 재요청과 단계·사유가 다르고, 그 라운드에 받은 기사 목록을 담는다.
-    (confirm,) = flow.records.of(ResearchReason.ARTICLES_CONFIRM_ROUND)
-    assert (confirm.stage, confirm.attempts, confirm.data["request"]["seq"]) == (ResearchStep.ARTICLES_CONFIRM, 2, 3)
-    assert confirm.data["received"][0]["articles"] == [R1]
-    assert (confirm.stage, confirm.reason) != (resent.stage, resent.reason)
+    (received,) = flow.records.of(ResearchReason.ARTICLES_RECEIVED)
+    assert received.data["received"][0]["articles"] == [R1]
+    # 저장 끝 알림 원문(수집·저장 건수)이 받은 기사 기록에 함께 남는다.
+    assert received.data["collectorCompletion"]["storedCount"] == 9
 
 
 def test_parse_queries_trims_dedupes_and_rejects_bad_shapes():
@@ -492,17 +459,15 @@ def test_query_llm_input_carries_the_background_figures():
 
 
 def test_without_a_query_writer_insufficient_evidence_is_not_published():
-    clock, requests, records = Clock(T), Requests(), Records()
+    clock, requests, records, api = Clock(T), Requests(), Records(), FakeApi()
     stage = ResearchReportStage(ReportStage(LlmWriter(FakeLlm(INSUFFICIENT)), requests, records, clock=clock),
-                                SentenceResearch(None, requests, records, S))
-    core = BriefingCore(requests, stage, S, records)
+                                SentenceResearch(None, requests, api, records, S))
+    core = BriefingCore(requests, api, stage, S, records)
     core.on_move(move(), T)
-    core.on_collection_completed(regular_completed(), T)
-    core.on_history_responded(history(), T)
-    core.on_context_responded(context(), T)
-    core.on_articles_responded(articles(1), T)
-    core.on_tick(T + S.recheck_interval)
-    core.on_articles_responded(articles(2), T + S.recheck_interval)
+    core.on_news_stored(regular_completed(), T)
+    api.reply(history(), T)
+    api.reply(context(), T)
+    api.reply(articles(1), T)
 
     assert requests.of("news.research.requested") == []
     # 인용한 근거가 없으면 보내지 않는다(결과는 작업 기록에 남는다).
@@ -547,9 +512,9 @@ def test_research_completion_timeout_reports_existing_evidence():
     assert flow.failures.failed == []
     (record,) = flow.records.of(ResearchReason.COMPLETION_TIMEOUT)
     assert (record.stage, record.reason) == (ResearchStep.COMPLETION, ResearchReason.COMPLETION_TIMEOUT)
-    assert record.data["awaited"] == {"eventType": "collection.completed", "jobType": "research-news",
+    assert record.data["awaited"] == {"eventType": "news.stored", "jobType": "research-news",
                               "researchJobId": RID, "requestedAt": requested_at.isoformat()}
-    # 늦게 온 완료 알림은 무시된다.
+    # 늦게 온 저장 끝 알림은 무시된다.
     flow.complete_research()
     assert research_articles_requests(flow) == []
 
@@ -564,7 +529,7 @@ def test_research_articles_outside_the_range_are_dropped_with_a_warning(caplog):
     flow.to_report()
     flow.complete_research()
     with caplog.at_level(logging.WARNING, logger="briefing.research"):
-        flow.stable_research([late, edge, old])
+        flow.answer_research([late, edge, old])
 
     rewritten = json.loads(flow.report_llm.calls[1][1])
     assert [a["ref"] for a in rewritten["researchArticles"]] == ["edge"]
@@ -579,7 +544,7 @@ def test_no_research_article_left_after_dropping_reports_existing_evidence_with_
     flow = Flow([INSUFFICIENT], [queries(*QUERIES)])
     flow.to_report()
     flow.complete_research()
-    flow.stable_research([late, A1])
+    flow.answer_research([late, A1])
 
     assert len(flow.report_llm.calls) == 1
     # 인용한 근거가 없어 메일을 보내지 않고, 결과와 본문은 작업 기록에 남긴다.
@@ -591,24 +556,6 @@ def test_no_research_article_left_after_dropping_reports_existing_evidence_with_
     assert [a["articleId"] for a in record.data["received"][0]["articles"]] == ["late", "a1"]
 
 
-def test_research_articles_that_keep_changing_report_existing_evidence():
-    flow = Flow([INSUFFICIENT], [queries(*QUERIES)])
-    flow.to_report()
-    flow.complete_research()
-    research = flow.research
-    for n in range(S.max_rounds):
-        flow.clock.now += SEC
-        research.on_articles_responded(articles(1 + n, [article(f"r{n}", T)], job_id=RID), flow.clock.now)
-        if n < S.max_rounds - 1:
-            flow.clock.now += S.recheck_interval
-            research.on_tick(flow.clock.now)
-
-    assert flow.briefings() == [] and len(flow.not_sent()) == 1
-    assert len(flow.records.of(ResearchReason.ARTICLES_CONFIRM_ROUND)) == S.max_rounds - 1
-    (record,) = flow.records.of(ResearchReason.ARTICLES_UNSTABLE)
-    assert (record.attempts, len(record.data["received"])) == (S.max_rounds, S.max_rounds)
-
-
 # ---- 다시 쓰기 ----
 
 def test_rewrite_citing_refs_outside_the_list_is_retried_and_three_failures_record_llm_error():
@@ -616,7 +563,7 @@ def test_rewrite_citing_refs_outside_the_list_is_retried_and_three_failures_reco
     flow = Flow([INSUFFICIENT, unknown, unknown, unknown], [queries(*QUERIES)])
     flow.to_report()
     flow.complete_research()
-    flow.stable_research([R1])
+    flow.answer_research([R1])
 
     assert len(flow.report_llm.calls) == 4
     (failure,) = flow.failures.failed
@@ -637,7 +584,7 @@ def test_rewrite_rejecting_one_unknown_ref_then_valid_is_published():
     flow = Flow([INSUFFICIENT, unknown, WITH_RESEARCH], [queries(*QUERIES)])
     flow.to_report()
     flow.complete_research()
-    flow.stable_research([R1])
+    flow.answer_research([R1])
 
     (briefing,) = flow.briefings()
     assert "지어낸 근거" not in briefing.value["payload"]["text"]
@@ -648,7 +595,7 @@ def test_still_insufficient_after_rewrite_is_not_published_and_recorded():
     flow = Flow([INSUFFICIENT, INSUFFICIENT], [queries(*QUERIES)])
     flow.to_report()
     flow.complete_research()
-    flow.stable_research([R1])
+    flow.answer_research([R1])
 
     # 인용한 근거가 없어 메일을 보내지 않고, 결과와 본문은 작업 기록에 남긴다.
     assert flow.briefings() == []
@@ -670,7 +617,7 @@ def test_same_job_is_researched_only_once():
         def on_research_done(self, target, result, now):
             done.append(result)
 
-    research = NewsResearch(requests, records, Done(), S)
+    research = NewsResearch(requests, FakeApi(), records, Done(), S)
     target = ResearchTarget("move", RID, JOB_ID, WHOLE_REPORT, 1, "corr-1", SYMBOL, SYMBOL,
                             T - S.evidence_window, T + S.delta)
 
@@ -700,7 +647,7 @@ def test_research_takes_the_job_kind_so_a_daily_edition_can_request_with_the_mar
         def on_research_done(self, target, result, now):
             pass
 
-    research = NewsResearch(requests, records, Done(), S)
+    research = NewsResearch(requests, FakeApi(), records, Done(), S)
     since, until = T - timedelta(hours=16), T
     target = ResearchTarget("morning", "6d1f0b7e-2a4c-4e8f-9b3d-5a7c1e9f2b40", "tick-1", 2, 1, "c", "*", SYMBOL,
                             since, until)
@@ -731,7 +678,7 @@ def test_record_has_every_field_group_and_no_secret_or_personal_names():
     flow = Flow([INSUFFICIENT, WITH_RESEARCH], [queries(*QUERIES)])
     flow.to_report()
     flow.complete_research()
-    flow.stable_research([R1])
+    flow.answer_research([R1])
     keys = set()
     for entry in flow.records.items:
         keys.update(entry.data)
@@ -748,14 +695,7 @@ def test_logs_of_a_research_run_never_contain_queries_or_the_symbol(caplog):
     with caplog.at_level(logging.DEBUG):
         flow.to_report()
         flow.complete_research()
-        flow.clock.now += S.response_timeout
-        flow.research.on_tick(flow.clock.now)
-        # 무응답 재요청 뒤라 seq 2부터 직접 돌린다.
-        research = flow.research
-        research.on_articles_responded(articles(2, [R1], job_id=RID), flow.clock.now)
-        flow.clock.now += S.recheck_interval
-        research.on_tick(flow.clock.now)
-        research.on_articles_responded(articles(3, [R1], job_id=RID), flow.clock.now)
+        flow.answer_research([R1])
 
     assert len(flow.briefings()) == 1
     messages = [r.getMessage() for r in caplog.records]
@@ -783,17 +723,17 @@ def test_a_researched_job_that_finally_succeeds_keeps_every_line_under_one_job_i
     flow = Flow([INSUFFICIENT, WITH_RESEARCH], [over_limit, queries(*QUERIES)])
     flow.to_report()
     flow.complete_research()
-    flow.stable_research([R1])
+    flow.answer_research([R1])
 
     entries = flow.records.entries
     # 재검색 작업 id는 따로지만 기록은 모두 재검색을 부른 작업 id 아래에 모인다.
     assert {e.job_id for e in entries} == {JOB_ID}
     assert [r.job_kind for r in flow.records.starts] == ["move"]
-    assert [e.entry_type for e in entries if e.stage == "news.articles.recheck"] == [EntryType.CHECK_ROUND]  # 첫 근거 조회
+    # 기사 안정 확인 라운드는 없다(첫 근거 조회도 재검색 조회도 한 번).
+    assert [e for e in entries if e.entry_type == EntryType.CHECK_ROUND] == []
     assert [(e.entry_type, e.reason) for e in entries if e.stage == "query"] == [
         (EntryType.LLM_REJECTED, "query_rejected"), (EntryType.QUERY_WRITTEN, "query_accepted")]
     assert [e.entry_type for e in entries if e.stage == "research-request"] == [EntryType.RESEARCH_REQUESTED]
-    assert [e.entry_type for e in entries if e.stage == "articles-confirm"] == [EntryType.CHECK_ROUND]
     assert [e.entry_type for e in entries if e.stage == "filter"] == [EntryType.ARTICLES_RECEIVED]
     # 첫 보고서와 다시 쓴 보고서의 LLM 시도가 모두 남는다.
     written = [e for e in entries if e.stage == "llm-report" and e.entry_type == EntryType.REPORT_WRITTEN]
@@ -812,7 +752,7 @@ def test_a_researched_job_is_not_published_when_its_log_cannot_be_saved(caplog):
     flow.complete_research()
     flow.records.fail = True
     with caplog.at_level(logging.ERROR, logger="briefing.job_log"):
-        flow.stable_research([R1])
+        flow.answer_research([R1])
 
     assert flow.briefings() == []
     assert "result event not published" in caplog.text
@@ -824,7 +764,7 @@ def test_job_log_values_carry_no_key_address_quantity_or_amount(monkeypatch):
     flow = Flow([INSUFFICIENT, WITH_RESEARCH], [queries(*QUERIES)])
     flow.to_report()
     flow.complete_research()
-    flow.stable_research([R1])
+    flow.answer_research([R1])
 
     dumped = json.dumps([[e.data, e.stage, e.reason, e.error_type, e.before, e.after] for e in flow.records.entries],
                         ensure_ascii=False, default=str)

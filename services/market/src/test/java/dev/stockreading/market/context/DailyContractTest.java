@@ -19,7 +19,10 @@ import dev.stockreading.market.event.EventFactory;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
-/** 리플레이 안전망(ADR-003/010): 과거 샘플 이벤트를 현재 소비자가 계속 읽을 수 있어야 한다. */
+/**
+ * 내부 조회 API 의 요청·응답 본문은 옛 요청·응답 이벤트의 payload 계약(contracts/events/, 더 이상 쓰지 않는 토픽)과 같다.
+ * 남겨 둔 샘플을 지금 요청 본문으로 계속 읽을 수 있고, 지금 응답 본문이 그 계약을 지키는지 본다(ADR-010).
+ */
 class DailyContractTest {
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-10-20T08:00:01Z"), ZoneId.of("Asia/Seoul"));
@@ -32,16 +35,28 @@ class DailyContractTest {
         String sample = ContractSchemas.sample("market.daily.requested.sample.json");
 
         assertThat(ContractSchemas.validate("market.daily.requested.v1.schema.json", sample)).isEmpty();
-        DailyRequestEnvelope event = mapper.readValue(sample, DailyRequestEnvelope.class);
-        assertThat(event.eventType()).isEqualTo("market.daily.requested");
-        assertThat(event.payload().jobId()).isEqualTo(JOB_ID);
-        assertThat(event.payload().seq()).isEqualTo(1);
-        assertThat(event.payload().asOf()).isEqualTo("2026-10-20T17:00:00+09:00");
-        assertThat(event.payload().since()).isEqualTo("2026-10-16T17:00:00+09:00");
-        assertThat(event.payload().maxResponseBytes()).isEqualTo(32_768);
-        assertThat(event.payload().maxEtfs()).isEqualTo(50);
-        assertThat(event.payload().maxTickers()).isEqualTo(100);
-        assertThat(event.payload().wantsOperations()).isTrue();
+        DailyRequest request = payload(sample, DailyRequest.class);
+        assertThat(request.jobId()).isEqualTo(JOB_ID);
+        assertThat(request.seq()).isEqualTo(1);
+        assertThat(request.asOf()).isEqualTo("2026-10-20T17:00:00+09:00");
+        assertThat(request.since()).isEqualTo("2026-10-16T17:00:00+09:00");
+        assertThat(request.maxResponseBytes()).isEqualTo(32_768);
+        assertThat(request.maxEtfs()).isEqualTo(50);
+        assertThat(request.maxTickers()).isEqualTo(100);
+        assertThat(request.wantsOperations()).isTrue();
+        assertThat(request.wantsIntradayFallback()).isTrue();
+    }
+
+    @Test
+    void requestWithoutTheIntradayFallbackFlagStillMatchesTheSchemaAndDoesNotAskForIt() throws IOException {
+        String sample = ContractSchemas.sample("market.daily.requested.sample.json");
+        String withoutFlag = sample.replace(",\n    \"includeIntradayFallback\": true", "");
+
+        assertThat(withoutFlag).doesNotContain("includeIntradayFallback");
+        assertThat(ContractSchemas.validate("market.daily.requested.v1.schema.json", withoutFlag)).isEmpty();
+        assertThat(payload(withoutFlag, DailyRequest.class).wantsIntradayFallback()).isFalse();
+        assertThat(ContractSchemas.validate("market.daily.requested.v1.schema.json",
+                sample.replace("\"includeIntradayFallback\": true", "\"includeIntradayFallback\": \"yes\""))).isNotEmpty();
     }
 
     @Test
@@ -51,7 +66,7 @@ class DailyContractTest {
 
         assertThat(withoutFlag).doesNotContain("includeOperations");
         assertThat(ContractSchemas.validate("market.daily.requested.v1.schema.json", withoutFlag)).isEmpty();
-        assertThat(mapper.readValue(withoutFlag, DailyRequestEnvelope.class).payload().wantsOperations()).isFalse();
+        assertThat(payload(withoutFlag, DailyRequest.class).wantsOperations()).isFalse();
     }
 
     @Test
@@ -124,7 +139,7 @@ class DailyContractTest {
                 .replace("\"payload\": {", "\"newTopLevelHint\": \"x\",\n  \"payload\": {\n    \"venue\": \"future\",");
 
         assertThat(ContractSchemas.validate("market.daily.requested.v1.schema.json", withExtraFields)).isEmpty();
-        assertThat(mapper.readValue(withExtraFields, DailyRequestEnvelope.class).payload().maxEtfs()).isEqualTo(50);
+        assertThat(payload(withExtraFields, DailyRequest.class).maxEtfs()).isEqualTo(50);
     }
 
     @Test
@@ -286,6 +301,45 @@ class DailyContractTest {
         }
     }
 
+    @Test
+    void producerIntradayFallbackMatchesTheSchemaAndIsLeftOutForADailyPrice() throws IOException {
+        DailyPayload.Etf plain = new DailyPayload.Etf("TEST01", "20261020", "9850", "10000", "-1.50",
+                "2026-10-20T16:30:02+09:00", List.of(), false);
+        DailyPayload.Etf fallback = DailyPayload.Etf.withoutDaily("TEST04", DailyPayload.NO_DAILY_PRICE_IN_RANGE,
+                List.of(), false, null).withIntradayFallback("10000", "-2.95",
+                new DailyPayload.IntradayFallback("9705", "2026-10-20T15:29:58+09:00"));
+        String json = serialize(new DailyPayload(JOB_ID, 1, List.of(plain, fallback), List.of(),
+                List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false));
+
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", json)).isEmpty();
+        var etfs = mapper.readTree(json).get("payload").get("etfs");
+        assertThat(etfs.get(0).has("intradayFallback")).isFalse();
+        assertThat(etfs.get(1).get("rate").asString()).isEqualTo("-2.95");
+        assertThat(etfs.get(1).get("missingReason").asString()).isEqualTo("no-daily-price-in-range");
+        assertThat(etfs.get(1).get("intradayFallback").get("receivedAt").asString())
+                .isEqualTo("2026-10-20T15:29:58+09:00");
+    }
+
+    @Test
+    void schemaRejectsAFallbackWithDailyCellsOrWithoutItsRate() throws IOException {
+        String sample = ContractSchemas.sample("v2", "market.daily.responded.sample.json");
+        assertThat(sample).contains("\"intradayFallback\"");
+        // 대체값인데 일봉 값(일자)이 있음, 대체값인데 등락률이 비어 있음, 받은 시각이 시각 형식이 아님,
+        // 일봉이 있는 ETF에 대체값 칸이 붙음, 대체값 없이 사유와 등락률이 함께 있음.
+        String withDate = sample.replace("\"rate\": \"-2.95\",\n        \"fetchedAt\": null",
+                "\"rate\": \"-2.95\",\n        \"fetchedAt\": \"2026-10-20T16:30:02+09:00\"");
+        String withoutRate = sample.replace("\"rate\": \"-2.95\"", "\"rate\": null");
+        String badTime = sample.replace("\"receivedAt\": \"2026-10-20T15:29:58+09:00\"", "\"receivedAt\": \"15:29\"");
+        String onDaily = sample.replaceFirst("\"missingReason\": null,",
+                "\"missingReason\": null, \"intradayFallback\": {\"price\": \"9850\", \"receivedAt\": \"2026-10-20T15:29:58+09:00\"},");
+        String noFallback = sample.replaceFirst("\"intradayFallback\": \\{[^}]*\\},", "");
+
+        for (String bad : List.of(withDate, withoutRate, badTime, onDaily, noFallback)) {
+            assertThat(bad).isNotEqualTo(sample);
+            assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", bad)).isNotEmpty();
+        }
+    }
+
     private String serialize(DailyPayload payload) {
         return mapper.writeValueAsString(EventFactory.create(CLOCK, "market.daily.responded", 2,
                 OffsetDateTime.now(CLOCK), "daily-briefing-post-close-2026-10-20T17:00:00+09:00", payload));
@@ -298,9 +352,9 @@ class DailyContractTest {
                 "\"includeOperations\": true,\n    \"openFlowSince\": \"2026-10-20T16:50:00+09:00\"");
 
         assertThat(ContractSchemas.validate("market.daily.requested.v1.schema.json", with)).isEmpty();
-        assertThat(mapper.readValue(with, DailyRequestEnvelope.class).payload().openFlowSince())
+        assertThat(payload(with, DailyRequest.class).openFlowSince())
                 .isEqualTo("2026-10-20T16:50:00+09:00");
-        assertThat(mapper.readValue(sample, DailyRequestEnvelope.class).payload().openFlowSince()).isNull();
+        assertThat(payload(sample, DailyRequest.class).openFlowSince()).isNull();
         assertThat(ContractSchemas.validate("market.daily.requested.v1.schema.json",
                 with.replace("2026-10-20T16:50:00+09:00", "ten to five"))).isNotEmpty();
     }
@@ -326,5 +380,10 @@ class DailyContractTest {
         assertThat(etfs.get(3).has("openFlow")).isFalse();
         assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json",
                 json.replace("\"status\":\"no-snapshot\"", "\"status\":\"other\""))).isNotEmpty();
+    }
+
+    /** 요청 이벤트 샘플의 payload 를 내부 조회 API 요청 본문으로 읽는다. 요청 본문은 그 payload 와 같은 모양이다. */
+    private <T> T payload(String event, Class<T> type) {
+        return mapper.treeToValue(mapper.readTree(event).get("payload"), type);
     }
 }

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Callable
 
-from briefing.compose import KST
+from briefing.compose import KST, label_of
 from briefing.daily_report import (
     DAILY_DISCLAIMER,
     DAILY_INSUFFICIENT,
@@ -24,6 +24,7 @@ from briefing.daily_report import (
     Section,
     etf_line,
     conclusion,
+    fallback_note,
     etf_groups,
     etf_name,
     headline,
@@ -158,7 +159,7 @@ def _signed_percent(rate: Decimal) -> str:
 
 
 def move_line(move: MoveRun, names: dict[str, str]) -> str:
-    """급변동 한 건의 한 줄: 시각 · ETF · 등락 · 리포트 결과."""
+    """급변동 한 건의 한 줄: 시각 · ETF 또는 주식 · 등락 · 리포트 결과."""
     at = move.move_at.astimezone(KST)
     change = _signed_percent(Decimal(str(move.change_percent))) if move.change_percent is not None else NO_DATA
     if move.status == RunStatus.SUCCEEDED.value and move.failure_reason == REASON_MERGED_INTO_MORNING:
@@ -176,7 +177,8 @@ def _moves_lines(i: DailyInput) -> tuple[str, ...] | None:
         return (MOVES_NOT_READ,)
     if not i.review.moves:
         return (MOVES_NONE,)
-    names = {e.symbol: etf_name(e) for e in i.etfs or ()}
+    names = {symbol: label_of(symbol, name) for symbol, name in i.review.stock_names}
+    names.update({e.symbol: etf_name(e) for e in i.etfs or ()})
     cap = i.settings.max_move_lines
     lines = [move_line(m, names) for m in i.review.moves[:cap]]
     if len(i.review.moves) > cap:
@@ -223,8 +225,10 @@ def post_close_view(i: DailyInput, sections: tuple[Section, ...], output: DailyO
             review_rows.append(ReviewRow(f"{name} 아침 예상 {r.call.direction} → {NOT_COMPARED}", None, (), None))
             continue
         p = review_reasons.get(r.symbol)
+        note = fallback_note(etf_by_symbol[r.symbol])
+        actual = f"{_signed_percent(r.rate)} {note}" if note else _signed_percent(r.rate)
         review_rows.append(ReviewRow(
-            f"{name} 아침 예상 {r.call.direction} → 실제 {_signed_percent(r.rate)}: {r.verdict}",
+            f"{name} 아침 예상 {r.call.direction} → 실제 {actual}: {r.verdict}",
             p.statement if p else None, number(p.refs) if p else (), p.shortfall if p else None))
     return PostCloseView(
         output is not None, bool(output is not None and output.insufficient_evidence), market_line(i, sections),

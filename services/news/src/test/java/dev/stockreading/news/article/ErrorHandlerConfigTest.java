@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.listener.MessageListenerContainer;
 
+import tools.jackson.databind.json.JsonMapper;
+
 class ErrorHandlerConfigTest {
 
     private final Consumer<?, ?> consumer = mock(Consumer.class);
@@ -27,7 +29,8 @@ class ErrorHandlerConfigTest {
     @BeforeEach
     void setUp() {
         repository = mock(FailedEventRepository.class);
-        handler = new ErrorHandlerConfig().kafkaErrorHandler(new FailedEventRecoverer(repository));
+        handler = new ErrorHandlerConfig().kafkaErrorHandler(new FailedEventRecoverer(
+                repository, mock(ArticleResultRepository.class), JsonMapper.builder().build()));
     }
 
     @Test

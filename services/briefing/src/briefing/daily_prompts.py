@@ -63,7 +63,15 @@ MORNING_RULES = """규칙:
 출력은 다음 JSON 하나만 냅니다:
 {"points":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"etfs":[{"symbol":"...","direction":"상승","reason":"...","refs":["..."],"weak":false,"shortfall":""}],"fxIssue":{"statement":"...","refs":["..."],"weak":false,"shortfall":""},"rateIssue":{"statement":"...","refs":["..."],"weak":false,"shortfall":""},"insufficientEvidence":false}"""
 
-SYSTEM_PROMPT = (READING_GUIDE + MORNING_GUIDE_EXTRA + "\n\n" + MORNING_RULES).replace("__FLAT_BAND__", FLAT_BAND)
+# 두 판이 함께 쓰는 같은 사건 기사 묶음 읽는 법과 기사끼리 말이 다를 때 쓰는 법. 판마다 항목 설명 뒤에 붙는다.
+SAME_EVENT_GUIDE = """
+- 항목 "ETF별 기사"·"재검색 기사"의 entries 한 칸이 sameEventArticles이면 제목 낱말과 발행 시각이 가까워 코드가 같은 사건을 다룬 기사로 묶은 것입니다. 묶음 안의 기사도 저마다 ref가 있어 그 ref로 인용하며, 묶음 자체에는 근거 번호가 없습니다. 묶음 안에서 research가 true인 기사는 다시 검색해 찾은 기사입니다. 묶이지 않은 기사는 한 칸에 하나씩 들어 있습니다.
+- 같은 사건 묶음은 한 기사만 보지 말고 묶음 안 기사들의 제목·요약을 함께 읽어, 여러 기사에 나뉘어 나온 사실(누가, 무엇을, 수치, 발언)을 모아 한 문장으로 씁니다. 내용을 가져온 기사의 ref는 모두 refs에 넣습니다.
+- 기사끼리 수치나 해석이 다르면 어느 쪽이 맞다고 단정하지 않고 양쪽을 모두 씁니다. 수치는 "보도에 따라 2천억~3천억 원으로 엇갈립니다"처럼 범위로 쓰고, 해석이 갈리면 "...를 이유로 드는 보도와 ...를 우려하는 보도가 함께 나왔습니다"처럼 씁니다. 양쪽 기사의 ref를 모두 refs에 넣어 코드가 두 근거 번호를 함께 보이게 합니다.
+- 문장 안에 근거 번호나 ref·articleId 값을 직접 쓰지 않습니다. 근거 번호는 코드가 refs로 붙입니다."""
+
+SYSTEM_PROMPT = (READING_GUIDE + MORNING_GUIDE_EXTRA + SAME_EVENT_GUIDE + "\n\n" + MORNING_RULES).replace(
+    "__FLAT_BAND__", FLAT_BAND)
 
 # 마감 후 판 지시문: 입력 읽는 법은 아침 판과 같고, 마감 후 판에 더해지는 항목 설명과 출력 규칙이 다르다.
 POST_CLOSE_GUIDE_EXTRA = """
@@ -71,7 +79,8 @@ POST_CLOSE_GUIDE_EXTRA = """
 - 항목 "미국 구성 종목 이슈"는 ETF에 담긴 미국 종목 중 직전 장 등락이 크거나 범위 안 공시가 있는 종목입니다(rank는 비중 순위, filingRefs는 그 종목의 공시 번호). 이 이슈는 코드가 ETF 줄 아래 '↳' 줄로 따로 보여 줍니다.
 - 항목 "미국 지수"는 직전 미국 장의 지수 등락(indexRates), 항목 "환율"은 환율종합 원문입니다. 환율의 usdKrw(있을 때만 담깁니다)는 코드가 원문의 원/달러 행에서 꺼낸 값이며 value는 원/달러 환율, change는 전일대비, ratePercent는 등락률(%)입니다. 환율 숫자는 usdKrw의 값을 씁니다.
 - notableCandidates는 코드가 고른 눈에 띄는 점 후보입니다. kind가 opposite면 업종이 같은데 반대로 움직인 ETF 둘, cluster면 같은 방향으로 크게 움직인 ETF 묶음입니다. ETF 하나에 관한 이야기는 후보가 아니며 ETF 줄의 reason과 '↳' 줄이 맡습니다. symbols는 관련 ETF 종목코드, refs는 관련 근거 번호입니다.
-- reviewEtfs(있을 때만 담깁니다)는 같은 날 아침 판이 ETF마다 쓴 방향 예상(morningDirection, morningReason)과 오늘 실제 등락률(actualRate, %)을 코드가 대조해 정한 결과입니다. verdict는 "맞음" 또는 "빗나감"이며 코드가 정한 값입니다."""
+- reviewEtfs(있을 때만 담깁니다)는 같은 날 아침 판이 ETF마다 쓴 방향 예상(morningDirection, morningReason)과 오늘 실제 등락률(actualRate, %)을 코드가 대조해 정한 결과입니다. verdict는 "맞음" 또는 "빗나감"이며 코드가 정한 값입니다.
+- 항목 "보유 ETF별 하루 등락"의 entry에 basis가 있으면 그날 일봉을 받지 못해 코드가 장중 시세(price, 받은 시각 receivedAt)와 전일 종가로 계산한 대체값이며, 장 마감 종가 기준 값과 다를 수 있습니다. reviewEtfs의 actualBasis도 같은 뜻입니다. 그 ETF의 등락 숫자를 쓸 때는 대체값임을 함께 밝힙니다."""
 
 POST_CLOSE_RULES = """규칙:
 - 원인을 단정하지 않습니다. "~때문에 올랐다"가 아니라 "~가 영향을 줬을 수 있다"처럼 씁니다.
@@ -101,7 +110,7 @@ POST_CLOSE_RULES = """규칙:
 # Claude가 이유를 찾지 못한 ETF에 쓰는 문장. 지시문과 같아야 하며, 코드가 이 문장으로 결론 줄의 ETF 수를 센다.
 NO_REASON_STATEMENT = "받은 자료에서 이유를 찾지 못했습니다."
 
-SYSTEM_PROMPT_POST_CLOSE = READING_GUIDE + POST_CLOSE_GUIDE_EXTRA + "\n\n" + POST_CLOSE_RULES
+SYSTEM_PROMPT_POST_CLOSE = READING_GUIDE + POST_CLOSE_GUIDE_EXTRA + SAME_EVENT_GUIDE + "\n\n" + POST_CLOSE_RULES
 
 # 문장 하나를 다시 쓸 때 두 판이 함께 쓰는 출력 형식(points 한 개). 아침 판의 첫 작성은 OUTPUT_SCHEMA_MORNING이다.
 OUTPUT_SCHEMA: dict[str, Any] = {
@@ -201,6 +210,7 @@ REWRITE_ADDENDUM_POST_CLOSE = """
 {"points":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"insufficientEvidence":false}
 - 새 기사로 부족한 점이 채워지면 weak를 false로, 그래도 약하면 weak를 true로 하고 shortfall에 아직 부족한 점을 씁니다. 새 기사에 없는 내용은 지어내지 않습니다.
 - 새 기사로도 이유를 찾지 못하면 위의 규칙대로 refs를 빈 목록으로 두고 weak를 true로 합니다.
+- 새 기사가 같은 사건 묶음(sameEventArticles)에 들었으면 묶음의 다른 기사와 함께 읽어 종합하고, 기사끼리 수치·해석이 다르면 위의 규칙대로 양쪽을 쓰고 단정하지 않습니다.
 - 근거 번호·단정 금지·티커 금지·구성 종목 이슈 되풀이 금지 같은 위의 규칙은 그대로 지킵니다."""
 
 REWRITE_ADDENDUM = """
@@ -210,4 +220,5 @@ REWRITE_ADDENDUM = """
 - 위의 출력 형식 대신 다음 JSON 하나만 냅니다. points에는 다시 쓴 문장 하나만 담고 다른 문장은 쓰지 않으며, insufficientEvidence는 false로 둡니다. etfs·fxIssue·rateIssue는 쓰지 않습니다.
 {"points":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"insufficientEvidence":false}
 - 새 기사로 부족한 점이 채워지면 weak를 false로, 그래도 약하면 weak를 true로 하고 shortfall에 아직 부족한 점을 씁니다. 새 기사에 없는 내용은 지어내지 않습니다.
+- 새 기사가 같은 사건 묶음(sameEventArticles)에 들었으면 묶음의 다른 기사와 함께 읽어 종합하고, 기사끼리 수치·해석이 다르면 위의 규칙대로 양쪽을 쓰고 단정하지 않습니다.
 - 근거 번호·단정 금지·티커 금지 같은 위의 규칙은 그대로 지킵니다."""

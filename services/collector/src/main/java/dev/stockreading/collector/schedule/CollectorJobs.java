@@ -4,10 +4,13 @@ import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.EnumMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
+import java.util.function.Function;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,9 +19,11 @@ import org.springframework.stereotype.Component;
 import dev.stockreading.collector.event.EventFactory;
 import dev.stockreading.collector.insight.InsightPublisher;
 import dev.stockreading.collector.insight.IntradayPublisher;
+import dev.stockreading.collector.members.MembersPublisher;
+import dev.stockreading.collector.trace.CorrelationId;
 
 /**
- * 수집 작업 다섯 개의 실행 입구. 수집기 타이머와 수동 실행 명령(CollectorCommandListener)이 모두 여기를 부른다.
+ * 수집 작업 여섯 개의 실행 입구. 수집기 타이머와 수동 실행 명령(CollectorCommandListener)이 모두 여기를 부른다.
  * 같은 작업은 겹쳐 돌지 않는다: 앞 회차가 끝나지 않았으면 이번 회차는 실행하지 않고 ALREADY_RUNNING 을 돌려준다.
  * 회차마다 기준 시각(scheduledFor, 초 단위로 자른 지금)과 correlationId(jobType-scheduledFor)를 정한다.
  */
@@ -31,7 +36,8 @@ public class CollectorJobs {
         COLLECT_NEWS("collect-news"),
         COLLECT_PRE_OPEN("collect-pre-open"),
         COLLECT_INTRADAY("collect-intraday"),
-        COLLECT_POST_CLOSE("collect-post-close");
+        COLLECT_POST_CLOSE("collect-post-close"),
+        COLLECT_ETF_MEMBERS("collect-etf-members");
 
         private final String jobType;
 
@@ -63,16 +69,22 @@ public class CollectorJobs {
     // 증권사 출처일 때만 있다. 시뮬레이터에는 장 시작 전·장중·마감 후 시세 정보 조회가 없다.
     private final Optional<InsightPublisher> insight;
     private final Optional<IntradayPublisher> intraday;
+    private final MembersPublisher members;
+    // 데일리 판을 켰을 때만 있다. 장 시작 전·마감 후 수집 결과를 데일리 판 시작 알림으로 넘긴다.
+    private final Optional<DailyCollectionPublisher> daily;
     private final Clock clock;
     private final Map<Job, AtomicBoolean> running = new EnumMap<>(Job.class);
 
     CollectorJobs(QuotePublisher quotes, NewsPublisher news, FilingPublisher filings,
-                  Optional<InsightPublisher> insight, Optional<IntradayPublisher> intraday, Clock clock) {
+                  Optional<InsightPublisher> insight, Optional<IntradayPublisher> intraday, MembersPublisher members,
+                  Optional<DailyCollectionPublisher> daily, Clock clock) {
         this.quotes = quotes;
         this.news = news;
         this.filings = filings;
         this.insight = insight;
         this.intraday = intraday;
+        this.members = members;
+        this.daily = daily;
         this.clock = clock;
         for (Job job : Job.values()) {
             running.put(job, new AtomicBoolean());
@@ -86,7 +98,8 @@ public class CollectorJobs {
             return Outcome.ALREADY_RUNNING;
         }
         try {
-            execute(job, round);
+            // 타이머 스레드에서 돌므로 레코드 인터셉터가 걸지 않는다. 회차의 correlationId 를 직접 로그 문맥에 둔다.
+            CorrelationId.within(round.correlationId(), () -> execute(job, round));
         } finally {
             running.get(job).set(false);
         }
@@ -116,7 +129,8 @@ public class CollectorJobs {
         if (!tryEnter(job, round, recordSkip)) {
             return Outcome.ALREADY_RUNNING;
         }
-        Runnable task = () -> {
+        // 작업 스레드는 메시지 처리 밖이라 레코드 인터셉터가 걸지 않으므로, 회차의 correlationId 를 직접 로그 문맥에 둔다.
+        Runnable task = () -> CorrelationId.within(round.correlationId(), () -> {
             try {
                 execute(job, round);
             } catch (RuntimeException e) {
@@ -125,7 +139,7 @@ public class CollectorJobs {
             } finally {
                 running.get(job).set(false);
             }
-        };
+        });
         try {
             Thread.ofVirtual().name("collector-" + job.jobType()).start(task);
         } catch (RuntimeException | Error e) {
@@ -133,6 +147,11 @@ public class CollectorJobs {
             throw e;
         }
         return Outcome.STARTED;
+    }
+
+    /** 지금 시작하면 회차가 쓸 correlationId. 타이머가 작업을 부르기 전에 찍는 줄(휴장일 건너뜀 등)에 쓴다. */
+    public String correlationId(Job job) {
+        return round(job).correlationId();
     }
 
     private boolean tryEnter(Job job, Round round, boolean recordSkip) {
@@ -159,23 +178,61 @@ public class CollectorJobs {
             case COLLECT_NEWS -> news.publishCollected(corr, at);
             case COLLECT_PRE_OPEN -> {
                 // 해외 일봉·세계지수와 SEC 공시를 한 회차에서 함께 받는다. 앞쪽이 실패해도 공시는 받는다.
-                ifBroker(job, insight, publisher -> publisher.publishPreOpen(corr, at));
-                filings.publishCollected(corr);
+                // 끝까지 가지 못하면 모두 못 받은 것으로 남는다.
+                Set<String> missing = new LinkedHashSet<>(DailyCollectionPublisher.PRE_OPEN_SOURCES);
+                try {
+                    Set<String> found = ifBroker(job, insight, publisher -> publisher.publishPreOpen(corr, at),
+                            List.of(InsightPublisher.WORLD_INDEX, InsightPublisher.OVERSEAS_DAILY_PRICE));
+                    if (!filings.publishCollected(corr)) {
+                        found.add(DailyCollectionPublisher.SEC_FILINGS);
+                    }
+                    missing = found;
+                } finally {
+                    // 수집이 일부 실패하거나 예외로 끝나도 아침 판 알림이 그 사실을 담도록 결과는 반드시 남긴다.
+                    Set<String> result = missing;
+                    daily.ifPresent(publisher -> publisher.recordPreOpen(result));
+                }
             }
-            case COLLECT_INTRADAY -> ifBroker(job, intraday, publisher -> publisher.publishIntraday(corr, at));
-            case COLLECT_POST_CLOSE -> ifBroker(job, insight, publisher -> publisher.publishAll(corr, at));
+            case COLLECT_INTRADAY -> ifBroker(job, intraday, publisher -> {
+                publisher.publishIntraday(corr, at);
+                return Set.of();
+            }, List.of());
+            case COLLECT_POST_CLOSE -> {
+                Set<String> missing = new LinkedHashSet<>(DailyCollectionPublisher.POST_CLOSE_SOURCES);
+                try {
+                    missing = ifBroker(job, insight, publisher -> publisher.publishAll(corr, at),
+                            DailyCollectionPublisher.POST_CLOSE_SOURCES);
+                } finally {
+                    // 수집이 일부 실패하거나 예외로 끝나도 마감 후 판 알림은 반드시 낸다.
+                    Set<String> result = missing;
+                    // 재시도 대기 중 종료로 끊기면 인터럽트 표시가 켜진 채라 전송이 실패할 수 있다.
+                    // 알림을 보내는 동안만 표시를 비우고, 보낸 뒤 되돌려 종료가 이어지게 한다.
+                    boolean interrupted = Thread.interrupted();
+                    try {
+                        daily.ifPresent(publisher -> publisher.publishPostClose(corr, result));
+                    } finally {
+                        if (interrupted) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                }
+            }
+            case COLLECT_ETF_MEMBERS -> members.publishFetched(corr);
         }
     }
 
-    private static <T> void ifBroker(Job job, Optional<T> publisher, Consumer<T> action) {
+    /** 증권사 출처가 아니거나 조회가 예외로 끝나면 그 수집의 자료 종류(whenFailed)를 모두 못 받은 것으로 돌려준다. */
+    private static <T> Set<String> ifBroker(Job job, Optional<T> publisher, Function<T, Set<String>> action,
+                                            List<String> whenFailed) {
         if (publisher.isEmpty()) {
             log.info("market insight skipped, market data source is not the broker jobType={}", job.jobType());
-            return;
+            return new LinkedHashSet<>(whenFailed);
         }
         try {
-            action.accept(publisher.get());
+            return new LinkedHashSet<>(action.apply(publisher.get()));
         } catch (RuntimeException e) {
             log.warn("market insight failed jobType={} errorType={}", job.jobType(), e.getClass().getSimpleName());
+            return new LinkedHashSet<>(whenFailed);
         }
     }
 

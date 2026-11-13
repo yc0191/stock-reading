@@ -85,6 +85,34 @@ class CollectionCompletedPublishTest {
         assertThat(payload.get("incompleteSymbols")).isEmpty();
     }
 
+    // 뉴스처리기가 저장 끝을 판단할 수 있게, 전송을 확정한 기사 이벤트의 eventId 를 빠짐없이 담는다.
+    @Test
+    void completionListsTheEventIdsOfTheArticlesWhoseSendWasConfirmed() throws IOException {
+        collect(Set.of(), item("https://news.example.com/a", "TEST01"), item("https://news.example.com/b", "TEST02"),
+                item("https://news.example.com/c", "TEST03"));
+        when(kafka.send(eq(Topics.NEWS_COLLECTED), eq("https://news.example.com/c"), anyString()))
+                .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("timeout")));
+
+        publisher.publishCollected(CORRELATION_ID, SCHEDULED_FOR);
+
+        ArgumentCaptor<String> sent = ArgumentCaptor.forClass(String.class);
+        verify(kafka, times(3)).send(eq(Topics.NEWS_COLLECTED), anyString(), sent.capture());
+        List<String> confirmedIds = new java.util.ArrayList<>();
+        for (String json : sent.getAllValues()) {
+            JsonNode article = mapper.readTree(json);
+            if (!article.get("payload").get("url").asString().endsWith("/c")) {
+                confirmedIds.add(article.get("eventId").asString());
+            }
+        }
+        List<String> listed = new java.util.ArrayList<>();
+        JsonNode payload = mapper.readTree(completionJson()).get("payload");
+        payload.get("articleEventIds").forEach(node -> listed.add(node.asString()));
+
+        assertThat(ContractSchemas.validate(SCHEMA, completionJson())).isEmpty();
+        assertThat(listed).containsExactlyInAnyOrderElementsOf(confirmedIds).hasSize(2);
+        assertThat(payload.get("publishedCount").asInt()).isEqualTo(listed.size());
+    }
+
     @Test
     void queryFailureAndDailyLimitSkipSymbolsComeFromTheCollection() throws IOException {
         collect(new LinkedHashSet<>(List.of("TEST02", "TEST03")), item("https://news.example.com/a", "TEST01"));
@@ -229,6 +257,7 @@ class CollectionCompletedPublishTest {
         verify(kafka, times(2)).send(eq(Topics.COLLECTION_COMPLETED), eq("collect-news"), value.capture());
         JsonNode second = mapper.readTree(value.getAllValues().get(1));
         assertThat(second.get("payload").get("publishedCount").asInt()).isZero();
+        assertThat(second.get("payload").get("articleEventIds")).isEmpty();
         assertThat(second.get("payload").get("incompleteSymbols")).isEmpty();
     }
 

@@ -19,6 +19,8 @@
         "symbol": { "type": "string", "pattern": "^[0-9A-Z]{6}$" },
         "name": { "type": "string", "minLength": 1, "description": "선택. 종목(ETF) 이름. 메일 제목과 본문 첫 줄이 '이름(코드)'로 쓴다. 이름을 모르면 칸을 뺀다(빈 문자열을 넣지 않는다). 소비자는 칸이 없거나 비어 있으면 코드만 쓴다." },
         "changePercent": { "type": "number" },
+        "todayChangePercent": { "type": "number", "description": "선택. 짧은 시간 변동(market.move의 detectionType window)이고 오늘 등락률(전일 종가 대비)을 알 때만 담는다. 있으면 메일 제목을 '[이름(코드)] HH:MM 기준 오늘 ±x.xx% · N분 새 ±y.yy% 반등|반락|상승|하락 브리핑'으로 쓰고(HH:MM은 asOf의 한국 시간), moveMinutes가 없으면 'N분 새' 대신 '짧은 시간'으로 쓴다. 없으면 이전 제목을 쓴다." },
+        "moveMinutes": { "type": "integer", "minimum": 1, "description": "선택. 짧은 시간 변동이 변동 시각(asOf)부터 감지까지 몇 분 사이였는지(1분 미만은 1). todayChangePercent와 함께만 담는다. 이 값이 브리핑의 짧은 시간 변동 구간 상한(시세처리기의 구간 길이와 같은 5분)을 넘으면(이어지는 변동을 다시 보내 변동 시각이 처음 시각에 고정된 경우) 실제 구간이 아니므로 칸을 뺀다." },
         "asOf": { "type": "string", "format": "date-time" },
         "text": { "type": "string", "minLength": 1 },
         "generatedBy": { "type": "string", "minLength": 1, "description": "알려진 값: rule-based" },

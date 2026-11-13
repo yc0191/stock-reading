@@ -1,8 +1,8 @@
 """변동 한 건의 근거 조회 작업. Kafka를 모르며 메시지와 시각을 인자로 받아 상태만 움직인다.
 
-흐름: market.move 수신 -> 쓸 수 있는 collection.completed 대기(변동 T+5분이 되면 ETF 이름과 구성 종목 이름으로 먼저 재검색하고,
-그 재검색 완료도 수집 완료로 본다. 둘 중 먼저 온 것으로 진행) -> 시세 이력·배경 자료·기사 요청 ->
-배경 자료 응답에 미국 종목 티커가 있으면 그 티커로 공시 요청 -> 모든 응답 수신(기사는 안정될 때까지 재확인)
+흐름: market.move 수신 -> 쓸 수 있는 저장 끝 알림(news.stored) 대기(변동 T+5분이 되면 ETF 이름과 구성 종목 이름으로 먼저
+재검색하고, 그 재검색의 저장 끝도 수집 완료로 본다. 둘 중 먼저 온 것으로 진행) -> 시세 이력·배경 자료·기사 조회(내부 조회 API) ->
+배경 자료에 미국 종목 티커가 있으면 그 티커로 공시 조회 -> 모든 결과 수신(기사는 저장이 끝난 뒤라 한 번만 조회)
 -> 받은 자료 재검사 -> 리포트 입력 완성, 또는 실패 기록(작업 기록 테이블).
 """
 from __future__ import annotations
@@ -17,22 +17,10 @@ from enum import Enum
 from typing import Any, Protocol
 
 from briefing.config import DEFAULT_SETTINGS, CoreSettings
-from briefing.events import (
-    ARTICLES_REQUESTED_TOPIC,
-    CONTEXT_REQUESTED_TOPIC,
-    FILINGS_REQUESTED_TOPIC,
-    HISTORY_REQUESTED_TOPIC,
-    format_timestamp,
-    parse_timestamp,
-    request_event,
-    research_request_event,
-)
+from briefing.events import NEWS_STORED, format_timestamp, parse_timestamp, research_request_event, stored_payload
 from briefing.evidence import MARKET_WIDE, in_evidence_range
 from briefing.job_log import (
-    REASON_RECHECK_ROUND,
-    REASON_RESENT,
     STAGE_ARTICLES,
-    STAGE_ARTICLES_RECHECK,
     STAGE_COLLECTION,
     STAGE_CONTEXT,
     STAGE_FILINGS,
@@ -48,7 +36,9 @@ from briefing.job_log import (
     move_target,
     record_result,
 )
+from briefing.job_step import job_scope
 from briefing.ports import FailureReason, RequestPort
+from briefing.queries import Query, QueryKind, QueryPort, QueryResult
 from briefing.research import MAX_QUERY_LENGTH, ResearchReason, ResearchStep
 from briefing.sources import (
     BACKGROUND_MISSING,
@@ -62,16 +52,19 @@ from briefing.sources import (
     Filing,
     PricePoint,
     next_seq,
+    parse_articles,
     parse_background,
     parse_close_rates,
     parse_etf_info,
     parse_filings,
-    response_payload,
 )
+from briefing.trace import correlation_context
 
 log = logging.getLogger("briefing.jobs")
 
 COLLECT_NEWS = "collect-news"
+# 조회 결과가 왔지만 해석하지 못해 받지 못한 것으로 본 경우의 실패 종류
+FAILURE_MALFORMED = "MalformedResponse"
 
 
 @dataclass(frozen=True)
@@ -101,8 +94,8 @@ class ReportInput:
     # market.move를 감지한 시각(봉투의 occurredAt)과 감지 유형. 머리말의 "몇 분 사이"에 쓴다. 이전 형식에는 없을 수 있다.
     detected_at: datetime | None = None
     detection_type: str | None = None
-    # 기사 요청에 마지막으로 쓴 순번. 재검색 기사 조회는 이 뒤 순번을 써서 늦게 온 이전 응답과 섞이지 않게 한다.
-    news_seq: int = 0
+    # 감지한 시세의 전일 종가 대비 오늘 등락률(%). 짧은 시간 변동을 시장의 하루 등락과 비교하고 첫 줄에 쓴다. 이전 형식에는 없다.
+    today_change_percent: float | None = None
     # 근거 부족으로 다시 검색해 받은 기사. 기존 기사와 따로 두고, 근거 번호·링크 규칙은 기사와 같다.
     research_articles: tuple[Article, ...] = ()
     research_articles_truncated: bool = False
@@ -117,6 +110,8 @@ class Completion:
     started_at: datetime
     job_type: str
     incomplete_symbols: frozenset[str]
+    # 대기 한도 안에 저장되지 못한 기사 수. 그 기사는 조회에 없을 뿐 근거 조회는 진행한다(근거가 약하면 재검색이 채운다).
+    unprocessed: int = 0
 
     def covers(self, symbol: str, as_of: datetime, settings: CoreSettings) -> bool:
         return (
@@ -137,8 +132,8 @@ class _Early(Enum):
     """정기 수집을 기다리는 동안 하는 T+5분 재검색의 진행."""
 
     PENDING = "pending"            # 아직 시각이 안 됐다
-    CONTEXT_SENT = "context_sent"  # ETF 이름을 알려고 배경 자료를 먼저 요청함
-    REQUESTED = "requested"        # 재검색 요청을 보냄. 완료 알림을 기다린다
+    CONTEXT_SENT = "context_sent"  # ETF 이름을 알려고 배경 자료를 먼저 조회함
+    REQUESTED = "requested"        # 재검색 요청을 보냄. 저장 끝 알림을 기다린다
     SKIPPED = "skipped"            # 이름을 모르거나 배경 자료가 오지 않아 정기 수집을 기다린다
 
 
@@ -164,9 +159,10 @@ class _Job:
     created_at: datetime
     detected_at: datetime | None = None
     detection_type: str | None = None
+    today_change_percent: float | None = None
     phase: _Phase = _Phase.WAITING_COLLECTION
     early: _Early = _Early.PENDING
-    # 시세·배경 자료·공시: 가장 최근에 보낸 요청의 순번과 보낸 시각
+    # 시세·배경 자료·공시·기사: 맡긴 조회의 순번과 시각, 받았는지
     market: Exchange = field(default_factory=Exchange)
     market_points: tuple[PricePoint, ...] | None = None
     market_truncated: bool = False
@@ -175,22 +171,13 @@ class _Job:
     filings: Exchange = field(default_factory=Exchange)
     filings_data: tuple[Filing, ...] = ()
     filings_truncated: bool = False
-    # 기사: 라운드(안정 확인용 재조회)와 라운드 안의 시도(재전송)를 따로 센다
-    news_seq: int = 0
-    news_sent_at: datetime | None = None
-    news_round: int = 0
-    news_attempt: int = 0
-    news_requests: int = 0
-    news_awaiting: bool = False
-    news_recheck_at: datetime | None = None
-    news_previous_ids: frozenset[str] | None = None
+    news: Exchange = field(default_factory=Exchange)
     news_articles: tuple[Article, ...] | None = None
     news_truncated: bool = False
-    news_stable: bool = False
-    # 실패 기록용: 요청마다 보낸 순번·시각, 요청별 마지막 요청 범위
+    # 실패 기록용: 조회마다 맡긴 순번·시각, 조회별 마지막 요청 범위
     request_log: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     request_ranges: dict[str, dict[str, Any]] = field(default_factory=dict)
-    # 실패 기록용: 요청별로 마지막에 받은 응답 payload 원문 그대로(기사는 가장 최근 라운드)
+    # 실패 기록용: 조회별로 받은 응답 본문 원문 그대로
     responses: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
@@ -213,14 +200,25 @@ def parse_move(message: str | bytes, now: datetime) -> _Job:
             created_at=now,
             detected_at=parse_timestamp(move["occurredAt"]) if move.get("occurredAt") else None,
             detection_type=payload.get("detectionType"),
+            today_change_percent=_optional_float(payload.get("todayChangePercent")),
         )
     except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ValueError(f"malformed market.move event: {error!r}") from error
 
 
+def _optional_float(value: Any) -> float | None:
+    """선택 칸의 숫자. 칸이 없으면 None이고, 숫자가 아니면 형식 오류로 본다."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"not a number: {value!r}")
+    return float(value)
+
+
 @dataclass
 class BriefingCore:
     requests: RequestPort
+    api: QueryPort
     ready: ReadyPort
     settings: CoreSettings = DEFAULT_SETTINGS
     job_log: JobLogPort = field(default_factory=DiscardJobLog)
@@ -249,25 +247,22 @@ class BriefingCore:
         self.job_log.start(JobStart(job.job_id, JobKind.MOVE, raw, move_target(job.symbol, format_timestamp(job.as_of)),
                                     now))
 
-        # 완료 알림이 변동 알림보다 먼저 도착했을 수 있어 보관분부터 확인한다.
+        # 저장 끝 알림이 변동 알림보다 먼저 도착했을 수 있어 보관분부터 확인한다.
         if any(c.covers(job.symbol, job.as_of, self.settings) for c in self._completions):
             self._start_fetching(job, now)
         else:
             self._tick_early(job, now)
 
-    def on_research_completed(self, message: str | bytes, now: datetime) -> bool:
-        """T+5분 재검색의 완료 알림이면 정기 수집 완료와 같이 '수집 완료'로 보고 True. 그 밖의 알림은 False로 돌려준다."""
+    def on_research_stored(self, message: str | bytes, now: datetime) -> bool:
+        """T+5분 재검색의 저장 끝 알림이면 정기 수집 완료와 같이 '수집 완료'로 보고 True. 그 밖의 알림은 False로 돌려준다."""
         try:
-            event = json.loads(message)
-            if event["eventType"] != "collection.completed":
-                raise ValueError(f"unexpected eventType: {event['eventType']}")
-            payload = event["payload"]
+            payload = stored_payload(message)
             research_job_id = payload.get("researchJobId")
             if research_job_id is None:
                 return False
             incomplete = frozenset(payload["incompleteSymbols"])
-        except (KeyError, TypeError, AttributeError, json.JSONDecodeError, UnicodeDecodeError) as error:
-            raise ValueError(f"malformed collection.completed event: {error!r}") from error
+        except (KeyError, TypeError, AttributeError) as error:
+            raise ValueError(f"malformed {NEWS_STORED} event: {error!r}") from error
 
         job = self._jobs.get(self._early_ids.get(research_job_id, ""))
         if job is None:
@@ -282,74 +277,109 @@ class BriefingCore:
                          ResearchReason.COLLECTION_INCOMPLETE.value, "CollectionIncomplete", 1, now,
                          {"researchJobId": research_job_id, "incompleteSymbolCount": len(incomplete)})
             return True
+        _warn_unprocessed(payload, job.job_id)
         log.info("early research completed for job %s; fetching evidence without the regular collection", job.job_id)
         self._start_fetching(job, now)
         return True
 
-    def on_collection_completed(self, message: str | bytes, now: datetime) -> None:
+    def on_news_stored(self, message: str | bytes, now: datetime) -> None:
+        """정기 수집의 저장 끝 알림(news.stored). 수집기가 보낸 기사가 모두 저장된 뒤라 기사는 한 번만 조회한다."""
         try:
-            event = json.loads(message)
-            if event["eventType"] != "collection.completed":
-                raise ValueError(f"unexpected eventType: {event['eventType']}")
-            payload = event["payload"]
+            payload = stored_payload(message)
             completion = Completion(
                 started_at=parse_timestamp(payload["startedAt"]),
                 job_type=payload["jobType"],
                 incomplete_symbols=frozenset(payload["incompleteSymbols"]),
+                unprocessed=len(payload["unprocessedEventIds"]),
             )
-        except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
-            raise ValueError(f"malformed collection.completed event: {error!r}") from error
+        except (KeyError, TypeError, AttributeError) as error:
+            raise ValueError(f"malformed {NEWS_STORED} event: {error!r}") from error
 
         self._completions.append(completion)
         for job in list(self._jobs.values()):
             if job.phase is _Phase.WAITING_COLLECTION:
                 if completion.covers(job.symbol, job.as_of, self.settings):
+                    _warn_unprocessed(payload, job.job_id)
                     self._start_fetching(job, now)
                 else:
                     log.info("completion skipped for job %s (not usable)", job.job_id)
 
-    def on_history_responded(self, message: str | bytes, now: datetime) -> None:
-        payload = response_payload(message, "market.history.responded")
-        job = self._fetching_job(payload)
+    def on_tick(self, now: datetime) -> None:
+        """기다림이 끝난 작업을 처리한다. 주기적으로, 또는 next_deadline 시각에 부른다."""
+        for job in list(self._jobs.values()):
+            if job.phase is not _Phase.WAITING_COLLECTION:
+                continue
+            # 메시지 처리 밖에서 도는 작업이라 그 작업의 추적 ID를 로그 줄에 직접 건다.
+            with correlation_context(job.correlation_id):
+                if now - job.created_at >= self.settings.collection_wait_limit:
+                    self._fail(job, FailureReason.COLLECTION_NOT_COVERED,
+                               "no usable news.stored within the wait limit", 0, now)
+                else:
+                    self._tick_early(job, now)
+
+    def next_deadline(self) -> datetime | None:
+        """다음에 on_tick을 불러야 하는 가장 이른 시각. 할 일이 없으면 None. 조회 결과는 시각이 아니라 콜백으로 온다."""
+        deadlines: list[datetime] = []
+        for job in self._jobs.values():
+            if job.phase is _Phase.WAITING_COLLECTION:
+                deadlines.append(job.created_at + self.settings.collection_wait_limit)
+                if job.early is _Early.PENDING:
+                    deadlines.append(job.as_of + self.settings.early_research_delay)
+        return min(deadlines) if deadlines else None
+
+    # ---- 조회 결과 (수신 루프 스레드에서 불린다) ----
+
+    def _on_history(self, result: QueryResult, now: datetime) -> None:
+        job = self._fetching_job(result)
         if job is None:
             return
-        if payload["seq"] != job.market.seq or job.market.received:
-            log.info("stale market response ignored: job=%s seq=%s latest=%s",
-                     job.job_id, payload["seq"], job.market.seq)
+        points = truncated = None
+        if result.received:
+            payload = result.payload
+            try:
+                points = tuple(PricePoint(parse_timestamp(p["asOf"]), int(p["price"])) for p in payload["points"])
+                truncated = bool(payload.get("truncated", False))
+            except (KeyError, TypeError, ValueError) as error:
+                _malformed(QueryKind.HISTORY, job.job_id, error)
+        if points is None:
+            job.market.given_up = True
+            self._fail(job, FailureReason.MARKET_NO_RESPONSE, "no market history from the market service",
+                       result.attempts, now, result.failure_kind or FAILURE_MALFORMED)
             return
-        try:
-            points = tuple(
-                PricePoint(parse_timestamp(p["asOf"]), int(p["price"])) for p in payload["points"]
-            )
-            truncated = bool(payload.get("truncated", False))
-        except (KeyError, TypeError) as error:
-            raise ValueError(f"malformed market.history.responded event: {error!r}") from error
         job.market.received = True
-        job.responses[STAGE_HISTORY] = payload
+        job.responses[STAGE_HISTORY] = result.payload
         job.market_points, job.market_truncated = points, truncated
         self._complete_if_ready(job)
 
-    def on_context_responded(self, message: str | bytes, now: datetime) -> None:
-        payload = response_payload(message, "market.context.responded")
-        early = self._jobs.get(payload["jobId"])
-        if early is not None and early.phase is _Phase.WAITING_COLLECTION and early.early is _Early.CONTEXT_SENT:
-            self._on_early_context(early, payload, now)
+    def _on_context(self, result: QueryResult, now: datetime) -> None:
+        job = self._jobs.get(result.query.payload["jobId"])
+        if job is None or job.phase is _Phase.DONE:
+            log.info("context result for unknown or finished job %s ignored", result.query.payload["jobId"])
             return
-        job = self._fetching_job(payload)
-        if job is None:
+        context = None
+        if result.received:
+            try:
+                context = self._parse_context(result.payload)
+            except ValueError as error:
+                _malformed(QueryKind.CONTEXT, job.job_id, error)
+        if job.phase is _Phase.WAITING_COLLECTION:
+            self._on_early_context(job, result, context, now)
             return
-        if payload["seq"] != job.context.seq or job.context.received:
-            log.info("stale context response ignored: job=%s seq=%s latest=%s",
-                     job.job_id, payload["seq"], job.context.seq)
+        if context is None:
+            job.context.given_up = True
+            self._fail(job, FailureReason.CONTEXT_NO_RESPONSE, "no market context from the market service",
+                       result.attempts, now, result.failure_kind or FAILURE_MALFORMED)
             return
-        context = self._parse_context(payload)
-        job.context.received = True
-        job.responses[STAGE_CONTEXT] = payload
-        job.context_data = context
+        self._accept_context(job, result.payload, context)
         # 미국 종목이 없으면 공시는 해당 없음이라 요청하지 않는다.
         if context.tickers:
             self._send_filings(job, now)
         self._complete_if_ready(job)
+
+    def _accept_context(self, job: _Job, payload: dict[str, Any], context: _Context) -> None:
+        job.context.received = True
+        job.responses[STAGE_CONTEXT] = payload
+        job.context_data = context
 
     @staticmethod
     def _parse_context(payload: dict) -> _Context:
@@ -367,127 +397,75 @@ class BriefingCore:
                 name=_name_or_none(payload.get("name")),
             )
         except (KeyError, TypeError) as error:
-            raise ValueError(f"malformed market.context.responded event: {error!r}") from error
+            raise ValueError(f"malformed {QueryKind.CONTEXT.value} response: {error!r}") from error
 
-    def on_filings_responded(self, message: str | bytes, now: datetime) -> None:
-        payload = response_payload(message, "news.filings.responded")
-        job = self._fetching_job(payload)
+    def _on_filings(self, result: QueryResult, now: datetime) -> None:
+        job = self._fetching_job(result)
         if job is None:
             return
-        if payload["seq"] != job.filings.seq or job.filings.received:
-            log.info("stale filings response ignored: job=%s seq=%s latest=%s",
-                     job.job_id, payload["seq"], job.filings.seq)
+        filings = truncated = None
+        if result.received:
+            try:
+                filings = parse_filings(result.payload["filings"])
+                truncated = bool(result.payload["truncated"])
+            except (KeyError, TypeError, ValueError) as error:
+                _malformed(QueryKind.FILINGS, job.job_id, error)
+        if filings is None:
+            job.filings.given_up = True
+            self._fail(job, FailureReason.FILINGS_NO_RESPONSE, "no filings from the news service",
+                       result.attempts, now, result.failure_kind or FAILURE_MALFORMED)
             return
-        try:
-            filings = parse_filings(payload["filings"])
-            truncated = bool(payload["truncated"])
-        except (KeyError, TypeError) as error:
-            raise ValueError(f"malformed news.filings.responded event: {error!r}") from error
         job.filings.received = True
-        job.responses[STAGE_FILINGS] = payload
+        job.responses[STAGE_FILINGS] = result.payload
         job.filings_data, job.filings_truncated = filings, truncated
         self._complete_if_ready(job)
 
-    def on_articles_responded(self, message: str | bytes, now: datetime) -> None:
-        payload = response_payload(message, "news.articles.responded")
-        job = self._fetching_job(payload)
+    def _on_articles(self, result: QueryResult, now: datetime) -> None:
+        job = self._fetching_job(result)
         if job is None:
             return
-        if payload["seq"] != job.news_seq or not job.news_awaiting:
-            log.info("stale articles response ignored: job=%s seq=%s latest=%s",
-                     job.job_id, payload["seq"], job.news_seq)
+        articles = None
+        if result.received:
+            try:
+                articles = parse_articles(result.payload["articles"])
+            except (KeyError, TypeError, ValueError) as error:
+                _malformed(QueryKind.ARTICLES, job.job_id, error)
+        if articles is None:
+            job.news.given_up = True
+            self._fail(job, FailureReason.NEWS_NO_RESPONSE, "no articles from the news service",
+                       result.attempts, now, result.failure_kind or FAILURE_MALFORMED)
             return
-        try:
-            articles = tuple(
-                Article(a["articleId"], a["title"], a["summary"], parse_timestamp(a["publishedAt"]),
-                        a["publisher"], a["url"])
-                for a in payload["articles"]
-            )
-        except (KeyError, TypeError) as error:
-            raise ValueError(f"malformed news.articles.responded event: {error!r}") from error
-
-        job.news_awaiting = False
-        job.responses[STAGE_ARTICLES] = payload
-        ids = frozenset(a.article_id for a in articles)
+        # 저장 끝 알림 뒤라 저장이 끝난 목록이다. 다시 조회해 같은지 확인하지 않는다.
+        job.news.received = True
+        job.responses[STAGE_ARTICLES] = result.payload
         job.news_articles = articles
-        job.news_truncated = bool(payload.get("truncated", False))
-        if job.news_round >= 2:
-            self._record_recheck_round(job, articles, ids, now)
-        if job.news_round >= 2 and ids == job.news_previous_ids:
-            job.news_stable = True
-            self._complete_if_ready(job)
-            return
-        if job.news_round >= self.settings.max_rounds:
-            self._fail(job, FailureReason.NEWS_UNSTABLE,
-                       f"article set kept changing for {job.news_round} rounds", job.news_requests, now)
-            return
-        job.news_previous_ids = ids
-        job.news_recheck_at = now + self.settings.recheck_interval
-
-    def on_tick(self, now: datetime) -> None:
-        """제한 시간이 지난 작업을 처리한다. 주기적으로, 또는 next_deadline 시각에 부른다."""
-        for job in list(self._jobs.values()):
-            if job.phase is _Phase.WAITING_COLLECTION:
-                if now - job.created_at >= self.settings.collection_wait_limit:
-                    self._fail(job, FailureReason.COLLECTION_NOT_COVERED,
-                               "no usable collection.completed within the wait limit", 0, now)
-                else:
-                    self._tick_early(job, now)
-            elif job.phase is _Phase.FETCHING:
-                # 같은 시각에 여럿이 끝나도 실패는 한 번만 기록된다. 앞의 판정이 작업을 끝내면 나머지는 건너뛴다.
-                for tick in (self._tick_market, self._tick_news, self._tick_context, self._tick_filings):
-                    if job.phase is not _Phase.FETCHING:
-                        break
-                    tick(job, now)
-
-    def next_deadline(self) -> datetime | None:
-        """다음에 on_tick을 불러야 하는 가장 이른 시각. 할 일이 없으면 None."""
-        deadlines: list[datetime] = []
-        for job in self._jobs.values():
-            if job.phase is _Phase.WAITING_COLLECTION:
-                deadlines.append(job.created_at + self.settings.collection_wait_limit)
-                if job.early is _Early.PENDING:
-                    deadlines.append(job.as_of + self.settings.early_research_delay)
-                elif job.early is _Early.CONTEXT_SENT:
-                    deadlines.append(job.context.sent_at + self.settings.response_timeout)
-            elif job.phase is _Phase.FETCHING:
-                for exchange in (job.market, job.context, job.filings):
-                    if exchange.awaiting():
-                        deadlines.append(exchange.sent_at + self.settings.response_timeout)
-                if job.news_awaiting and job.news_sent_at is not None:
-                    deadlines.append(job.news_sent_at + self.settings.response_timeout)
-                elif job.news_recheck_at is not None and not job.news_stable:
-                    deadlines.append(job.news_recheck_at)
-        return min(deadlines) if deadlines else None
+        job.news_truncated = bool(result.payload.get("truncated", False))
+        self._complete_if_ready(job)
 
     # ---- 내부 ----
 
-    def _fetching_job(self, payload: dict) -> _Job | None:
-        job = self._jobs.get(payload["jobId"])
+    def _fetching_job(self, result: QueryResult) -> _Job | None:
+        job_id = result.query.payload["jobId"]
+        job = self._jobs.get(job_id)
         if job is None or job.phase is not _Phase.FETCHING:
-            log.info("response for unknown or finished job %s ignored", payload["jobId"])
+            log.info("result for unknown or finished job %s ignored", job_id)
             return None
         return job
 
     def _tick_early(self, job: _Job, now: datetime) -> None:
-        """정기 수집을 기다리는 작업의 T+5분 재검색을 진행한다. 배경 자료가 안 오면 포기하고 정기 수집을 기다린다."""
+        """정기 수집을 기다리는 작업의 T+5분 재검색을 시작한다. 배경 자료가 오면 _on_early_context가 이어 간다."""
         if job.early is _Early.PENDING and now >= job.as_of + self.settings.early_research_delay:
             job.early = _Early.CONTEXT_SENT
             self._send_context(job, now)
-        elif job.early is _Early.CONTEXT_SENT and now - job.context.sent_at >= self.settings.response_timeout:
-            log.info("early research skipped for job %s: no context response", job.job_id)
-            job.early = _Early.SKIPPED
 
-    def _on_early_context(self, job: _Job, payload: dict, now: datetime) -> None:
+    def _on_early_context(self, job: _Job, result: QueryResult, context: _Context | None, now: datetime) -> None:
         """T+5분 재검색을 하려고 먼저 받은 배경 자료. ETF 이름을 알면 재검색을 요청하고, 모르면 정기 수집을 기다린다."""
-        if payload["seq"] != job.context.seq or job.context.received:
-            log.info("stale context response ignored: job=%s seq=%s latest=%s",
-                     job.job_id, payload["seq"], job.context.seq)
+        if context is None:
+            log.info("early research skipped for job %s: no context result", job.job_id)
+            job.context.given_up = True
+            job.early = _Early.SKIPPED
             return
-        context = self._parse_context(payload)
-        job.context.received = True
-        job.responses[STAGE_CONTEXT] = payload
-        job.context_data = context
+        self._accept_context(job, result.payload, context)
         queries = early_queries(context.etf, self.settings.max_research_queries, context.name)
         if not queries:
             log.info("early research skipped for job %s: ETF and stock name unknown", job.job_id)
@@ -510,118 +488,64 @@ class BriefingCore:
         job.phase = _Phase.FETCHING
         self._send_market(job, now)
         if job.context_data is None:
-            # T+5분 재검색을 하려고 먼저 보낸 요청이 아직 답을 기다리는 중이면 그 요청을 이어 쓴다. 새 순번으로 다시 보내면
-            # 곧 도착할 그 응답이 낡은 응답이 된다.
+            # T+5분 재검색을 하려고 먼저 맡긴 조회가 아직 끝나지 않았으면 그 결과를 이어 쓴다.
             if not job.context.awaiting():
                 self._send_context(job, now)
         elif job.context_data.tickers:
             # T+5분 재검색을 하려고 배경 자료를 이미 받았다. 다시 받지 않고 공시만 요청한다.
             self._send_filings(job, now)
-        job.news_round = 1
-        self._send_news(job, now, attempt=1)
+        self._send_news(job, now)
+
+    def _submit(self, job: _Job, kind: QueryKind, stage: str, exchange: Exchange, now: datetime, on_result,
+                payload: dict[str, Any]) -> None:
+        payload = {"jobId": job.job_id, "seq": next_seq(exchange, now), **payload}
+        job.request_log.setdefault(stage, []).append({"seq": payload["seq"], "sentAt": format_timestamp(now)})
+        job.request_ranges[stage] = {k: v for k, v in payload.items() if k not in ("jobId", "seq")}
+        self.api.submit(Query(kind, job.job_id, stage, job.correlation_id, payload), on_result)
 
     def _send_market(self, job: _Job, now: datetime) -> None:
-        seq = next_seq(job.market, now)
         s = self.settings
-        self.requests.send(request_event(
-            HISTORY_REQUESTED_TOPIC, "market.history.requested", job.correlation_id, now, self._sent(job, STAGE_HISTORY, now, {
-                "jobId": job.job_id,
-                "seq": seq,
-                "symbol": job.symbol,
-                "since": format_timestamp(job.as_of - s.market_lookback),
-                "until": format_timestamp(job.as_of + s.delta),
-                "maxPoints": s.max_history_points,
-                "intervalSeconds": int(s.history_interval.total_seconds()),
-            })))
+        self._submit(job, QueryKind.HISTORY, STAGE_HISTORY, job.market, now, self._on_history, {
+            "symbol": job.symbol,
+            "since": format_timestamp(job.as_of - s.market_lookback),
+            "until": format_timestamp(job.as_of + s.delta),
+            "maxPoints": s.max_history_points,
+            "intervalSeconds": int(s.history_interval.total_seconds()),
+        })
 
     def _send_context(self, job: _Job, now: datetime) -> None:
-        seq = next_seq(job.context, now)
         s = self.settings
-        self.requests.send(request_event(
-            CONTEXT_REQUESTED_TOPIC, "market.context.requested", job.correlation_id, now, self._sent(job, STAGE_CONTEXT, now, {
-                "jobId": job.job_id,
-                "seq": seq,
-                "symbol": job.symbol,
-                "asOf": format_timestamp(job.as_of),
-                "since": format_timestamp(job.as_of - s.background_window),
-                "maxResponseBytes": s.max_background_bytes,
-                "maxTickers": s.max_tickers,
-            })))
+        self._submit(job, QueryKind.CONTEXT, STAGE_CONTEXT, job.context, now, self._on_context, {
+            "symbol": job.symbol,
+            "asOf": format_timestamp(job.as_of),
+            "since": format_timestamp(job.as_of - s.background_window),
+            "maxResponseBytes": s.max_background_bytes,
+            "maxTickers": s.max_tickers,
+        })
 
     def _send_filings(self, job: _Job, now: datetime) -> None:
-        seq = next_seq(job.filings, now)
         s = self.settings
-        self.requests.send(request_event(
-            FILINGS_REQUESTED_TOPIC, "news.filings.requested", job.correlation_id, now, self._sent(job, STAGE_FILINGS, now, {
-                "jobId": job.job_id,
-                "seq": seq,
-                "symbol": job.symbol,
-                "tickers": list(job.context_data.tickers),
-                "since": format_timestamp(job.as_of - s.filings_window),
-                "until": format_timestamp(job.as_of),
-                "maxFilings": s.max_filings,
-            })))
+        self._submit(job, QueryKind.FILINGS, STAGE_FILINGS, job.filings, now, self._on_filings, {
+            "symbol": job.symbol,
+            "tickers": list(job.context_data.tickers),
+            "since": format_timestamp(job.as_of - s.filings_window),
+            "until": format_timestamp(job.as_of),
+            "maxFilings": s.max_filings,
+        })
 
-    def _send_news(self, job: _Job, now: datetime, attempt: int) -> None:
-        job.news_seq += 1
-        job.news_attempt = attempt
-        job.news_requests += 1
-        job.news_sent_at = now
-        job.news_awaiting = True
-        job.news_recheck_at = None
+    def _send_news(self, job: _Job, now: datetime) -> None:
         s = self.settings
-        self.requests.send(request_event(
-            ARTICLES_REQUESTED_TOPIC, "news.articles.requested", job.correlation_id, now, self._sent(job, STAGE_ARTICLES, now, {
-                "jobId": job.job_id,
-                "seq": job.news_seq,
-                "symbol": job.symbol,
-                "since": format_timestamp(job.as_of - s.evidence_window),
-                "until": format_timestamp(job.as_of + s.delta),
-                "maxArticles": s.max_articles,
-            })))
-
-    def _tick_market(self, job: _Job, now: datetime) -> None:
-        self._tick_exchange(job, job.market, now, self._send_market, FailureReason.MARKET_NO_RESPONSE,
-                            "market.history.responded", STAGE_HISTORY)
-
-    def _tick_context(self, job: _Job, now: datetime) -> None:
-        self._tick_exchange(job, job.context, now, self._send_context, FailureReason.CONTEXT_NO_RESPONSE,
-                            "market.context.responded", STAGE_CONTEXT)
-
-    def _tick_filings(self, job: _Job, now: datetime) -> None:
-        self._tick_exchange(job, job.filings, now, self._send_filings, FailureReason.FILINGS_NO_RESPONSE,
-                            "news.filings.responded", STAGE_FILINGS)
-
-    def _tick_exchange(self, job: _Job, exchange: Exchange, now: datetime, resend, reason: FailureReason,
-                       event_type: str, stage: str) -> None:
-        if not exchange.awaiting() or now - exchange.sent_at < self.settings.response_timeout:
-            return
-        if exchange.seq >= self.settings.max_attempts:
-            self._fail(job, reason, f"no {event_type} within the time limit", exchange.seq, now)
-        else:
-            resend(job, now)
-            self._record(job, stage, EntryType.RESENT, REASON_RESENT, "ResponseTimeout", exchange.seq, now,
-                         {"timedOutSeq": exchange.seq - 1, "resentSeq": exchange.seq})
-
-    def _tick_news(self, job: _Job, now: datetime) -> None:
-        if job.news_awaiting:
-            if now - job.news_sent_at < self.settings.response_timeout:
-                return
-            if job.news_attempt >= self.settings.max_attempts:
-                self._fail(job, FailureReason.NEWS_NO_RESPONSE,
-                           "no news.articles.responded within the time limit", job.news_attempt, now)
-            else:
-                self._send_news(job, now, job.news_attempt + 1)
-                self._record(job, STAGE_ARTICLES, EntryType.RESENT, REASON_RESENT, "ResponseTimeout", job.news_attempt, now,
-                             {"round": job.news_round, "timedOutSeq": job.news_seq - 1, "resentSeq": job.news_seq})
-        elif job.news_recheck_at is not None and not job.news_stable and now >= job.news_recheck_at:
-            job.news_round += 1
-            self._send_news(job, now, attempt=1)
+        self._submit(job, QueryKind.ARTICLES, STAGE_ARTICLES, job.news, now, self._on_articles, {
+            "symbol": job.symbol,
+            "since": format_timestamp(job.as_of - s.evidence_window),
+            "until": format_timestamp(job.as_of + s.delta),
+            "maxArticles": s.max_articles,
+        })
 
     def _complete_if_ready(self, job: _Job) -> None:
         # 필요한 응답을 모두 받아야 완성한다. 일부만으로 진행하지 않는다.
         context = job.context_data
-        if not job.market.received or not job.news_stable or context is None:
+        if not job.market.received or not job.news.received or context is None:
             return
         if context.tickers and not job.filings.received:
             return
@@ -673,19 +597,23 @@ class BriefingCore:
             tickers_truncated=context.tickers_truncated, close_rates=tuple(close_rates),
             filings=tuple(filings), filings_truncated=job.filings_truncated, background=tuple(background),
             etf=context.etf, name=context.name, detected_at=job.detected_at, detection_type=job.detection_type,
-            news_seq=job.news_seq)
+            today_change_percent=job.today_change_percent)
         _log_collection(report_input, _Excluded(
             articles=len(job.news_articles or ()) - len(articles),
             filings=len(job.filings_data) - len(filings),
             close_rates=len(context.close_rates) - len(close_rates),
             background=background_excluded))
         job.phase = _Phase.DONE
-        self.ready.on_ready(report_input)
+        # 리포트를 쓰는 LLM 호출을 이 작업의 job_step으로 남긴다.
+        with job_scope(job.job_id):
+            self.ready.on_ready(report_input)
 
-    def _fail(self, job: _Job, reason: FailureReason, detail: str, attempts: int, now: datetime) -> None:
+    def _fail(self, job: _Job, reason: FailureReason, detail: str, attempts: int, now: datetime,
+              error_type: str | None = None) -> None:
         job.phase = _Phase.DONE
         log.warning("job %s failed: %s", job.job_id, reason.value)
-        stage, error_type = _FINAL_FAILURES[reason]
+        stage, default_error = _FINAL_FAILURES[reason]
+        error_type = error_type or default_error
         extra: dict[str, Any] = {"detail": detail}
         if reason is FailureReason.COLLECTION_NOT_COVERED:
             extra["waitStartedAt"] = format_timestamp(job.created_at)
@@ -694,51 +622,30 @@ class BriefingCore:
                 {"jobType": c.job_type, "startedAt": format_timestamp(c.started_at),
                  "incompleteSymbolCount": len(c.incomplete_symbols)}
                 for c in self._completions]
-        if reason is FailureReason.NEWS_UNSTABLE:
-            extra["rounds"] = job.news_round
-            extra["lastArticles"] = _article_list(job.news_articles or ())
         self._record(job, stage, EntryType.STEP_FAILED, reason.value, error_type, attempts, now, extra)
         # 작업 한 줄에는 사유만 적는다. 관련 데이터는 위의 실패 줄에 있다.
         record_result(self.job_log, JobResult(job.job_id, RunStatus.FAILED, now, failure_reason=reason.value))
 
     # ---- 작업 기록 ----
 
-    def _sent(self, job: _Job, stage: str, now: datetime, payload: dict[str, Any]) -> dict[str, Any]:
-        """보낸 요청을 실패 기록용으로 남기고 payload를 그대로 돌려준다."""
-        job.request_log.setdefault(stage, []).append({"seq": payload["seq"], "sentAt": format_timestamp(now)})
-        job.request_ranges[stage] = {k: v for k, v in payload.items() if k not in ("jobId", "seq")}
-        return payload
-
     def _record(self, job: _Job, stage: str, entry_type: EntryType, reason: str, error_type: str | None, attempts: int,
                 now: datetime, extra: dict[str, Any]) -> None:
         received, not_received = _response_states(job)
-        request_stage = STAGE_ARTICLES if stage == STAGE_ARTICLES_RECHECK else stage
         data: dict[str, Any] = {
-            "requestRange": job.request_ranges.get(request_stage, {}),
+            "requestRange": job.request_ranges.get(stage, {}),
             "requestRanges": dict(job.request_ranges),
             "requests": {k: list(v) for k, v in job.request_log.items()},
             "received": received,
             # 받은 응답의 내용 전부. 응답 payload를 가공하지 않고 담는다(배경 자료 원문, 지수별 계산값 포함).
             "receivedResponses": {stage: job.responses[stage] for stage in received},
             "notReceived": not_received,
-            # 수집 완료를 기다리다 끝났으면 요청은 하나도 나가지 않았고 빠진 것은 수집 완료 알림이다.
-            "missingItems": ["collection.completed"] if stage == STAGE_COLLECTION else not_received,
+            # 저장 끝을 기다리다 끝났으면 조회는 하나도 나가지 않았고 빠진 것은 저장 끝 알림이다.
+            "missingItems": [NEWS_STORED] if stage == STAGE_COLLECTION else not_received,
         }
         data.update(extra)
         self.job_log.record(JobLogEntry(
             job_id=job.job_id, entry_type=entry_type, stage=stage, reason=reason, occurred_at=now,
             error_type=error_type, attempts=attempts, data=data))
-
-    def _record_recheck_round(self, job: _Job, articles: tuple[Article, ...], ids: frozenset[str],
-                              now: datetime) -> None:
-        changed = ids != job.news_previous_ids
-        self._record(job, STAGE_ARTICLES_RECHECK, EntryType.CHECK_ROUND, REASON_RECHECK_ROUND,
-                     "ArticleSetChanged" if changed else "ArticleSetUnchanged", job.news_round, now, {
-                         "round": job.news_round,
-                         "receivedArticles": _article_list(articles),
-                         "previousArticleIds": sorted(job.news_previous_ids or ()),
-                         "stable": not changed,
-                     })
 
 
 def early_research_id(job_id: str) -> str:
@@ -765,13 +672,20 @@ _FINAL_FAILURES: dict[FailureReason, tuple[str, str]] = {
     FailureReason.CONTEXT_NO_RESPONSE: (STAGE_CONTEXT, "ResponseTimeout"),
     FailureReason.FILINGS_NO_RESPONSE: (STAGE_FILINGS, "ResponseTimeout"),
     FailureReason.NEWS_NO_RESPONSE: (STAGE_ARTICLES, "ResponseTimeout"),
-    FailureReason.NEWS_UNSTABLE: (STAGE_ARTICLES_RECHECK, "ArticleSetUnstable"),
 }
 
 
-def _article_list(articles) -> list[dict[str, str]]:
-    return [{"articleId": a.article_id, "title": a.title, "summary": a.summary, "publisher": a.publisher,
-             "publishedAt": format_timestamp(a.published_at), "url": a.url} for a in articles]
+def _warn_unprocessed(payload: dict[str, Any], job_id: str) -> None:
+    """저장 끝이 대기 한도에 이르러 저장되지 않은 기사가 있다. 그 기사는 근거에 없을 뿐이므로 진행하고 건수만 남긴다."""
+    unprocessed = len(payload.get("unprocessedEventIds") or ())
+    if unprocessed:
+        log.warning("news.stored for job %s left %d article(s) unprocessed; fetching what was stored",
+                    job_id, unprocessed)
+
+
+def _malformed(kind: QueryKind, job_id: str, error: Exception) -> None:
+    # 응답 쪽 결함이라 받지 못한 것으로 본다. 원문은 로그에 쓰지 않는다.
+    log.error("malformed %s response for job %s: %s", kind.value, job_id, type(error).__name__)
 
 
 def _response_states(job: _Job) -> tuple[list[str], list[str]]:
@@ -782,7 +696,7 @@ def _response_states(job: _Job) -> tuple[list[str], list[str]]:
             (STAGE_HISTORY, job.market.sent_at is not None, job.market.received),
             (STAGE_CONTEXT, job.context.sent_at is not None, job.context.received),
             (STAGE_FILINGS, job.filings.sent_at is not None, job.filings.received),
-            (STAGE_ARTICLES, job.news_sent_at is not None, job.news_articles is not None)):
+            (STAGE_ARTICLES, job.news.sent_at is not None, job.news.received)):
         if sent:
             (received if got else not_received).append(stage)
     return received, not_received

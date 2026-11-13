@@ -4,7 +4,7 @@
 한 줄인 job_log(job_run을 가리킴)다. 같은 작업의 줄은 작업 id로 묶는다. 키·수신 주소·보유 수량·금액은 담지 않는다.
 저장은 JobLogPort 구현(job_log_store)이 맡는다.
 
-작업 종류·상태·작성 방식·기록 종류의 값은 아래 enum이 원본이다. DB의 CHECK 제약은 Flyway V1 파일에 같은 값으로 적혀 있고, 어긋나면 test_job_log_schema.py가 실패한다.
+작업 종류·상태·작성 방식·기록 종류의 값은 아래 enum이 원본이다. DB의 CHECK 제약은 Flyway 번호 파일에 같은 값으로 적혀 있고, 어긋나면 test_job_log_schema.py가 실패한다.
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from enum import Enum
 from typing import Any, Mapping, Protocol
 
 from briefing.events import parse_timestamp
+from briefing.job_step import JobStep
 
 log = logging.getLogger("briefing.job_log")
 
@@ -50,6 +51,7 @@ class EntryType(str, Enum):
     RESEARCH_REQUESTED = "research-requested"  # 문장 하나의 재검색 요청을 보냄
     ARTICLES_RECEIVED = "articles-received"    # 재검색 기사를 받음(받은·쓴·버린 기사와 이유)
     SENTENCE_REWRITTEN = "sentence-rewritten"  # 문장 하나를 다시 씀(before·after)
+    # 아래 둘은 Kafka 요청·응답 때(2026-11-13까지)의 기록에만 있다. 지금은 조회 시도마다 job_step에 남는다.
     CHECK_ROUND = "check-round"                # 기사 안정 판정을 위한 확인 라운드
     RESENT = "resent"                          # 무응답이라 같은 요청을 다시 보냄
     MISSING_ITEMS = "missing-items"            # 판은 나갔지만 빠진 항목이 있음
@@ -57,23 +59,22 @@ class EntryType(str, Enum):
     MOVES_GROUPED = "moves-grouped"            # 같은 종목의 변동 여럿을 모아 작업 하나로 만듦(모인 변동 전부)
     ETF_OUTLOOK = "etf-outlook"                # 아침 판이 쓴 ETF별 방향 예상(data.outlooks). 마감 후 판이 다시 읽는다
     MEMBER_BRIEFING = "member-briefing"        # 이 작업의 판을 멤버 한 명 몫으로 발행함(data.memberId, 결과 이벤트 ID)
+    FINAL_CHECK = "final-check"                # 발행 직전 마지막 검사(코드 검사, LLM 검토, 최종으로 고른 본문과 이유)
+    SENTENCE_FIXED = "sentence-fixed"          # 마지막 검사의 검토로 문장 하나를 고침(before·after)
 
 
-# 급변동 단계: 근거 조회의 어느 요청인지, 또는 LLM 작성
+# 급변동 단계: 근거 조회의 어느 조회인지, 또는 LLM 작성. 조회 단계 이름은 job_step의 단계에도 쓴다.
 STAGE_COLLECTION = "collection-wait"
 STAGE_HISTORY = "market.history"
 STAGE_CONTEXT = "market.context"
 STAGE_FILINGS = "news.filings"
 STAGE_ARTICLES = "news.articles"
-STAGE_ARTICLES_RECHECK = "news.articles.recheck"
 STAGE_LLM = "llm-report"
 STAGE_PUBLISH = "publish"
 STAGE_MOVE_GROUP = "move-group"
 STAGE_RESTART = "restart"
 
 # 급변동 사유. 끝내 실패한 경우는 ports.FailureReason 값을 그대로 쓴다.
-REASON_RESENT = "resent-after-timeout"
-REASON_RECHECK_ROUND = "article-recheck-round"
 REASON_LLM_REJECTED = "llm-output-rejected"
 REASON_LLM_CALL_FAILED = "llm-call-failed"
 REASON_LLM_ACCEPTED = "llm-output-accepted"
@@ -95,7 +96,7 @@ class JobStart:
 
     job_id: str
     job_kind: JobKind
-    # 작업을 시작시킨 이벤트(market.move 또는 schedule.tick)의 원문 JSON
+    # 작업을 시작시킨 이벤트(market.move 또는 판 시작 알림 daily.collection.completed)의 원문 JSON. 한도 시각으로 시작한 판은 그 사실을 담은 JSON
     input: str
     # 대상: 급변동은 종목과 변동 시각, 데일리 판은 다루는 범위
     target: Mapping[str, str]
@@ -191,6 +192,18 @@ class JobLogPort(Protocol):
     def moves_between(self, since: datetime, until: datetime) -> list[MoveRun] | None:
         """시작 시각이 범위(양끝 포함) 안인 급변동 작업을 시작이 이른 것부터 돌려준다. 읽지 못하면 None."""
 
+    def edition_started(self, kind: JobKind, day: date) -> bool | None:
+        """그날(한국 시간) 시작한 이 종류의 작업 줄이 있는가(결과와 상관없이). 데일리 판을 하루 한 번만 만드는 데 쓴다. 읽지 못하면 None."""
+
+    def mark_market_closed(self, kind: JobKind, day: date, event_id: str, at: datetime) -> bool:
+        """그날(한국 시간) 이 판을 휴장이라 만들지 않는다고 남긴다. 같은 날 같은 판은 한 줄만 남는다. 끝내 저장하지 못했으면 False."""
+
+    def market_closed(self, kind: JobKind, day: date) -> bool | None:
+        """그날(한국 시간) 이 판에 휴장 기록이 있는가. 읽지 못하면 None."""
+
+    def record_step(self, step: JobStep) -> bool:
+        """호출 한 번(job_step)을 남긴다. 조회 작업 스레드에서도 불린다. 끝내 저장하지 못했으면 False."""
+
 
 class DiscardJobLog:
     """받기만 하고 버린다. 저장소가 필요 없는 곳의 기본 구현이다."""
@@ -215,6 +228,18 @@ class DiscardJobLog:
 
     def moves_between(self, since: datetime, until: datetime) -> list[MoveRun] | None:
         return []
+
+    def edition_started(self, kind: JobKind, day: date) -> bool | None:
+        return False
+
+    def mark_market_closed(self, kind: JobKind, day: date, event_id: str, at: datetime) -> bool:
+        return True
+
+    def record_step(self, step: JobStep) -> bool:
+        return True
+
+    def market_closed(self, kind: JobKind, day: date) -> bool | None:
+        return False
 
 
 def record_result(job_log: JobLogPort, result: JobResult) -> bool:

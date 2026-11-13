@@ -5,9 +5,13 @@ from datetime import datetime, timedelta
 import pytest
 
 from briefing.compose import KST
-from briefing.events import (EDITION_MORNING, EDITION_POST_CLOSE, JOB_TYPE_BY_EDITION, RESEARCH_JOB_KINDS,
+from briefing.daily_start import SOURCE_LABELS, STATUS_COLLECTED, STATUS_MARKET_CLOSED
+from briefing.events import (EDITION_MORNING, EDITION_POST_CLOSE, EDITIONS, RESEARCH_JOB_KINDS,
                              daily_briefing_event, research_request_event)
+from briefing.jobs import parse_move
 from contracts import CONTRACTS_DIR, sample, validate
+
+NOW = datetime(2026, 10, 20, 16, 1, 0, tzinfo=KST)
 
 
 def test_committed_move_sample_matches_its_schema():
@@ -58,6 +62,26 @@ def test_move_sample_carries_detection_fields_and_older_form_still_valid():
     assert validate("market.move.v1.schema.json", older) == []
 
 
+def test_move_sample_carries_today_change_and_moves_without_it_are_still_read():
+    current = sample("market.move.sample.json")
+    assert isinstance(current["payload"]["todayChangePercent"], float)
+    assert parse_move(json.dumps(current), NOW).today_change_percent == current["payload"]["todayChangePercent"]
+
+    older = sample("market.move.sample.json")
+    del older["payload"]["todayChangePercent"]
+    assert validate("market.move.v1.schema.json", older) == []
+    assert parse_move(json.dumps(older), NOW).today_change_percent is None
+
+
+def test_move_with_a_non_numeric_today_change_is_rejected():
+    broken = sample("market.move.sample.json")
+    broken["payload"]["todayChangePercent"] = "-2.10"
+
+    assert validate("market.move.v1.schema.json", broken) != []
+    with pytest.raises(ValueError):
+        parse_move(json.dumps(broken), NOW)
+
+
 def test_move_with_unknown_detection_type_is_rejected():
     broken = sample("market.move.sample.json")
     broken["payload"]["detectionType"] = "other"
@@ -105,7 +129,9 @@ def test_evidence_samples_match_their_schemas(schema_file, sample_file):
 
 
 # 계약에서 선택 칸인 payload 필드. 없어도 유효해야 하므로 "빠지면 거부" 검사에서 뺀다.
-OPTIONAL_PAYLOAD_FIELDS = {"market.context.responded.sample.json": {"etf", "name"}}
+OPTIONAL_PAYLOAD_FIELDS = {"market.context.responded.sample.json": {"etf", "name"},
+                           # 기사 이벤트 id 목록은 뒤에 더한 칸이라 이전 수집기가 낸 완료에는 없다.
+                           "collection.completed.sample.json": {"articleEventIds"}}
 
 
 @pytest.mark.parametrize("schema_file, sample_file", EVIDENCE_CONTRACTS)
@@ -501,7 +527,7 @@ def test_daily_briefing_carries_no_personal_fields():
 def test_daily_briefing_event_built_by_the_producer_matches_the_schema(edition, generated_by, missing):
     at = datetime(2026, 10, 20, 17, 0, tzinfo=KST)
     event = daily_briefing_event(
-        tick_event_id="0b8c2d3e-4f50-4a6b-9c7d-1e2f3a4b5c6d", correlation_id="tick-correlation",
+        job_id="0b8c2d3e-4f50-4a6b-9c7d-1e2f3a4b5c6d", correlation_id="tick-correlation",
         scheduled_for=at, now=at + timedelta(seconds=40), edition=edition,
         range_start=at - timedelta(days=1), range_end=at, text="본문", missing_items=missing,
         generated_by=generated_by, member_id=7)
@@ -518,7 +544,7 @@ def test_daily_briefing_event_carries_html_and_images_only_when_given():
     at = datetime(2026, 10, 20, 17, 0, tzinfo=KST)
 
     def build(**extra):
-        return daily_briefing_event(tick_event_id="t", correlation_id="c", scheduled_for=at, now=at,
+        return daily_briefing_event(job_id="t", correlation_id="c", scheduled_for=at, now=at,
                                     edition=EDITION_POST_CLOSE, range_start=at, range_end=at, text="본문",
                                     missing_items=[], generated_by="llm", member_id=1, **extra)
 
@@ -537,7 +563,7 @@ def test_daily_briefing_event_id_is_the_same_for_the_same_tick_and_edition():
     at = datetime(2026, 10, 20, 8, 45, tzinfo=KST)
 
     def build(tick_id, edition, now, member_id=1):
-        return daily_briefing_event(tick_event_id=tick_id, correlation_id="c", scheduled_for=at, now=now,
+        return daily_briefing_event(job_id=tick_id, correlation_id="c", scheduled_for=at, now=now,
                                     edition=edition, range_start=at - timedelta(days=1), range_end=at,
                                     text="본문", missing_items=[], generated_by="llm",
                                     member_id=member_id).value["eventId"]
@@ -554,17 +580,41 @@ def test_daily_briefing_event_rejects_an_unknown_edition():
     at = datetime(2026, 10, 20, 8, 45, tzinfo=KST)
 
     with pytest.raises(ValueError):
-        daily_briefing_event(tick_event_id="t", correlation_id="c", scheduled_for=at, now=at, edition="noon",
+        daily_briefing_event(job_id="t", correlation_id="c", scheduled_for=at, now=at, edition="noon",
                              range_start=at, range_end=at, text="본문", missing_items=[], generated_by="llm", member_id=1)
 
 
-def test_daily_briefing_job_types_are_the_ones_listed_in_the_tick_schema():
-    schema = json.loads((CONTRACTS_DIR / "schedule.tick.v1.schema.json").read_text(encoding="utf-8"))
-    description = schema["properties"]["payload"]["properties"]["jobType"]["description"]
+DAILY_START_SCHEMA = "daily.collection.completed.v1.schema.json"
 
-    assert set(JOB_TYPE_BY_EDITION) == {"morning", "post-close"}
-    for job_type in JOB_TYPE_BY_EDITION.values():
-        assert job_type in description
+
+def test_daily_start_notice_sample_matches_its_schema_and_tolerates_unknown_fields():
+    notice = sample("daily.collection.completed.sample.json")
+    assert validate(DAILY_START_SCHEMA, notice) == []
+    notice["newTopLevelHint"] = "x"
+    notice["payload"]["venue"] = "future"
+    assert validate(DAILY_START_SCHEMA, notice) == []
+    for field in sample("daily.collection.completed.sample.json")["payload"]:
+        broken = sample("daily.collection.completed.sample.json")
+        del broken["payload"][field]
+        assert validate(DAILY_START_SCHEMA, broken) != [], field
+
+
+def test_daily_start_notice_editions_statuses_and_sources_are_the_ones_the_briefing_knows():
+    schema = json.loads((CONTRACTS_DIR / DAILY_START_SCHEMA).read_text(encoding="utf-8"))
+    payload = schema["properties"]["payload"]["properties"]
+
+    assert set(payload["edition"]["enum"]) == set(EDITIONS) == {"morning", "post-close"}
+    assert set(payload["status"]["enum"]) == {STATUS_COLLECTED, STATUS_MARKET_CLOSED}
+    # 판에 한글 이름으로 쓰는 자료 종류는 계약 설명에 적힌 것과 같다.
+    for source in SOURCE_LABELS:
+        assert source in payload["missingSources"]["description"]
+
+
+def test_daily_start_notice_rejects_ticker_like_missing_sources():
+    broken = sample("daily.collection.completed.sample.json")
+    broken["payload"]["missingSources"] = ["TESTA"]
+
+    assert validate(DAILY_START_SCHEMA, broken) != []
 
 
 DAILY_DATA_CONTRACTS = [
@@ -574,7 +624,7 @@ DAILY_DATA_CONTRACTS = [
 
 
 # 요청 샘플에 있어도 없는 요청이 유효해야 하는 선택 칸.
-OPTIONAL_DAILY_REQUEST_FIELDS = {"includeOperations"}
+OPTIONAL_DAILY_REQUEST_FIELDS = {"includeOperations", "includeIntradayFallback"}
 
 
 @pytest.mark.parametrize("schema_file, sample_file", DAILY_DATA_CONTRACTS)
@@ -805,7 +855,30 @@ def test_daily_responded_v2_sample_matches_its_schema_and_has_a_missing_etf():
     assert validate(DAILY_V2, event) == []
     assert event["schemaVersion"] == 2
     empty = [e for e in event["payload"]["etfs"] if e["missingReason"] is not None]
-    assert empty and all(e["rate"] is None and e["fetchedAt"] is None for e in empty)
+    plain = [e for e in empty if "intradayFallback" not in e]
+    assert plain and all(e["rate"] is None and e["fetchedAt"] is None for e in plain)
+    # 일봉이 없어도 장중 시세 대체값이 있으면 등락률만 차고 일봉 값(일자·종가·받은 시각)은 비어 있다.
+    fallback = [e for e in empty if "intradayFallback" in e]
+    assert fallback and all(e["rate"] is not None and e["fetchedAt"] is None and e["date"] is None for e in fallback)
+
+
+def test_daily_responded_v2_intraday_fallback_needs_its_rate_and_no_daily_cells():
+    event = daily_v2()
+    assert validate(DAILY_V2, event) == []
+
+    def broken(change):
+        bad = daily_v2()
+        change(next(e for e in bad["payload"]["etfs"] if "intradayFallback" in e))
+        return bad
+
+    assert validate(DAILY_V2, broken(lambda e: e.update(rate=None))) != []
+    assert validate(DAILY_V2, broken(lambda e: e.update(date="20261020"))) != []
+    assert validate(DAILY_V2, broken(lambda e: e["intradayFallback"].update(receivedAt="15:29"))) != []
+    assert validate(DAILY_V2, broken(lambda e: e["intradayFallback"].pop("price"))) != []
+    # 일봉이 있는 ETF에는 대체값 칸이 붙지 않는다.
+    on_daily = daily_v2()
+    on_daily["payload"]["etfs"][0]["intradayFallback"] = {"price": "9850", "receivedAt": "2026-10-20T15:29:58+09:00"}
+    assert validate(DAILY_V2, on_daily) != []
 
 
 def test_daily_responded_v2_member_changes_match_the_schema_and_a_broken_one_is_rejected():
@@ -860,6 +933,16 @@ def test_daily_request_operations_flag_is_optional_and_must_be_boolean():
     assert validate("market.daily.requested.v1.schema.json", request) == []
 
     request["payload"]["includeOperations"] = "yes"
+    assert validate("market.daily.requested.v1.schema.json", request) != []
+
+
+def test_daily_request_intraday_fallback_flag_is_optional_and_must_be_boolean():
+    request = sample("market.daily.requested.sample.json")
+    assert request["payload"]["includeIntradayFallback"] is True
+    del request["payload"]["includeIntradayFallback"]
+    assert validate("market.daily.requested.v1.schema.json", request) == []
+
+    request["payload"]["includeIntradayFallback"] = "yes"
     assert validate("market.daily.requested.v1.schema.json", request) != []
 
 
