@@ -56,6 +56,13 @@ class CoreSettings:
     # 정기 뉴스 수집을 기다리지 않고, 변동 시각 T 뒤 이 시간이 되면 ETF 이름과 비중 상위 구성 종목 이름으로 먼저 재검색한다.
     # 그 재검색 완료도 정기 수집 완료와 같이 '수집 완료'로 본다. 검색어 수는 max_research_queries를 쓴다.
     early_research_delay: timedelta = timedelta(minutes=5)
+    # 같은 사건 기사 묶기(급변동·데일리 LLM 입력 공통): 두 기사 제목의 낱말 겹침 비율(공통 낱말 수 / 두 제목 낱말 합집합 수)이
+    # 이 이상이고, 공통 낱말이 이 수 이상이며, 발행 시각 차이가 이 이내이면 같은 사건으로 본다. 묶음 안의 모든 기사 쌍이 맞아야 한다.
+    # 낱말은 제목 앞의 [속보] 같은 괄호 머리말을 떼고 글자·숫자로 자른 것 중 이 길이 이상만 센다.
+    article_group_min_overlap: float = 0.3
+    article_group_min_shared_words: int = 2
+    article_group_max_gap: timedelta = timedelta(hours=6)
+    article_group_min_word_length: int = 2
 
 
 @dataclass(frozen=True)

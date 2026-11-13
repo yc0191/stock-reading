@@ -452,7 +452,10 @@ def build_runner(env: Mapping[str, str]) -> BriefingRunner:
     # 아침 판 합침은 수집기의 아침 판 tick을 켜는 값과 같은 환경변수로 켠다. tick이 안 오면 합칠 판이 없다.
     daily_settings = replace(DEFAULT_DAILY_SETTINGS, morning_merge_enabled=env.get(
         "COLLECTOR_DAILY_BRIEFING_ENABLED", "").strip().lower() == "true")
-    return BriefingRunner(bootstrap, build_report_writer(env), store, daily_writer=build_daily_writer(env),
+    # 같은 사건 기사 묶기 기준값은 급변동·데일리 작성기와 서비스가 같은 CoreSettings를 쓴다.
+    settings = DEFAULT_SETTINGS
+    return BriefingRunner(bootstrap, build_report_writer(env, settings=settings), store, settings=settings,
+                          daily_writer=build_daily_writer(env, core=settings),
                           daily_settings=daily_settings,
                           query_writer=build_query_writer(env, AnthropicClient),
                           status_store=PostgresStatusStore(connect), member_store=PostgresMemberStore(connect))

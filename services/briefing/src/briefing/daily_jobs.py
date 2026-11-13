@@ -686,7 +686,7 @@ class DailyCore:
         self._detail(job, STAGE_LLM, EntryType.REPORT_WRITTEN, REASON_LLM_ACCEPTED, None, a.attempt, now,
                      sentence_no=sentence_no, round=round, missingItems=missing,
                      llm={"input": a.llm_input, "rawOutput": a.response, "rejectReason": None,
-                          "usage": usage_record(a.usage)})
+                          "usage": usage_record(a.usage), "articleGroups": a.article_groups})
 
     # ---- 문장 단위 재검색(어댑터가 부른다) ----
 
@@ -919,7 +919,7 @@ class DailySentences:
         return draft.draft.insufficient_evidence
 
     def query_context(self, draft: DailyDraft, sentence: WeakSentence | None) -> dict[str, Any]:
-        llm = build_llm_input(draft.input, draft.sections, self.core.settings)
+        llm = build_llm_input(draft.input, draft.sections, self.core.settings, group=False)
         background = [e.llm for s in draft.sections for e in s.entries if e.llm.get("category") == BACKGROUND_LABEL]
         context: dict[str, Any] = {
             "edition": llm["edition"], "rangeStart": llm["rangeStart"], "asOf": llm["asOf"],

@@ -313,7 +313,7 @@ class MoveSentences:
 
     def query_context(self, draft: MoveDraft, sentence: WeakSentence | None) -> Mapping[str, Any]:
         i = draft.input
-        llm = build_llm_input(i, self.settings)
+        llm = build_llm_input(i, self.settings, group=False)
         context: dict[str, Any] = {
             "symbol": llm["symbol"], "direction": llm["direction"], "changePercent": llm["changePercent"],
             "moveAt": llm["moveAt"],
