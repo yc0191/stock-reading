@@ -481,6 +481,22 @@ SELECT m.id, e.id, 'HELD' FROM personal.member m, market.etf e WHERE m.name = 'T
 - **배포 뒤 확인:** 이 변경을 배포한 뒤 첫 평일 08:00 구성 종목 조회에서 수집기 로그에 대상 읽기 실패 경고(`member targets unreadable`, 권한 부족)가 없는지 확인합니다. 수집기의 읽기 권한(`etf_stock_history`, `index_rebalance_schedule` 포함)은 배포 때마다 도는 DB 준비 단계(`infra/deploy/migrate/migrate.sh`가 `infra/db/personal/init.sql` 실행)가 반영합니다.
 - **자동 수집을 허용한 곳만:** 이용약관이나 robots.txt가 자동 수집을 막는 출처는 쓰지 않고, 그런 ETF는 수동 입력으로 둡니다.
 
+## 내부 조회 API
+
+시세처리기와 뉴스처리기는 브리핑이 부를 조회 API를 웹 서버로 엽니다. 지금은 Kafka 요청·응답 5쌍과 함께 있으며, 같은 요청에 Kafka 응답의 `payload`와 같은 내용을 돌려줍니다(같은 계산을 씁니다). 요청 본문은 각 `*.requested` 이벤트의 `payload`와 같은 JSON이고(`contracts/events/`), 응답 본문은 각 `*.responded` 이벤트의 `payload`입니다. 추적 ID는 요청 헤더 `X-Correlation-Id`로 받아 그 요청을 처리하는 동안의 로그 줄에 붙입니다(아래 "추적 ID").
+
+| 서비스 | 기본 포트 | 경로 (POST) | 같은 Kafka 요청·응답 |
+|---|---|---|---|
+| 시세처리기 | 8091 | `/internal/market/context` | `market.context.requested`·`.responded` |
+| | | `/internal/market/daily` | `market.daily.requested`·`.responded` (응답 `schemaVersion` 2의 `payload`) |
+| | | `/internal/market/history` | `market.history.requested`·`.responded` |
+| 뉴스처리기 | 8092 | `/internal/news/articles` | `news.articles.requested`·`.responded` |
+| | | `/internal/news/filings` | `news.filings.requested`·`.responded` |
+
+- 잘못된 요청(필수 칸 누락, 상한·순번 0 이하, 시작이 끝보다 늦은 기간, 읽을 수 없는 시각·재검색 작업 id, 티커 없는 공시 요청)은 400입니다. Kafka에서는 같은 경우 응답하지 않습니다. 조회 중 DB 오류 같은 서버 쪽 실패는 500이며 본문에 오류 내용을 담지 않습니다.
+- 서버 밖으로 열지 않습니다. 로컬에서는 `server.address` 기본값 `127.0.0.1`로 이 기계 안에서만 받고, 포트는 로컬 Compose가 쓰는 8080·8081과 겹치지 않게 두었습니다. 운영 Compose(`infra/deploy/compose/services.yml`)에서는 두 서비스에 `SERVER_ADDRESS=0.0.0.0`을 주어 같은 Compose 네트워크에서만 받고 `ports`를 두지 않으며, 브리핑 환경에 주소(`MARKET_API_URL=http://market:8091`, `NEWS_API_URL=http://news:8092`)를 둡니다. 브리핑은 아직 Kafka 요청·응답을 쓰며 이 주소를 읽지 않습니다.
+- 요청 스레드는 최대 8개입니다(`server.tomcat.threads.max`). 부르는 쪽이 브리핑 하나라 기본 200개의 스레드 메모리를 아낍니다.
+
 ## 추적 ID
 
 메일 하나를 만든 모든 서비스의 로그를 이벤트 본문의 `correlationId` 하나로 찾습니다. 아래 이름이 원본이며, 5개 서비스가 같은 이름을 상수로 둡니다(Java는 각 서비스의 `trace.CorrelationId`, 브리핑은 `briefing/trace.py`). 값은 언제나 이벤트 본문의 `correlationId`와 같습니다. 별도 추적 도구는 쓰지 않습니다.
@@ -605,7 +621,7 @@ MOVE_REPLAY_INPUT=<저장소 밖>/snapshots.tsv MOVE_REPLAY_EXCLUDE=<저장소 �
 - **휴장일 발송 관리:** 휴장일에는 수집기가 판 시각에 휴장 알림을 내고 브리핑은 그날 판과 한도 시각을 꺼 판이 나가지 않습니다. 판정하지 못한 날은 영업일로 보고 평소대로 나갑니다. 휴장일에 수집기가 꺼져 있으면 브리핑이 한도 시각에 판을 만들 수 있습니다.
 - **LLM 2단계:** 1단계 LLM이 모은 자료의 중복을 없애고 거른 뒤, 2단계 LLM이 분석해 리포트를 씁니다.
 
-- **외부 접속을 받는 기능:** 브리핑의 Kafka 수신·발행은 "시작"과 "멈추기"로 부를 수 있게 나뉘어 있어 다른 프로그램(예: 어드민 화면)이 같은 실행부를 부를 수 있습니다. 어드민 화면이나 웹 서버는 아직 없습니다. 이런 화면처럼 외부 접속을 받는 기능을 만들 때는 [ADR-007](adr/007-outbound-only.md)(외부 접속을 받지 않는다)을 먼저 갱신하고, 접속 경로와 인증 방식을 정해야 합니다.
+- **외부 접속을 받는 기능:** 브리핑의 Kafka 수신·발행은 "시작"과 "멈추기"로 부를 수 있게 나뉘어 있어 다른 프로그램(예: 어드민 화면)이 같은 실행부를 부를 수 있습니다. 외부 접속을 받는 어드민 화면은 아직 없습니다(시세처리기·뉴스처리기의 내부 조회 API는 서버 안 컨테이너 네트워크에서만 받습니다, 아래 "내부 조회 API"). 이런 화면처럼 외부 접속을 받는 기능을 만들 때는 [ADR-007](adr/007-outbound-only.md)(외부 접속을 받지 않는다)을 먼저 갱신하고, 접속 경로와 인증 방식을 정해야 합니다.
 
 ## 보안
 

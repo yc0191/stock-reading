@@ -35,7 +35,13 @@ class FilingsRequestListener {
     @KafkaListener(topics = Topics.NEWS_FILINGS_REQUESTED, groupId = "news")
     void onRequest(String message) {
         FilingsRequestEnvelope event = mapper.readValue(message, FilingsRequestEnvelope.class);
-        FilingsRequestEnvelope.RequestPayload request = event.payload();
+        FilingsPayload payload = answer(event.payload());
+        publisher.publish(payload.jobId(), payload.seq(), payload.symbol(), payload.filings(), payload.truncated(),
+                event.eventId(), event.correlationId());
+    }
+
+    /** Kafka 요청과 내부 조회 API 가 함께 쓴다. 같은 요청에는 같은 내용을 돌려준다. */
+    FilingsPayload answer(FilingsRequestEnvelope.RequestPayload request) {
         OffsetDateTime since = OffsetDateTime.parse(request.since());
         OffsetDateTime until = OffsetDateTime.parse(request.until());
         if (request.maxFilings() < 1 || since.isAfter(until) || request.tickers() == null
@@ -60,7 +66,6 @@ class FilingsRequestListener {
                         EventFactory.formatKst(row.acceptedAt()), row.url()))
                 .toList();
 
-        publisher.publish(request.jobId(), request.seq(), request.symbol(), filings, truncated, event.eventId(),
-                event.correlationId());
+        return new FilingsPayload(request.jobId(), request.seq(), request.symbol(), filings, truncated);
     }
 }

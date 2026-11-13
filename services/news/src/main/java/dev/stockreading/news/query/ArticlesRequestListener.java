@@ -47,7 +47,13 @@ class ArticlesRequestListener {
     @KafkaListener(topics = Topics.NEWS_ARTICLES_REQUESTED, groupId = "news")
     void onRequest(String message) {
         ArticlesRequestEnvelope event = mapper.readValue(message, ArticlesRequestEnvelope.class);
-        ArticlesRequestEnvelope.RequestPayload request = event.payload();
+        ArticlesPayload payload = answer(event.payload());
+        publisher.publish(payload.jobId(), payload.seq(), payload.symbol(), payload.articles(), payload.truncated(),
+                event.correlationId());
+    }
+
+    /** Kafka 요청과 내부 조회 API 가 함께 쓴다. 같은 요청에는 같은 내용을 돌려준다. */
+    ArticlesPayload answer(ArticlesRequestEnvelope.RequestPayload request) {
         OffsetDateTime since = OffsetDateTime.parse(request.since());
         OffsetDateTime until = OffsetDateTime.parse(request.until());
         if (request.maxArticles() < 1 || since.isAfter(until)) {
@@ -81,6 +87,6 @@ class ArticlesRequestListener {
             articles.add(article);
         }
 
-        publisher.publish(request.jobId(), request.seq(), request.symbol(), articles, truncated, event.correlationId());
+        return new ArticlesPayload(request.jobId(), request.seq(), request.symbol(), articles, truncated);
     }
 }

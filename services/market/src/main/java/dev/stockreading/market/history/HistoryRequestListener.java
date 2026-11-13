@@ -37,7 +37,13 @@ class HistoryRequestListener {
     @KafkaListener(topics = Topics.MARKET_HISTORY_REQUESTED, groupId = "market")
     void onRequest(String message) {
         HistoryRequestEnvelope event = mapper.readValue(message, HistoryRequestEnvelope.class);
-        HistoryRequestEnvelope.RequestPayload request = event.payload();
+        HistoryPayload payload = answer(event.payload());
+        publisher.publish(payload.jobId(), payload.seq(), payload.symbol(), payload.points(), payload.truncated(),
+                event.correlationId());
+    }
+
+    /** Kafka 요청과 내부 조회 API 가 함께 쓴다. 같은 요청에는 같은 내용을 돌려준다. */
+    HistoryPayload answer(HistoryRequestEnvelope.RequestPayload request) {
         OffsetDateTime since = OffsetDateTime.parse(request.since());
         OffsetDateTime until = OffsetDateTime.parse(request.until());
         Integer interval = request.intervalSeconds();
@@ -58,7 +64,6 @@ class HistoryRequestListener {
                 .limit(limit)
                 .map(row -> new HistoryPayload.Point(EventFactory.formatKst(row.asOf()), row.price()))
                 .toList();
-
-        publisher.publish(request.jobId(), request.seq(), request.symbol(), points, truncated, event.correlationId());
+        return new HistoryPayload(request.jobId(), request.seq(), request.symbol(), points, truncated);
     }
 }
