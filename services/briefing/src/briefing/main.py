@@ -1,5 +1,5 @@
 """Kafka 실행부: market.move -> 시세 이력·배경 자료·기사·공시 조회 -> briefing.generated,
-schedule.tick(데일리 판) -> 데일리 자료·공시 조회 -> 멤버마다 briefing.daily.generated. 실행: python -m briefing.main
+daily.collection.completed(데일리 판 시작 알림) 또는 한도 시각 -> 데일리 자료·공시 조회 -> 멤버마다 briefing.daily.generated. 실행: python -m briefing.main
 
 Kafka를 import하는 곳은 이 파일뿐이다. 근거 조회(jobs), 리포트(report), 작업 기록(job_log_store)은
 메시지와 시각을 인자로 받기만 하고, 여기서 받은 메시지를 넘기고 그쪽이 낸 이벤트를 발행한다.
@@ -29,8 +29,6 @@ from briefing.events import (
     BRIEFING_GENERATED_TOPIC,
     CONTEXT_REQUESTED_TOPIC,
     DAILY_BRIEFING_GENERATED_TOPIC,
-    EDITION_MORNING,
-    EDITION_POST_CLOSE,
     FILINGS_REQUESTED_TOPIC,
     HISTORY_REQUESTED_TOPIC,
     RESEARCH_REQUESTED_TOPIC,
@@ -60,7 +58,7 @@ CONTEXT_RESPONDED_TOPIC = "market.context.responded"
 FILINGS_RESPONDED_TOPIC = "news.filings.responded"
 DAILY_DATA_REQUESTED_TOPIC = "market.daily.requested"
 DAILY_DATA_RESPONDED_TOPIC = "market.daily.responded"
-SCHEDULE_TICK_TOPIC = "schedule.tick"
+DAILY_COLLECTION_COMPLETED_TOPIC = "daily.collection.completed"
 
 # 같은 토픽을 선언하는 다른 서비스(Topics.java)와 파티션 수가 같아야 한다. 어긋나면 일부 종목이 오류 없이 누락된다.
 TOPIC_PARTITIONS = {
@@ -79,24 +77,20 @@ TOPIC_PARTITIONS = {
     DAILY_BRIEFING_GENERATED_TOPIC: 1,  # notifier
     DAILY_DATA_REQUESTED_TOPIC: 3,   # market
     DAILY_DATA_RESPONDED_TOPIC: 3,   # market
-    SCHEDULE_TICK_TOPIC: 1,          # collector
+    DAILY_COLLECTION_COMPLETED_TOPIC: 1,  # collector
 }
 SUBSCRIBED_TOPICS = (MOVE_TOPIC, COLLECTION_COMPLETED_TOPIC, HISTORY_RESPONDED_TOPIC, ARTICLES_RESPONDED_TOPIC,
-                     CONTEXT_RESPONDED_TOPIC, FILINGS_RESPONDED_TOPIC, DAILY_DATA_RESPONDED_TOPIC)
-# schedule.tick 은 파티션이 1개라 같은 그룹이면 한쪽 판만 tick 을 받아 다른 판이 오류 없이 빠진다. 판마다 그룹을 따로 둔다.
-TICK_CONSUMER_GROUPS = {
-    EDITION_MORNING: {"group.id": "briefing-daily-morning"},
-    EDITION_POST_CLOSE: {"group.id": "briefing-daily-post-close"},
-}
+                     CONTEXT_RESPONDED_TOPIC, FILINGS_RESPONDED_TOPIC, DAILY_DATA_RESPONDED_TOPIC,
+                     DAILY_COLLECTION_COMPLETED_TOPIC)
 
 # 로컬 브로커는 IPv4만 받는다. 이 설정이 없으면 클라이언트가 먼저 ::1로 접속을 시도하며 연결 오류를 로그에 남긴다.
 COMMON = {"broker.address.family": "v4"}
 # 제한 시간이 없어도 이 간격으로는 깨어나 멈추기 요청을 확인한다.
 MAX_POLL_SECONDS = 1.0
 FLUSH_SECONDS = 10
-# 한 번에 이어서 읽을 메시지 수 상한. 메시지가 계속 쌓여도 tick과 제한 시각 확인이 밀리지 않게 한다.
+# 한 번에 이어서 읽을 메시지 수 상한. 메시지가 계속 쌓여도 제한 시각과 한도 시각 확인이 밀리지 않게 한다.
 MAX_MESSAGES_PER_RUN = 50
-# 쌓인 메시지를 읽는 데 쓸 시간 상한. 메시지마다 LLM 호출로 10초 넘게 걸려도 tick 소비자 poll(기본 300초 안에 필요)과
+# 쌓인 메시지를 읽는 데 쓸 시간 상한. 메시지마다 LLM 호출로 10초 넘게 걸려도 소비자 poll(기본 300초 안에 필요)과
 # 멈추기 요청 확인이 이 안에 돌게 하되, 약한 문장 5개의 다시 쓰기(약 70초)는 한 번에 처리할 만큼 넉넉히 둔다.
 MAX_READ_SECONDS = 120
 
@@ -188,7 +182,6 @@ class BriefingRunner:
         self.status_store = status_store
         self.member_store = member_store
         self.daily: DailyCore | None = None
-        self.tick_consumers: dict[str, Consumer] = {}
         self.query_writer = query_writer
         self._consumer: Consumer | None = None
         self._producer: Producer | None = None
@@ -257,17 +250,6 @@ class BriefingRunner:
                                sentences=self.sentences, status=self.status_store, members=self.member_store,
                                on_morning_result=self.merge.on_morning_result)
         self.merge.morning_in_progress = self.daily.morning_in_progress
-        for edition, group in TICK_CONSUMER_GROUPS.items():
-            consumer = self._consumer_factory({
-                "bootstrap.servers": self.bootstrap,
-                **group,
-                # 그룹이 처음 생길 때 지난 tick 을 처음부터 읽으면 지난 판이 한꺼번에 다시 나간다. 그룹이 생긴 뒤의 tick 만 받는다.
-                "auto.offset.reset": "latest",
-                "enable.auto.commit": False,
-                **COMMON,
-            })
-            consumer.subscribe([SCHEDULE_TICK_TOPIC])
-            self.tick_consumers[edition] = consumer
         self._consumer = self._consumer_factory({
             "bootstrap.servers": self.bootstrap,
             "group.id": "briefing",
@@ -293,13 +275,6 @@ class BriefingRunner:
             if (self.clock() - started).total_seconds() >= MAX_READ_SECONDS:
                 break
             message = self._consumer.poll(0)
-        for edition, consumer in self.tick_consumers.items():
-            tick = consumer.poll(0)
-            if tick is not None:
-                if tick.error():
-                    log.error("tick consumer error (%s): %s", edition, tick.error())
-                else:
-                    self.handle_tick(edition, consumer, tick)
         self._tick()
 
     def handle_message(self, message) -> None:
@@ -318,6 +293,7 @@ class BriefingRunner:
             CONTEXT_RESPONDED_TOPIC: self.core.on_context_responded,
             FILINGS_RESPONDED_TOPIC: self._on_filings_responded,
             DAILY_DATA_RESPONDED_TOPIC: self.daily.on_daily_data_responded,
+            DAILY_COLLECTION_COMPLETED_TOPIC: self.daily.on_collection_ready,
         }.get(message.topic())
         with correlation_context(message_correlation_id(message)):
             if handler is None:
@@ -327,16 +303,6 @@ class BriefingRunner:
                 handler(message.value(), self.clock())
             except ValueError as error:
                 log.error("skipping malformed message at %s[%d]@%d: %s",
-                          message.topic(), message.partition(), message.offset(), error)
-
-    def handle_tick(self, edition: str, consumer: Consumer, message) -> None:
-        # 판 작업도 메모리에만 두므로 급변동 알림과 같은 이유로 읽은 위치를 처리 전에 확정한다.
-        consumer.commit(message=message, asynchronous=False)
-        with correlation_context(message_correlation_id(message)):
-            try:
-                self.daily.on_schedule_tick(message.value(), self.clock(), edition)
-            except ValueError as error:
-                log.error("skipping malformed tick at %s[%d]@%d: %s",
                           message.topic(), message.partition(), message.offset(), error)
 
     def _on_move(self, message: str | bytes, now: datetime) -> None:
@@ -371,9 +337,6 @@ class BriefingRunner:
         self.daily.on_filings_responded(message, now)
 
     def close(self) -> None:
-        for consumer in self.tick_consumers.values():
-            consumer.close()
-        self.tick_consumers = {}
         if self._consumer is not None:
             self._consumer.close()
             self._consumer = None
@@ -414,6 +377,8 @@ class BriefingRunner:
         deadline = self.daily.next_deadline()
         if deadline is not None and now >= deadline:
             self.daily.on_tick(now)
+        # 판 시작 알림의 한도 시각은 루프가 최대 MAX_POLL_SECONDS마다 깨어나므로 그 간격으로 본다.
+        self.daily.check_deadlines(now)
 
     def _abandon_pending_moves(self) -> None:
         # 읽은 위치는 이미 확정했으므로 모으는 중이던 변동은 다시 오지 않는다. 사라지지 않고 실패 기록으로 남긴다.
@@ -459,9 +424,10 @@ def build_runner(env: Mapping[str, str]) -> BriefingRunner:
     bootstrap = env.get("KAFKA_BOOTSTRAP", "localhost:9092")
     connect = psycopg_connector(db_conninfo(env))
     store = PostgresJobLog(connect)
-    # 아침 판 합침은 수집기의 아침 판 tick을 켜는 값과 같은 환경변수로 켠다. tick이 안 오면 합칠 판이 없다.
-    daily_settings = replace(DEFAULT_DAILY_SETTINGS, morning_merge_enabled=env.get(
-        "COLLECTOR_DAILY_BRIEFING_ENABLED", "").strip().lower() == "true")
+    # 아침 판 합침과 한도 시각 안전장치는 수집기의 판 시작 알림을 켜는 값과 같은 환경변수로 켠다. 알림을 꺼 둔 곳에서는
+    # 합칠 판이 없고, 평일마다 판이 저절로 나가면 안 된다.
+    daily_on = env.get("COLLECTOR_DAILY_BRIEFING_ENABLED", "").strip().lower() == "true"
+    daily_settings = replace(DEFAULT_DAILY_SETTINGS, morning_merge_enabled=daily_on, deadline_enabled=daily_on)
     return BriefingRunner(bootstrap, build_report_writer(env), store, daily_writer=build_daily_writer(env),
                           daily_settings=daily_settings,
                           query_writer=build_query_writer(env, AnthropicClient),

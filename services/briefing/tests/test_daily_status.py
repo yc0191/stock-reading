@@ -105,7 +105,7 @@ def make():
         writer = DailyLlmWriter(llm, settings.llm_max_attempts) if llm is not None else None
         core = DailyCore(requests, writer, details, settings, status=status)
         edition = "post-close" if edition_job == POST_CLOSE_JOB else "morning"
-        core.on_schedule_tick(tick(edition_job, at), at, edition)
+        core.on_collection_ready(tick(edition_job, at), at)
         core.on_daily_data_responded(with_operations() if answer == "default" else answer, at)
         # 아침 판은 공시 응답을 시험이 따로 보낸다.
         answer_news(core, requests, at, filings_silent=edition == "morning")
@@ -214,7 +214,7 @@ def test_a_malformed_operations_field_is_treated_as_no_operations_and_the_editio
 def test_when_the_data_response_never_comes_the_edition_still_goes_out_with_no_data_lines():
     requests, details = Requests(), Details()
     core = DailyCore(requests, None, details, DailySettings(), status=FakeStatus([], [morning_run()]))
-    core.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
+    core.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
     for n in (1, 2, 3):
         core.on_tick(POST_CLOSE_AT + timedelta(seconds=10 * n))
     payload = only_event(requests)

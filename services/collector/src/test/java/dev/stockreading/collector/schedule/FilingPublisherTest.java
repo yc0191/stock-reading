@@ -130,6 +130,20 @@ class FilingPublisherTest {
         verify(kafka, never()).send(anyString(), anyString(), anyString());
     }
 
+    @Test
+    void reportsWhetherTheFilingsWereReceivedForTheDailyNotice() {
+        when(collector.collect()).thenReturn(List.of(collected("0000000001-26-000001", "8-K", List.of("8.01"), "TESTA")))
+                .thenReturn(List.of(collected("0000000001-26-000002", "8-K", List.of("8.01"), "TESTA")))
+                .thenThrow(new EdgarApiException(EdgarFailure.TIMEOUT, null));
+        when(kafka.send(anyString(), anyString(), anyString()))
+                .thenReturn(CompletableFuture.completedFuture(null))
+                .thenThrow(new IllegalStateException("broker down"));
+
+        assertThat(publisher.publishCollected("collect-pre-open-2026-10-21T08:30:00+09:00")).isTrue();
+        assertThat(publisher.publishCollected("collect-pre-open-2026-10-22T08:30:00+09:00")).isFalse();
+        assertThat(publisher.publishCollected("collect-pre-open-2026-10-23T08:30:00+09:00")).isFalse();
+    }
+
     private static CollectedFiling collected(String accession, String form, List<String> items, String... tickers) {
         return new CollectedFiling("0000000001", List.of(tickers), new Filing(accession, form,
                 OffsetDateTime.parse("2026-10-20T20:30:28Z"), LocalDate.of(2026, 10, 20), items,

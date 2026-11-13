@@ -4,7 +4,7 @@
 한 줄인 job_log(job_run을 가리킴)다. 같은 작업의 줄은 작업 id로 묶는다. 키·수신 주소·보유 수량·금액은 담지 않는다.
 저장은 JobLogPort 구현(job_log_store)이 맡는다.
 
-작업 종류·상태·작성 방식·기록 종류의 값은 아래 enum이 원본이다. DB의 CHECK 제약은 Flyway V1 파일에 같은 값으로 적혀 있고, 어긋나면 test_job_log_schema.py가 실패한다.
+작업 종류·상태·작성 방식·기록 종류의 값은 아래 enum이 원본이다. DB의 CHECK 제약은 Flyway 번호 파일에 같은 값으로 적혀 있고, 어긋나면 test_job_log_schema.py가 실패한다.
 """
 from __future__ import annotations
 
@@ -95,7 +95,7 @@ class JobStart:
 
     job_id: str
     job_kind: JobKind
-    # 작업을 시작시킨 이벤트(market.move 또는 schedule.tick)의 원문 JSON
+    # 작업을 시작시킨 이벤트(market.move 또는 판 시작 알림 daily.collection.completed)의 원문 JSON. 한도 시각으로 시작한 판은 그 사실을 담은 JSON
     input: str
     # 대상: 급변동은 종목과 변동 시각, 데일리 판은 다루는 범위
     target: Mapping[str, str]
@@ -191,6 +191,15 @@ class JobLogPort(Protocol):
     def moves_between(self, since: datetime, until: datetime) -> list[MoveRun] | None:
         """시작 시각이 범위(양끝 포함) 안인 급변동 작업을 시작이 이른 것부터 돌려준다. 읽지 못하면 None."""
 
+    def edition_started(self, kind: JobKind, day: date) -> bool | None:
+        """그날(한국 시간) 시작한 이 종류의 작업 줄이 있는가(결과와 상관없이). 데일리 판을 하루 한 번만 만드는 데 쓴다. 읽지 못하면 None."""
+
+    def mark_market_closed(self, kind: JobKind, day: date, event_id: str, at: datetime) -> bool:
+        """그날(한국 시간) 이 판을 휴장이라 만들지 않는다고 남긴다. 같은 날 같은 판은 한 줄만 남는다. 끝내 저장하지 못했으면 False."""
+
+    def market_closed(self, kind: JobKind, day: date) -> bool | None:
+        """그날(한국 시간) 이 판에 휴장 기록이 있는가. 읽지 못하면 None."""
+
 
 class DiscardJobLog:
     """받기만 하고 버린다. 저장소가 필요 없는 곳의 기본 구현이다."""
@@ -215,6 +224,15 @@ class DiscardJobLog:
 
     def moves_between(self, since: datetime, until: datetime) -> list[MoveRun] | None:
         return []
+
+    def edition_started(self, kind: JobKind, day: date) -> bool | None:
+        return False
+
+    def mark_market_closed(self, kind: JobKind, day: date, event_id: str, at: datetime) -> bool:
+        return True
+
+    def market_closed(self, kind: JobKind, day: date) -> bool | None:
+        return False
 
 
 def record_result(job_log: JobLogPort, result: JobResult) -> bool:

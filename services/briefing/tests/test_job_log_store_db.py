@@ -61,14 +61,15 @@ def entry(job_id, entry_type=EntryType.RESENT, data=None, **changes):
     return JobLogEntry(**values)
 
 
-def test_flyway_created_the_briefing_tables_and_recorded_versions_1_and_2(store, connect):
+def test_flyway_created_the_briefing_tables_and_recorded_versions_1_to_3(store, connect):
     rows = fetch(connect, "SELECT table_name FROM information_schema.tables WHERE table_schema = 'briefing' "
-                          "AND table_name IN ('job_run', 'job_log', 'collection_completed', 'failed_jobs') "
-                          "ORDER BY table_name")
-    applied = fetch(connect, "SELECT version, success FROM briefing.flyway_schema_history WHERE version IS NOT NULL")
+                          "AND table_name IN ('job_run', 'job_log', 'collection_completed', 'failed_jobs', "
+                          "'market_closed_edition') ORDER BY table_name")
+    applied = fetch(connect, "SELECT version, success FROM briefing.flyway_schema_history WHERE version IS NOT NULL "
+                             "ORDER BY installed_rank")
 
-    assert rows == [("collection_completed",), ("job_log",), ("job_run",)]
-    assert applied == [("1", True), ("2", True)]
+    assert rows == [("collection_completed",), ("job_log",), ("job_run",), ("market_closed_edition",)]
+    assert applied == [("1", True), ("2", True), ("3", True)]
 
 
 def test_job_run_line_is_made_running_and_updated_when_the_job_ends(store, connect):
@@ -278,3 +279,36 @@ def test_the_moves_started_in_the_range_are_read_back_with_their_results(store):
             for r in runs] == [
         ("it-review-move-1", "ITR001", first, 2.1, "succeeded", "llm", None),
         ("it-review-move-2", "ITR001", second, -1.8, "failed", None, "test-failure")]
+
+
+# 다른 테스트가 쓰지 않는 날짜(it-edition- 접두 작업만 이 날짜에 둔다).
+EDITION_DAY = datetime(2026, 2, 10, tzinfo=KST)
+
+
+def test_whether_an_edition_was_started_that_korean_day_is_read_back(store):
+    start_at(store, "it-edition-post-close-1", JobKind.POST_CLOSE, EDITION_DAY.replace(hour=16, minute=31))
+    # 한국 시간 다음 날 00:30(UTC로는 같은 날)에 시작한 아침 판은 다음 날 것으로 센다.
+    start_at(store, "it-edition-morning-1", JobKind.MORNING, EDITION_DAY + timedelta(days=1, minutes=30))
+
+    assert store.edition_started(JobKind.POST_CLOSE, EDITION_DAY.date()) is True
+    assert store.edition_started(JobKind.MORNING, EDITION_DAY.date()) is False
+    assert store.edition_started(JobKind.MORNING, (EDITION_DAY + timedelta(days=1)).date()) is True
+    assert store.edition_started(JobKind.POST_CLOSE, (EDITION_DAY - timedelta(days=1)).date()) is False
+
+
+# 다른 테스트가 쓰지 않는 날짜(휴장 기록만 이 날짜에 둔다).
+CLOSED_DAY = datetime(2026, 2, 17, tzinfo=KST)
+
+
+def test_a_market_closed_edition_is_kept_once_and_not_counted_as_a_job_run(store, connect):
+    day = CLOSED_DAY.date()
+    assert store.mark_market_closed(JobKind.MORNING, day, "it-closed-1", CLOSED_DAY.replace(hour=9, minute=10)) is True
+    # 같은 날 같은 판의 두 번째 알림은 오류 없이 첫 줄만 남긴다.
+    assert store.mark_market_closed(JobKind.MORNING, day, "it-closed-2", CLOSED_DAY.replace(hour=9, minute=11)) is True
+
+    assert store.market_closed(JobKind.MORNING, day) is True
+    assert store.market_closed(JobKind.POST_CLOSE, day) is False
+    assert store.market_closed(JobKind.MORNING, (CLOSED_DAY + timedelta(days=1)).date()) is False
+    assert fetch(connect, "SELECT event_id FROM briefing.market_closed_edition WHERE edition_day = %s", (day,)) == [
+        ("it-closed-1",)]
+    assert store.edition_started(JobKind.MORNING, day) is False

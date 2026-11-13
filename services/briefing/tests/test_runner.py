@@ -206,7 +206,7 @@ def test_open_declares_topics_cleans_up_unfinished_jobs_and_subscribes_to_the_in
     assert consumer.subscribed == ["market.move", "collection.completed",
                                    "market.history.responded", "news.articles.responded",
                                    "market.context.responded", "news.filings.responded",
-                                   "market.daily.responded"]
+                                   "market.daily.responded", "daily.collection.completed"]
     assert consumer.config["enable.auto.commit"] is False
     assert producer.config["acks"] == "all"
 

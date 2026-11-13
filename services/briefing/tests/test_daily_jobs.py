@@ -44,8 +44,9 @@ TICK_ID = "8d3b5e17-6c2a-4f90-b1e4-7a9c0d2f3e68"
 MORNING_AT = datetime(2026, 10, 20, 8, 45, tzinfo=KST)    # 화요일
 OPEN_AT = datetime(2026, 10, 20, 9, 10, tzinfo=KST)        # 장 시작 뒤 아침 판 시각
 POST_CLOSE_AT = datetime(2026, 10, 20, 17, 0, tzinfo=KST)
-MORNING_JOB = "daily-briefing-morning"
-POST_CLOSE_JOB = "daily-briefing-post-close"
+# 판 시작 알림(daily.collection.completed)의 edition 값
+MORNING_JOB = "morning"
+POST_CLOSE_JOB = "post-close"
 
 
 # ---- 가짜 ----
@@ -96,12 +97,14 @@ class FakeLlm:
         return output
 
 
-def tick(job_type=MORNING_JOB, at=MORNING_AT, event_id=TICK_ID):
+def tick(job_type=MORNING_JOB, at=MORNING_AT, event_id=TICK_ID, missing=(), status="collected"):
+    """수집기의 판 시작 알림(daily.collection.completed). job_type은 판(edition)이다."""
     return json.dumps({
-        "eventId": event_id, "eventType": "schedule.tick", "schemaVersion": 1,
+        "eventId": event_id, "eventType": "daily.collection.completed", "schemaVersion": 1,
         "occurredAt": at.isoformat(), "producedAt": at.isoformat(),
-        "correlationId": f"{job_type}-{at.isoformat()}",
-        "payload": {"jobType": job_type, "scheduledFor": at.isoformat()},
+        "correlationId": f"daily-{job_type}-{at.isoformat()}",
+        "payload": {"edition": job_type, "status": status, "scheduledFor": at.isoformat(),
+                    "missingSources": list(missing)},
     })
 
 
@@ -232,40 +235,46 @@ def test_range_is_computed_from_the_scheduled_time_in_korean_time_and_is_repeata
 
 # ---- 시작 신호 ----
 
-def test_each_edition_only_handles_its_own_job_type(core):
-    c, requests, _, _ = core()
-    c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "morning")
-    c.on_schedule_tick(tick("collect"), MORNING_AT, "morning")
+def test_each_notice_starts_only_its_own_edition_and_an_unknown_edition_is_rejected(core):
+    c, requests, _, details = core()
+    with pytest.raises(ValueError):
+        c.on_collection_ready(tick("collect"), MORNING_AT)
     assert requests.sent == []
-    c.on_schedule_tick(tick(MORNING_JOB), MORNING_AT, "morning")
+    c.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
+    assert [s.job_kind.value for s in details.starts] == ["post-close"]
     assert len(requests.topic("market.daily.requested")) == 1
 
 
-def test_the_same_tick_is_handled_once(core):
+def test_the_same_notice_is_handled_once(core):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_collection_ready(tick(), MORNING_AT)
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT)
-    c.on_schedule_tick(tick(), MORNING_AT + timedelta(seconds=5), "morning")
+    c.on_collection_ready(tick(), MORNING_AT + timedelta(seconds=5))
     assert len(requests.topic("market.daily.requested")) == 1
     assert len(published(requests)) == 1
 
 
-def test_malformed_tick_is_rejected(core):
+def test_malformed_notice_is_rejected(core):
     c, _, _, _ = core()
     with pytest.raises(ValueError):
-        c.on_schedule_tick("{not json", MORNING_AT, "morning")
+        c.on_collection_ready("{not json", MORNING_AT)
     with pytest.raises(ValueError):
-        c.on_schedule_tick(json.dumps({"eventType": "schedule.tick", "payload": {"jobType": MORNING_JOB}}),
-                           MORNING_AT, "morning")
+        c.on_collection_ready(json.dumps({"eventType": "daily.collection.completed", "payload": {"edition": MORNING_JOB}}),
+                              MORNING_AT)
+    with pytest.raises(ValueError):
+        # 더 이상 쓰지 않는 시작 신호는 받지 않는다.
+        c.on_collection_ready(json.dumps({"eventId": TICK_ID, "eventType": "schedule.tick", "correlationId": "x",
+                                          "payload": {"jobType": "daily-briefing-morning",
+                                                      "scheduledFor": MORNING_AT.isoformat()}}), MORNING_AT)
 
 
 # ---- 자료 모으기 ----
 
 def test_daily_data_request_matches_the_contract_and_is_keyed_by_job(core):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_collection_ready(tick(), MORNING_AT)
     [event] = requests.topic("market.daily.requested")
     assert validate("market.daily.requested.v1.schema.json", event.value) == []
     assert event.key == TICK_ID
@@ -277,7 +286,7 @@ def test_daily_data_request_matches_the_contract_and_is_keyed_by_job(core):
 
 def test_morning_requests_filings_with_all_us_tickers_after_the_daily_data(core):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_collection_ready(tick(), MORNING_AT)
     assert requests.topic("news.filings.requested") == []
     c.on_daily_data_responded(daily_response(etfs=[
         etf("TEST02", ("FAKEB", "TESTC")), etf("TEST01", ("TESTA", "FAKEB")), etf("TEST03", ())]), MORNING_AT)
@@ -293,7 +302,7 @@ def test_morning_requests_filings_with_all_us_tickers_after_the_daily_data(core)
 
 def test_no_filings_request_when_no_etf_holds_us_stocks(core):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_collection_ready(tick(), MORNING_AT)
     c.on_daily_data_responded(daily_response(etfs=[etf(tickers=())], close_rates=[]), MORNING_AT)
     assert requests.topic("news.filings.requested") == []
     answer_news(c, requests, MORNING_AT)
@@ -305,7 +314,7 @@ def test_no_filings_request_when_no_etf_holds_us_stocks(core):
 
 def test_post_close_edition_requests_the_filings_of_the_us_stocks_in_its_range(core):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
+    c.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
     c.on_daily_data_responded(daily_response(etfs=[etf(fetched="2026-10-20T16:30:02+09:00", rate="0.50")],
                                              background=[WORLD_C, EXCHANGE, {**MARKET, "fetchedAt": "2026-10-20T16:30:05+09:00"}]),
                               POST_CLOSE_AT)
@@ -327,7 +336,7 @@ def test_post_close_edition_requests_the_filings_of_the_us_stocks_in_its_range(c
 
 def test_morning_edition_uses_us_markets_filings_and_the_previous_korean_session(core):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_collection_ready(tick(), MORNING_AT)
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT)
@@ -347,7 +356,7 @@ def test_morning_edition_uses_us_markets_filings_and_the_previous_korean_session
 
 def test_data_received_after_the_scheduled_time_or_before_the_range_is_dropped_with_a_warning(core, caplog):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
+    c.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
     with caplog.at_level(logging.WARNING, logger="briefing.daily_jobs"):
         c.on_daily_data_responded(daily_response(
             etfs=[etf(fetched="2026-10-20T17:00:01+09:00"), etf("TEST02", fetched="2026-10-19T16:59:59+09:00")],
@@ -361,7 +370,7 @@ def test_data_received_after_the_scheduled_time_or_before_the_range_is_dropped_w
 
 def test_data_received_exactly_at_both_ends_of_the_range_is_kept(core):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
+    c.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
     c.on_daily_data_responded(daily_response(
         etfs=[etf(fetched="2026-10-20T17:00:00+09:00"), etf("TEST02", fetched="2026-10-19T17:00:00+09:00")],
         background=[WORLD_C, EXCHANGE, {**MARKET, "fetchedAt": "2026-10-20T17:00:00+09:00"}]), POST_CLOSE_AT)
@@ -372,7 +381,7 @@ def test_data_received_exactly_at_both_ends_of_the_range_is_kept(core):
 
 def test_stale_responses_are_ignored(core):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_collection_ready(tick(), MORNING_AT)
     c.on_tick(MORNING_AT + timedelta(seconds=10))  # seq 2로 다시 보냄
     c.on_daily_data_responded(daily_response(seq=1), MORNING_AT + timedelta(seconds=11))
     assert requests.topic("news.filings.requested") == []
@@ -390,7 +399,7 @@ def test_filings_responses_of_other_jobs_are_ignored(core):
 
 def test_daily_data_is_resent_with_a_new_seq_and_given_up_after_the_last_attempt(core):
     c, requests, failures, details = core()
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_collection_ready(tick(), MORNING_AT)
     assert c.next_deadline() == MORNING_AT + timedelta(seconds=10)
     c.on_tick(MORNING_AT + timedelta(seconds=9))
     assert len(requests.topic("market.daily.requested")) == 1
@@ -430,7 +439,7 @@ def test_daily_data_is_resent_with_a_new_seq_and_given_up_after_the_last_attempt
 
 def test_filings_no_response_still_sends_the_edition_and_records_one_failure(core):
     c, requests, failures, details = core()
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_collection_ready(tick(), MORNING_AT)
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT, filings_silent=True)
     for n in (1, 2, 3):
@@ -452,7 +461,7 @@ def test_filings_no_response_still_sends_the_edition_and_records_one_failure(cor
 def test_llm_writes_the_summary_and_cites_only_given_refs(core):
     llm = FakeLlm(good_output("B1", "0000000001-26-000001"))
     c, requests, failures, details = core(llm)
-    c.on_schedule_tick(tick(at=OPEN_AT), OPEN_AT, "morning")
+    c.on_collection_ready(tick(at=OPEN_AT), OPEN_AT)
     c.on_daily_data_responded(daily_response(etfs=[etf(open_flow=OPEN_FLOW)]), OPEN_AT)
     c.on_filings_responded(filings_response(), OPEN_AT)
     answer_news(c, requests, OPEN_AT)
@@ -475,7 +484,7 @@ def test_rejected_llm_attempts_are_each_recorded_even_when_the_edition_succeeds(
     unknown = json.dumps({"points": [{"statement": "근거 밖", "refs": ["Z9"]}], "insufficientEvidence": False})
     llm = FakeLlm("not json", unknown, good_output())
     c, requests, failures, details = core(llm)
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_collection_ready(tick(), MORNING_AT)
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT)
@@ -494,7 +503,7 @@ def test_rejected_llm_attempts_are_each_recorded_even_when_the_edition_succeeds(
 def test_llm_failing_every_time_falls_back_to_the_rule_based_body_and_records_llm_error(core):
     llm = FakeLlm(LlmCallError("LLM call failed: APIError"), "{}", "[]")
     c, requests, failures, details = core(llm)
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_collection_ready(tick(), MORNING_AT)
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT)
@@ -514,7 +523,7 @@ def test_llm_failing_every_time_falls_back_to_the_rule_based_body_and_records_ll
 def test_insufficient_evidence_is_marked_in_the_body(core):
     llm = FakeLlm(json.dumps({"points": [], "insufficientEvidence": True}))
     c, requests, _, _ = core(llm)
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_collection_ready(tick(), MORNING_AT)
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT)
@@ -526,7 +535,7 @@ def test_insufficient_evidence_is_marked_in_the_body(core):
 def test_llm_is_not_called_when_there_is_no_evidence_at_all(core):
     llm = FakeLlm()
     c, requests, _, _ = core(llm)
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_collection_ready(tick(), MORNING_AT)
     for n in (1, 2, 3):
         c.on_tick(MORNING_AT + timedelta(seconds=10 * n))
     assert llm.calls == []
@@ -537,7 +546,7 @@ def test_llm_is_not_called_when_there_is_no_evidence_at_all(core):
 def test_every_failure_is_logged_but_the_result_line_names_the_first_one(core):
     llm = FakeLlm("x", "x", "x")
     c, requests, failures, details = core(llm)
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_collection_ready(tick(), MORNING_AT)
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT, filings_silent=True)
     for n in (1, 2, 3):
@@ -552,7 +561,7 @@ def test_every_failure_is_logged_but_the_result_line_names_the_first_one(core):
 
 def test_missing_items_are_recorded_with_every_field_filled(core):
     c, requests, _, details = core()
-    c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
+    c.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
     c.on_daily_data_responded(daily_response(etfs=[], background=[]), POST_CLOSE_AT)
     answer_news(c, requests, POST_CLOSE_AT)
     [record] = details.by_reason(REASON_MISSING_ITEMS)
@@ -571,7 +580,7 @@ def test_records_and_events_carry_no_keys_or_personal_data(core, caplog, monkeyp
     llm = FakeLlm("bad", good_output())
     c, requests, failures, details = core(llm)
     with caplog.at_level(logging.DEBUG):
-        c.on_schedule_tick(tick(), MORNING_AT, "morning")
+        c.on_collection_ready(tick(), MORNING_AT)
         c.on_daily_data_responded(daily_response(), MORNING_AT)
         c.on_filings_responded(filings_response(), MORNING_AT)
         answer_news(c, requests, MORNING_AT)
@@ -597,7 +606,7 @@ def test_default_log_port_keeps_nothing_and_logs_nothing(caplog):
 def test_every_edition_leaves_one_result_line_with_body_cited_evidence_missing_items_and_method(core):
     llm = FakeLlm(good_output("B1", "0000000001-26-000001"))
     c, requests, _, details = core(llm)
-    c.on_schedule_tick(tick(at=OPEN_AT), OPEN_AT, "morning")
+    c.on_collection_ready(tick(at=OPEN_AT), OPEN_AT)
     c.on_daily_data_responded(daily_response(etfs=[etf(open_flow=OPEN_FLOW)]), OPEN_AT)
     c.on_filings_responded(filings_response(), OPEN_AT)
     answer_news(c, requests, OPEN_AT)
@@ -620,7 +629,7 @@ def test_the_accepted_llm_attempt_keeps_its_input_and_original_response(core):
     answer = good_output("B1")
     llm = FakeLlm("bad", answer)
     c, requests, _, details = core(llm)
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_collection_ready(tick(), MORNING_AT)
     c.on_daily_data_responded(daily_response(), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
     answer_news(c, requests, MORNING_AT)
@@ -635,7 +644,7 @@ def test_edition_is_not_published_when_its_log_could_not_be_saved(caplog):
     requests, log_port = Requests(), Details(fail=True)
     c = DailyCore(requests, None, log_port, DailySettings())
     with caplog.at_level(logging.ERROR, logger="briefing.job_log"):
-        c.on_schedule_tick(tick(), MORNING_AT, "morning")
+        c.on_collection_ready(tick(), MORNING_AT)
         c.on_daily_data_responded(daily_response(), MORNING_AT)
         c.on_filings_responded(filings_response(), MORNING_AT)
         answer_news(c, requests, MORNING_AT)
@@ -648,7 +657,7 @@ def test_edition_is_not_published_when_its_log_could_not_be_saved(caplog):
 
 def test_post_close_edition_also_leaves_its_lines_under_its_own_job_kind(core):
     c, requests, _, details = core()
-    c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
+    c.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
     for n in (1, 2, 3):
         c.on_tick(POST_CLOSE_AT + timedelta(seconds=10 * n))
 
@@ -679,7 +688,7 @@ def etf_v2(symbol="TEST01", name=None, **kwargs):
 
 def post_close_core(core, llm=None):
     c, requests, failures, details = core(llm)
-    c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
+    c.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
     return c, requests, failures, details
 
 
@@ -765,7 +774,7 @@ def test_the_llm_is_told_which_etf_is_empty_and_not_to_invent_its_numbers(core):
 
 def test_morning_edition_ignores_an_empty_etf_in_its_missing_items(core):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(at=OPEN_AT), OPEN_AT, "morning")
+    c.on_collection_ready(tick(at=OPEN_AT), OPEN_AT)
     c.on_daily_data_responded(
         daily_response(etfs=[etf_v2_missing("TEST01", tickers=("TESTA",), open_flow=OPEN_FLOW)]), OPEN_AT)
     c.on_filings_responded(filings_response(), OPEN_AT)
@@ -777,7 +786,7 @@ def test_morning_edition_ignores_an_empty_etf_in_its_missing_items(core):
 
 def test_an_etf_without_a_daily_price_still_gets_us_stocks_filings_and_research(core):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
+    c.on_collection_ready(tick(), MORNING_AT)
     c.on_daily_data_responded(daily_response(etfs=[etf_v2_missing("TEST01", tickers=("TESTA", "FAKEB"))]),
                               MORNING_AT)
     [filings] = requests.topic("news.filings.requested")

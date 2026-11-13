@@ -11,7 +11,7 @@
     "schemaVersion": { "const": 1 },
     "occurredAt": { "type": "string", "format": "date-time", "description": "조회 시각(payload.fetchedAt과 같다)." },
     "producedAt": { "type": "string", "format": "date-time" },
-    "correlationId": { "type": "string", "minLength": 1, "description": "조회를 시작시킨 schedule.tick의 correlationId를 이어받는다." },
+    "correlationId": { "type": "string", "minLength": 1, "description": "조회 회차(수집기 타이머 또는 수동 실행 명령)의 correlationId를 이어받는다." },
     "payload": {
       "type": "object",
       "required": ["apiType", "target", "response", "scheduledFor", "fetchedAt"],
@@ -30,7 +30,7 @@
           "minLength": 1,
           "description": "응답 본문 원문. 앞뒤 공백 제거 외에는 가공하지 않은 JSON 텍스트이며 소비자는 해석하지 않고 그대로 저장한다. 객체로 싣지 않는 것은 직렬화 과정에서 숫자 표기나 공백이 바뀌는 것을 막기 위해서다."
         },
-        "scheduledFor": { "type": "string", "format": "date-time", "description": "조회를 일으킨 schedule.tick의 논리적 시각(payload.scheduledFor)." },
+        "scheduledFor": { "type": "string", "format": "date-time", "description": "조회 회차의 기준 시각(scheduledFor)." },
         "fetchedAt": { "type": "string", "format": "date-time", "description": "응답을 실제로 받은 시각." }
       },
       "allOf": [

@@ -3,7 +3,7 @@ spring:
     name: collector
   main:
     web-application-type: none
-  # 타이머 스레드 수: 타이머(수집 작업 6개, 다른 서비스로 가는 tick 2개)마다 한 자리. 기본 1개면 오래 걸리는
+  # 타이머 스레드 수: 타이머(수집 작업 6개, 데일리 판 시작 알림 2개)마다 한 자리. 기본 1개면 오래 걸리는
   # 작업(뉴스·장 시작 전·장중·마감 후)이 도는 동안 1초 현재가 타이머가 멈춘다.
   task:
     scheduling:
@@ -103,12 +103,16 @@ collector:
     # 한 번에 해외 일봉을 조회할 종목 수 상한. 넘친 종목은 호출하지 않고 건너뛴 개수만 경고로 남긴다.
     overseas-max-tickers: 100
   daily-briefing:
-    # 꺼 두면 데일리 브리핑 시작 tick 을 발행하지 않는다. 휴장일에는 발행하지 않는다(시세 제공자의 장 운영 상태로 판정, 판정하지 못하면 영업일로 본다).
-    # 각 판은 그 판의 자료 수집이 끝난 뒤에 오도록 둔다(아침 판은 장 시작 후 09:10까지의 개장 흐름을 담으므로 09:10, 마감 후 판은 장 마감 후 16:30 수집 뒤).
+    # 꺼 두면 데일리 판 시작 알림(daily.collection.completed)을 발행하지 않는다. 브리핑의 한도 시각 안전장치도 같은 환경변수로 켠다.
+    # 아침 판: 장 시작 전 수집 결과(못 받은 자료 목록)를 담아 개장 흐름 구간이 끝나는 이 시각에 낸다.
+    # 마감 후 판: 마감 후 수집(타이머 또는 수동 실행 명령)이 끝나는 즉시 낸다. 아래 post-close-cron 은 휴장 알림 시각이다.
+    # 휴장일(시세 제공자의 장 운영 상태로 판정, 판정하지 못하면 영업일로 본다)에는 두 판 시각에 '휴장이라 수집 안 함'을 낸다.
     enabled: ${COLLECTOR_DAILY_BRIEFING_ENABLED:false}
     # 한국 시간 기준 cron(초 분 시 일 월 요일). 한 판만 끄려면 그 판의 값을 "-" 로 준다.
+    # 아침 판 시각은 브리핑의 morning_merge_end(09:10)와 같아야 하고, 브리핑의 한도 시각(아침 09:20)보다 앞서야 한다.
     morning-cron: ${COLLECTOR_DAILY_BRIEFING_MORNING_CRON:0 10 9 * * MON-FRI}
-    post-close-cron: ${COLLECTOR_DAILY_BRIEFING_POST_CLOSE_CRON:0 0 17 * * MON-FRI}
+    # 휴장일의 마감 후 판 알림 시각. 마감 후 수집 시각(collector.insight.schedule.cron)과 같게 두며, 브리핑의 한도 시각(17:30)보다 앞서야 한다.
+    post-close-cron: ${COLLECTOR_DAILY_BRIEFING_POST_CLOSE_CRON:0 30 16 * * MON-FRI}
   market-data:
     # simulator | broker
     source: ${COLLECTOR_MARKET_DATA_SOURCE:simulator}

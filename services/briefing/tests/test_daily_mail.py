@@ -53,7 +53,7 @@ def run(edition="post-close", settings=None, llm=True, answer_etfs=None, ref=Non
     writer = DailyLlmWriter(FakeLlm(output), settings.llm_max_attempts) if llm else None
     core = DailyCore(requests, writer, details, settings, members=FakeMembers(members))
     job, at = (POST_CLOSE_JOB, POST_CLOSE_AT) if edition == "post-close" else (MORNING_JOB, MORNING_AT)
-    core.on_schedule_tick(tick(job, at), at, edition)
+    core.on_collection_ready(tick(job, at), at)
     background = POST_CLOSE_BACKGROUND if edition == "post-close" else None
     core.on_daily_data_responded(daily_response(etfs=answer_etfs or etfs(), background=background), at)
     answer_news(core, requests, at)

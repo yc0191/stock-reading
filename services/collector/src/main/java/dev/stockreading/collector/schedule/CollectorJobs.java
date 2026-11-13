@@ -4,10 +4,13 @@ import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.EnumMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
+import java.util.function.Function;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,18 +70,21 @@ public class CollectorJobs {
     private final Optional<InsightPublisher> insight;
     private final Optional<IntradayPublisher> intraday;
     private final MembersPublisher members;
+    // 데일리 판을 켰을 때만 있다. 장 시작 전·마감 후 수집 결과를 데일리 판 시작 알림으로 넘긴다.
+    private final Optional<DailyCollectionPublisher> daily;
     private final Clock clock;
     private final Map<Job, AtomicBoolean> running = new EnumMap<>(Job.class);
 
     CollectorJobs(QuotePublisher quotes, NewsPublisher news, FilingPublisher filings,
                   Optional<InsightPublisher> insight, Optional<IntradayPublisher> intraday, MembersPublisher members,
-                  Clock clock) {
+                  Optional<DailyCollectionPublisher> daily, Clock clock) {
         this.quotes = quotes;
         this.news = news;
         this.filings = filings;
         this.insight = insight;
         this.intraday = intraday;
         this.members = members;
+        this.daily = daily;
         this.clock = clock;
         for (Job job : Job.values()) {
             running.put(job, new AtomicBoolean());
@@ -172,24 +178,52 @@ public class CollectorJobs {
             case COLLECT_NEWS -> news.publishCollected(corr, at);
             case COLLECT_PRE_OPEN -> {
                 // 해외 일봉·세계지수와 SEC 공시를 한 회차에서 함께 받는다. 앞쪽이 실패해도 공시는 받는다.
-                ifBroker(job, insight, publisher -> publisher.publishPreOpen(corr, at));
-                filings.publishCollected(corr);
+                // 끝까지 가지 못하면 모두 못 받은 것으로 남는다.
+                Set<String> missing = new LinkedHashSet<>(DailyCollectionPublisher.PRE_OPEN_SOURCES);
+                try {
+                    Set<String> found = ifBroker(job, insight, publisher -> publisher.publishPreOpen(corr, at),
+                            List.of(InsightPublisher.WORLD_INDEX, InsightPublisher.OVERSEAS_DAILY_PRICE));
+                    if (!filings.publishCollected(corr)) {
+                        found.add(DailyCollectionPublisher.SEC_FILINGS);
+                    }
+                    missing = found;
+                } finally {
+                    // 수집이 일부 실패하거나 예외로 끝나도 아침 판 알림이 그 사실을 담도록 결과는 반드시 남긴다.
+                    Set<String> result = missing;
+                    daily.ifPresent(publisher -> publisher.recordPreOpen(result));
+                }
             }
-            case COLLECT_INTRADAY -> ifBroker(job, intraday, publisher -> publisher.publishIntraday(corr, at));
-            case COLLECT_POST_CLOSE -> ifBroker(job, insight, publisher -> publisher.publishAll(corr, at));
+            case COLLECT_INTRADAY -> ifBroker(job, intraday, publisher -> {
+                publisher.publishIntraday(corr, at);
+                return Set.of();
+            }, List.of());
+            case COLLECT_POST_CLOSE -> {
+                Set<String> missing = new LinkedHashSet<>(DailyCollectionPublisher.POST_CLOSE_SOURCES);
+                try {
+                    missing = ifBroker(job, insight, publisher -> publisher.publishAll(corr, at),
+                            DailyCollectionPublisher.POST_CLOSE_SOURCES);
+                } finally {
+                    // 수집이 일부 실패하거나 예외로 끝나도 마감 후 판 알림은 반드시 낸다.
+                    Set<String> result = missing;
+                    daily.ifPresent(publisher -> publisher.publishPostClose(corr, result));
+                }
+            }
             case COLLECT_ETF_MEMBERS -> members.publishFetched(corr);
         }
     }
 
-    private static <T> void ifBroker(Job job, Optional<T> publisher, Consumer<T> action) {
+    /** 증권사 출처가 아니거나 조회가 예외로 끝나면 그 수집의 자료 종류(whenFailed)를 모두 못 받은 것으로 돌려준다. */
+    private static <T> Set<String> ifBroker(Job job, Optional<T> publisher, Function<T, Set<String>> action,
+                                            List<String> whenFailed) {
         if (publisher.isEmpty()) {
             log.info("market insight skipped, market data source is not the broker jobType={}", job.jobType());
-            return;
+            return new LinkedHashSet<>(whenFailed);
         }
         try {
-            action.accept(publisher.get());
+            return new LinkedHashSet<>(action.apply(publisher.get()));
         } catch (RuntimeException e) {
             log.warn("market insight failed jobType={} errorType={}", job.jobType(), e.getClass().getSimpleName());
+            return new LinkedHashSet<>(whenFailed);
         }
     }
 

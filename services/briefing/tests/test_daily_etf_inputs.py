@@ -72,7 +72,7 @@ def start():
         requests, details = Requests(), Details()
         llm = llm or FakeLlm(post_close_output())
         core = DailyCore(requests, DailyLlmWriter(llm, settings.llm_max_attempts, settings), details, settings)
-        core.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
+        core.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
         core.on_daily_data_responded(daily_response(etfs=three_etfs() if etfs is None else etfs,
                                                     close_rates=close_rates(), background=POST_CLOSE_BACKGROUND),
                                      POST_CLOSE_AT)
@@ -126,7 +126,7 @@ def test_the_edition_waits_for_every_answer_then_goes_out_once(start):
 def test_the_morning_edition_also_requests_articles_per_etf_and_waits_for_them():
     requests = Requests()
     c = DailyCore(requests, None, Details())
-    c.on_schedule_tick(tick(MORNING_JOB, MORNING_AT), MORNING_AT, "morning")
+    c.on_collection_ready(tick(MORNING_JOB, MORNING_AT), MORNING_AT)
     c.on_daily_data_responded(daily_response(etfs=[etf("TEST01"), etf("TEST02")]), MORNING_AT)
     c.on_filings_responded(filings_response(), MORNING_AT)
     assert [p["symbol"] for p in articles_requested(requests)] == ["TEST01", "TEST02"]

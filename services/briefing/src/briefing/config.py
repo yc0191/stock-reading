@@ -102,12 +102,12 @@ class DailySettings:
     us_index_target: str = "C"
     # 마감 후 판 기준 시각(한국 시간)이 이보다 이르면 그날 장이 아직 열리지 않은 것으로 본다(일봉이 모두 등락 0.00일 때만).
     market_open: time = time(9, 0)
-    # 장 시작부터 이 시각 전까지의 급변동은 급변동 리포트를 따로 만들지 않고 아침 판에 합친다. 아침 판 시작 시각(수집기의
-    # collector.daily-briefing.morning-cron 기본 평일 09:10)과 같아야 한다. 합침 구간이 끝난 뒤 이 시간이 지나도 아침 판
+    # 장 시작부터 이 시각 전까지의 급변동은 급변동 리포트를 따로 만들지 않고 아침 판에 합친다. 수집기가 아침 판 시작 알림을 내는
+    # 시각(collector.daily-briefing.morning-cron 기본 평일 09:10)과 같아야 한다. 합침 구간이 끝난 뒤 이 시간이 지나도 아침 판
     # 결과가 없으면 모아 둔 변동을 급변동 리포트로 넘긴다.
     morning_merge_end: time = time(9, 10)
-    # 합침을 켠다. 수집기의 아침 판 tick을 켜는 값(collector.daily-briefing.enabled = COLLECTOR_DAILY_BRIEFING_ENABLED)과
-    # 짝이다. tick이 오지 않는데 켜 두면 합침 구간의 급변동이 grace만큼 늦게 나가므로 꺼져 있으면 바로 리포트를 만든다.
+    # 합침을 켠다. 수집기의 데일리 판 시작 알림을 켜는 값(collector.daily-briefing.enabled = COLLECTOR_DAILY_BRIEFING_ENABLED)과
+    # 짝이다. 알림이 오지 않는데 켜 두면 합침 구간의 급변동이 grace만큼 늦게 나가므로 꺼져 있으면 바로 리포트를 만든다.
     morning_merge_enabled: bool = False
     # 합침 경로가 기억하는 eventId 수. 급변동 묶음기(remembered_jobs)와 같은 상한이다.
     remembered_move_ids: int = 10000
@@ -124,8 +124,15 @@ class DailySettings:
     # 마감 후 판의 그날 급변동 요약에 보여 주는 최대 건수. 넘으면 '외 N건'으로 줄인다.
     max_move_lines: int = 20
     llm_max_attempts: int = 3
-    # 같은 tick 중복 처리를 막기 위해 기억하는 eventId 수.
-    remembered_ticks: int = 1000
+    # 같은 판 시작 알림(daily.collection.completed) 중복 처리를 막기 위해 기억하는 eventId 수.
+    remembered_notices: int = 1000
+    # 한도 시각(한국 시간, 평일): 수집기의 판 시작 알림이 이 시각까지 오지 않으면 있는 자료로 판을 스스로 시작하고 판에
+    # '자료가 낡았을 수 있음'을 표시한다. 수집기 알림 시각(아침 09:10, 마감 후 수집 16:30 뒤)보다 뒤여야 한다.
+    morning_deadline: time = time(9, 20)
+    post_close_deadline: time = time(17, 30)
+    # 한도 시각 안전장치를 켠다. 합침(morning_merge_enabled)과 같은 환경변수(COLLECTOR_DAILY_BRIEFING_ENABLED)로 켠다.
+    # 수집기 알림을 꺼 둔 로컬에서 평일마다 판이 저절로 나가지 않게 한다.
+    deadline_enabled: bool = False
     # 서버 상태 절의 '주의': 판 시각에 시작한 지 이만큼 넘게 진행 중인 작업은 멈춘 것으로 본다.
     stuck_after: timedelta = timedelta(minutes=30)
     # 메일 본문 이벤트(briefing.daily.generated)의 그림 크기 상한. 그림 한 장(base64를 푼 크기)과 이벤트 전체(JSON 바이트)가

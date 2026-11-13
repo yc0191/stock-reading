@@ -311,16 +311,6 @@ BRIEFING_PID=$!
 wait_ready briefing "$TMP/briefing.log" "briefing started:" "$BRIEFING_PID" 60
 grep -qF "daily briefings will be rule-based" "$TMP/briefing.log" && fail "briefing 이 LLM 없이(규칙 기반으로) 시작됐습니다"
 
-# 판 tick 그룹은 latest 부터 읽으므로 파티션을 받기 전에 보낸 tick 은 놓친다. 두 그룹 모두 받을 때까지 기다린다.
-for group in briefing-daily-morning briefing-daily-post-close; do
-  waited=0
-  until docker exec "$KAFKA_NAME" /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server "$BOOTSTRAP" \
-      --describe --group "$group" --members 2>/dev/null | grep -qE '[[:space:]]1[[:space:]]*$'; do
-    [ "$waited" -ge 60 ] && fail "브리핑 $group 그룹이 60초 안에 파티션을 받지 못했습니다"
-    sleep 2; waited=$((waited + 2))
-  done
-done
-
 # ---------------------------------------------------------------- 흐름
 
 NOW=$(TZ=Asia/Seoul date +%Y-%m-%dT%H:%M:%S+09:00)
@@ -338,8 +328,8 @@ until [ "$(count_rows 'SELECT (SELECT count(*) FROM market.daily_price) + (SELEC
 done
 echo "저장 확인: 시세처리기 8건, 뉴스(공시) 1건"
 
-echo "아침 판·마감 후 판 시작 신호 넣기(예정 시각 $NOW)"
-"$PY" scripts/daily_e2e.py ticks || fail "시작 신호를 넣지 못했습니다"
+echo "아침 판·마감 후 판 시작 알림 넣기(판 기준 시각 $NOW)"
+"$PY" scripts/daily_e2e.py notices || fail "시작 알림을 넣지 못했습니다"
 
 # 실제 Claude 는 근거 약한 문장마다 재검색을 요청하고, 이 실행의 news 는 검색하지 않으므로 판이 재검색 전체 상한
 # (CoreSettings.research_total_limit, 15분)까지 기다렸다가 나간다. 그보다 길게 기다린다.

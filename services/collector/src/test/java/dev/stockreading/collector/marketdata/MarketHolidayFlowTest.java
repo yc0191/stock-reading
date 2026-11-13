@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -13,10 +14,12 @@ import java.lang.reflect.Method;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.kafka.core.KafkaTemplate;
 
 import dev.stockreading.collector.Topics;
@@ -28,7 +31,7 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * 리허설: 가짜 시세 서버의 장 운영 상태 응답 → 휴장일 판정 → 수집기 타이머 5곳과 데일리 판 tick 발행기 → 가짜 실행 입구·가짜 Kafka 까지 끝까지 돌린다.
+ * 리허설: 가짜 시세 서버의 장 운영 상태 응답 → 휴장일 판정 → 수집기 타이머 5곳과 데일리 판 시작 알림 발행기 → 가짜 실행 입구·가짜 Kafka 까지 끝까지 돌린다.
  * 타이머와 발행기는 다른 패키지의 package-private 클래스라 리플렉션으로 만든다.
  */
 class MarketHolidayFlowTest {
@@ -79,24 +82,30 @@ class MarketHolidayFlowTest {
                 "collectIntraday");
         fire(publisher(SCHEDULE + "PostCloseTimer", jobs, marketDay), "collectPostClose");
         fire(publisher(SCHEDULE + "MembersTimer", jobs, marketDay), "collectMembers");
-        Object daily = publisher(SCHEDULE + "DailyBriefingTickPublisher", marketDay, kafka, mapper, CLOCK);
-        fire(daily, "publishMorningTick");
-        fire(daily, "publishPostCloseTick");
+        Object daily = publisher(SCHEDULE + "DailyCollectionPublisher", marketDay, kafka, mapper, CLOCK);
+        fire(daily, "publishMorning");
+        fire(daily, "publishPostCloseHoliday");
     }
 
-    private void verifyEveryJobAndTickRan() {
+    private List<String> sentDailyNotices() {
+        ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
+        verify(kafka, atLeast(0)).send(eq(Topics.DAILY_COLLECTION_COMPLETED), anyString(), value.capture());
+        return value.getAllValues();
+    }
+
+    private void verifyEveryJobAndMorningNoticeRan() {
         verify(jobs).start(Job.COLLECT);
         for (Job job : new Job[] {Job.COLLECT_NEWS, Job.COLLECT_PRE_OPEN, Job.COLLECT_INTRADAY, Job.COLLECT_POST_CLOSE,
                 Job.COLLECT_ETF_MEMBERS}) {
             verify(jobs).run(job);
         }
-        for (String jobType : new String[] {"daily-briefing-morning", "daily-briefing-post-close"}) {
-            verify(kafka).send(eq(Topics.SCHEDULE_TICK), eq(jobType), anyString());
-        }
+        // 영업일: 아침 판은 판 시각에 알림이 나가고, 마감 후 판은 마감 후 수집이 끝날 때 나가므로 판 시각에는 내지 않는다.
+        assertThat(sentDailyNotices()).singleElement().asString()
+                .contains("\"edition\":\"morning\"").contains("\"status\":\"collected\"");
     }
 
     @Test
-    void holidayStopsEveryMarketJobAndTickIncludingTheMembersFetchAndKeepsTheNews() throws Exception {
+    void holidayStopsEveryMarketJobIncludingTheMembersFetchKeepsTheNewsAndSendsMarketClosedNotices() throws Exception {
         server.marketStatusBody = FakeBrokerServer.marketStatus("20261110", "20261109");
 
         fireEverySchedule();
@@ -107,18 +116,20 @@ class MarketHolidayFlowTest {
                 Job.COLLECT_ETF_MEMBERS}) {
             verify(jobs, never()).run(job);
         }
-        for (String jobType : new String[] {"daily-briefing-morning", "daily-briefing-post-close"}) {
-            verify(kafka, never()).send(eq(Topics.SCHEDULE_TICK), eq(jobType), anyString());
-        }
+        // 휴장일: 두 판 모두 판 시각에 '휴장이라 수집 안 함'을 낸다.
+        assertThat(sentDailyNotices()).hasSize(2)
+                .allSatisfy(v -> assertThat(v).contains("\"status\":\"market-closed\"").contains("\"missingSources\":[]"))
+                .anySatisfy(v -> assertThat(v).contains("\"edition\":\"morning\""))
+                .anySatisfy(v -> assertThat(v).contains("\"edition\":\"post-close\""));
         // 여러 곳이 물었지만 서버 조회는 하루 한 번이다.
         assertThat(server.marketStatusCalls).hasValue(1);
     }
 
     @Test
-    void businessDayRunsEveryJobAndTick() throws Exception {
+    void businessDayRunsEveryJobAndTheMorningNotice() throws Exception {
         fireEverySchedule();
 
-        verifyEveryJobAndTickRan();
+        verifyEveryJobAndMorningNoticeRan();
     }
 
     @Test
@@ -127,7 +138,7 @@ class MarketHolidayFlowTest {
 
         fireEverySchedule();
 
-        verifyEveryJobAndTickRan();
+        verifyEveryJobAndMorningNoticeRan();
         // 세 번 다시 시도한 뒤 쿨다운 동안은 더 묻지 않는다.
         assertThat(server.marketStatusCalls).hasValue(BrokerMarketDay.MAX_ATTEMPTS);
     }

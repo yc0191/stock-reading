@@ -1,4 +1,4 @@
-"""Flyway V1 파일(services/briefing/db/migration)이 코드가 기대하는 테이블 모양과 같은지 글자로 확인한다. DB는 부르지 않는다.
+"""Flyway 번호 파일(services/briefing/db/migration)이 코드가 기대하는 테이블 모양과 같은지 글자로 확인한다. DB는 부르지 않는다.
 
 값 제한(CHECK)은 코드 enum과 SQL 파일 양쪽에 있으므로 어긋나면 여기서 실패한다.
 실제 Postgres에 적용한 모양은 test_job_log_store_db.py가 확인한다.
@@ -12,6 +12,7 @@ MIGRATIONS = Path(__file__).resolve().parents[1] / "db" / "migration"
 V1 = (MIGRATIONS / "V1__create_briefing_tables.sql").read_text(encoding="utf-8")
 V1_CODE = re.sub(r"--[^\n]*", "", V1)  # 주석에는 JSONB 같은 말이 나올 수 있다
 V2 = (MIGRATIONS / "V2__add_member_briefing_entry_type.sql").read_text(encoding="utf-8")
+V3 = (MIGRATIONS / "V3__create_market_closed_edition.sql").read_text(encoding="utf-8")
 
 
 def table_sql(name):
@@ -31,7 +32,8 @@ def test_the_migration_creates_the_three_tables_without_if_not_exists():
         table_sql(name)
     assert "IF NOT EXISTS" not in V1_CODE.upper()
     assert sorted(MIGRATIONS.glob("V*.sql")) == [MIGRATIONS / "V1__create_briefing_tables.sql",
-                                                MIGRATIONS / "V2__add_member_briefing_entry_type.sql"]
+                                                MIGRATIONS / "V2__add_member_briefing_entry_type.sql",
+                                                MIGRATIONS / "V3__create_market_closed_edition.sql"]
 
 
 def test_run_and_log_columns_follow_the_plan_and_keep_json_as_json():
@@ -65,3 +67,17 @@ def test_the_collection_table_matches_what_the_status_store_writes():
     columns = re.search(r"\((.*?)\)\s*VALUES", INSERT_COLLECTION_SQL, re.S).group(1)
     for column in [c.strip() for c in columns.split(",")]:
         assert re.search(rf"^\s+{column}\s", table_sql("collection_completed"), re.M), column
+
+
+def test_the_market_closed_table_takes_only_the_two_daily_editions_once_a_day():
+    # 휴장 기록은 판 작업이 아니므로 job_run이 아닌 따로 된 표에 둔다(서버 상태 절의 판·실패 건수에 세지지 않게).
+    match = re.search(r"CREATE TABLE market_closed_edition \((.*?)\n\);", V3, re.S)
+    assert match and "IF NOT EXISTS" not in re.sub(r"--[^\n]*", "", V3).upper()
+    values = set(re.findall(r"'([^']+)'", re.search(r"CHECK \(edition IN \((.*?)\)\)", match.group(1)).group(1)))
+    assert values == {JobKind.MORNING.value, JobKind.POST_CLOSE.value}
+    assert "PRIMARY KEY (edition_day, edition)" in match.group(1)
+    from briefing.job_log_store import INSERT_MARKET_CLOSED_SQL
+
+    columns = re.search(r"\((.*?)\)\s*VALUES", INSERT_MARKET_CLOSED_SQL, re.S).group(1)
+    for column in [c.strip() for c in columns.split(",")]:
+        assert re.search(rf"^\s+{column}\s", match.group(1), re.M), column

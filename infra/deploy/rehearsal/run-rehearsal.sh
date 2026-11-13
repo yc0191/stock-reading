@@ -1,6 +1,6 @@
 #!/bin/bash
 # 로컬 리허설: 서버 2대(각 메모리 상한 2GB)를 Docker 컨테이너(dind)로 흉내 내 운영 Compose 전체를 띄우고,
-# 가짜 값을 넣고 가짜 tick 으로 한 바퀴 돌린 뒤 서비스별 메모리를 잰다. 외부 API·AWS·메일은 부르지 않는다(시세는 시뮬레이터, 메일은 드라이런, LLM 키 없음).
+# 가짜 값을 넣고 수동 명령과 판 시작 알림으로 한 바퀴 돌린 뒤 서비스별 메모리를 잰다. 외부 API·AWS·메일은 부르지 않는다(시세는 시뮬레이터, 메일은 드라이런, LLM 키 없음).
 #
 #   데이터 서버  rehearsal-data      172.30.0.10  data.yml     (Kafka, Postgres 는 이 주소에만 포트를 연다)
 #   서비스 서버  rehearsal-services  172.30.0.11  services.yml (서비스 5개와 DB 표 만들기 단계)
@@ -9,7 +9,7 @@
 #   all      build -> up -> seed -> tick -> 기다림 -> 두 번째 배포 -> 측정 요약 -> down   (메모리는 시작부터 끝까지 5초마다 잰다)
 #   up       서버 2대를 만들고 이미지를 옮겨 데이터 서버, 서비스 서버 순서로 띄운다
 #   seed     가짜 종목·멤버·포트폴리오를 DB 에 넣고 수집기·뉴스를 다시 띄운다(두 서비스는 시작할 때 DB 를 읽는다)
-#   tick     수집기 수동 명령과 데일리 판 tick 을 Kafka 로 넣는다
+#   tick     수집기 수동 명령과 데일리 판 시작 알림을 Kafka 로 넣는다
 #   redeploy 서비스가 도는 중에 새 버전 태그(dev2)로 두 번째 배포를 하고, 그 동안 서비스 서버 전체 메모리를 1초 안팎 간격으로 잰다
 #   measure  지금까지 잰 값의 최댓값을 표로 보인다
 #   down     서버 2대와 네트워크, 임시 파일을 지운다
@@ -190,14 +190,14 @@ with_data_docker() {
 }
 
 cmd_tick() {
-  echo "== 가짜 tick 한 바퀴 =="
+  echo "== 수동 명령·판 시작 알림 한 바퀴 =="
   local c
   for c in collect collect-pre-open collect-intraday collect-post-close collect-news collect-etf-members; do
     with_data_docker "$ROOT/scripts/collector-command.sh" "$c"
     sleep 3
   done
-  for c in daily-briefing-morning daily-briefing-post-close; do
-    with_data_docker "$ROOT/scripts/publish-tick.sh" "$c"
+  for c in morning post-close; do
+    with_data_docker "$ROOT/scripts/publish-daily-notice.sh" "$c"
   done
 }
 

@@ -255,7 +255,7 @@ def morning_core(members=None, llm=None):
 
 
 def run_morning(c, requests):
-    c.on_schedule_tick(jobs.tick(at=OPEN_AT), OPEN_AT, "morning")
+    c.on_collection_ready(jobs.tick(at=OPEN_AT), OPEN_AT)
     c.on_daily_data_responded(jobs.daily_response(etfs=[jobs.etf(open_flow=jobs.OPEN_FLOW)]), OPEN_AT)
     c.on_filings_responded(jobs.filings_response(), OPEN_AT)
     answer_news(c, requests, OPEN_AT)
@@ -271,7 +271,7 @@ def test_a_sent_morning_edition_reports_success():
 
 def test_an_etf_without_its_open_flow_in_the_edition_is_not_reported_as_flowed():
     c, requests, notified = morning_core()
-    c.on_schedule_tick(jobs.tick(at=OPEN_AT), OPEN_AT, "morning")
+    c.on_collection_ready(jobs.tick(at=OPEN_AT), OPEN_AT)
     c.on_daily_data_responded(jobs.daily_response(etfs=[
         jobs.etf(open_flow=jobs.OPEN_FLOW), jobs.etf("TEST02", tickers=("TESTC",)),
         jobs.etf("TEST03", tickers=("TESTD",), open_flow={"status": "no-snapshot"})]), OPEN_AT)
@@ -285,7 +285,7 @@ def test_the_morning_edition_is_in_progress_from_its_tick_until_it_finishes():
     c, requests, _ = morning_core()
     day = OPEN_AT.date()
     assert c.morning_in_progress(day) is False
-    c.on_schedule_tick(jobs.tick(at=OPEN_AT), OPEN_AT, "morning")
+    c.on_collection_ready(jobs.tick(at=OPEN_AT), OPEN_AT)
     assert c.morning_in_progress(day) is True
     assert c.morning_in_progress(day + timedelta(days=1)) is False
     c.on_daily_data_responded(jobs.daily_response(etfs=[jobs.etf(open_flow=jobs.OPEN_FLOW)]), OPEN_AT)
@@ -304,7 +304,7 @@ def test_a_morning_edition_that_could_not_read_its_members_reports_failure():
 
 def test_the_post_close_edition_does_not_report_a_morning_result():
     c, requests, notified = morning_core()
-    c.on_schedule_tick(jobs.tick(jobs.POST_CLOSE_JOB, jobs.POST_CLOSE_AT), jobs.POST_CLOSE_AT, "post-close")
+    c.on_collection_ready(jobs.tick(jobs.POST_CLOSE_JOB, jobs.POST_CLOSE_AT), jobs.POST_CLOSE_AT)
     c.on_daily_data_responded(jobs.daily_response(etfs=[jobs.etf(fetched="2026-10-20T16:30:00+09:00")]),
                               jobs.POST_CLOSE_AT)
     c.on_filings_responded(jobs.filings_response(), jobs.POST_CLOSE_AT)

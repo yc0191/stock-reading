@@ -26,7 +26,8 @@ Avro + 스키마 레지스트리, Protobuf
 
 ## 요청·응답 이벤트 규칙
 근거 조회는 요청·응답 이벤트 쌍과 수집 완료 알림(`collection.completed`)으로 한다.
-- `jobId`는 작업을 시작시킨 이벤트(`market.move` 또는 판 시작 `schedule.tick`)의 `eventId`다.
+- `jobId`는 작업을 시작시킨 이벤트(`market.move` 또는 판 시작 알림 `daily.collection.completed`)의 `eventId`다. 알림 없이 한도 시각에 시작한 데일리 판은 판과 날짜로 정한 id를 쓴다.
+  - 2026-11-13 변경: 데일리 판을 시작시키는 이벤트가 `schedule.tick`에서 `daily.collection.completed`로 바뀌었다(ADR-012).
 - `seq`는 요청 순번이다. 응답은 받은 `seq`를 돌려주고, 요청한 쪽은 가장 최근 `seq`의 응답만 반영한다.
 - 요청은 읽기 전용이라 다시 보내도 부작용이 없고, 0건 응답도 정상이다.
 - 기존 응답의 뜻을 바꾸지 않도록, 새 자료는 기존 응답에 얹지 않고 새 쌍으로 더한다.

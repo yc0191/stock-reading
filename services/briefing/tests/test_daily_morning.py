@@ -116,7 +116,7 @@ def run_morning(output, rows=None, articles=None, llm=True):
     requests, details = Requests(), Details()
     writer = DailyLlmWriter(FakeLlm(output), 3) if llm else None
     core = DailyCore(requests, writer, details)
-    core.on_schedule_tick(tick(MORNING_JOB, MORNING_AT), MORNING_AT, "morning")
+    core.on_collection_ready(tick(MORNING_JOB, MORNING_AT), MORNING_AT)
     core.on_daily_data_responded(daily_response(etfs=rows or [{**etf("TEST01"), "etf": ETF_INFO}, etf("TEST02", ())]),
                                  MORNING_AT)
     answer_news(core, requests, MORNING_AT, articles=articles)
@@ -129,7 +129,7 @@ def test_watch_etfs_are_asked_too_and_unrelated_articles_never_reach_claude():
     requests, details = Requests(), Details()
     core = DailyCore(requests, DailyLlmWriter(llm, 3), details,
                      members=FakeMembers([member(1, held=("TEST01",), watched=("TEST02",))]))
-    core.on_schedule_tick(tick(MORNING_JOB, MORNING_AT), MORNING_AT, "morning")
+    core.on_collection_ready(tick(MORNING_JOB, MORNING_AT), MORNING_AT)
     core.on_daily_data_responded(daily_response(etfs=[{**etf("TEST01"), "etf": ETF_INFO}, etf("TEST02", ())]),
                                  MORNING_AT)
     answer_news(core, requests, MORNING_AT, articles={"TEST01": [

@@ -189,7 +189,7 @@ def run_post_close(members, monkeypatch=None, settings=None):
     llm = FakeLlm(post_close_output(symbols=("TEST01", "TEST02", "TEST03"), reasons=REASONS))
     core = DailyCore(requests, DailyLlmWriter(llm, settings.llm_max_attempts), details, settings,
                      members=FakeMembers(members))
-    core.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
+    core.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
     core.on_daily_data_responded(daily_response(etfs=three_etfs(), background=POST_CLOSE_BACKGROUND), POST_CLOSE_AT)
     answer_news(core, requests, POST_CLOSE_AT)
     return requests.topic("briefing.daily.generated"), details, llm
@@ -296,7 +296,7 @@ def test_the_members_are_read_for_the_edition_being_built():
     requests, details = Requests(), Details()
     fake = FakeMembers(MEMBERS)
     core = DailyCore(requests, None, details, members=fake)
-    core.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
+    core.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
     core.on_daily_data_responded(daily_response(etfs=three_etfs(), background=POST_CLOSE_BACKGROUND), POST_CLOSE_AT)
     answer_news(core, requests, POST_CLOSE_AT)
     assert fake.asked == ["post-close"] and len(requests.topic("briefing.daily.generated")) == 3
@@ -305,7 +305,7 @@ def test_the_members_are_read_for_the_edition_being_built():
 def test_a_core_without_a_member_source_does_not_publish():
     requests, details = Requests(), Details()
     core = DailyCore(requests, None, details, members=None)
-    core.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
+    core.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
     core.on_daily_data_responded(daily_response(etfs=three_etfs(), background=POST_CLOSE_BACKGROUND), POST_CLOSE_AT)
     answer_news(core, requests, POST_CLOSE_AT)
     assert requests.topic("briefing.daily.generated") == []
@@ -332,7 +332,7 @@ def test_a_summary_that_names_an_etf_is_retried_so_other_members_never_read_it()
     good = post_close_output(symbols=("TEST01", "TEST02", "TEST03"), reasons=REASONS)
     llm = FakeLlm(bad, good)
     core = DailyCore(requests, DailyLlmWriter(llm, 3), details, DailySettings(), members=FakeMembers(MEMBERS))
-    core.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
+    core.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
     core.on_daily_data_responded(daily_response(etfs=three_etfs(), background=POST_CLOSE_BACKGROUND), POST_CLOSE_AT)
     answer_news(core, requests, POST_CLOSE_AT)
     assert len(llm.calls) == 2

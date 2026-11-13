@@ -1,6 +1,7 @@
 """데일리 판(아침 판, 마감 후 판) 작업. Kafka를 모르며 메시지와 시각을 인자로 받아 상태만 움직인다.
 
-흐름: schedule.tick(판마다 따로 받음) -> 범위 계산 -> 데일리 자료 요청(market.daily.requested)
+흐름: 수집기의 판 시작 알림(daily.collection.completed) 또는 한도 시각(알림이 끝내 오지 않을 때) -> 같은 날 같은 판을
+이미 만들었으면 그만둠 -> 범위 계산 -> 데일리 자료 요청(market.daily.requested)
 -> 아침 판이고 미국 종목이 있으면 그 티커로 공시 요청 -> 받은 자료 재검사 -> 본문(LLM 또는 규칙 기반)
 -> (LLM이 약한 문장을 냈으면 문장마다 뉴스 재검색 -> 그 문장만 다시 쓰기, 근거 부족이면 보고서 전체를 한 번 재검색)
 -> 멤버마다 그 멤버의 포트폴리오 ETF만 담은 판을 짜서 briefing.daily.generated 발행(LLM 본문은 판 하나에 한 번만 쓴다).
@@ -13,7 +14,6 @@ import base64
 import json
 import logging
 import uuid
-from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from typing import Any, Callable
@@ -26,6 +26,7 @@ from briefing.daily_members import MemberPort, MemberPortfolio, member_input, me
 from briefing.daily_morning import outlook_records
 from briefing.daily_inputs import EtfArticles, member_issues, moves_with_market, notable_candidates
 from briefing.daily_relevance import split_related
+from briefing.daily_start import DailyStart
 from briefing.daily_review import MORNING_READ_FAILED, NO_ACTUAL_RATES, NO_MORNING_CALLS, ReviewInput, parse_calls
 from briefing.daily_report import (
     Section,
@@ -49,9 +50,9 @@ from briefing.daily_report import (
 from briefing.events import (
     EDITION_MORNING,
     EDITION_POST_CLOSE,
+    EDITIONS,
     ARTICLES_REQUESTED_TOPIC,
     FILINGS_REQUESTED_TOPIC,
-    JOB_TYPE_BY_EDITION,
     OutboundEvent,
     daily_briefing_event,
     format_timestamp,
@@ -102,7 +103,6 @@ CHART_FAILED_ITEM = "하루 등락 차트: 그리지 못함"
 # 서버 상태 절을 만들다 실패했을 때 본문 끝에 대신 붙이는 절.
 NO_STATUS_TEXT = "──────── 서버 상태 ────────\n- 자료 없음"
 
-SCHEDULE_TICK = "schedule.tick"
 DAILY_DATA_REQUESTED_TOPIC = "market.daily.requested"
 DAILY_DATA_RESPONDED = "market.daily.responded"
 FILINGS_RESPONDED = "news.filings.responded"
@@ -211,6 +211,8 @@ class _DailyJob:
     researching: bool = False
     # 아침 판만: 개장 시세를 읽을 구간의 시작. 판 시각이 장 시작 전이라 읽지 않으면 None.
     open_flow_since: datetime | None = None
+    # 판을 시작시킨 쪽이 알린 빠진 자료(못 받은 수집 자료, 알림 없이 시작함). 판의 자료 없음 목록 맨 앞에 붙는다.
+    notes: tuple[str, ...] = ()
 
     def waiting(self) -> bool:
         return (self.data.awaiting() and not self.data_given_up) or (self.filings.awaiting() and not self.filings_given_up) \
@@ -235,9 +237,10 @@ class DailyCore:
     # 장 시작 뒤 급변동을 아침 판에 합쳤는지 정하는 데 쓴다.
     on_morning_result: Callable[[datetime, bool, datetime, frozenset[str], datetime | None], None] | None = None
     _jobs: dict[str, _DailyJob] = field(default_factory=dict, init=False)
-    _seen: OrderedDict[str, None] = field(default_factory=OrderedDict, init=False)
+    _starter: DailyStart = field(init=False)
 
     def __post_init__(self) -> None:
+        self._starter = DailyStart(self.start, self.job_log, self.settings)
         if self.sentences is not None:
             adapter = DailySentences(self)
             for edition in EDITION_JOB_KINDS:
@@ -245,37 +248,27 @@ class DailyCore:
 
     # ---- 입력 ----
 
-    def on_schedule_tick(self, message: str | bytes, now: datetime, edition: str) -> None:
-        """판 하나의 시작 신호. 그 판의 jobType만 처리하고 같은 eventId는 한 번만 처리한다. 형식이 잘못되면 ValueError."""
-        try:
-            tick = json.loads(message)
-            if tick["eventType"] != SCHEDULE_TICK:
-                raise ValueError(f"unexpected eventType: {tick['eventType']}")
-            job_type = tick["payload"]["jobType"]
-            if job_type != JOB_TYPE_BY_EDITION[edition]:
-                return
-            job_id = tick["eventId"]
-            scheduled_for = parse_timestamp(tick["payload"]["scheduledFor"])
-            correlation_id = tick["correlationId"]
-        except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
-            raise ValueError(f"malformed schedule.tick event: {error!r}") from error
-        if job_id in self._seen:
-            log.info("duplicate daily tick %s (%s) ignored", job_id, edition)
-            return
-        self._seen[job_id] = None
-        while len(self._seen) > self.settings.remembered_ticks:
-            self._seen.popitem(last=False)
-        job = _DailyJob(job_id, edition, correlation_id, scheduled_for, range_start(scheduled_for, self.settings))
+    def on_collection_ready(self, message: str | bytes, now: datetime) -> None:
+        """수집기의 판 시작 알림(daily.collection.completed). 판을 시작할지는 DailyStart가 정한다. 형식이 잘못되면 ValueError."""
+        self._starter.on_collection_ready(message, now)
+
+    def check_deadlines(self, now: datetime) -> None:
+        """한도 시각까지 판 시작 알림이 없으면 있는 자료로 판을 시작한다."""
+        self._starter.check_deadlines(now)
+
+    def start(self, job_id: str, edition: str, correlation_id: str, scheduled_for: datetime, raw: str,
+               now: datetime, notes: tuple[str, ...]) -> None:
+        job = _DailyJob(job_id, edition, correlation_id, scheduled_for, range_start(scheduled_for, self.settings),
+                        notes=notes)
         if edition == EDITION_MORNING:
             job.open_flow_since = open_flow_start(scheduled_for, self.core_settings)
         self._jobs[job_id] = job
-        # 작업 한 줄은 시작 때 만들고 끝날 때 고친다. 입력은 시작시킨 이벤트 원문이다.
-        raw = message.decode("utf-8") if isinstance(message, bytes) else message
+        # 작업 한 줄은 시작 때 만들고 끝날 때 고친다. 입력은 시작시킨 알림 원문(한도 시각이면 그 사실)이다.
         self.job_log.start(JobStart(job_id, JobKind(edition), raw,
                                     range_target(format_timestamp(job.range_start), format_timestamp(scheduled_for)),
                                     now))
-        log.info("daily %s started: job=%s range=%s~%s", edition, job_id,
-                 format_timestamp(job.range_start), format_timestamp(scheduled_for))
+        log.info("daily %s started: job=%s range=%s~%s notes=%d", edition, job_id,
+                 format_timestamp(job.range_start), format_timestamp(scheduled_for), len(notes))
         self._send_data(job, now)
 
     def on_daily_data_responded(self, message: str | bytes, now: datetime) -> None:
@@ -803,8 +796,7 @@ class DailyCore:
                 mine_sections = member_sections(mine, sections, self.settings)
                 mine_draft = replace(draft, output=member_output(draft.output, mine, mine_sections))
                 text = daily_text(mine, mine_sections, mine_draft.output, status_text)
-                missing = missing_items(mine_sections)
-                missing = [*missing, *status_missing]
+                missing = [*job.notes, *missing_items(mine_sections), *status_missing]
                 event, _ = self._daily_event(job, now, member.member_id, mine, mine_sections, mine_draft, text,
                                              status_text, missing)
             except Exception as error:  # noqa: BLE001 - 멤버 한 명의 판이 실패해도 다른 멤버의 판은 낸다
@@ -817,7 +809,7 @@ class DailyCore:
 
     def _publish(self, job: _DailyJob, now: datetime, daily_input: DailyInput, sections: tuple[Section, ...],
                  draft: _Draft, research_count: int = 0) -> None:
-        missing = missing_items(sections)
+        missing = [*job.notes, *missing_items(sections)]
         by_ref = {e.ref: e for s in sections for e in s.entries}
         report = self._status_report(job, now, draft, research_count)
         status_text = report.text if report is not None else None

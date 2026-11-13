@@ -11,7 +11,7 @@
     "schemaVersion": { "const": 1 },
     "occurredAt": { "type": "string", "format": "date-time", "description": "SEC 접수 시각(payload.acceptedAt과 같다)." },
     "producedAt": { "type": "string", "format": "date-time" },
-    "correlationId": { "type": "string", "minLength": 1, "description": "수집을 시작시킨 schedule.tick의 correlationId를 이어받는다." },
+    "correlationId": { "type": "string", "minLength": 1, "description": "수집 회차(수집기 타이머 또는 수동 실행 명령)의 correlationId를 이어받는다." },
     "payload": {
       "type": "object",
       "required": ["tickers", "cik", "accessionNumber", "form", "items", "acceptedAt", "filingDate", "url"],

@@ -275,7 +275,7 @@ def run(store, llm, etfs=None, settings=DailySettings(), at=POST_CLOSE_AT):
     requests = Requests()
     writer = DailyLlmWriter(llm, settings.llm_max_attempts) if llm is not None else None
     core = DailyCore(requests, writer, store, settings)
-    core.on_schedule_tick(tick(POST_CLOSE_JOB, at), at, "post-close")
+    core.on_collection_ready(tick(POST_CLOSE_JOB, at), at)
     core.on_daily_data_responded(daily_response(etfs=etfs or ETFS, background=POST_CLOSE_BACKGROUND), at)
     answer_news(core, requests, at)
     [event] = published(requests)

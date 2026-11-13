@@ -12,12 +12,14 @@ import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -58,11 +60,101 @@ class CollectorJobsTest {
     }
 
     private CollectorJobs broker() {
-        return new CollectorJobs(quotes, news, filings, Optional.of(insight), Optional.of(intraday), members, CLOCK);
+        return new CollectorJobs(quotes, news, filings, Optional.of(insight), Optional.of(intraday), members,
+                Optional.empty(), CLOCK);
     }
 
     private CollectorJobs simulator() {
-        return new CollectorJobs(quotes, news, filings, Optional.empty(), Optional.empty(), members, CLOCK);
+        return new CollectorJobs(quotes, news, filings, Optional.empty(), Optional.empty(), members,
+                Optional.empty(), CLOCK);
+    }
+
+    private final DailyCollectionPublisher daily = mock(DailyCollectionPublisher.class);
+
+    private CollectorJobs withDaily(Optional<InsightPublisher> source) {
+        return new CollectorJobs(quotes, news, filings, source, Optional.of(intraday), members, Optional.of(daily), CLOCK);
+    }
+
+    @Test
+    void preOpenRecordsWhatItMissedForTheMorningNotice() {
+        when(insight.publishPreOpen(anyString(), anyString())).thenReturn(Set.of("overseas-daily-price"));
+        when(filings.publishCollected(anyString())).thenReturn(false);
+
+        withDaily(Optional.of(insight)).run(Job.COLLECT_PRE_OPEN);
+
+        verify(daily).recordPreOpen(Set.of("overseas-daily-price", "sec-filings"));
+    }
+
+    @Test
+    void preOpenThatGotEverythingRecordsNothingMissing() {
+        when(insight.publishPreOpen(anyString(), anyString())).thenReturn(Set.of());
+        when(filings.publishCollected(anyString())).thenReturn(true);
+
+        withDaily(Optional.of(insight)).run(Job.COLLECT_PRE_OPEN);
+
+        verify(daily).recordPreOpen(Set.of());
+    }
+
+    @Test
+    void preOpenWhoseInsightPartFailsOrIsNotTheBrokerCountsBothOfItsSourcesAsMissing() {
+        doThrow(new IllegalStateException("insight down")).when(insight).publishPreOpen(anyString(), anyString());
+        when(filings.publishCollected(anyString())).thenReturn(true);
+
+        withDaily(Optional.of(insight)).run(Job.COLLECT_PRE_OPEN);
+        withDaily(Optional.empty()).run(Job.COLLECT_PRE_OPEN);
+
+        verify(daily, times(2)).recordPreOpen(Set.of("world-index", "overseas-daily-price"));
+    }
+
+    @Test
+    void preOpenStillRecordsAResultWhenTheFilingsPartThrows() {
+        when(insight.publishPreOpen(anyString(), anyString())).thenReturn(Set.of());
+        doThrow(new IllegalStateException("edgar down")).when(filings).publishCollected(anyString());
+
+        assertThatThrownBy(() -> withDaily(Optional.of(insight)).run(Job.COLLECT_PRE_OPEN))
+                .isInstanceOf(IllegalStateException.class);
+
+        verify(daily).recordPreOpen(Set.of("world-index", "overseas-daily-price", "sec-filings"));
+    }
+
+    @Test
+    void postCloseSendsTheNoticeWithWhatItMissedWhenItEnds() {
+        when(insight.publishAll(anyString(), anyString())).thenReturn(Set.of("market-summary"));
+
+        withDaily(Optional.of(insight)).run(Job.COLLECT_POST_CLOSE);
+
+        verify(daily).publishPostClose("collect-post-close-" + AT, Set.of("market-summary"));
+    }
+
+    @Test
+    void postCloseThatFailsOrIsNotTheBrokerStillSendsTheNoticeWithEverySourceMissing() {
+        doThrow(new IllegalStateException("insight down")).when(insight).publishAll(anyString(), anyString());
+        Set<String> all = Set.of("daily-price", "world-index", "exchange-rate-summary", "market-summary");
+
+        withDaily(Optional.of(insight)).run(Job.COLLECT_POST_CLOSE);
+        withDaily(Optional.empty()).run(Job.COLLECT_POST_CLOSE);
+
+        verify(daily, times(2)).publishPostClose("collect-post-close-" + AT, all);
+    }
+
+    @Test
+    void aManualPostCloseRunAlsoSendsTheNotice() throws Exception {
+        when(insight.publishAll(anyString(), anyString())).thenReturn(Set.of());
+
+        withDaily(Optional.of(insight)).startOnDemand(Job.COLLECT_POST_CLOSE);
+
+        verify(daily, timeout(5_000)).publishPostClose("collect-post-close-" + AT, Set.of());
+    }
+
+    @Test
+    void otherJobsSendNoDailyNotice() {
+        CollectorJobs jobs = withDaily(Optional.of(insight));
+
+        for (Job job : new Job[] {Job.COLLECT, Job.COLLECT_NEWS, Job.COLLECT_INTRADAY, Job.COLLECT_ETF_MEMBERS}) {
+            jobs.run(job);
+        }
+
+        verifyNoInteractions(daily);
     }
 
     @Test

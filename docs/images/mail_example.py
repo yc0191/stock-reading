@@ -50,7 +50,7 @@ req=Requests(); from fake_members import FakeMembers
 details=Details()
 seed_morning(details, [("TEST01","상승"),("TEST02","상승"),("TEST03","보합")])
 core=DailyCore(req, DailyLlmWriter(llm,1), details, members=FakeMembers())
-core.on_schedule_tick(tick(POST_CLOSE_JOB, AT), AT, "post-close")
+core.on_collection_ready(tick(POST_CLOSE_JOB, AT), AT)  # tick: 수집기의 판 시작 알림(daily.collection.completed)을 만드는 테스트 보조
 cr=[{"ticker":"FAKEA","date":"20261019","closeAt":"2026-10-20T05:00:00+09:00","rate":"3.10","fetchedAt":"2026-10-20T08:30:02+09:00"}]
 core.on_daily_data_responded(daily_response(etfs=ETFS, close_rates=cr, background=[WORLD_C, {**EXCHANGE,"response":response([fx_row(value="     1385.2000", change="       -5.3000", rate="     -0.38")])}, {**MARKET,"fetchedAt":"2026-10-20T16:30:05+09:00","response":response([index_row(KOSPI_NAME,"  2620.50","    28.51","   1.10","2"), index_row(KOSDAQ_NAME,"   812.40","     6.85","   0.85","2")])}]), AT)
 arts={"TEST01":[article("a1","TEST 반도체 수출 사상 최대…가짜반도체 강세","2026-10-20T10:00:00+09:00")],

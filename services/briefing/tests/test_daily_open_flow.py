@@ -34,7 +34,7 @@ def at(hour, minute, second=0):
 
 
 def start_job(c, now=OPEN_AT, response=None):
-    c.on_schedule_tick(tick(at=now), now, "morning")
+    c.on_collection_ready(tick(at=now), now)
     c.on_daily_data_responded(response or daily_response(etfs=[etf(open_flow=OPEN_FLOW)]), now)
     c.on_filings_responded(filings_response(), now)
 
@@ -93,7 +93,7 @@ def test_signed_rates():
 
 def test_the_morning_request_asks_for_the_open_flow_from_the_market_open(core):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(at=OPEN_AT), OPEN_AT, "morning")
+    c.on_collection_ready(tick(at=OPEN_AT), OPEN_AT)
 
     [request] = requests.topic("market.daily.requested")
     assert request.value["payload"]["openFlowSince"] == "2026-10-20T09:00:00+09:00"
@@ -102,9 +102,8 @@ def test_the_morning_request_asks_for_the_open_flow_from_the_market_open(core):
 
 def test_no_open_flow_is_requested_before_the_market_opens_or_by_the_post_close_edition(core):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(), MORNING_AT, "morning")
-    c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT, "9d3b5e17-6c2a-4f90-b1e4-7a9c0d2f3e68"),
-                       POST_CLOSE_AT, "post-close")
+    c.on_collection_ready(tick(), MORNING_AT)
+    c.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT, "9d3b5e17-6c2a-4f90-b1e4-7a9c0d2f3e68"), POST_CLOSE_AT)
 
     assert all("openFlowSince" not in e.value["payload"] for e in requests.topic("market.daily.requested"))
 
@@ -176,7 +175,7 @@ def test_an_etf_without_any_quote_in_the_range_is_listed_as_a_gap(core):
 
 def test_the_post_close_edition_drops_an_open_flow_it_did_not_ask_for(core, caplog):
     c, requests, _, _ = core()
-    c.on_schedule_tick(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT, "post-close")
+    c.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
     with caplog.at_level(logging.WARNING):
         c.on_daily_data_responded(daily_response(etfs=[etf(fetched="2026-10-20T16:30:00+09:00", open_flow=OPEN_FLOW)]), POST_CLOSE_AT)
 

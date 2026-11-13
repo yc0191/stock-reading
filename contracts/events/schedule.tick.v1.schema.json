@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://stock-reading.local/contracts/schedule.tick.v1",
   "title": "schedule.tick v1",
-  "description": "예약된 작업의 실행 시각이 되면 타이머가 발행한다. 임시 봉투 형식(ADR-010 초안).",
+  "description": "더 이상 쓰지 않음(2026-11-13). 수집기 자신의 수집은 수집기 안 타이머와 수동 실행 명령(collector.command, ADR-012), ETF 구성 종목 조회는 수집기 타이머와 etf.members.fetched, 데일리 판 시작은 daily.collection.completed 로 대체했다. 옛 이벤트를 읽을 수 있게 스키마와 샘플만 남긴다(ADR-010 호환 규칙). 예약된 작업의 실행 시각이 되면 타이머가 발행했다. 임시 봉투 형식(ADR-010 초안).",
   "type": "object",
   "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
   "properties": {

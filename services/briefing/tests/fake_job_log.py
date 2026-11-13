@@ -19,6 +19,8 @@ class FakeJobLog:
         # fail_unfinished를 부른 시각들과, 그때 돌려줄 이전 실행의 작업 id
         self.unfinished_calls = []
         self.unfinished_ids = []
+        # 휴장 기록(market_closed_edition): (한국 날짜, 판 값)
+        self.closed = set()
 
     def start(self, run):
         if self.fail:
@@ -78,6 +80,26 @@ class FakeJobLog:
             if run is not None:
                 runs.append(run)
         return runs
+
+    def edition_started(self, kind, day):
+        """그날(한국 시간) 이 종류의 작업이 시작됐는가. fail_reads면 읽지 못함(None)."""
+        if self.fail_reads:
+            return None
+        kind = getattr(kind, "value", kind)
+        return any(getattr(s.job_kind, "value", s.job_kind) == kind and s.started_at.astimezone(KST).date() == day
+                   for s in self.starts)
+
+    def mark_market_closed(self, kind, day, event_id, at):
+        if self.fail:
+            return False
+        self.closed.add((day, getattr(kind, "value", kind)))
+        return True
+
+    def market_closed(self, kind, day):
+        """그날(한국 시간) 이 판의 휴장 기록이 있는가. fail_reads면 읽지 못함(None)."""
+        if self.fail_reads:
+            return None
+        return (day, getattr(kind, "value", kind)) in self.closed
 
     def of_reason(self, reason):
         return [e for e in self.entries if e.reason == getattr(reason, "value", reason)]

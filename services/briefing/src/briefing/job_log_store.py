@@ -33,6 +33,7 @@ log = logging.getLogger("briefing.job_log_store")
 
 RUN_TABLE = "briefing.job_run"
 LOG_TABLE = "briefing.job_log"
+CLOSED_TABLE = "briefing.market_closed_edition"
 
 # 이전 실행이 끝내지 못하고 남긴 작업. started_at 조건은 이번 실행이 시작한 뒤에 만든 작업을 건드리지 않기 위한 것이다.
 FAIL_UNFINISHED_SQL = f"""
@@ -74,6 +75,28 @@ SELECT job_id, input::text, target::text, status, generated_by, failure_reason
 FROM {RUN_TABLE}
 WHERE job_kind = %s AND started_at >= %s AND started_at <= %s
 ORDER BY started_at, job_id
+"""
+
+# 그날(한국 시간 하루) 이 종류의 작업이 시작됐는가. 데일리 판을 하루 한 번만 만드는 데 쓴다.
+SELECT_EDITION_STARTED_SQL = f"""
+SELECT 1
+FROM {RUN_TABLE}
+WHERE job_kind = %s AND started_at >= %s AND started_at < %s
+LIMIT 1
+"""
+
+# 휴장 알림을 받은 날의 판. 같은 날 같은 판의 알림이 다시 와도 첫 줄만 남긴다.
+INSERT_MARKET_CLOSED_SQL = f"""
+INSERT INTO {CLOSED_TABLE} (edition_day, edition, event_id, recorded_at)
+VALUES (%s, %s, %s, %s)
+ON CONFLICT (edition_day, edition) DO NOTHING
+"""
+
+SELECT_MARKET_CLOSED_SQL = f"""
+SELECT 1
+FROM {CLOSED_TABLE}
+WHERE edition_day = %s AND edition = %s
+LIMIT 1
 """
 
 # 저장에 실패한 작업 id를 기억하는 수. 메모리가 무한히 늘지 않게 한다.
@@ -155,6 +178,18 @@ class PostgresJobLog:
             return None
         parsed = (parse_move_run(r[0], r[1], r[2], r[3], r[4], r[5]) for r in rows)
         return [m for m in parsed if m is not None]
+
+    def edition_started(self, kind: JobKind, day: date) -> bool | None:
+        start = datetime.combine(day, day_time.min, tzinfo=KST)
+        rows = self._read(SELECT_EDITION_STARTED_SQL, (kind.value, start, start + timedelta(days=1)))
+        return None if rows is None else bool(rows)
+
+    def mark_market_closed(self, kind: JobKind, day: date, event_id: str, at: datetime) -> bool:
+        return self._save(INSERT_MARKET_CLOSED_SQL, (day, kind.value, event_id, at), event_id, "market-closed")
+
+    def market_closed(self, kind: JobKind, day: date) -> bool | None:
+        rows = self._read(SELECT_MARKET_CLOSED_SQL, (day, kind.value))
+        return None if rows is None else bool(rows)
 
     def _read(self, sql: str, params: tuple) -> list[tuple] | None:
         """조회에 실패하면 None. 예외 메시지에는 접속 정보가 섞일 수 있어 종류 이름만 남긴다."""

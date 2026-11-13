@@ -554,7 +554,7 @@ class DailyFlow:
         return research_job_id(TICK_ID, no, round_no)
 
     def to_first_report(self):
-        self.core.on_schedule_tick(tick(self.job_type, self.at), self.now, self.edition)
+        self.core.on_collection_ready(tick(self.job_type, self.at), self.now)
         etfs, background, close_rates = self.etfs, None, None
         if self.edition == "post-close":
             # 마감 후 판의 범위는 그날 오후라 그 안에 받은 값으로 바꾼다.

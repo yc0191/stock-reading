@@ -19,7 +19,7 @@ SERVICES = {
     "collector": dict(title="수집기", lang="Java", logic=[
         "타이머: 1초 시세, 주기마다 뉴스·공시·지수·환율",
         "시세 응답 칸 검사, 휴장일 판정",
-        "판 시작 시각에 신호 발행"]),
+        "판 수집 끝나면 판 시작 알림 발행"]),
     "briefing": dict(title="브리핑", lang="Python", logic=[
         "급변동 한 건 / 하루 두 번 판마다 작업 시작",
         "시세처리기·뉴스처리기에서 범위 안 근거 조회",
@@ -48,7 +48,7 @@ def chip_width(name):
 FLOWS = [
     ("collector", "news", "news.collected", "g"),
     ("collector", "market", "market.snapshot", "r"),
-    ("collector", "briefing", "schedule.tick", "b"),
+    ("collector", "briefing", "daily.collection.completed", "b"),
     ("market", "briefing", "market.move", "r"),
     ("briefing", "notifier", "briefing.generated", "r"),
     ("briefing", "notifier", "briefing.daily.generated", "b"),
@@ -126,7 +126,7 @@ def svg(theme):
     chip(560, mid1, "market.snapshot", "r")
     # 수집기 → 브리핑 (허브 안에서 돌아 올라감)
     path([(628, top_b), (628, mid2), (740, mid2), (740, top_b)], "b")
-    chip(684, mid2, "schedule.tick", "b")
+    chip(684, mid2, "daily.collection.completed", "b")
     # 시세처리기 → 브리핑 (아래 → 위)
     path([(800, low_t), (800, top_b)], "r")
     chip(800, mid1, "market.move", "r")
