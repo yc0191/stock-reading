@@ -68,6 +68,7 @@ from briefing.sources import (
     parse_filings,
     response_payload,
 )
+from briefing.trace import correlation_context
 
 log = logging.getLogger("briefing.jobs")
 
@@ -427,18 +428,23 @@ class BriefingCore:
     def on_tick(self, now: datetime) -> None:
         """제한 시간이 지난 작업을 처리한다. 주기적으로, 또는 next_deadline 시각에 부른다."""
         for job in list(self._jobs.values()):
-            if job.phase is _Phase.WAITING_COLLECTION:
-                if now - job.created_at >= self.settings.collection_wait_limit:
-                    self._fail(job, FailureReason.COLLECTION_NOT_COVERED,
-                               "no usable collection.completed within the wait limit", 0, now)
-                else:
-                    self._tick_early(job, now)
-            elif job.phase is _Phase.FETCHING:
-                # 같은 시각에 여럿이 끝나도 실패는 한 번만 기록된다. 앞의 판정이 작업을 끝내면 나머지는 건너뛴다.
-                for tick in (self._tick_market, self._tick_news, self._tick_context, self._tick_filings):
-                    if job.phase is not _Phase.FETCHING:
-                        break
-                    tick(job, now)
+            # 메시지 처리 밖에서 도는 작업이라 그 작업의 추적 ID를 로그 줄에 직접 건다.
+            with correlation_context(job.correlation_id):
+                self._tick_job(job, now)
+
+    def _tick_job(self, job: _Job, now: datetime) -> None:
+        if job.phase is _Phase.WAITING_COLLECTION:
+            if now - job.created_at >= self.settings.collection_wait_limit:
+                self._fail(job, FailureReason.COLLECTION_NOT_COVERED,
+                           "no usable collection.completed within the wait limit", 0, now)
+            else:
+                self._tick_early(job, now)
+        elif job.phase is _Phase.FETCHING:
+            # 같은 시각에 여럿이 끝나도 실패는 한 번만 기록된다. 앞의 판정이 작업을 끝내면 나머지는 건너뛴다.
+            for tick in (self._tick_market, self._tick_news, self._tick_context, self._tick_filings):
+                if job.phase is not _Phase.FETCHING:
+                    break
+                tick(job, now)
 
     def next_deadline(self) -> datetime | None:
         """다음에 on_tick을 불러야 하는 가장 이른 시각. 할 일이 없으면 None."""

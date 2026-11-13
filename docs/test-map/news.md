@@ -12,5 +12,6 @@
 | 기사 조회 응답(종목·기간, 재검색 작업 id, ETF는 자체 기사 먼저 그다음 구성 종목 기사) | ArticleQueryRepository, ArticlesPublisher, ArticlesRequestEnvelope, ArticlesRequestListener | ArticlesContractTest | ArticlesPublisherTest, ArticlesRequestListenerTest | ArticleQueryIntegrationTest [DB, 켜는 조건: NEWS_IT_DB_URL·NEWS_IT_DB_USER·NEWS_IT_DB_PASSWORD]; scripts/test_briefing_flow_live.py [서비스 흐름, 켜는 조건: test-all.sh --live] |
 | 공시 조회 응답 | FilingQueryRepository, FilingsPayload, FilingsPublisher, FilingsRequestEnvelope, FilingsRequestListener | FilingsContractTest | FilingsRequestListenerTest | FilingsQueryIntegrationTest [DB, 켜는 조건: NEWS_IT_DB_URL·NEWS_IT_DB_USER·NEWS_IT_DB_PASSWORD] |
 | ETF 구성 종목 읽기(시작할 때 market.etf_stock_map을 읽기 전용으로 읽어 보관, 읽지 못하면 시작 중단, 읽기만 가능하고 쓰기는 거부됨) | EtfStockMembers | 해당 없음 - 표를 읽어 모으기만 하며 기사 조회 응답 행의 가상 테스트가 이 보관값을 가짜로 바꿔 확인함 | 해당 없음 - 기사 조회 응답 행에서 가짜 구성 종목으로 확인 | EtfStockMembersIntegrationTest [DB, 켜는 조건: NEWS_IT_DB_URL·NEWS_IT_DB_USER·NEWS_IT_DB_PASSWORD·MARKET_IT_DB_USER·MARKET_IT_DB_PASSWORD] |
+| 추적 ID(보내는 메시지 헤더 correlationId, 메시지 처리 중 로그 줄의 correlationId, HTTP 헤더 이름) | CorrelationId, CorrelationIdConfig, CorrelationIdProducerInterceptor, CorrelationIdRecordInterceptor | CorrelationIdProducerInterceptorTest, CorrelationIdLoggingTest | 해당 없음 - 헤더·로그 문맥만 다루며 외부 의존을 부르지 않음 | 없음 - 실제 Kafka로 서비스를 이어 로그를 찾는 자동 테스트는 아직 없음 |
 
 테스트 도우미: ContractSchemas

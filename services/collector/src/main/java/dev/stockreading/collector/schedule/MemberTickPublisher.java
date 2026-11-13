@@ -16,6 +16,7 @@ import dev.stockreading.collector.event.Envelope;
 import dev.stockreading.collector.event.EventFactory;
 import dev.stockreading.collector.event.TickPayload;
 import dev.stockreading.collector.marketdata.MarketDayPort;
+import dev.stockreading.collector.trace.CorrelationId;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -45,19 +46,23 @@ class MemberTickPublisher {
 
     @Scheduled(cron = "${collector.members.cron}", zone = "Asia/Seoul")
     void publishMembersTick() {
-        if (!marketDay.isBusinessDay()) {
-            log.info("skipped schedule.tick jobType={} reason=market-holiday", JOB_COLLECT_MEMBERS);
-            return;
-        }
         OffsetDateTime scheduledFor = OffsetDateTime.now(clock).truncatedTo(ChronoUnit.SECONDS);
         String scheduledForText = EventFactory.format(scheduledFor);
-        Envelope<TickPayload> tick = EventFactory.create(
-                clock,
-                "schedule.tick",
-                scheduledFor,
-                JOB_COLLECT_MEMBERS + "-" + scheduledForText,
-                new TickPayload(JOB_COLLECT_MEMBERS, scheduledForText));
-        kafka.send(Topics.SCHEDULE_TICK, JOB_COLLECT_MEMBERS, mapper.writeValueAsString(tick));
-        log.info("published schedule.tick jobType={} scheduledFor={}", JOB_COLLECT_MEMBERS, scheduledForText);
+        String correlationId = JOB_COLLECT_MEMBERS + "-" + scheduledForText;
+        // 메시지 처리 밖(타이머 스레드)에서 찍는 줄이라 발행할 tick 의 correlationId 를 직접 로그 문맥에 둔다.
+        CorrelationId.within(correlationId, () -> {
+            if (!marketDay.isBusinessDay()) {
+                log.info("skipped schedule.tick jobType={} reason=market-holiday", JOB_COLLECT_MEMBERS);
+                return;
+            }
+            Envelope<TickPayload> tick = EventFactory.create(
+                    clock,
+                    "schedule.tick",
+                    scheduledFor,
+                    correlationId,
+                    new TickPayload(JOB_COLLECT_MEMBERS, scheduledForText));
+            kafka.send(Topics.SCHEDULE_TICK, JOB_COLLECT_MEMBERS, mapper.writeValueAsString(tick));
+            log.info("published schedule.tick jobType={} scheduledFor={}", JOB_COLLECT_MEMBERS, scheduledForText);
+        });
     }
 }

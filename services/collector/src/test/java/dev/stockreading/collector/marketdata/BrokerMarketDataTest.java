@@ -11,10 +11,12 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import dev.stockreading.collector.trace.CorrelationId;
 import tools.jackson.databind.json.JsonMapper;
 
 class BrokerMarketDataTest {
@@ -221,6 +223,29 @@ class BrokerMarketDataTest {
                     .doesNotContain("12345", "10000", "10100", "9800", "dataBody", PriceChecks.RATE);
         } finally {
             root.detachAppender(appender);
+        }
+    }
+
+    @Test
+    void linesPrintedInTheParallelQuoteCallsCarryTheCallersCorrelationId() throws IOException {
+        // 종목마다 다른 스레드에서 부르므로, 부른 스레드의 로그 문맥을 옮기지 않으면 실패 줄에 추적 번호가 빠진다.
+        Logger logger = (Logger) LoggerFactory.getLogger(BrokerMarketData.class);
+        var appender = new ListAppender<ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        MDC.put(CorrelationId.KEY, "collect-2026-10-22T10:00:00+09:00");
+        try {
+            var marketData = marketData(10, 5, List.of("TEST01"));
+            server.priceBody = PriceChecks.body("12345", "10000", "100", "D", "-1.00", "10100", "9800");
+
+            assertThat(marketData.fetch(List.of("TEST01", "TEST02")).failures()).hasSize(2);
+
+            assertThat(appender.list).hasSize(2).allSatisfy(event -> assertThat(event.getMDCPropertyMap())
+                    .containsEntry(CorrelationId.KEY, "collect-2026-10-22T10:00:00+09:00"));
+            assertThat(MDC.get(CorrelationId.KEY)).isEqualTo("collect-2026-10-22T10:00:00+09:00");
+        } finally {
+            logger.detachAppender(appender);
+            MDC.clear();
         }
     }
 }

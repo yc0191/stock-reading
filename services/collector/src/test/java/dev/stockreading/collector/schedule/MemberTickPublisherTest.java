@@ -1,10 +1,12 @@
 package dev.stockreading.collector.schedule;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.time.Clock;
@@ -13,6 +15,7 @@ import java.time.ZoneId;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.slf4j.MDC;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -21,6 +24,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.ContractSchemas;
 import dev.stockreading.collector.marketdata.MarketDayPort;
+import dev.stockreading.collector.trace.CorrelationId;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -52,6 +56,27 @@ class MemberTickPublisherTest {
         new MemberTickPublisher(() -> false, kafka, JsonMapper.builder().build(), clock).publishMembersTick();
 
         verifyNoInteractions(kafka);
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void linesPrintedWhilePublishingCarryTheTicksCorrelationId() {
+        KafkaTemplate<String, String> kafka = mock(KafkaTemplate.class);
+        Clock clock = Clock.fixed(Instant.parse("2026-10-20T23:00:00Z"), ZoneId.of("Asia/Seoul"));
+        String[] seen = new String[2];
+        MarketDayPort open = () -> {
+            seen[0] = MDC.get(CorrelationId.KEY);
+            return true;
+        };
+        when(kafka.send(anyString(), anyString(), anyString())).thenAnswer(invocation -> {
+            seen[1] = MDC.get(CorrelationId.KEY);
+            return null;
+        });
+
+        new MemberTickPublisher(open, kafka, JsonMapper.builder().build(), clock).publishMembersTick();
+
+        assertThat(seen).containsOnly("collect-members-2026-10-21T08:00:00+09:00");
+        assertThat(MDC.get(CorrelationId.KEY)).isNull();
     }
 
     @Test

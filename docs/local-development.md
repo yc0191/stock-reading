@@ -478,6 +478,18 @@ SELECT m.id, e.id, 'HELD' FROM personal.member m, market.etf e WHERE m.name = 'T
 - **결정: 시세처리기의 첫 외부 호출.** 지금까지 시세처리기는 외부를 호출하지 않고 수집기가 받아 준 자료만 읽었습니다. 구성 종목은 호출이 주 1회 수준으로 적고(ETF마다 한 번, 한 번에 약 수십 KB), 받은 결과를 곧바로 이력·종목 테이블에 반영해야 하며, 종목 테이블을 쓰는 서비스가 시세처리기뿐이라 시세처리기가 직접 호출합니다. 수집기가 받으면 응답을 이벤트로 옮기고 다시 시세처리기가 받아 테이블에 쓰는 단계가 더해집니다. 이 호출은 시세 제공자 API(`CallRateLimit` 대상)와 무관하며, 출처 주소와 ETF별 번호는 설정값으로만 받습니다. 출처 응답 모양이 예고 없이 바뀔 수 있어, 모양이 다르면 일부만 읽지 않고 실패로 둡니다.
 - **자동 수집을 허용한 곳만:** 이용약관이나 robots.txt가 자동 수집을 막는 출처는 쓰지 않고, 그런 ETF는 수동 입력으로 둡니다.
 
+## 추적 ID
+
+메일 하나를 만든 모든 서비스의 로그를 이벤트 본문의 `correlationId` 하나로 찾습니다. 아래 이름이 원본이며, 5개 서비스가 같은 이름을 상수로 둡니다(Java는 각 서비스의 `trace.CorrelationId`, 브리핑은 `briefing/trace.py`). 값은 언제나 이벤트 본문의 `correlationId`와 같습니다. 별도 추적 도구는 쓰지 않습니다.
+
+| 쓰는 곳 | 이름 | 붙이는 방법 |
+|---|---|---|
+| Kafka 메시지 헤더 | `correlationId` | 보내는 모든 메시지에 본문 값을 싣습니다. Java는 프로듀서 인터셉터(`spring.kafka.producer.properties.interceptor.classes`), 브리핑은 발행 함수 한 곳 |
+| 로그 문맥 | `correlationId` | 메시지를 처리하는 동안 찍히는 줄마다 붙습니다. Java는 레코드 인터셉터가 MDC에 넣고 로그 패턴 `logging.pattern.correlation`(`[%X{correlationId:-}]`)이 찍으며, 브리핑은 로그 필터와 형식 `%(correlationId)s`. 헤더가 없는 메시지는 본문에서 읽습니다 |
+| 서비스 간 HTTP 요청 헤더 | `X-Correlation-Id` | 서비스가 다른 서비스를 HTTP로 부를 때 싣고, 받는 쪽은 이 값을 로그 문맥에 넣습니다 |
+
+메시지 처리 밖에서 도는 일도 그 일의 ID를 로그 줄에 붙입니다. 수집기 수집 작업은 회차의 `correlationId`(`<jobType>-<기준 시각>`), 브리핑의 제한 시각 처리(응답 대기 초과, 재요청, 같은 종목 변동 묶음 시작)는 그 작업의 `correlationId`입니다. 처리 밖의 줄은 빈 `[]`로 찍힙니다.
+
 ## 테스트
 
 테스트 명령과 변경 범위별로 돌릴 테스트는 [`.claude/rules/testing.md`](../.claude/rules/testing.md), 기능마다 어떤 테스트가 있고 어떤 조건에서 켜지는지는 테스트 지도 [`docs/test-map/`](test-map/README.md)가 원본입니다. 테스트 개수는 실행할 때마다 바뀌므로 적지 않고, 아래 전체 실행의 결과 표로 확인합니다.

@@ -92,6 +92,7 @@ from briefing.sources import (
     parse_filings,
     response_payload,
 )
+from briefing.trace import correlation_context
 
 log = logging.getLogger("briefing.daily_jobs")
 
@@ -370,28 +371,33 @@ class DailyCore:
     def on_tick(self, now: datetime) -> None:
         """제한 시간이 지난 요청을 다시 보내거나 포기한다. 포기해도 판은 있는 자료로 나간다."""
         for job in list(self._jobs.values()):
-            if job.data.awaiting() and not job.data_given_up \
-                    and now - job.data.sent_at >= self.settings.response_timeout:
-                if job.data.seq >= self.settings.max_attempts:
-                    self._give_up(job, job.data, STAGE_DAILY_DATA, FailureReason.CONTEXT_NO_RESPONSE,
-                                  DAILY_DATA_RESPONDED, now)
-                    job.data_given_up = True
-                    self._finish(job, now)
-                else:
-                    self._resent(job, job.data, STAGE_DAILY_DATA, DAILY_DATA_RESPONDED, now)
-                    self._send_data(job, now)
-            elif job.filings.awaiting() and not job.filings_given_up \
-                    and now - job.filings.sent_at >= self.settings.response_timeout:
-                if job.filings.seq >= self.settings.max_attempts:
-                    self._give_up(job, job.filings, STAGE_FILINGS, FailureReason.FILINGS_NO_RESPONSE,
-                                  FILINGS_RESPONDED, now)
-                    job.filings_given_up = True
-                    self._finish(job, now)
-                else:
-                    self._resent(job, job.filings, STAGE_FILINGS, FILINGS_RESPONDED, now)
-                    self._send_filings(job, now)
-            if job.job_id in self._jobs:
-                self._tick_articles(job, now)
+            # 메시지 처리 밖에서 도는 작업이라 그 판의 추적 ID를 로그 줄에 직접 건다.
+            with correlation_context(job.correlation_id):
+                self._tick_job(job, now)
+
+    def _tick_job(self, job: _DailyJob, now: datetime) -> None:
+        if job.data.awaiting() and not job.data_given_up \
+                and now - job.data.sent_at >= self.settings.response_timeout:
+            if job.data.seq >= self.settings.max_attempts:
+                self._give_up(job, job.data, STAGE_DAILY_DATA, FailureReason.CONTEXT_NO_RESPONSE,
+                              DAILY_DATA_RESPONDED, now)
+                job.data_given_up = True
+                self._finish(job, now)
+            else:
+                self._resent(job, job.data, STAGE_DAILY_DATA, DAILY_DATA_RESPONDED, now)
+                self._send_data(job, now)
+        elif job.filings.awaiting() and not job.filings_given_up \
+                and now - job.filings.sent_at >= self.settings.response_timeout:
+            if job.filings.seq >= self.settings.max_attempts:
+                self._give_up(job, job.filings, STAGE_FILINGS, FailureReason.FILINGS_NO_RESPONSE,
+                              FILINGS_RESPONDED, now)
+                job.filings_given_up = True
+                self._finish(job, now)
+            else:
+                self._resent(job, job.filings, STAGE_FILINGS, FILINGS_RESPONDED, now)
+                self._send_filings(job, now)
+        if job.job_id in self._jobs:
+            self._tick_articles(job, now)
 
     def _tick_articles(self, job: _DailyJob, now: datetime) -> None:
         """답이 없는 ETF의 기사 요청을 다시 보내거나, 시도 횟수를 다 쓰면 그 ETF는 기사 없음으로 포기한다."""
@@ -943,6 +949,9 @@ class DailySentences:
             # 데일리 공시 요청처럼 정렬한 첫 ETF 코드. 재검색 조회는 종목 조건을 보지 않고 응답 짝짓기에만 쓴다.
             reply_symbol=min(etf.symbol for etf in draft.input.etfs),
             since=job.range_start, until=job.scheduled_for)
+
+    def correlation_id(self, draft: DailyDraft) -> str:
+        return draft.job.correlation_id
 
     def rewrite_sentence(self, draft: DailyDraft, sentence_no: int, round: int, articles: tuple[Article, ...],
                          research_articles: tuple[Article, ...], now: datetime) -> DailyDraft | None:

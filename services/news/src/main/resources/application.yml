@@ -27,3 +27,11 @@ spring:
       compression-type: gzip
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        # 보내는 모든 메시지 헤더에 본문 correlationId 를 싣는다(추적 ID, docs/local-development.md).
+        interceptor.classes: dev.stockreading.news.trace.CorrelationIdProducerInterceptor
+
+logging:
+  pattern:
+    # 메시지를 처리하는 동안 찍히는 로그 줄마다 그 메시지의 correlationId 를 붙인다(추적 ID, docs/local-development.md).
+    correlation: "[%X{correlationId:-}] "

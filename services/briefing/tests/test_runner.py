@@ -22,8 +22,11 @@ T = datetime(2026, 10, 20, 16, 0, 31, tzinfo=KST)
 
 
 class FakeMessage:
-    def __init__(self, topic, value, offset=0):
-        self._topic, self._value, self._offset = topic, value, offset
+    def __init__(self, topic, value, offset=0, headers=None):
+        self._topic, self._value, self._offset, self._headers = topic, value, offset, headers
+
+    def headers(self):
+        return self._headers
 
     def topic(self):
         return self._topic
@@ -71,9 +74,11 @@ class FakeProducer:
     def __init__(self, config):
         self.config = config
         self.sent = []
+        self.headers = []  # sent와 같은 순서의 헤더 목록
 
-    def produce(self, topic, key, value, on_delivery=None):
+    def produce(self, topic, key, value, headers=None, on_delivery=None):
         self.sent.append((topic, key, json.loads(value)))
+        self.headers.append(headers)
 
     def flush(self, _timeout=None):
         return 0

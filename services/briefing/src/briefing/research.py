@@ -31,6 +31,7 @@ from briefing.job_log import EntryType, JobLogEntry, JobLogPort
 from briefing.llm import LlmCallError, LlmClient, llm_config
 from briefing.ports import RequestPort
 from briefing.sources import Article, response_payload
+from briefing.trace import correlation_context
 
 log = logging.getLogger("briefing.research")
 
@@ -438,18 +439,23 @@ class NewsResearch:
 
     def on_tick(self, now: datetime) -> None:
         for job in list(self._jobs.values()):
-            if job.phase is _Phase.WAITING_COMPLETION:
-                if now - job.requested_at >= self.settings.research_wait_limit:
-                    log.warning("no research completion for job %s within the wait limit", job.target.job_id)
-                    self._finish(job, now, None, ResearchStep.COMPLETION, ResearchReason.COMPLETION_TIMEOUT, 1,
-                                 request=job.request, awaited={
-                                     "eventType": "collection.completed",
-                                     "jobType": RESEARCH_JOB_TYPE,
-                                     "researchJobId": job.target.job_id,
-                                     "requestedAt": format_timestamp(job.requested_at),
-                                 })
-            elif job.phase is _Phase.FETCHING:
-                self._tick_fetching(job, now)
+            # 메시지 처리 밖에서 도는 작업이라 재검색을 부른 작업의 추적 ID를 로그 줄에 직접 건다.
+            with correlation_context(job.target.correlation_id):
+                self._tick_job(job, now)
+
+    def _tick_job(self, job: _Research, now: datetime) -> None:
+        if job.phase is _Phase.WAITING_COMPLETION:
+            if now - job.requested_at >= self.settings.research_wait_limit:
+                log.warning("no research completion for job %s within the wait limit", job.target.job_id)
+                self._finish(job, now, None, ResearchStep.COMPLETION, ResearchReason.COMPLETION_TIMEOUT, 1,
+                             request=job.request, awaited={
+                                 "eventType": "collection.completed",
+                                 "jobType": RESEARCH_JOB_TYPE,
+                                 "researchJobId": job.target.job_id,
+                                 "requestedAt": format_timestamp(job.requested_at),
+                             })
+        elif job.phase is _Phase.FETCHING:
+            self._tick_fetching(job, now)
 
     def next_deadline(self) -> datetime | None:
         deadlines: list[datetime] = []

@@ -34,6 +34,7 @@ from briefing.job_log import (
     record_result,
 )
 from briefing.jobs import parse_move
+from briefing.trace import correlation_context, from_event
 
 log = logging.getLogger("briefing.move_merge")
 
@@ -140,7 +141,9 @@ class MorningMerge:
             log.warning("%d held market.move released to the move report flow: %s", len(deferred), why)
         for d in deferred:
             try:
-                self.release(d.raw, now)
+                # 기한이 지나 메시지 처리 밖에서 작업을 시작하므로, 넘기는 변동의 추적 ID를 로그 줄에 직접 건다.
+                with correlation_context(from_event(d.raw)):
+                    self.release(d.raw, now)
             except ValueError as error:
                 # 모아 둘 때 같은 해석을 통과했으므로 일어나지 않는 경로다. 일어나도 다른 변동은 계속 넘긴다.
                 log.error("could not release a held market.move: %s", error)

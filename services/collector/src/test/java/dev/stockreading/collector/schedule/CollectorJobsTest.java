@@ -28,11 +28,13 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InOrder;
 import org.mockito.stubbing.Answer;
+import org.slf4j.MDC;
 
 import dev.stockreading.collector.insight.InsightPublisher;
 import dev.stockreading.collector.insight.IntradayPublisher;
 import dev.stockreading.collector.schedule.CollectorJobs.Job;
 import dev.stockreading.collector.schedule.CollectorJobs.Outcome;
+import dev.stockreading.collector.trace.CorrelationId;
 
 class CollectorJobsTest {
 
@@ -71,6 +73,42 @@ class CollectorJobsTest {
         assertThat(Job.of("collect-members")).isEmpty();
         assertThat(Job.of("daily-briefing-morning")).isEmpty();
         assertThat(Job.of(null)).isEmpty();
+    }
+
+    @Test
+    void logLinesInsideAJobCarryTheRoundCorrelationId() throws Exception {
+        // 작업 스레드에서 찍는 로그 줄도 회차 correlationId 로 찾을 수 있어야 한다.
+        CompletableFuture<String> during = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            during.complete(MDC.get(CorrelationId.KEY));
+            return null;
+        }).when(news).publishCollected(anyString(), anyString());
+
+        assertThat(simulator().start(Job.COLLECT_NEWS)).isEqualTo(Outcome.STARTED);
+
+        assertThat(during.get(5, TimeUnit.SECONDS)).isEqualTo("collect-news-" + AT);
+    }
+
+    @Test
+    void logLinesOfAJobRunOnTheCallingThreadCarryTheRoundCorrelationIdAndTheOldValueComesBack() {
+        // 장 시작 전·장중·마감 후·뉴스 타이머는 타이머 스레드에서 작업을 끝까지 돌린다.
+        String[] during = new String[1];
+        doAnswer(invocation -> {
+            during[0] = MDC.get(CorrelationId.KEY);
+            return null;
+        }).when(news).publishCollected(anyString(), anyString());
+        MDC.put(CorrelationId.KEY, "timer");
+
+        assertThat(simulator().run(Job.COLLECT_NEWS)).isEqualTo(Outcome.STARTED);
+
+        assertThat(during[0]).isEqualTo("collect-news-" + AT);
+        assertThat(MDC.get(CorrelationId.KEY)).isEqualTo("timer");
+        MDC.remove(CorrelationId.KEY);
+    }
+
+    @Test
+    void theCorrelationIdForTimersIsTheOneTheNextRoundUses() {
+        assertThat(simulator().correlationId(Job.COLLECT_PRE_OPEN)).isEqualTo("collect-pre-open-" + AT);
     }
 
     @Test

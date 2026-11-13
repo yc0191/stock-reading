@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 import dev.stockreading.collector.marketdata.MarketDayPort;
 import dev.stockreading.collector.schedule.CollectorJobs.Job;
+import dev.stockreading.collector.trace.CorrelationId;
 
 /**
  * 장 시작 전 수집의 타이머. 한 회차에서 해외 일봉·세계지수와 SEC 공시를 함께 받는다. 공시는 이때만 받는다.
@@ -29,10 +30,13 @@ class PreOpenTimer {
 
     @Scheduled(cron = "${collector.pre-open.cron}", zone = "Asia/Seoul")
     void collectPreOpen() {
-        if (!marketDay.isBusinessDay()) {
-            log.info("collect skipped on market holiday job={}", Job.COLLECT_PRE_OPEN);
-            return;
-        }
-        jobs.run(Job.COLLECT_PRE_OPEN);
+        // 메시지 처리 밖(타이머 스레드)에서 찍는 줄이라 이 실행의 correlationId 를 직접 로그 문맥에 둔다.
+        CorrelationId.within(jobs.correlationId(Job.COLLECT_PRE_OPEN), () -> {
+            if (!marketDay.isBusinessDay()) {
+                log.info("collect skipped on market holiday job={}", Job.COLLECT_PRE_OPEN);
+                return;
+            }
+            jobs.run(Job.COLLECT_PRE_OPEN);
+        });
     }
 }

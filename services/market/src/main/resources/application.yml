@@ -27,6 +27,9 @@ spring:
       compression-type: gzip
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        # 보내는 모든 메시지 헤더에 본문 correlationId 를 싣는다(추적 ID, docs/local-development.md).
+        interceptor.classes: dev.stockreading.market.trace.CorrelationIdProducerInterceptor
 
 market:
   # 유형 1(window): 최근 window-minutes분 이력의 가장 오래된 스냅샷 대비 변동의 절댓값이 이 값(%) 이상이면 "변동"으로 본다.
@@ -84,3 +87,8 @@ market:
     max-etfs: 50
     # 개장 흐름(아침 판)이 판 기준 시각부터 거슬러 읽는 시세 구간의 안전 상한. 요청 구간이 이보다 길면 이 기간까지만 읽는다.
     open-flow-max-window: PT30M
+
+logging:
+  pattern:
+    # 메시지를 처리하는 동안 찍히는 로그 줄마다 그 메시지의 correlationId 를 붙인다(추적 ID, docs/local-development.md).
+    correlation: "[%X{correlationId:-}] "

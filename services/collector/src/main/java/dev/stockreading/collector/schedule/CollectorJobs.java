@@ -16,6 +16,7 @@ import org.springframework.stereotype.Component;
 import dev.stockreading.collector.event.EventFactory;
 import dev.stockreading.collector.insight.InsightPublisher;
 import dev.stockreading.collector.insight.IntradayPublisher;
+import dev.stockreading.collector.trace.CorrelationId;
 
 /**
  * 수집 작업 다섯 개의 실행 입구. 수집기 타이머와 수동 실행 명령(CollectorCommandListener)이 모두 여기를 부른다.
@@ -86,7 +87,8 @@ public class CollectorJobs {
             return Outcome.ALREADY_RUNNING;
         }
         try {
-            execute(job, round);
+            // 타이머 스레드에서 돌므로 레코드 인터셉터가 걸지 않는다. 회차의 correlationId 를 직접 로그 문맥에 둔다.
+            CorrelationId.within(round.correlationId(), () -> execute(job, round));
         } finally {
             running.get(job).set(false);
         }
@@ -116,7 +118,8 @@ public class CollectorJobs {
         if (!tryEnter(job, round, recordSkip)) {
             return Outcome.ALREADY_RUNNING;
         }
-        Runnable task = () -> {
+        // 작업 스레드는 메시지 처리 밖이라 레코드 인터셉터가 걸지 않으므로, 회차의 correlationId 를 직접 로그 문맥에 둔다.
+        Runnable task = () -> CorrelationId.within(round.correlationId(), () -> {
             try {
                 execute(job, round);
             } catch (RuntimeException e) {
@@ -125,7 +128,7 @@ public class CollectorJobs {
             } finally {
                 running.get(job).set(false);
             }
-        };
+        });
         try {
             Thread.ofVirtual().name("collector-" + job.jobType()).start(task);
         } catch (RuntimeException | Error e) {
@@ -133,6 +136,11 @@ public class CollectorJobs {
             throw e;
         }
         return Outcome.STARTED;
+    }
+
+    /** 지금 시작하면 회차가 쓸 correlationId. 타이머가 작업을 부르기 전에 찍는 줄(휴장일 건너뜀 등)에 쓴다. */
+    public String correlationId(Job job) {
+        return round(job).correlationId();
     }
 
     private boolean tryEnter(Job job, Round round, boolean recordSkip) {

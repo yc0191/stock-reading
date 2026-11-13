@@ -13,6 +13,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
+import dev.stockreading.collector.trace.CorrelationId;
+
 @Component
 @ConditionalOnProperty(name = "collector.market-data.source", havingValue = "broker")
 class BrokerMarketData implements MarketDataPort {
@@ -50,7 +52,7 @@ class BrokerMarketData implements MarketDataPort {
         List<Future<Outcome>> futures = new ArrayList<>();
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
             for (String symbol : symbols.subList(0, callable)) {
-                futures.add(executor.submit(() -> call(symbol)));
+                futures.add(executor.submit(CorrelationId.carry(() -> call(symbol))));
             }
         }
         List<PriceQuote> quotes = new ArrayList<>();

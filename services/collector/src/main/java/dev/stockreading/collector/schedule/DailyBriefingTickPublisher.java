@@ -16,6 +16,7 @@ import dev.stockreading.collector.event.Envelope;
 import dev.stockreading.collector.event.EventFactory;
 import dev.stockreading.collector.event.TickPayload;
 import dev.stockreading.collector.marketdata.MarketDayPort;
+import dev.stockreading.collector.trace.CorrelationId;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -55,19 +56,23 @@ class DailyBriefingTickPublisher {
     }
 
     private void publishTick(String jobType) {
-        if (!marketDay.isBusinessDay()) {
-            log.info("schedule.tick skipped on market holiday jobType={}", jobType);
-            return;
-        }
         OffsetDateTime scheduledFor = OffsetDateTime.now(clock).truncatedTo(ChronoUnit.SECONDS);
         String scheduledForText = EventFactory.format(scheduledFor);
-        Envelope<TickPayload> tick = EventFactory.create(
-                clock,
-                "schedule.tick",
-                scheduledFor,
-                jobType + "-" + scheduledForText,
-                new TickPayload(jobType, scheduledForText));
-        kafka.send(Topics.SCHEDULE_TICK, jobType, mapper.writeValueAsString(tick));
-        log.info("published schedule.tick jobType={} scheduledFor={}", jobType, scheduledForText);
+        String correlationId = jobType + "-" + scheduledForText;
+        // 메시지 처리 밖(타이머 스레드)에서 찍는 줄이라 발행할 tick 의 correlationId 를 직접 로그 문맥에 둔다.
+        CorrelationId.within(correlationId, () -> {
+            if (!marketDay.isBusinessDay()) {
+                log.info("schedule.tick skipped on market holiday jobType={}", jobType);
+                return;
+            }
+            Envelope<TickPayload> tick = EventFactory.create(
+                    clock,
+                    "schedule.tick",
+                    scheduledFor,
+                    correlationId,
+                    new TickPayload(jobType, scheduledForText));
+            kafka.send(Topics.SCHEDULE_TICK, jobType, mapper.writeValueAsString(tick));
+            log.info("published schedule.tick jobType={} scheduledFor={}", jobType, scheduledForText);
+        });
     }
 }

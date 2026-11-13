@@ -7,15 +7,19 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.slf4j.MDC;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -25,6 +29,7 @@ import org.springframework.scheduling.support.CronExpression;
 import dev.stockreading.collector.Topics;
 import dev.stockreading.collector.event.ContractSchemas;
 import dev.stockreading.collector.marketdata.MarketDayPort;
+import dev.stockreading.collector.trace.CorrelationId;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -69,6 +74,31 @@ class DailyBriefingTickPublisherTest {
                 .contains("\"jobType\":\"daily-briefing-post-close\"")
                 .contains("\"scheduledFor\":\"2026-10-21T17:00:00+09:00\"")
                 .contains("\"correlationId\":\"daily-briefing-post-close-2026-10-21T17:00:00+09:00\"");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void linesPrintedWhilePublishingCarryTheTicksCorrelationIdEvenOnAHoliday() {
+        KafkaTemplate<String, String> kafka = mock(KafkaTemplate.class);
+        Clock clock = Clock.fixed(Instant.parse("2026-10-21T00:10:00Z"), KST);
+        List<String> seen = new ArrayList<>();
+        when(kafka.send(anyString(), anyString(), anyString())).thenAnswer(invocation -> {
+            seen.add(MDC.get(CorrelationId.KEY));
+            return null;
+        });
+
+        new DailyBriefingTickPublisher(() -> {
+            seen.add(MDC.get(CorrelationId.KEY));
+            return true;
+        }, kafka, JsonMapper.builder().build(), clock).publishMorningTick();
+        new DailyBriefingTickPublisher(() -> {
+            seen.add(MDC.get(CorrelationId.KEY));
+            return false;
+        }, kafka, JsonMapper.builder().build(), clock).publishPostCloseTick();
+
+        String morning = "daily-briefing-morning-2026-10-21T09:10:00+09:00";
+        assertThat(seen).containsExactly(morning, morning, "daily-briefing-post-close-2026-10-21T09:10:00+09:00");
+        assertThat(MDC.get(CorrelationId.KEY)).isNull();
     }
 
     @Test

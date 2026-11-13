@@ -25,6 +25,9 @@ spring:
       acks: all
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        # 보내는 모든 메시지 헤더에 본문 correlationId 를 싣는다(추적 ID, docs/local-development.md).
+        interceptor.classes: dev.stockreading.collector.trace.CorrelationIdProducerInterceptor
 
 collector:
   # 1초 현재가 조회 주기. 1초 미만이면 회차의 기준 시각(scheduledFor, 초 단위)과 correlationId 가 겹친다.
@@ -178,3 +181,8 @@ collector:
     api-key: ${DART_API_KEY:}
     page-count: 100
     timeout-seconds: 10
+
+logging:
+  pattern:
+    # 메시지를 처리하는 동안 찍히는 로그 줄마다 그 메시지의 correlationId 를 붙인다(추적 ID, docs/local-development.md).
+    correlation: "[%X{correlationId:-}] "

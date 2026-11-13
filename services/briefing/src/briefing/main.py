@@ -48,6 +48,7 @@ from briefing.research import QueryWriter, build_query_writer
 from briefing.sentence_research import ResearchReportStage, SentenceResearch
 from briefing.status import StatusPort, parse_collection
 from briefing.status_store import PostgresStatusStore
+from briefing.trace import configure_logging, correlation_context, from_event, from_headers, kafka_headers
 
 log = logging.getLogger("briefing")
 
@@ -132,8 +133,10 @@ class KafkaPublisher:
         self._producer = producer
 
     def send(self, event: OutboundEvent) -> None:
+        # 받는 쪽이 본문을 풀지 않고도 추적 ID를 로그 문맥에 걸 수 있게 헤더에 같은 값을 싣는다.
         self._producer.produce(event.topic, key=event.key,
-                               value=json.dumps(event.value, ensure_ascii=False), on_delivery=_on_delivery)
+                               value=json.dumps(event.value, ensure_ascii=False), headers=kafka_headers(event.value),
+                               on_delivery=_on_delivery)
         # 요청은 응답 제한 시간을 재므로 버퍼에 묵히지 않고 바로 내보낸다.
         remaining = self._producer.flush(FLUSH_SECONDS)
         if remaining:
@@ -142,6 +145,11 @@ class KafkaPublisher:
             log.info("published briefing for %s (correlationId=%s)", event.key, event.value["correlationId"])
         elif event.topic == DAILY_BRIEFING_GENERATED_TOPIC:
             log.info("published daily briefing %s (correlationId=%s)", event.key, event.value["correlationId"])
+
+
+def message_correlation_id(message) -> str | None:
+    """받은 메시지의 추적 ID. 헤더를 먼저 보고, 헤더가 없는 메시지(헤더를 싣기 전에 쌓인 메시지)는 본문에서 읽는다."""
+    return from_headers(message.headers()) or from_event(message.value())
 
 
 def _on_delivery(error, message) -> None:
@@ -311,23 +319,25 @@ class BriefingRunner:
             FILINGS_RESPONDED_TOPIC: self._on_filings_responded,
             DAILY_DATA_RESPONDED_TOPIC: self.daily.on_daily_data_responded,
         }.get(message.topic())
-        if handler is None:
-            log.warning("message from unexpected topic %s ignored", message.topic())
-            return
-        try:
-            handler(message.value(), self.clock())
-        except ValueError as error:
-            log.error("skipping malformed message at %s[%d]@%d: %s",
-                      message.topic(), message.partition(), message.offset(), error)
+        with correlation_context(message_correlation_id(message)):
+            if handler is None:
+                log.warning("message from unexpected topic %s ignored", message.topic())
+                return
+            try:
+                handler(message.value(), self.clock())
+            except ValueError as error:
+                log.error("skipping malformed message at %s[%d]@%d: %s",
+                          message.topic(), message.partition(), message.offset(), error)
 
     def handle_tick(self, edition: str, consumer: Consumer, message) -> None:
         # 판 작업도 메모리에만 두므로 급변동 알림과 같은 이유로 읽은 위치를 처리 전에 확정한다.
         consumer.commit(message=message, asynchronous=False)
-        try:
-            self.daily.on_schedule_tick(message.value(), self.clock(), edition)
-        except ValueError as error:
-            log.error("skipping malformed tick at %s[%d]@%d: %s",
-                      message.topic(), message.partition(), message.offset(), error)
+        with correlation_context(message_correlation_id(message)):
+            try:
+                self.daily.on_schedule_tick(message.value(), self.clock(), edition)
+            except ValueError as error:
+                log.error("skipping malformed tick at %s[%d]@%d: %s",
+                          message.topic(), message.partition(), message.offset(), error)
 
     def _on_move(self, message: str | bytes, now: datetime) -> None:
         # 장 시작~아침 판 시작 사이 변동은 아침 판이 담으므로 모아 두고, 그 밖의 변동은 급변동 리포트로 간다.
@@ -459,7 +469,7 @@ def build_runner(env: Mapping[str, str]) -> BriefingRunner:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    configure_logging(logging.INFO)
     runner = build_runner(os.environ)
 
     signal.signal(signal.SIGINT, lambda *_: runner.request_stop())
