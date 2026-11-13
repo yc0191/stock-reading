@@ -18,7 +18,11 @@ public class Topics {
     public static final String FILING_COLLECTED = "filing.collected";
     public static final String NEWS_FILINGS_REQUESTED = "news.filings.requested";
     public static final String NEWS_FILINGS_RESPONDED = "news.filings.responded";
+    public static final String COLLECTION_COMPLETED = "collection.completed";
+    public static final String NEWS_STORED = "news.stored";
     public static final int PARTITIONS = 3;
+    /** 수집 완료와 저장 끝은 jobType 을 키로 순서대로 처리하므로 파티션이 하나다(생산자 collector 와 같다). */
+    public static final int COMPLETION_PARTITIONS = 1;
 
     @Bean
     NewTopic newsCollectedTopic() {
@@ -39,6 +43,16 @@ public class Topics {
     @Bean
     NewTopic filingCollectedTopic() {
         return TopicBuilder.name(FILING_COLLECTED).partitions(PARTITIONS).replicas(1).build();
+    }
+
+    @Bean
+    NewTopic collectionCompletedTopic() {
+        return TopicBuilder.name(COLLECTION_COMPLETED).partitions(COMPLETION_PARTITIONS).replicas(1).build();
+    }
+
+    @Bean
+    NewTopic newsStoredTopic() {
+        return TopicBuilder.name(NEWS_STORED).partitions(COMPLETION_PARTITIONS).replicas(1).build();
     }
 
     @Bean

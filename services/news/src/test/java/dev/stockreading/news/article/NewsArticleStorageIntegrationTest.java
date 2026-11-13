@@ -2,7 +2,9 @@ package dev.stockreading.news.article;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
@@ -24,6 +26,7 @@ class NewsArticleStorageIntegrationTest {
 
     private static JdbcClient jdbc;
     private static NewsListener listener;
+    private static ArticleResultRepository results;
 
     @BeforeAll
     static void migrateAndWire() {
@@ -37,7 +40,8 @@ class NewsArticleStorageIntegrationTest {
 
         jdbc = JdbcClient.create(new DriverManagerDataSource(url + (url.contains("?") ? "&" : "?") + "currentSchema=news",
                 user, password));
-        listener = new NewsListener(new NewsArticleRepository(jdbc), JsonMapper.builder().build());
+        results = new ArticleResultRepository(jdbc);
+        listener = new NewsListener(new NewsArticleRepository(jdbc), results, JsonMapper.builder().build());
     }
 
     @Test
@@ -118,6 +122,39 @@ class NewsArticleStorageIntegrationTest {
                 "[\"ITN007\"]", "[\"검색어A\"]"));
 
         assertThat(researchMark("1006")).containsEntry("from_research", true).containsEntry("job", RESEARCH_JOB);
+    }
+
+    // 저장 끝 알림이 읽는 처리 결과: 새 기사는 '새로 저장', URL 중복은 '합침'이고, 같은 이벤트를 다시 받아도 그대로다.
+    @Test
+    void eachArticleEventLeavesOneResultThatStaysTheSameOnRedelivery() {
+        UUID first = UUID.fromString("d7000000-0000-4000-8000-000000000001");
+        UUID duplicate = UUID.fromString("d7000000-0000-4000-8000-000000000002");
+        UUID notYet = UUID.fromString("d7000000-0000-4000-8000-000000000003");
+        String message = event(first.toString(), "https://news.example.com/it/1007", "[\"ITN008\"]", "[\"검색어A\"]");
+
+        listener.onNews(message);
+        listener.onNews(event(duplicate.toString(), "https://www.news.example.com/it/1007/", "[\"ITN008\"]",
+                "[\"검색어B\"]"));
+        listener.onNews(message);
+
+        assertThat(results.resultsOf(List.of(first, duplicate, notYet)))
+                .containsExactlyInAnyOrderEntriesOf(Map.of(first, ArticleResult.STORED, duplicate, ArticleResult.MERGED));
+        assertThat(jdbc.sql("SELECT count(*) FROM article_event_result WHERE CAST(event_id AS text) LIKE 'd7%'")
+                .query(Long.class).single()).isEqualTo(2L);
+    }
+
+    @Test
+    void failedResultIsReplacedWhenTheEventIsLaterStoredButNotTheOtherWayAround() {
+        UUID replayed = UUID.fromString("d8000000-0000-4000-8000-000000000001");
+        UUID stored = UUID.fromString("d8000000-0000-4000-8000-000000000002");
+
+        results.record(replayed, ArticleResult.FAILED, "it");
+        listener.onNews(event(replayed.toString(), "https://news.example.com/it/1008", "[\"ITN009\"]", "[\"검색어A\"]"));
+        results.record(stored, ArticleResult.STORED, "it");
+        results.record(stored, ArticleResult.FAILED, "it");
+
+        assertThat(results.resultsOf(List.of(replayed, stored)))
+                .containsExactlyInAnyOrderEntriesOf(Map.of(replayed, ArticleResult.STORED, stored, ArticleResult.STORED));
     }
 
     private static Map<String, Object> researchMark(String urlPart) {

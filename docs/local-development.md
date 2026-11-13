@@ -263,7 +263,7 @@ java -jar services/notifier/build/libs/notifier-0.0.1-SNAPSHOT.jar   # 저장소
 
 ## 수집기의 외부 데이터 설정 (`collector`)
 
-수집기에는 공시, 시세, 뉴스 검색 클라이언트가 있습니다. 시세 기본은 가짜 데이터(시뮬레이터)이며, `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 외부 API를 씁니다. 뉴스는 15분 뉴스 수집(`collect-news`)마다 검색해 기사마다 `news.collected`를 발행하고, 기사 전송이 모두 확정된 뒤 `collection.completed`를 한 건 발행합니다([ADR-010](adr/010-event-format.md)). 브리핑의 재검색 요청을 받으면 요청한 검색어로 같은 방식으로 검색해 기사에 재검색 작업 id를 싣고, 끝나면 `jobType` `research-news`로 완료 알림을 보냅니다. 검색 한 번(정기 수집·재검색 모두)마다 거른 기사 건수를 이유별(기간 밖 `tooOld`·`tooFarAhead`, 검색어 낱말 불일치 `unmatched`, 통과한 뒤 앞서 모은 기사와 합쳐진 중복 `duplicates`)로 한 줄 `news filtered ...` 로그에 남기며 검색어와 종목은 쓰지 않습니다. DART 공시는 아직 조회 클라이언트까지만 구현되어 있고 이벤트로 발행하지 않습니다. 미국 종목 공시(SEC EDGAR)는 아래 장 시작 전 수집에서 `filing.collected`로 발행합니다. 기본값은 `application.yml`의 `collector.*`가 원본입니다.
+수집기에는 공시, 시세, 뉴스 검색 클라이언트가 있습니다. 시세 기본은 가짜 데이터(시뮬레이터)이며, `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 외부 API를 씁니다. 뉴스는 15분 뉴스 수집(`collect-news`)마다 검색해 기사마다 `news.collected`를 발행하고, 기사 전송이 모두 확정된 뒤 `collection.completed`를 한 건 발행합니다([ADR-010](adr/010-event-format.md)). 완료 알림에는 전송을 확정한 기사 이벤트의 `eventId` 목록(`articleEventIds`)을 싣고, 뉴스처리기는 이 목록으로 저장 끝을 알립니다(아래 "뉴스처리기의 저장 끝 알림"). 브리핑의 재검색 요청을 받으면 요청한 검색어로 같은 방식으로 검색해 기사에 재검색 작업 id를 싣고, 끝나면 `jobType` `research-news`로 완료 알림을 보냅니다. 검색 한 번(정기 수집·재검색 모두)마다 거른 기사 건수를 이유별(기간 밖 `tooOld`·`tooFarAhead`, 검색어 낱말 불일치 `unmatched`, 통과한 뒤 앞서 모은 기사와 합쳐진 중복 `duplicates`)로 한 줄 `news filtered ...` 로그에 남기며 검색어와 종목은 쓰지 않습니다. DART 공시는 아직 조회 클라이언트까지만 구현되어 있고 이벤트로 발행하지 않습니다. 미국 종목 공시(SEC EDGAR)는 아래 장 시작 전 수집에서 `filing.collected`로 발행합니다. 기본값은 `application.yml`의 `collector.*`가 원본입니다.
 
 수집 작업 여섯 개(`collect` 1초 현재가, `collect-news` 뉴스, `collect-pre-open` 장 시작 전, `collect-intraday` 장중, `collect-post-close` 마감 후, `collect-etf-members` ETF 구성 종목)는 수집기 안 타이머가 직접 실행합니다([ADR-012](adr/012-collector-timers-and-command-topic.md)). 같은 작업은 겹쳐 돌지 않아 앞 회차가 끝나지 않았으면 이번 회차를 건너뛰고 로그를 남기며, 밀린 회차를 뒤에 몰아서 실행하지 않습니다. 1초 현재가는 건너뛴 회차를 종목마다 `TICK_SKIPPED`(`exceptionType=SupersededByNewerTick`) 실패 이벤트로도 남겨 데일리 메일 서버 상태에 보입니다. 타이머 스레드가 여러 개(`spring.task.scheduling.pool.size`)라 오래 걸리는 작업이 1초 현재가와 뉴스를 막지 않습니다. 다른 서비스로 가는 신호도 시계 신호가 아니라 수집 결과 이벤트입니다(데일리 판 시작 알림 `daily.collection.completed`, 위 "데일리 브리핑").
 
@@ -496,6 +496,16 @@ SELECT m.id, e.id, 'HELD' FROM personal.member m, market.etf e WHERE m.name = 'T
 - 잘못된 요청(필수 칸 누락, 상한·순번 0 이하, 시작이 끝보다 늦은 기간, 읽을 수 없는 시각·재검색 작업 id, 티커 없는 공시 요청)은 400입니다. Kafka에서는 같은 경우 응답하지 않습니다. 조회 중 DB 오류 같은 서버 쪽 실패는 500이며 본문에 오류 내용을 담지 않습니다.
 - 서버 밖으로 열지 않습니다. 로컬에서는 `server.address` 기본값 `127.0.0.1`로 이 기계 안에서만 받고, 포트는 로컬 Compose가 쓰는 8080·8081과 겹치지 않게 두었습니다. 운영 Compose(`infra/deploy/compose/services.yml`)에서는 두 서비스에 `SERVER_ADDRESS=0.0.0.0`을 주어 같은 Compose 네트워크에서만 받고 `ports`를 두지 않으며, 브리핑 환경에 주소(`MARKET_API_URL=http://market:8091`, `NEWS_API_URL=http://news:8092`)를 둡니다. 브리핑은 아직 Kafka 요청·응답을 쓰며 이 주소를 읽지 않습니다.
 - 요청 스레드는 최대 8개입니다(`server.tomcat.threads.max`). 부르는 쪽이 브리핑 하나라 기본 200개의 스레드 메모리를 아낍니다.
+
+## 뉴스처리기의 저장 끝 알림
+
+뉴스처리기는 기사 이벤트(`news.collected`)마다 처리 결과를 `news.article_event_result`에 한 줄 남깁니다. 결과는 새로 저장(`stored`), 같은 기사(URL 중복)가 이미 있어 종목·검색어만 합침(`merged`), 재시도를 모두 소진해 저장 실패(`failed`) 중 하나이며, 같은 이벤트를 다시 받아도 한 줄입니다.
+
+수집 완료(`collection.completed`)를 받으면 그 `articleEventIds`가 모두 처리될 때까지 기다렸다가 저장 끝(`news.stored`)을 한 건 냅니다. 내용은 수집 완료의 칸(`jobType`, `scheduledFor`, `startedAt`, `incompleteSymbols`, `researchJobId`)과 결과별 개수이며, 대기 한도(`news.stored.wait-limit`, 기본 60초)까지 처리되지 않은 기사가 있으면 그 `eventId`를 `unprocessedEventIds`에 담아 한도에서 냅니다. `articleEventIds`가 없는 수집 완료(그 칸을 더하기 전의 수집기)에는 내지 않습니다. 계약은 `contracts/events/news.stored.v1.schema.json`입니다.
+
+- 같은 수집 완료를 다시 받으면(재시작 뒤 다시 읽기, 전송 실패 뒤 재시도) 저장 끝을 다시 냅니다. 저장 끝의 `eventId`는 수집 완료의 `eventId`로 정해져 다시 내도 같으므로, 받는 쪽은 `eventId`로 한 번만 처리합니다. 두 번째 알림의 개수는 첫 알림과 다를 수 있습니다.
+- 수집 끝 시각(`finishedAt`)에서 `news.stored.stale-after`(기본은 대기 한도와 같음) 이상 지난 수집 완료는 기다리지 않고 지금 결과로 바로 냅니다. 뉴스처리기가 멈췄다 켜져 밀린 알림을 처리할 때 알림마다 한도만큼 기다리지 않기 위해서입니다. 이때 아직 저장되지 않은 기사는 `unprocessedEventIds`에 담기며, 뒤늦게 저장돼도 정정 알림은 내지 않습니다(이미 낸 저장 끝에 반영되지 않음).
+- 같은 수집 완료에 대한 기다림은 처음 한 번뿐입니다. 전송 실패 등으로 다시 처리할 때는 기다리지 않고 지금 결과로 냅니다. 기다린 수집 완료는 메모리에 최근 1000건까지 기억하며, 다시 시작하면 잊으므로 재시작 뒤에는 한 번 더 기다릴 수 있습니다. 오류 처리기는 실패한 알림을 다음 poll에서 다시 받으므로, 한 번 처리의 최악(대기 한도 60초 + 전송이 막히는 한도 `max.block.ms` 60초 + 전송 확정 한도 `delivery.timeout.ms` 120초 = 240초)이 poll 간격 상한(`max.poll.interval.ms` 기본 300초)보다 짧습니다. 대기 한도를 늘리면 이 합을 다시 확인합니다.
 
 ## 추적 ID
 

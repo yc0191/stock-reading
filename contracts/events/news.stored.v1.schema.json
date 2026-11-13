@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stock-reading.local/contracts/news.stored.v1",
+  "title": "news.stored v1",
+  "description": "뉴스처리기가 수집 완료 알림(collection.completed) 한 건이 가리키는 기사 이벤트(articleEventIds)를 모두 처리하면 한 건 발행한다. 대기 한도 안에 처리되지 않은 기사가 있으면 그 eventId를 unprocessedEventIds에 담아 한도에서 발행한다. 기사 조회는 이 알림을 받은 뒤 한 번만 하면 된다. 수집 완료의 칸(jobType, scheduledFor, startedAt, incompleteSymbols, researchJobId)을 그대로 옮겨 이 알림만으로 근거 조회 여부를 판단할 수 있게 한다. articleEventIds가 없는 수집 완료(그 칸을 더하기 전의 수집기)에는 발행하지 않는다. 메시지 키는 jobType이다. eventId는 수집 완료의 eventId에서 정해지므로 같은 수집 완료에 대해 다시 발행해도 같다. 같은 수집 완료를 다시 받으면(재시작, 재시도) 같은 eventId로 다시 나갈 수 있으니 받는 쪽은 eventId로 한 번만 처리한다. 수집이 끝난 지 오래된(stale-after 이상) 수집 완료는 기다리지 않고 그때 결과로 발행하며, 뒤늦게 저장된 기사에 대한 정정 알림은 내지 않는다.",
+  "type": "object",
+  "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "const": "news.stored" },
+    "schemaVersion": { "const": 1 },
+    "occurredAt": { "type": "string", "format": "date-time", "description": "모두 처리됐다고 판단한 시각, 또는 대기 한도에 이른 시각." },
+    "producedAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1, "description": "수집 완료의 correlationId를 이어받는다." },
+    "payload": {
+      "type": "object",
+      "required": ["collectionEventId", "jobType", "scheduledFor", "startedAt", "incompleteSymbols", "articleCount", "storedCount", "mergedCount", "failedCount", "unprocessedEventIds"],
+      "properties": {
+        "collectionEventId": { "type": "string", "format": "uuid", "description": "이 알림이 답하는 수집 완료의 eventId." },
+        "jobType": { "type": "string", "minLength": 1, "description": "수집 완료의 jobType." },
+        "scheduledFor": { "type": "string", "format": "date-time", "description": "수집 완료의 scheduledFor." },
+        "startedAt": { "type": "string", "format": "date-time", "description": "수집 완료의 startedAt." },
+        "incompleteSymbols": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^([0-9A-Z]{6}|\\*)$" },
+          "description": "수집 완료의 incompleteSymbols(수집기가 제대로 모으지 못했을 수 있는 종목)."
+        },
+        "researchJobId": { "type": "string", "format": "uuid", "description": "수집 완료의 researchJobId. 재검색 완료에만 있다. 선택." },
+        "articleCount": { "type": "integer", "minimum": 0, "description": "수집 완료가 가리킨 기사 이벤트 수(articleEventIds 개수)." },
+        "storedCount": { "type": "integer", "minimum": 0, "description": "새 기사로 저장된 수." },
+        "mergedCount": { "type": "integer", "minimum": 0, "description": "같은 기사(URL 중복)가 이미 있어 종목·검색어만 합친 수." },
+        "failedCount": { "type": "integer", "minimum": 0, "description": "재시도를 모두 소진해 저장하지 못한 수." },
+        "unprocessedEventIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "format": "uuid" },
+          "description": "대기 한도 안에 처리 결과가 남지 않은 기사 이벤트의 eventId. 빈 배열이면 모두 처리된 것이다. 네 개수의 합은 articleCount다."
+        }
+      }
+    }
+  }
+}

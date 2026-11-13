@@ -21,7 +21,8 @@ class NewsArticleRepository {
      * 기존 기사면 종목과 검색어를 합집합으로 늘린다. 한 트랜잭션이라 중간 상태가 남지 않는다.
      * 재검색에서 온 기사면 재검색 여부를 참으로 두고, 작업 id 는 비어 있을 때만 채운다(처음 찾은 작업만 남긴다).
      *
-     * @return 새 행이 만들어졌으면 true
+     * @return 이 이벤트로 기사 행이 만들어졌으면 true. 같은 이벤트를 다시 받아도 true 라서, 처리 결과 기록이 다시
+     *         받은 횟수와 상관없이 같다.
      */
     @Transactional
     boolean save(NewsArticle article) {
@@ -29,7 +30,8 @@ class NewsArticleRepository {
         String[] matchedQueries = article.matchedQueries().toArray(String[]::new);
 
         Optional<Long> inserted = insertIfAbsent(article, articleKey, matchedQueries);
-        long articleId = inserted.orElseGet(() -> findIdByKey(articleKey));
+        StoredRow existing = inserted.isPresent() ? null : findByKey(articleKey);
+        long articleId = inserted.isPresent() ? inserted.get() : existing.id();
 
         jdbc.sql("""
                         INSERT INTO news_article_symbol (article_id, symbol)
@@ -46,7 +48,10 @@ class NewsArticleRepository {
                 markFoundByResearch(articleId, article.researchJobId());
             }
         }
-        return inserted.isPresent();
+        return inserted.isPresent() || existing.eventId().equals(article.eventId());
+    }
+
+    private record StoredRow(long id, UUID eventId) {
     }
 
     // 유니크 제약이 event_id와 article_key 둘이라 충돌 대상을 지정하지 않는다.
@@ -75,10 +80,10 @@ class NewsArticleRepository {
                 .optional();
     }
 
-    private long findIdByKey(String articleKey) {
-        return jdbc.sql("SELECT id FROM news_article WHERE article_key = :articleKey")
+    private StoredRow findByKey(String articleKey) {
+        return jdbc.sql("SELECT id, event_id FROM news_article WHERE article_key = :articleKey")
                 .param("articleKey", articleKey)
-                .query(Long.class)
+                .query((rs, rowNum) -> new StoredRow(rs.getLong("id"), rs.getObject("event_id", UUID.class)))
                 .optional()
                 .orElseThrow(() -> new IllegalStateException(
                         "article conflicted on event_id but not article_key, key=" + articleKey));

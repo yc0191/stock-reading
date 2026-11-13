@@ -21,8 +21,12 @@ class TopicsConfigTest {
                     assertThat(topics.values()).extracting(NewTopic::name)
                             .containsExactlyInAnyOrder("news.collected", "news.articles.requested",
                                     "news.articles.responded", "filing.collected", "news.filings.requested",
-                                    "news.filings.responded");
-                    assertThat(topics.values()).extracting(NewTopic::numPartitions).containsOnly(3);
+                                    "news.filings.responded", "collection.completed", "news.stored");
+                    // 수집 완료와 저장 끝은 collector 의 collection.completed 와 같은 1개, 나머지는 3개다.
+                    assertThat(topics.values()).filteredOn(t -> t.name().equals("collection.completed")
+                            || t.name().equals("news.stored")).extracting(NewTopic::numPartitions).containsOnly(1);
+                    assertThat(topics.values()).filteredOn(t -> !t.name().equals("collection.completed")
+                            && !t.name().equals("news.stored")).extracting(NewTopic::numPartitions).containsOnly(3);
                 });
     }
 }

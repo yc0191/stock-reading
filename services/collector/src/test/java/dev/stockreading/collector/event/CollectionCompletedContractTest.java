@@ -52,6 +52,17 @@ class CollectionCompletedContractTest {
                 .replace("    \"publishedCount\": 12,\n", ""));
     }
 
+    // 기사 이벤트 id 목록은 뒤에 더한 칸이라, 이전 수집기가 낸 완료(칸 없음)도 계약을 지킨다.
+    @Test
+    void articleEventIdsAreOptionalUniqueUuids() throws IOException {
+        String withoutIds = sample().replaceAll("(?s)    \"articleEventIds\": \\[.*?\\],\n", "");
+        assertThat(withoutIds).doesNotContain("articleEventIds");
+        assertThat(ContractSchemas.validate(SCHEMA, withoutIds)).isEmpty();
+
+        assertRejected(sample().replace("e0000001-0000-4000-8000-000000000001", "not-a-uuid"));
+        assertRejected(sample().replace("e0000002-0000-4000-8000-000000000002", "e0000001-0000-4000-8000-000000000001"));
+    }
+
     @Test
     void researchCompletionCarriesItsJobIdAsAnOptionalUuid() throws IOException {
         String research = sample()
@@ -71,9 +82,9 @@ class CollectionCompletedContractTest {
         OffsetDateTime at = OffsetDateTime.now(clock);
         String time = EventFactory.format(at);
         CollectionCompletedPayload regular = new CollectionCompletedPayload(
-                "collect-news", time, time, time, 0, List.of());
+                "collect-news", time, time, time, 0, List.of(), List.of(), null);
         CollectionCompletedPayload research = new CollectionCompletedPayload(
-                "research-news", time, time, time, 0, List.of("TEST01"), "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13");
+                "research-news", time, time, time, 0, List.of(), List.of("TEST01"), "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13");
 
         String regularJson = mapper.writeValueAsString(
                 EventFactory.create(clock, "collection.completed", at, "c", regular));

@@ -20,8 +20,14 @@ public final class EventFactory {
 
     public static <T> Envelope<T> create(
             Clock clock, String eventType, OffsetDateTime occurredAt, String correlationId, T payload) {
+        return create(clock, UUID.randomUUID(), eventType, occurredAt, correlationId, payload);
+    }
+
+    /** 다시 발행해도 소비자가 eventId 로 같은 이벤트임을 알 수 있게 eventId 를 정해서 만든다. */
+    public static <T> Envelope<T> create(
+            Clock clock, UUID eventId, String eventType, OffsetDateTime occurredAt, String correlationId, T payload) {
         return new Envelope<>(
-                UUID.randomUUID().toString(),
+                eventId.toString(),
                 eventType,
                 1,
                 format(occurredAt),

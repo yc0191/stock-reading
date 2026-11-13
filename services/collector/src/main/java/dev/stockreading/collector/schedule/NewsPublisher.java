@@ -10,7 +10,6 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
@@ -34,6 +33,7 @@ import tools.jackson.databind.ObjectMapper;
 /**
  * 수집한 기사를 기사마다 news.collected 이벤트 한 건으로 발행한다. 메시지 키는 기사 url 이다.
  * 기사 전송이 모두 확정되면(성공·실패 포함) collection.completed 를 한 건 발행한다. 메시지 키는 jobType 이다.
+ * 완료 알림에는 전송을 확정한 기사 이벤트의 eventId 를 모두 담아, 뉴스처리기가 그 기사들의 저장 끝을 알릴 수 있게 한다.
  * 재검색(news.research.requested)도 같은 수집·발행 경로를 쓰고, 기사와 완료 알림에 재검색 작업 id 를 싣는다.
  */
 @Component
@@ -124,7 +124,7 @@ class NewsPublisher {
         // 전송 실패는 콜백 스레드에서도 기록되므로 동시 접근에 안전한 집합과 카운터를 쓴다.
         Set<String> incomplete = ConcurrentHashMap.newKeySet();
         incomplete.addAll(collection.incompleteSymbols());
-        AtomicInteger confirmed = new AtomicInteger();
+        Set<String> confirmed = ConcurrentHashMap.newKeySet();
         List<CompletableFuture<Void>> settled = new ArrayList<>();
 
         int published = 0;
@@ -143,9 +143,9 @@ class NewsPublisher {
                 continue;
             }
             CompletableFuture<SendResult<String, String>> future;
+            Envelope<NewsPayload> event;
             try {
-                Envelope<NewsPayload> event = EventFactory.create(
-                        clock, EVENT_TYPE, item.publishedAt(), correlationId, payload);
+                event = EventFactory.create(clock, EVENT_TYPE, item.publishedAt(), correlationId, payload);
                 future = kafka.send(Topics.NEWS_COLLECTED, payload.url(), mapper.writeValueAsString(event));
             } catch (RuntimeException e) {
                 sendFailed++;
@@ -159,7 +159,7 @@ class NewsPublisher {
             settled.add(future.handle((result, error) -> {
                 if (error == null) {
                     remember(sentKey);
-                    confirmed.incrementAndGet();
+                    confirmed.add(event.eventId());
                 } else {
                     markIncomplete(incomplete, item);
                     log.warn("news send failed corr={} errorType={}", correlationId, error.getClass().getSimpleName());
@@ -179,7 +179,7 @@ class NewsPublisher {
 
         CompletableFuture<Void> allSettled = CompletableFuture.allOf(settled.toArray(new CompletableFuture[0]));
         Runnable sendCompletion = () -> publishCompleted(
-                jobType, researchJobId, correlationId, scheduledFor, collection.startedAt(), confirmed.get(), incomplete);
+                jobType, researchJobId, correlationId, scheduledFor, collection.startedAt(), confirmed, incomplete);
         if (allSettled.isDone()) {
             sendCompletion.run();
         } else {
@@ -190,15 +190,18 @@ class NewsPublisher {
     }
 
     private void publishCompleted(String jobType, String researchJobId, String correlationId, String scheduledFor,
-            OffsetDateTime startedAt, int publishedCount, Set<String> incomplete) {
+            OffsetDateTime startedAt, Set<String> articleEventIds, Set<String> incomplete) {
         try {
             OffsetDateTime finishedAt = OffsetDateTime.now(clock);
+            List<String> eventIds = new ArrayList<>(new TreeSet<>(articleEventIds));
+            int publishedCount = eventIds.size();
             CollectionCompletedPayload payload = new CollectionCompletedPayload(
                     jobType,
                     scheduledFor,
                     EventFactory.format(startedAt),
                     EventFactory.format(finishedAt),
                     publishedCount,
+                    eventIds,
                     completedSymbols(incomplete),
                     researchJobId);
             Envelope<CollectionCompletedPayload> event = EventFactory.create(

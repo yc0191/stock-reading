@@ -30,7 +30,7 @@ class NewsContractTest {
     @BeforeEach
     void setUp() {
         repository = mock(NewsArticleRepository.class);
-        listener = new NewsListener(repository, mapper);
+        listener = new NewsListener(repository, mock(ArticleResultRepository.class), mapper);
     }
 
     @Test

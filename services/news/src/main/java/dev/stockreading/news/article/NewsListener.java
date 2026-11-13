@@ -18,10 +18,12 @@ class NewsListener {
     private static final Logger log = LoggerFactory.getLogger(NewsListener.class);
 
     private final NewsArticleRepository repository;
+    private final ArticleResultRepository results;
     private final ObjectMapper mapper;
 
-    NewsListener(NewsArticleRepository repository, ObjectMapper mapper) {
+    NewsListener(NewsArticleRepository repository, ArticleResultRepository results, ObjectMapper mapper) {
         this.repository = repository;
+        this.results = results;
         this.mapper = mapper;
     }
 
@@ -45,6 +47,8 @@ class NewsListener {
 
         // 제목과 URL은 기사 내용이라 로그에 남기지 않고 식별자만 남긴다.
         boolean inserted = repository.save(article);
+        // 저장 뒤에 기록한다. 그 사이에 멈춰 다시 받아도 저장은 멱등이고 결과도 같게 나온다.
+        results.record(article.eventId(), inserted ? ArticleResult.STORED : ArticleResult.MERGED, event.correlationId());
         log.info("news {} eventId={} researchJobId={} corr={}",
                 inserted ? "stored" : "merged into existing article", event.eventId(), payload.researchJobId(),
                 event.correlationId());
