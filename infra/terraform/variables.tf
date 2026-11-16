@@ -1,6 +1,12 @@
 variable "aws_region" {
-  description = "Lightsail·ECR·S3·Parameter Store를 만들 리전. 서버 설정(AWS_REGION)과 같아야 한다."
+  description = "ECR·S3·Parameter Store를 만들 리전. 서버 설정(AWS_REGION)과 같아야 한다. lightsail_region 을 비우면 Lightsail 도 여기에 만든다."
   type        = string
+}
+
+variable "lightsail_region" {
+  description = "Lightsail 서버 2대만 다른 리전에 둘 때 쓴다(외부 API가 접속 지역을 제한할 때 등). 비우면 aws_region. 서버는 AWS_REGION 으로 ECR·S3·Parameter Store 를 부르므로 서버 설정은 바꾸지 않는다."
+  type        = string
+  default     = null
 }
 
 variable "aws_profile" {
@@ -28,7 +34,7 @@ variable "blueprint_id" {
 }
 
 variable "bundle_id" {
-  description = "Lightsail 묶음. small_3_2 가 2GB 메모리·공개 IPv4(월 $12)이다. 묶음 이름의 끝 번호는 AWS가 바꾸므로 aws lightsail get-bundles 로 확인한다. 서비스 서버가 모자라면 서비스 서버만 4GB 묶음으로 올린다."
+  description = "Lightsail 묶음. small_3_2 가 2GB 메모리·공개 IPv4(월 $12)이다. 묶음 이름의 끝 번호는 AWS가 바꾸고 리전마다 다르므로(같은 2GB 묶음도 리전에 따라 끝 번호가 다름) 서버를 둘 리전에서 aws lightsail get-bundles --region <리전> 으로 확인한다. 서비스 서버가 모자라면 서비스 서버만 4GB 묶음으로 올린다."
   type        = string
   default     = "small_3_2"
 }
