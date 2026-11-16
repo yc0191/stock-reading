@@ -2,6 +2,7 @@ package dev.stockreading.market.snapshot;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -19,11 +20,14 @@ import dev.stockreading.market.MarketProperties;
  * 감지 조건이 풀리면 상태를 지워 다음 변동을 처음부터 본다. 판단 불가(UNKNOWN) 스냅샷이 끼면 연속 건수를 다시 센다.
  * 셋째, 종목 단위로 마지막 발행(유형 무관) 뒤 재발행 간격 안이면 마지막 발행 가격 대비 예외 비율 이상 더 움직일 때만 발행한다.
  * 간격 때문에 막은 변동은 그 시점의 가격으로 유형 상태에 남겨, 조건이 풀리기 전에는 간격이 끝나도 새 움직임 없이 발행하지 않는다.
+ * 연속 확인과 유형별 상태는 그날(한국 날짜) 것만 쓴다. 장이 끝나면 조건이 풀렸다는 판정이 오지 않아 상태가 다음 거래일까지 남는데,
+ * 그대로 쓰면 다음 날 첫 변동의 시각과 근거 범위가 지난 거래일이 된다.
  */
 @Component
 class MoveTracker {
 
     private static final Logger log = LoggerFactory.getLogger(MoveTracker.class);
+    private static final ZoneId ZONE = ZoneId.of("Asia/Seoul");
 
     private final MoveDetector detector;
     private final MoveStateRepository states;
@@ -75,7 +79,7 @@ class MoveTracker {
     private Streak countStreak(String key, OffsetDateTime asOf, Detection detection) {
         int direction = detection.changePercent().signum();
         return streaks.compute(key, (k, streak) -> {
-            if (streak == null || streak.direction != direction) {
+            if (streak == null || streak.direction != direction || fromEarlierDay(streak.firstAsOf, asOf)) {
                 return new Streak(direction, asOf);
             }
             streak.count++;
@@ -86,6 +90,10 @@ class MoveTracker {
     private void publishIfAllowed(
             String symbol, OffsetDateTime asOf, long price, Detection detection, Streak streak, String correlationId) {
         Optional<MoveState> state = states.find(symbol, detection.type());
+        if (state.isPresent() && fromEarlierDay(state.get().moveStartedAt(), asOf)) {
+            states.delete(symbol, detection.type());
+            state = Optional.empty();
+        }
         if (state.isPresent() && !movedFurther(state.get().lastPublishedPrice(), price, detection.thresholdPercent())) {
             log.info("{} {} move already published at {}, change since then is below {}%",
                     symbol, detection.type().wire(), state.get().lastPublishedPrice(), detection.thresholdPercent());
@@ -128,6 +136,11 @@ class MoveTracker {
                     symbol, detection.type().wire(), last.get().publishedAt(), minutes, properties.republishExceptionPercent());
         }
         return true;
+    }
+
+    /** 지난 시세를 나중에 재생할 때 오늘 상태를 지우지 않도록, 이른 날짜만 지난 거래일 상태로 본다. */
+    private static boolean fromEarlierDay(OffsetDateTime stored, OffsetDateTime asOf) {
+        return stored.atZoneSameInstant(ZONE).toLocalDate().isBefore(asOf.atZoneSameInstant(ZONE).toLocalDate());
     }
 
     private static boolean movedFurther(long lastPublishedPrice, long price, BigDecimal threshold) {

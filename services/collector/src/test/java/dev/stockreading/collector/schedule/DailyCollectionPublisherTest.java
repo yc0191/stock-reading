@@ -115,6 +115,25 @@ class DailyCollectionPublisherTest {
     }
 
     @Test
+    void postCloseEditionTimeIsNotEarlierThanTheFinishTime() throws IOException {
+        // 수집이 16:30:01.69에 끝났는데 기준 시각을 16:30:01로 내리면, 그 사이에 받은 일봉이 기준 시각 뒤 자료로 빠진다(11-16 운영).
+        Clock finishedMidSecond = Clock.fixed(Instant.parse("2026-11-16T07:30:01.690Z"), KST);
+        publisher(OPEN, finishedMidSecond).publishPostClose("collect-post-close-2026-11-16T16:30:00+09:00", List.of());
+
+        assertThat(sentOne("post-close").get("payload").get("scheduledFor").asString())
+                .isEqualTo("2026-11-16T16:30:02+09:00");
+    }
+
+    @Test
+    void postCloseEditionTimeStaysWhenTheFinishTimeIsAWholeSecond() throws IOException {
+        Clock finishedOnTheSecond = Clock.fixed(Instant.parse("2026-11-16T07:30:01Z"), KST);
+        publisher(OPEN, finishedOnTheSecond).publishPostClose("collect-post-close-2026-11-16T16:30:00+09:00", List.of());
+
+        assertThat(sentOne("post-close").get("payload").get("scheduledFor").asString())
+                .isEqualTo("2026-11-16T16:30:01+09:00");
+    }
+
+    @Test
     void holidaySendsMarketClosedForBothEditionsAtTheirTimes() throws IOException {
         publisher(HOLIDAY, MORNING).publishMorning();
         JsonNode morning = sentOne("morning");
