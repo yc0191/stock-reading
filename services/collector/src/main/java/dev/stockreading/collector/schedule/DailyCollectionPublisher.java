@@ -107,7 +107,7 @@ class DailyCollectionPublisher {
 
     /** 마감 후 수집(타이머·수동 실행 모두)이 끝나면 부른다. 판의 기준 시각은 수집이 끝난 지금이다. */
     void publishPostClose(String correlationId, Collection<String> missingSources) {
-        publish(EDITION_POST_CLOSE, STATUS_COLLECTED, now(), correlationId, List.copyOf(missingSources));
+        publish(EDITION_POST_CLOSE, STATUS_COLLECTED, nowRoundedUp(), correlationId, List.copyOf(missingSources));
     }
 
     private void publish(String edition, String status, String scheduledFor, String correlationId,
@@ -131,6 +131,16 @@ class DailyCollectionPublisher {
 
     private String now() {
         return EventFactory.format(OffsetDateTime.now(clock).truncatedTo(ChronoUnit.SECONDS));
+    }
+
+    /**
+     * 마감 후 판은 이 시각까지 받은 자료만 쓴다. 초 아래를 버리면 끝나기 직전 1초 안에 받은 일봉이 기준 시각 뒤 자료로 빠지므로
+     * 초 단위로 올린다.
+     */
+    private String nowRoundedUp() {
+        OffsetDateTime now = OffsetDateTime.now(clock);
+        OffsetDateTime seconds = now.truncatedTo(ChronoUnit.SECONDS);
+        return EventFactory.format(seconds.equals(now) ? seconds : seconds.plusSeconds(1));
     }
 
     private LocalDate today() {
