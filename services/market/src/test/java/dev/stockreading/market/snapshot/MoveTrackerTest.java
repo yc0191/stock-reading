@@ -444,4 +444,53 @@ class MoveTrackerTest {
             logger.detachAppender(appender);
         }
     }
+
+    // 11-16 운영: 금요일 15:05의 상태가 주말을 넘겨 남아, 월요일 첫 감지 메일의 변동 시각이 금요일로 나갔다.
+    private static final OffsetDateTime FRIDAY = OffsetDateTime.parse("2026-11-13T15:05:00+09:00");
+    private static final OffsetDateTime MONDAY = OffsetDateTime.parse("2026-11-16T14:37:47+09:00");
+
+    @Test
+    void stateLeftFromThePreviousTradingDayIsNotReusedSoTheMoveStartsToday() {
+        snapshot(FRIDAY, 10_300, up(DetectionType.PREV_CLOSE, 10_300, FRIDAY));
+
+        snapshot(MONDAY, 10_900, up(DetectionType.PREV_CLOSE, 10_900, MONDAY));
+
+        verify(publisher).publish(eq("TEST01"), any(Detection.class), eq(MONDAY), eq(MONDAY), anyString());
+        assertThat(stored.get(DetectionType.PREV_CLOSE).moveStartedAt()).isEqualTo(MONDAY);
+    }
+
+    @Test
+    void aMoveTodayNearThePriceLastPublishedOnThePreviousTradingDayIsStillPublished() {
+        snapshot(FRIDAY, 10_300, up(DetectionType.PREV_CLOSE, 10_300, FRIDAY));
+
+        // 지난 거래일에 알린 가격과 거의 같아도 오늘 처음 감지한 변동이므로 알린다.
+        snapshot(MONDAY, 10_310, up(DetectionType.PREV_CLOSE, 10_310, MONDAY));
+
+        verify(publisher).publish(eq("TEST01"), any(Detection.class), eq(MONDAY), eq(MONDAY), anyString());
+    }
+
+    @Test
+    void aSnapshotFromAnEarlierDayDoesNotDropTodaysState() {
+        snapshot(MONDAY, 10_900, up(DetectionType.PREV_CLOSE, 10_900, MONDAY));
+
+        // 지난 시세를 나중에 재생해도 오늘 상태는 그대로다.
+        snapshot(FRIDAY, 10_300, up(DetectionType.PREV_CLOSE, 10_300, FRIDAY));
+
+        verify(states, never()).delete(anyString(), any(DetectionType.class));
+        assertThat(stored.get(DetectionType.PREV_CLOSE).moveStartedAt()).isEqualTo(MONDAY);
+    }
+
+    @Test
+    void aStreakCountedOnThePreviousTradingDayStartsOverToday() {
+        MoveTracker target = confirming();
+        snapshot(target, FRIDAY, 10_200, up(DetectionType.PREV_CLOSE, 10_200, FRIDAY));
+        snapshot(target, FRIDAY.plusMinutes(1), 10_200, up(DetectionType.PREV_CLOSE, 10_200, FRIDAY.plusMinutes(1)));
+
+        snapshot(target, MONDAY, 10_200, up(DetectionType.PREV_CLOSE, 10_200, MONDAY));
+        verify(publisher, never()).publish(anyString(), any(), any(), any(), anyString());
+
+        snapshot(target, MONDAY.plusSeconds(1), 10_200, up(DetectionType.PREV_CLOSE, 10_200, MONDAY.plusSeconds(1)));
+        snapshot(target, MONDAY.plusSeconds(2), 10_200, up(DetectionType.PREV_CLOSE, 10_200, MONDAY.plusSeconds(2)));
+        verify(publisher).publish(eq("TEST01"), any(Detection.class), eq(MONDAY), eq(MONDAY.plusSeconds(2)), anyString());
+    }
 }
