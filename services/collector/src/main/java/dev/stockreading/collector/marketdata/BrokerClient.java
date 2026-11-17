@@ -32,6 +32,9 @@ class BrokerClient {
 
     static final String RESULT_OK = "200";
     private static final int HTTP_UNAUTHORIZED = 401;
+    // 상대는 만료된 토큰에 401 이 아니라 HTTP 500 과 이 처리 코드(토큰 검증 실패)로 답한다.
+    // 경로 오류·호출 수 초과 같은 다른 500 응답은 토큰과 무관하므로 이 코드일 때만 토큰을 버린다.
+    private static final String TOKEN_VALIDATION_FAILED = "I445";
     // 재시도 호출도 호출하는 쪽과 같은 상한 장치를 거친다. 호출 스레드를 오래 잡지 않도록 짧게만 기다린다.
     private static final Duration RETRY_LIMITER_WAIT = Duration.ofSeconds(1);
     private static final Logger log = LoggerFactory.getLogger(BrokerClient.class);
@@ -177,23 +180,24 @@ class BrokerClient {
         return send(path, dataBody, null, timeout);
     }
 
-    // 토큰이 거부되면(HTTP 401) 메모리의 토큰을 버리고 새로 발급해 한 번만 다시 시도한다.
+    // 토큰이 거부되면(HTTP 401 또는 토큰 검증 실패 코드) 메모리의 토큰을 버리고 새로 발급해 한 번만 다시 시도한다.
     // 재시도도 거부되면 그 실패를 그대로 올리므로 다음 호출은 처음부터 새 토큰으로 시작한다.
     private <T> T withTokenRetry(Function<String, T> call) {
         String used = token();
         try {
             return call.apply(used);
         } catch (BrokerApiException e) {
-            if (e.httpStatus() == null || e.httpStatus() != HTTP_UNAUTHORIZED) {
+            if (!isTokenRejected(e)) {
                 throw e;
             }
             discardToken(used);
             if (!limiter.tryAcquire(RETRY_LIMITER_WAIT)) {
-                log.warn("broker token rejected http={}; discarded it but no call slot for the retry, giving up",
-                        HTTP_UNAUTHORIZED);
+                log.warn("broker token rejected http={} code={}; discarded it but no call slot for the retry, giving up",
+                        e.httpStatus(), e.responseCode());
                 throw e;
             }
-            log.warn("broker token rejected http={}; discarded it and reissuing once", HTTP_UNAUTHORIZED);
+            log.warn("broker token rejected http={} code={}; discarded it and reissuing once",
+                    e.httpStatus(), e.responseCode());
             try {
                 T result = call.apply(token());
                 log.warn("broker call succeeded after token reissue");
@@ -204,6 +208,11 @@ class BrokerClient {
                 throw retryFailure;
             }
         }
+    }
+
+    private static boolean isTokenRejected(BrokerApiException e) {
+        return (e.httpStatus() != null && e.httpStatus() == HTTP_UNAUTHORIZED)
+                || TOKEN_VALIDATION_FAILED.equals(e.responseCode());
     }
 
     // 동시에 거부된 호출들이 이미 새로 발급된 토큰까지 버리지 않도록, 거부된 그 토큰일 때만 버린다.
@@ -411,19 +420,24 @@ class BrokerClient {
                 throw new BrokerApiException(FailureType.HTTP_ERROR, "시세 API 오류 http=" + HTTP_UNAUTHORIZED,
                         HTTP_UNAUTHORIZED, null, null, null);
             }
-            JsonNode responseHeader = mapper.readTree(response.body()).path("dataHeader");
+            JsonNode responseHeader;
+            try {
+                responseHeader = mapper.readTree(response.body()).path("dataHeader");
+            } catch (tools.jackson.core.JacksonException e) {
+                // 파싱 예외 메시지에 응답 일부가 들어갈 수 있어 종류만 남긴다. 상태는 남겨야 오류 응답을 구분한다.
+                int status = response.statusCode();
+                throw new BrokerApiException(status != 200 ? FailureType.HTTP_ERROR : FailureType.RESULT_CODE_FAILED,
+                        "시세 API 응답 형식 오류 http=" + status, status, null, null, null);
+            }
             if (response.statusCode() != 200 || !RESULT_OK.equals(responseHeader.path("resultCode").asString(""))) {
-                // 서버 문구는 외부 원문이라 남기지 않고 원인 구분용 코드만 남긴다.
+                // 서버 문구는 외부 원문이라 남기지 않고 원인 구분용 코드만 남긴다. 토큰 거부를 알아보도록 코드는 칸에도 싣는다.
+                String code = safeCode(responseHeader.path("processCode").asString(""));
                 throw new BrokerApiException(
                         response.statusCode() != 200 ? FailureType.HTTP_ERROR : FailureType.RESULT_CODE_FAILED,
-                        "시세 API 오류 http=" + response.statusCode()
-                                + " processCode=" + safeCode(responseHeader.path("processCode").asString("")),
-                        response.statusCode(), null, null, null);
+                        "시세 API 오류 http=" + response.statusCode() + " processCode=" + code,
+                        response.statusCode(), code.isEmpty() ? null : code, null, null);
             }
             return response.body().trim();
-        } catch (tools.jackson.core.JacksonException e) {
-            // 파싱 예외 메시지에 응답 일부가 들어갈 수 있어 종류만 남긴다.
-            throw new BrokerApiException(FailureType.RESULT_CODE_FAILED, "시세 API 응답 형식 오류");
         } catch (IOException e) {
             // 원인 예외 메시지에 요청 정보가 들어갈 수 있어 연결하지 않는다.
             FailureType type = e instanceof HttpTimeoutException ? FailureType.TIMEOUT : FailureType.CONNECTION_FAILED;

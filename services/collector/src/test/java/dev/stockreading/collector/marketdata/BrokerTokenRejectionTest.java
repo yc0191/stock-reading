@@ -22,7 +22,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import tools.jackson.databind.json.JsonMapper;
 
-/** 토큰이 거부(HTTP 401)되면 토큰을 버리고 새로 발급해 한 번만 다시 시도하고, 그 일을 로그로 남긴다. */
+/** 토큰이 거부(HTTP 401, 또는 HTTP 500 과 토큰 검증 실패 코드)되면 토큰을 버리고 새로 발급해 한 번만 다시 시도하고, 그 일을 로그로 남긴다. */
 class BrokerTokenRejectionTest {
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-11-10T01:00:00Z"), ZoneId.of("Asia/Seoul"));
@@ -130,6 +130,55 @@ class BrokerTokenRejectionTest {
         assertThat(server.authHeaders).containsExactly("Bearer tok-secret-1", "Bearer tok-secret-2");
     }
 
+    private void rejectAsExpiredToken() {
+        server.rejectStatus = 500;
+        server.rejectBody = errorBody("I445");
+    }
+
+    private static String errorBody(String processCode) {
+        return "{\"dataHeader\": {\"resultCode\": \"9999\", \"processCode\": \"" + processCode
+                + "\", \"processFlag\": \"B\"}}";
+    }
+
+    @Test
+    void aTokenValidationFailureAnsweredWith500IsDiscardedReissuedAndRetriedOnce() {
+        rejectAsExpiredToken();
+        server.rejectAuthorizedCalls.set(1);
+
+        PriceQuote quote = client.currentPrice("TEST01");
+
+        assertThat(quote.price()).isEqualTo(10250L);
+        assertThat(server.tokenCalls).hasValue(2);
+        assertThat(server.authHeaders).containsExactly("Bearer tok-secret-1", "Bearer tok-secret-2");
+        assertThat(warnMessages().getFirst()).contains("token rejected").contains("http=500").contains("code=I445");
+    }
+
+    @Test
+    void aSecondTokenValidationFailureIsNotRetriedAgain() {
+        rejectAsExpiredToken();
+        server.rejectAuthorizedCalls.set(2);
+
+        assertThatThrownBy(() -> client.currentPrice("TEST01"))
+                .isInstanceOfSatisfying(BrokerApiException.class, e -> assertThat(e.responseCode()).isEqualTo("I445"));
+
+        assertThat(server.tokenCalls).hasValue(2);
+        assertThat(server.priceCalls).hasValue(2);
+    }
+
+    @Test
+    void aServer500WithAnotherCodeDoesNotDiscardTheTokenOrRetry() {
+        server.rejectStatus = 500;
+        server.rejectBody = errorBody("I301");
+        server.rejectAuthorizedCalls.set(1);
+
+        assertThatThrownBy(() -> client.currentPrice("TEST01"))
+                .isInstanceOfSatisfying(BrokerApiException.class, e -> assertThat(e.responseCode()).isEqualTo("I301"));
+
+        assertThat(server.tokenCalls).hasValue(1);
+        assertThat(server.priceCalls).hasValue(1);
+        assertThat(warnMessages()).isEmpty();
+    }
+
     @Test
     void otherFailuresDoNotDiscardTheTokenOrRetry() {
         server.priceStatus = 500;
@@ -151,6 +200,33 @@ class BrokerTokenRejectionTest {
         assertThat(server.tokenCalls).hasValue(2);
         assertThat(server.marketStatusCalls).hasValue(2);
         assertThat(server.authHeaders).containsExactly("Bearer tok-secret-1", "Bearer tok-secret-2");
+    }
+
+    @Test
+    void rawQueriesAlsoReissueTheTokenOnATokenValidationFailure() {
+        rejectAsExpiredToken();
+        server.rejectAuthorizedCalls.set(1);
+
+        String raw = client.marketStatusRaw(FakeBrokerServer.MARKET_STATUS_PATH, Duration.ofSeconds(5));
+
+        assertThat(raw).contains("today_field");
+        assertThat(server.tokenCalls).hasValue(2);
+        assertThat(server.authHeaders).containsExactly("Bearer tok-secret-1", "Bearer tok-secret-2");
+    }
+
+    @Test
+    void aRawQueryAnsweredWithANonJson500KeepsTheStatusAndKeepsTheToken() {
+        server.rejectStatus = 500;
+        server.rejectBody = "Internal Server Error";
+        server.rejectAuthorizedCalls.set(1);
+
+        assertThatThrownBy(() -> client.marketStatusRaw(FakeBrokerServer.MARKET_STATUS_PATH, Duration.ofSeconds(5)))
+                .isInstanceOfSatisfying(BrokerApiException.class, e -> {
+                    assertThat(e.failureType()).isEqualTo(FailureType.HTTP_ERROR);
+                    assertThat(e.httpStatus()).isEqualTo(500);
+                });
+
+        assertThat(server.tokenCalls).hasValue(1);
     }
 
     @Test

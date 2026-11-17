@@ -61,8 +61,9 @@ public final class FakeBrokerServer implements AutoCloseable {
     final AtomicInteger failMarketStatusCalls = new AtomicInteger();
     // 평일(영업일) 응답. 두 일자가 같으면 영업일이다.
     public volatile String marketStatusBody = marketStatus("20261110", "20261110");
-    // 인증이 필요한 호출(시세, 장 운영 상태)에 앞으로 401 을 줄 횟수. 토큰이 거부된 상황을 흉내 낸다.
+    // 인증이 필요한 호출(시세, 장 운영 상태)에 앞으로 rejectStatus 를 줄 횟수. 토큰이 거부된 상황을 흉내 낸다.
     final AtomicInteger rejectAuthorizedCalls = new AtomicInteger();
+    volatile int rejectStatus = 401;
     volatile String rejectBody = "Unauthorized";
     // 설정하면 이 Authorization 값으로 온 요청만 거부 대상이 된다.
     volatile String rejectOnlyBearer;
@@ -152,7 +153,7 @@ public final class FakeBrokerServer implements AutoCloseable {
             return false;
         }
         if (rejectAuthorizedCalls.get() > 0 && rejectAuthorizedCalls.getAndDecrement() > 0) {
-            reply(exchange, 401, rejectBody);
+            reply(exchange, rejectStatus, rejectBody);
             return true;
         }
         return false;
