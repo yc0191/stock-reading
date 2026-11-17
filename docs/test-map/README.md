@@ -23,7 +23,7 @@
 | 가상 | 외부 의존(외부 API, Kafka, DB, LLM, SMTP)을 가짜로 바꾸고 기능 흐름을 돌리는 테스트. 가짜 HTTP 서버, mock 처리한 포트·저장소·`KafkaTemplate`, 프로세스 안 테스트용 서버가 여기에 해당합니다 |
 | 실제 | 실제 DB, 실제 서비스 흐름, 실제 외부 API를 쓰는 테스트 |
 
-세 종류의 뜻은 `.claude/rules/commit.md`의 "테스트 3종"과 같습니다.
+세 종류의 뜻은 `.claude/guides/commit.md`의 "테스트 3종"과 같습니다.
 
 ## 칸에 쓰는 값
 

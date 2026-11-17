@@ -1,3 +1,15 @@
+---
+paths:
+  - "services/**"
+  - "scripts/**"
+  - "build-logic/**"
+  - "gradle/**"
+  - "contracts/**"
+  - "infra/**"
+  - "docs/test-map/**"
+  - ".github/workflows/**"
+---
+
 # 검증 규칙
 
 코드나 설정을 바꾼 뒤, 또는 "동작한다"고 말하기 전에 읽습니다.
