@@ -41,6 +41,6 @@
 - 이벤트 스키마·토픽·`Envelope` 변경: `.claude/rules/event-contract.md`
 - 새 수집 자료를 브리핑 근거로 연결: `.claude/rules/evidence-source.md`
 - ADR·README 등 설계 문서 변경: `.claude/rules/adr.md`
-- 커밋 메시지 작성: `.claude/rules/commit.md`
-- PR 생성·머지: `.claude/rules/pr.md`
-- 이슈·마일스톤·프로젝트 보드 생성·수정 (모두 공개됨): `.claude/rules/issue.md`
+- 커밋 메시지 작성: `.claude/guides/commit.md`
+- PR 생성·머지: `.claude/guides/pr.md`
+- 이슈·마일스톤·프로젝트 보드 생성·수정 (모두 공개됨): `.claude/guides/issue.md`
