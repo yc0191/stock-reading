@@ -1,4 +1,4 @@
-# 이슈마다 종류 라벨 1개와 영역(area:) 라벨 1개 이상을 달게 한다(.claude/rules/issue.md).
+# 이슈마다 종류 라벨 1개와 영역(area:) 라벨 1개 이상을 달게 한다(.claude/guides/issue.md).
 # 양식의 "관련 서비스"에서 고른 항목을 area: 라벨로 달고, 그래도 빠진 라벨이 있으면 needs-labels 라벨과 안내 댓글을 단다.
 # 이 작업이 단 라벨은 GITHUB_TOKEN으로 단 것이라 이 워크플로를 다시 부르지 않는다.
 name: issue-labels

@@ -1,3 +1,11 @@
+---
+paths:
+  - "services/**"
+  - "scripts/**"
+  - "build-logic/**"
+  - "gradle/**"
+---
+
 # 코드 작성 규칙
 
 코드를 작성하거나 수정할 때 읽습니다.
