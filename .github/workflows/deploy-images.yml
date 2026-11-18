@@ -1,4 +1,4 @@
-# main 푸시마다 이미지 6개(서비스 5개 + DB 표 만들기 migrate)를 같은 커밋 태그로 ECR에 올리고,
+# main 푸시마다 이미지 7개(서비스 6개 + DB 표 만들기 migrate)를 같은 커밋 태그로 ECR에 올리고,
 # 모두 성공했을 때만 대기 버전 값(Parameter Store)을 그 커밋으로 적는다. 하나라도 실패하면 값을 적지 않는다.
 # 서버 적용은 서버가 값을 읽어 가져가는 방식이라 여기서 서버로 접속하지 않는다(infra/deploy/README.md).
 # 필요한 저장소 변수(Settings > Variables): AWS_ROLE_ARN(terraform output github_actions_role_arn), AWS_REGION.
@@ -30,6 +30,7 @@ jobs:
           - { image: news, dockerfile: services/news/Dockerfile }
           - { image: notifier, dockerfile: services/notifier/Dockerfile }
           - { image: briefing, dockerfile: services/briefing/Dockerfile }
+          - { image: ops-checker, dockerfile: services/ops-checker/Dockerfile }
           - { image: migrate, dockerfile: infra/deploy/migrate/Dockerfile }
     steps:
       - uses: actions/checkout@v4.2.2
@@ -60,7 +61,7 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,scope=${{ matrix.image }},mode=max
 
-  # build 가 6개 모두 성공해야 돈다(needs 는 매트릭스 전체의 성공을 요구한다).
+  # build 가 7개 모두 성공해야 돈다(needs 는 매트릭스 전체의 성공을 요구한다).
   publish-standby-version:
     needs: build
     runs-on: ubuntu-latest

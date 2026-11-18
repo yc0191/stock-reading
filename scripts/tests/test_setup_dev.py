@@ -22,6 +22,8 @@ def repo(tmp_path: Path) -> Path:
     shutil.copy(SCRIPTS / "install_font.py", root / "scripts")
     (root / "services" / "briefing").mkdir(parents=True)
     (root / "services" / "briefing" / "requirements.txt").write_text("")
+    (root / "services" / "ops-checker").mkdir(parents=True)
+    (root / "services" / "ops-checker" / "requirements.txt").write_text("")
     return root
 
 
@@ -71,6 +73,7 @@ def test_check_on_an_empty_clone_reports_every_missing_part_and_creates_nothing(
     assert "안 됨" in line(result, ".env") and ".env.example" in line(result, ".env")
     assert "준비됨" in line(result, "JDK 21")
     assert "안 됨" in line(result, "브리핑 venv") and "안 됨" in line(result, "차트 글꼴")
+    assert "안 됨" in line(result, "확인기 venv")
     # 글꼴 확인에 쓰는 파이썬 캐시(__pycache__)도 남기지 않는다.
     assert files(root) == before
 
@@ -95,7 +98,9 @@ def test_setup_creates_the_venv_installs_requirements_and_fetches_fonts(tmp_path
     assert calls[0] == "python3 -m venv services/briefing/.venv"
     assert calls[1].startswith("venv -m pip install") and calls[1].endswith("services/briefing/requirements.txt")
     assert calls[2] == "python3 scripts/install_font.py"
-    assert all("준비됨" in line(result, item) for item in (".env", "JDK 21", "브리핑 venv", "차트 글꼴"))
+    assert calls[3] == "python3 -m venv services/ops-checker/.venv"
+    assert calls[4].startswith("venv -m pip install") and calls[4].endswith("services/ops-checker/requirements.txt")
+    assert all("준비됨" in line(result, item) for item in (".env", "JDK 21", "브리핑 venv", "차트 글꼴", "확인기 venv"))
 
 
 def test_a_failed_requirements_install_is_reported_and_fails_the_run(tmp_path):
