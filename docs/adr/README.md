@@ -1,7 +1,7 @@
 # 설계 결정 기록 (ADR)
 
 ADR = Architecture Decision Record. "무엇을, 왜, 어떤 대안을 놓고 정했는지"를 결정 하나당 문서 하나로 남깁니다.
-언제 ADR을 쓰는지와 결정이 바뀔 때의 처리는 `.claude/rules/adr.md`를 따릅니다. 프로젝트 배경은 [background.md](../background.md)에 있습니다.
+언제 ADR을 쓰는지와 결정이 바뀔 때의 처리는 `.claude/rules/adr.md`를 따릅니다. ADR 본문에는 현재 결정만 있고, 결정이 바뀐 경위는 [history/](history/)에 ADR 파일명과 같은 이름으로 있습니다. 프로젝트 배경은 [background.md](../background.md)에 있습니다.
 
 | # | 주제 | 상태 |
 |---|---|---|
@@ -16,6 +16,7 @@ ADR = Architecture Decision Record. "무엇을, 왜, 어떤 대안을 놓고 정
 | [011](011-notification-channel.md) | 알림 채널: 이메일(AWS SES) | 확정 |
 | [012](012-collector-timers-and-command-topic.md) | 수집기 자기 수집은 서비스 안 타이머, 수동 실행은 명령 토픽(collector.command) | 확정 |
 | [013](013-lightsail-compose-deploy.md) | 운영 배포: Lightsail 서버 2대 + Docker Compose, 서버가 ECR 이미지를 받아 옴 | 확정 |
+| [014](014-ops-checker.md) | 이슈 조치 판정: 서버의 확인기가 저장소 기준 파일로 재고, GitHub Actions가 이슈에 전달 | 초안 |
 
 ## 상태 표기
 - **확정**: 합의했고, 구현이 있으면 테스트로 검증됨
