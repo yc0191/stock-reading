@@ -346,21 +346,6 @@ warn_leftovers() {
   fi
 }
 
-migrate_briefing() {
-  # 브리핑은 테이블을 만들지 않으므로 브리핑 테스트와 기동보다 먼저 Flyway 로 만든다.
-  # 서비스 계정으로 붙고, 비밀번호는 명령줄이 아니라 환경변수로만 넘긴다. 컨테이너는 stock-postgres 의 네트워크를 같이 쓴다.
-  local out
-  if ! out=$(FLYWAY_PASSWORD="$B_PW" docker run --rm --network "container:$PG_CONTAINER" \
-      -v "$ROOT/services/briefing/db/migration:/flyway/sql:ro" \
-      -e FLYWAY_PASSWORD -e FLYWAY_USER="$B_USER" -e FLYWAY_URL="jdbc:postgresql://localhost:5432/$DB_NAME" \
-      -e FLYWAY_SCHEMAS=briefing -e FLYWAY_DEFAULT_SCHEMA=briefing -e FLYWAY_CREATE_SCHEMAS=false \
-      -e FLYWAY_LOCATIONS=filesystem:/flyway/sql "$FLYWAY_IMAGE" migrate 2>&1); then
-    printf '%s\n' "$out" | tail -15
-    return 1
-  fi
-  printf '%s\n' "$out" | grep -E 'Successfully applied|up to date' | head -2
-}
-
 prepare_db() {
   local running waited key role found
   if ! docker info >/dev/null 2>&1; then DB_FAIL_REASON="Docker 에 연결할 수 없음"; return 1; fi

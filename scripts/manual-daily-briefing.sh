@@ -203,10 +203,12 @@ CREATE SCHEMA news AUTHORIZATION "$N_USER";
 CREATE SCHEMA briefing AUTHORIZATION "$B_USER";
 SQL
 # market 표 → personal 계정·권한 → personal 표 순서로 만든다(personal 이 market.etf·market.stock 을 가리킨다).
-echo "market·personal 표 생성(Flyway)"
+echo "market·personal·briefing 표 생성(Flyway)"
 migrate_market >/dev/null || fail "market 표를 만들지 못했습니다"
 init_personal || fail "personal 계정·권한을 만들지 못했습니다"
 migrate_personal >/dev/null || fail "personal 표를 만들지 못했습니다"
+# 브리핑은 표를 만들지 않고 시작할 때 작업 기록 표를 읽으므로 브리핑 기동보다 먼저 만든다.
+migrate_briefing >/dev/null || fail "briefing 표를 만들지 못했습니다"
 # 가짜 대응표: TEST01 에 미국 종목 두 개, TEST02 는 미국 종목 없음. 가짜 멤버 한 명이 두 ETF 를 보유하고 받는 주소는 가짜 주소다.
 "$PY" -c 'import sys; sys.path.insert(0, "scripts"); import daily_e2e; print(daily_e2e.holdings_seed_sql(sys.argv[1]))' "$RECIPIENT" \
   | admin_sql "$DB_NAME" >/dev/null || fail "가짜 종목·멤버를 넣지 못했습니다"

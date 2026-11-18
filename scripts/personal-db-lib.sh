@@ -1,5 +1,5 @@
 # test-all.sh 와 manual-daily-briefing.sh 가 함께 쓰는 DB 준비 함수. 직접 실행하지 않고 source 한다.
-# 쓰는 변수: ROOT, PG_CONTAINER, DB_NAME, FLYWAY_IMAGE, M_USER, M_PW(시세처리기), N_USER(뉴스), B_USER(브리핑), PO_*(personal 소유), PW_*(쓰기), PC_*(수집기), PN_*(발송기).
+# 쓰는 변수: ROOT, PG_CONTAINER, DB_NAME, FLYWAY_IMAGE, M_USER, M_PW(시세처리기), N_USER(뉴스), B_USER, B_PW(브리핑), PO_*(personal 소유), PW_*(쓰기), PC_*(수집기), PN_*(발송기).
 # 순서: market 표(migrate_market) → personal 계정·권한(init_personal) → personal 표(migrate_personal).
 # personal 표가 market.etf·market.stock 을 가리키는 외래 키를 가지므로 이 순서를 지킨다.
 
@@ -45,3 +45,17 @@ migrate_personal() {
   printf '%s\n' "$out" | grep -E 'Successfully applied|up to date' | head -2
 }
 
+migrate_briefing() {
+  # 브리핑은 테이블을 만들지 않으므로 브리핑 테스트와 기동보다 먼저 Flyway 로 만든다.
+  # 서비스 계정으로 붙고, 비밀번호는 명령줄이 아니라 환경변수로만 넘긴다. 컨테이너는 stock-postgres 의 네트워크를 같이 쓴다.
+  local out
+  if ! out=$(FLYWAY_PASSWORD="$B_PW" docker run --rm --network "container:$PG_CONTAINER" \
+      -v "$ROOT/services/briefing/db/migration:/flyway/sql:ro" \
+      -e FLYWAY_PASSWORD -e FLYWAY_USER="$B_USER" -e FLYWAY_URL="jdbc:postgresql://localhost:5432/$DB_NAME" \
+      -e FLYWAY_SCHEMAS=briefing -e FLYWAY_DEFAULT_SCHEMA=briefing -e FLYWAY_CREATE_SCHEMAS=false \
+      -e FLYWAY_LOCATIONS=filesystem:/flyway/sql "$FLYWAY_IMAGE" migrate 2>&1); then
+    printf '%s\n' "$out" | tail -15
+    return 1
+  fi
+  printf '%s\n' "$out" | grep -E 'Successfully applied|up to date' | head -2
+}
