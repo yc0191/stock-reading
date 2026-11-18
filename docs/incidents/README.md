@@ -4,9 +4,9 @@
 
 | # | 문제 | 상태 |
 |---|---|---|
-| [001](001-quote-calls-stall-together.md) | 시세 조회가 한꺼번에 10초씩 멈춤 | 진행 중(시도 1) |
-| [002](002-briefing-prompt-cache.md) | 브리핑이 같은 지시문을 매번 정가로 보냄 | 진행 중(시도 1) |
-| [003](003-quote-provider-blocks-overseas-ip.md) | 운영 서버에서 시세 제공자에 연결이 전부 안 됨 | 조치함(확인 중) |
+| [001](001-quote-calls-stall-together.md) | 시세 조회가 한꺼번에 10초씩 멈춤 | 해결됨 |
+| [002](002-briefing-prompt-cache.md) | 브리핑이 같은 지시문을 매번 정가로 보냄 | 해결됨 |
+| [003](003-quote-provider-blocks-overseas-ip.md) | 운영 서버에서 시세 제공자에 연결이 전부 안 됨 | 해결됨 |
 
 ## 기록하는 것
 

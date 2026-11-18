@@ -83,7 +83,7 @@ def test_value_with_newline_is_rejected():
 
 def test_missing_parameters_are_reported():
     updates, _ = lc.to_env_updates([param("smtp-host", "h")])
-    assert "sender" in lc.missing_names(updates)
+    assert "smtp-password" in lc.missing_names(updates)
     assert "smtp-host" not in lc.missing_names(updates)
 
 
@@ -109,6 +109,17 @@ def test_main_writes_when_all_values_present(tmp_path, capsys):
     assert stat.S_IMODE(os.stat(env).st_mode) == 0o600
     # 출력에는 키 이름만 있고 값은 없어야 한다.
     assert "v-smtp-password" not in capsys.readouterr().out
+
+
+def test_main_writes_through_a_linked_env_file_to_its_target(tmp_path):
+    shared = tmp_path / "shared.env"
+    shared.write_text("SMTP_HOST=old\n")
+    link = tmp_path / ".env"
+    link.symlink_to(shared)
+    code = lc.main(["--env-file", str(link)], run=fake_run(full_parameters()))
+    assert code == 0
+    assert link.is_symlink()
+    assert "SMTP_HOST=v-smtp-host" in shared.read_text()
 
 
 def test_main_writes_nothing_when_partial(tmp_path):

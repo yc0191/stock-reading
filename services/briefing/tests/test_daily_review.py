@@ -472,3 +472,13 @@ def test_a_move_not_sent_for_lack_of_evidence_is_shown_as_such_not_as_a_success(
 
     assert move_line(sent, {"TEST01": "TEST 하나(TEST01)"}).endswith("· 리포트 성공")
     assert move_line(skipped, {"TEST01": "TEST 하나(TEST01)"}) == "10:15 TEST 하나(TEST01) +2.10% · 근거 없어 보내지 않음"
+
+
+def test_a_move_during_the_report_pause_is_shown_with_its_time_name_and_change_only():
+    from briefing.daily_post_close import move_line
+    from briefing.job_log import MoveRun
+    at = datetime(2026, 11, 20, 10, 15, tzinfo=timezone(timedelta(hours=9)))
+    paused = MoveRun("j1", "TEST01", at, -3.4, "succeeded", None, "move_report_paused")
+
+    # 멈춤 안내나 리포트 결과 문구는 붙이지 않는다.
+    assert move_line(paused, {"TEST01": "TEST 하나(TEST01)"}) == "10:15 TEST 하나(TEST01) −3.40%"

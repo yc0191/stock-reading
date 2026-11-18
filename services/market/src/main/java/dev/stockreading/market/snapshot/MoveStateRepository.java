@@ -23,13 +23,14 @@ class MoveStateRepository {
 
     Optional<MoveState> find(String symbol, DetectionType type) {
         return jdbc.sql("""
-                        SELECT last_published_price, move_started_at FROM move_state
+                        SELECT last_published_price, move_started_at, last_published_at FROM move_state
                         WHERE symbol = :symbol AND detection_type = :type
                         """)
                 .param("symbol", symbol)
                 .param("type", type.wire())
                 .query((rs, rowNum) -> new MoveState(
-                        rs.getLong("last_published_price"), rs.getObject("move_started_at", OffsetDateTime.class)))
+                        rs.getLong("last_published_price"), rs.getObject("move_started_at", OffsetDateTime.class),
+                        rs.getObject("last_published_at", OffsetDateTime.class)))
                 .optional();
     }
 
@@ -47,6 +48,23 @@ class MoveStateRepository {
                 .param("price", price)
                 .param("startedAt", moveStartedAt)
                 .param("publishedAt", publishedAt)
+                .update();
+    }
+
+    /**
+     * 감지 조건이 풀렸음을 남긴다. 그날 재발행 판단에 마지막 발행 가격이 계속 필요해 행을 지우지 않고,
+     * 마이그레이션 없이 시작 시각 칸을 풀린 시각으로 바꿔 표시한다(시작 시각이 마지막 발행 시각보다 늦으면 끝난 변동).
+     * 이미 끝난 행과 풀린 시각이 마지막 발행보다 이른 경우(지난 시세 재생)는 그대로 둔다.
+     */
+    void markEnded(String symbol, DetectionType type, OffsetDateTime endedAt) {
+        jdbc.sql("""
+                        UPDATE move_state SET move_started_at = :endedAt
+                        WHERE symbol = :symbol AND detection_type = :type
+                          AND move_started_at <= last_published_at AND last_published_at < :endedAt
+                        """)
+                .param("symbol", symbol)
+                .param("type", type.wire())
+                .param("endedAt", endedAt)
                 .update();
     }
 

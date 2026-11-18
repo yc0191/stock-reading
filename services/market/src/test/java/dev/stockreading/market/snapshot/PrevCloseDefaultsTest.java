@@ -41,7 +41,7 @@ class PrevCloseDefaultsTest {
 
     private static Evaluation prevClose(MarketProperties properties, String raw) {
         MoveDetector detector = new MoveDetector(mock(PriceSnapshotRepository.class), properties, JsonMapper.builder().build());
-        return detector.evaluate("TEST01", AS_OF, 10_400, raw).stream()
+        return detector.evaluate("TEST01", AS_OF, 10_600, raw).stream()
                 .filter(e -> e.type() == DetectionType.PREV_CLOSE).findFirst().orElseThrow();
     }
 

@@ -16,10 +16,12 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Protocol
 
+from briefing.compose import KST
 from briefing.config import DEFAULT_SETTINGS, CoreSettings
 from briefing.events import NEWS_STORED, format_timestamp, parse_timestamp, research_request_event, stored_payload
 from briefing.evidence import MARKET_WIDE, in_evidence_range
 from briefing.job_log import (
+    REASON_MOVE_REPORT_PAUSED,
     STAGE_ARTICLES,
     STAGE_COLLECTION,
     STAGE_CONTEXT,
@@ -246,12 +248,25 @@ class BriefingCore:
         raw = message.decode("utf-8") if isinstance(message, bytes) else message
         self.job_log.start(JobStart(job.job_id, JobKind.MOVE, raw, move_target(job.symbol, format_timestamp(job.as_of)),
                                     now))
+        if self._report_paused(now):
+            # 멈춘 작업도 기억해 두어 같은 eventId가 다시 와도 리포트를 만들지 않는다.
+            job.phase = _Phase.DONE
+            log.info("move report paused; job %s recorded without a report", job.job_id)
+            record_result(self.job_log, JobResult(job.job_id, RunStatus.SUCCEEDED, now,
+                                                  failure_reason=REASON_MOVE_REPORT_PAUSED))
+            return
 
         # 저장 끝 알림이 변동 알림보다 먼저 도착했을 수 있어 보관분부터 확인한다.
         if any(c.covers(job.symbol, job.as_of, self.settings) for c in self._completions):
             self._start_fetching(job, now)
         else:
             self._tick_early(job, now)
+
+    def _report_paused(self, now: datetime) -> bool:
+        start, end = self.settings.move_report_pause_start, self.settings.move_report_pause_end
+        if start is None or end is None:
+            return False
+        return start <= now.astimezone(KST).date() < end
 
     def on_research_stored(self, message: str | bytes, now: datetime) -> bool:
         """T+5분 재검색의 저장 끝 알림이면 정기 수집 완료와 같이 '수집 완료'로 보고 True. 그 밖의 알림은 False로 돌려준다."""

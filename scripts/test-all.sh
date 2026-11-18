@@ -19,7 +19,7 @@
 #   TEST_ALL_AWS_PROFILE  --live 가 Parameter Store 를 읽을 AWS CLI 프로필. --live 에서는 필수이고,
 #                         엉뚱한 계정을 읽지 않도록 기본 자격증명 방식으로 넘어가지 않는다
 #   --live 전용: BROKER_BASE_URL, BROKER_APP_KEY, BROKER_APP_SECRET, TEST_ALL_LIVE_SYMBOL(6자리),
-#               ANTHROPIC_API_KEY, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, NOTIFIER_SENDER, TEST_ALL_LIVE_RECIPIENT,
+#               ANTHROPIC_API_KEY, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, TEST_ALL_LIVE_RECIPIENT,
 #               NEWS_SEARCH_CLIENT_ID, NEWS_SEARCH_CLIENT_SECRET
 #               (선택: SMTP_PORT, BRIEFING_LLM_MODEL)
 #               (비밀이 아닌 뉴스 검색 설정 NEWS_SEARCH_BASE_URL, NEWS_SEARCH_ID_HEADER, NEWS_SEARCH_SECRET_HEADER 는 필수이며
@@ -63,7 +63,7 @@ if [ "$PLAN" = 1 ]; then
   if [ "$LIVE" = 1 ]; then
     echo "6. 시세 흐름 실제: 일회용 Kafka, market(테스트 전용 데이터베이스), collector(실제 시세, 종목 1개), 수동 실행 명령 collect 1건, 저장 확인"
     echo "6b. 브리핑·메일 실제: news·notifier(발송 켬, [테스트], 1통)·briefing(실제 LLM) 기동, 가짜 변동·기사·수집 완료 넣기,"
-    echo "    리포트(generatedBy=llm)와 메일 발송 1통 확인, 본문은 build/test-all-live/ 에 저장"
+    echo "    리포트(generatedBy=llm)와 메일 발송 1통 확인, 본문은 build/test-all-live/ 에 저장(급변동 리포트 멈춤 기간에는 건너뜀)"
   else
     echo "6. 시세 흐름 실제: 건너뜀($LIVE_SKIP_REASON)"
     echo "6b. 브리핑·메일 실제: 건너뜀($LIVE_SKIP_REASON)"
@@ -362,21 +362,6 @@ warn_leftovers() {
   fi
 }
 
-migrate_briefing() {
-  # 브리핑은 테이블을 만들지 않으므로 브리핑 테스트와 기동보다 먼저 Flyway 로 만든다.
-  # 서비스 계정으로 붙고, 비밀번호는 명령줄이 아니라 환경변수로만 넘긴다. 컨테이너는 stock-postgres 의 네트워크를 같이 쓴다.
-  local out
-  if ! out=$(FLYWAY_PASSWORD="$B_PW" docker run --rm --network "container:$PG_CONTAINER" \
-      -v "$ROOT/services/briefing/db/migration:/flyway/sql:ro" \
-      -e FLYWAY_PASSWORD -e FLYWAY_USER="$B_USER" -e FLYWAY_URL="jdbc:postgresql://localhost:5432/$DB_NAME" \
-      -e FLYWAY_SCHEMAS=briefing -e FLYWAY_DEFAULT_SCHEMA=briefing -e FLYWAY_CREATE_SCHEMAS=false \
-      -e FLYWAY_LOCATIONS=filesystem:/flyway/sql "$FLYWAY_IMAGE" migrate 2>&1); then
-    printf '%s\n' "$out" | tail -15
-    return 1
-  fi
-  printf '%s\n' "$out" | grep -E 'Successfully applied|up to date' | head -2
-}
-
 prepare_db() {
   local running waited key role found
   if ! docker info >/dev/null 2>&1; then DB_FAIL_REASON="Docker 에 연결할 수 없음"; return 1; fi
@@ -599,7 +584,7 @@ live_value() {
 }
 
 # 브리핑·메일 단계까지 필요한 키. 시세를 부르기 전에 모두 확인해 메일 설정이 빠졌는데 시세만 부르는 일이 없게 한다.
-LIVE_KEYS="BROKER_BASE_URL BROKER_APP_KEY BROKER_APP_SECRET TEST_ALL_LIVE_SYMBOL ANTHROPIC_API_KEY SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER TEST_ALL_LIVE_RECIPIENT NEWS_SEARCH_CLIENT_ID NEWS_SEARCH_CLIENT_SECRET"
+LIVE_KEYS="BROKER_BASE_URL BROKER_APP_KEY BROKER_APP_SECRET TEST_ALL_LIVE_SYMBOL ANTHROPIC_API_KEY SMTP_HOST SMTP_USERNAME SMTP_PASSWORD TEST_ALL_LIVE_RECIPIENT NEWS_SEARCH_CLIENT_ID NEWS_SEARCH_CLIENT_SECRET"
 
 missing_live_keys() {
   local key missing=""
@@ -821,8 +806,7 @@ run_live_briefing() {
     export NOTIFIER_SEND_ENABLED=true NOTIFIER_SUBJECT_PREFIX="[테스트]"
     SMTP_HOST=$(live_value SMTP_HOST) SMTP_USERNAME=$(live_value SMTP_USERNAME)
     SMTP_PASSWORD=$(live_value SMTP_PASSWORD) SMTP_PORT=$(live_value SMTP_PORT)
-    NOTIFIER_SENDER=$(live_value NOTIFIER_SENDER)
-    export SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER
+    export SMTP_HOST SMTP_USERNAME SMTP_PASSWORD
     if [ -n "$SMTP_PORT" ]; then export SMTP_PORT; else unset SMTP_PORT; fi
     # 제목의 한글 머리말이 환경변수에서 깨지지 않게 JVM 이 UTF-8 로 읽게 한다.
     export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
@@ -1000,11 +984,28 @@ else
   stage live "시세 흐름 실제" fail "$LIVE_FAIL_REASON" $((SECONDS - t)) live/py/scripts.xml
 fi
 
+# 브리핑 설정의 급변동 리포트 멈춤 기간(한국 날짜)이면 그 끝 날짜를 출력한다. 이 단계는 가짜 변동으로 리포트를 확인하므로
+# 멈춤 기간에는 리포트가 나오지 않아 돌리지 않는다.
+move_report_pause_end() {
+  PYTHONPATH="$ROOT/services/briefing/src" "$PY" -c '
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from briefing.config import CoreSettings
+s, today = CoreSettings(), datetime.now(ZoneInfo("Asia/Seoul")).date()
+start, end = s.move_report_pause_start, s.move_report_pause_end
+print(end if start and end and start <= today < end else "")' 2>/dev/null
+}
+
 log "6b. 브리핑·메일 실제"
 t=$SECONDS
+PAUSE_END=""
+[ "$LIVE" = 1 ] && PAUSE_END=$(move_report_pause_end)
 if [ "$LIVE" = 0 ]; then
   echo "건너뜀($LIVE_SKIP_REASON)"
   stage livebrief "브리핑·메일 실제" skip "$LIVE_SKIP_REASON" 0
+elif [ -n "$PAUSE_END" ]; then
+  echo "건너뜀(급변동 리포트 멈춤 기간, $PAUSE_END 부터 다시 돎)"
+  stage livebrief "브리핑·메일 실제" skip "급변동 리포트 멈춤 기간, $PAUSE_END 부터 다시 돎" 0
 elif [ "${QUOTE_LIVE_OK:-0}" = 0 ]; then
   # 브리핑 서비스를 띄우지 않았으므로 LLM·메일은 부르지 않았다.
   stage livebrief "브리핑·메일 실제" fail "시세 흐름 실제가 통과하지 않아 돌리지 않음" 0

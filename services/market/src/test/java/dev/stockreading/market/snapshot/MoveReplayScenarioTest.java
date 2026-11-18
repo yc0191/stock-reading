@@ -85,22 +85,22 @@ class MoveReplayScenarioTest {
     }
 
     // 장 시작 직후 첫 체결 전(현재가가 전일 종가 그대로, 시가·누적 거래량 0) 23초 뒤 첫 체결이 오고 오르내린다.
-    // 예전에는 첫 체결 전 값이 5분 동안 기준이 되어 1% 안팎을 오갈 때마다 세 건이 나갔다.
+    // 예전에는 첫 체결 전 값이 5분 동안 기준이 되어 기준선 안팎을 오갈 때마다 세 건이 나갔다(11-11 모양의 폭을 지금 기준 3%에 맞게 키움).
     @Test
     void rowsBeforeTheFirstTradeAreNotTheBaselineSoTheOpeningProducesAtMostOneMove(@TempDir Path dir) throws IOException {
         long pc = 10_000;
         List<String> lines = rows("TEST01",
-                seg(0, 22, 10_000, pc, 0, 0), seg(23, 131, 10_153, pc, 10_153, 1_000),
-                seg(132, 141, 9_936, pc, 10_153, 3_000), seg(142, 229, 9_927, pc, 10_153, 3_300),
-                seg(230, 287, 9_858, pc, 10_153, 3_400), seg(288, 303, 9_925, pc, 10_153, 3_500),
-                seg(304, 420, 9_914, pc, 10_153, 4_300));
+                seg(0, 22, 10_000, pc, 0, 0), seg(23, 131, 10_459, pc, 10_459, 1_000),
+                seg(132, 141, 9_808, pc, 10_459, 3_000), seg(142, 229, 9_781, pc, 10_459, 3_300),
+                seg(230, 287, 9_574, pc, 10_459, 3_400), seg(288, 303, 9_775, pc, 10_459, 3_500),
+                seg(304, 420, 9_742, pc, 10_459, 4_300));
 
         assertThat(moves(lines, dir)).isLessThanOrEqualTo(1);
     }
 
     @Test
     void aRealMoveThatLastsIsPublishedOnce(@TempDir Path dir) throws IOException {
-        List<String> lines = rows("TEST01", seg(0, 399, 10_000, 10_000, 10_000, 1_000), seg(400, 459, 10_200, 10_000, 10_000, 2_000));
+        List<String> lines = rows("TEST01", seg(0, 399, 10_000, 10_000, 10_000, 1_000), seg(400, 459, 10_350, 10_000, 10_000, 2_000));
 
         assertThat(moves(lines, dir)).isEqualTo(1);
     }
@@ -108,53 +108,64 @@ class MoveReplayScenarioTest {
     @Test
     void aMoveThatLastsOnlyTwoRowsIsNotPublished(@TempDir Path dir) throws IOException {
         List<String> lines = rows("TEST01", seg(0, 399, 10_000, 10_000, 10_000, 1_000),
-                seg(400, 401, 10_200, 10_000, 10_000, 2_000), seg(402, 460, 10_000, 10_000, 10_000, 2_100));
+                seg(400, 401, 10_350, 10_000, 10_000, 2_000), seg(402, 460, 10_000, 10_000, 10_000, 2_100));
 
         assertThat(moves(lines, dir)).isZero();
     }
 
     @Test
-    void aMoveFollowedByAnotherWithinThirtyMinutesIsHeldBackUnlessItGoesTwoPercentFurther(@TempDir Path dir) throws IOException {
-        // 발행(10200) 뒤 약 10분에 같은 방향으로 +1.47%
-        List<String> held = rows("TEST01", seg(0, 399, 10_000, 10_200, 10_000, 1_000),
-                seg(400, 999, 10_200, 10_200, 10_000, 2_000), seg(1_000, 1_199, 10_350, 10_200, 10_000, 3_000));
+    void aMoveFollowedByAnotherWithinTwoHoursIsHeldBackUnlessItGoesThreePercentFurther(@TempDir Path dir) throws IOException {
+        // 5분 비교 변동(10350) 발행 뒤 약 10분에 전일 종가 대비 +5.5% 조건이 생기지만 마지막 발행 가격 대비 +1.93%다.
+        List<String> held = rows("TEST01", seg(0, 399, 10_000, 10_000, 10_000, 1_000),
+                seg(400, 999, 10_350, 10_000, 10_000, 2_000), seg(1_000, 1_199, 10_550, 10_000, 10_000, 3_000));
         assertThat(moves(held, dir)).isEqualTo(1);
 
-        // 같은 자리에서 +2.45%이면 간격 안이라도 발행한다.
-        List<String> further = rows("TEST01", seg(0, 399, 10_000, 10_200, 10_000, 1_000),
-                seg(400, 999, 10_200, 10_200, 10_000, 2_000), seg(1_000, 1_199, 10_450, 10_200, 10_000, 3_000));
+        // 같은 자리에서 +3.38%이면 간격 안이라도 발행한다.
+        List<String> further = rows("TEST01", seg(0, 399, 10_000, 10_000, 10_000, 1_000),
+                seg(400, 999, 10_350, 10_000, 10_000, 2_000), seg(1_000, 1_199, 10_700, 10_000, 10_000, 3_000));
         assertThat(moves(further, dir)).isEqualTo(2);
 
-        // 31분이 지나면 +1.47%도 다시 발행한다.
-        List<String> later = rows("TEST01", seg(0, 399, 10_000, 10_200, 10_000, 1_000),
-                seg(400, 2_299, 10_200, 10_200, 10_000, 2_000), seg(2_300, 2_399, 10_350, 10_200, 10_000, 3_000));
+        // 2시간이 지나면 +1.93%도 발행한다.
+        List<String> later = rows("TEST01", seg(0, 399, 10_000, 10_000, 10_000, 1_000),
+                seg(400, 7_699, 10_350, 10_000, 10_000, 2_000), seg(7_700, 7_799, 10_550, 10_000, 10_000, 3_000));
         assertThat(moves(later, dir)).isEqualTo(2);
     }
 
     @Test
     void theOtherTypeIsHeldBackWithinTheInterval(@TempDir Path dir) throws IOException {
-        // 5분 비교 변동을 낸 뒤 10분에 전일 종가 대비 +3.2% 조건이 생겨도 마지막 발행 가격 대비 +1.18%라 내지 않는다.
+        // 5분 비교 변동을 낸 뒤 10분에 전일 종가 대비 +5.2% 조건이 생겨도 마지막 발행 가격 대비 +1.64%라 내지 않는다.
         List<String> lines = rows("TEST01", seg(0, 399, 10_000, 10_000, 10_000, 1_000),
-                seg(400, 999, 10_200, 10_000, 10_000, 2_000), seg(1_000, 1_199, 10_320, 10_000, 10_000, 3_000));
+                seg(400, 999, 10_350, 10_000, 10_000, 2_000), seg(1_000, 1_199, 10_520, 10_000, 10_000, 3_000));
 
         assertThat(moves(lines, dir)).isEqualTo(1);
     }
 
     @Test
     void aMoveHeldBackByTheIntervalIsNotPublishedWhenTheIntervalEnds(@TempDir Path dir) throws IOException {
-        // +4%로 뛰어 5분 비교와 전일 종가 비교 조건이 함께 생긴다. 5분 비교만 발행되고 전일 종가 조건은 40분 넘게 이어진다.
-        List<String> lines = rows("TEST01", seg(0, 399, 10_000, 10_000, 10_000, 1_000), seg(400, 2_900, 10_400, 10_000, 10_000, 2_000));
+        // +6%로 뛰어 5분 비교와 전일 종가 비교 조건이 함께 생긴다. 5분 비교만 발행되고 전일 종가 조건은 2시간 넘게 이어진다.
+        List<String> lines = rows("TEST01", seg(0, 399, 10_000, 10_000, 10_000, 1_000), seg(400, 8_000, 10_600, 10_000, 10_000, 2_000));
         assertThat(moves(lines, dir)).isEqualTo(1);
 
-        // 같은 자리에서 간격 안에 +2.4%를 더 가면 발행한다.
+        // 같은 자리에서 간격 안에 +3.3%를 더 가면 발행한다.
         List<String> further = rows("TEST01", seg(0, 399, 10_000, 10_000, 10_000, 1_000),
-                seg(400, 999, 10_400, 10_000, 10_000, 2_000), seg(1_000, 2_900, 10_650, 10_000, 10_000, 3_000));
+                seg(400, 999, 10_600, 10_000, 10_000, 2_000), seg(1_000, 2_900, 10_950, 10_000, 10_000, 3_000));
         assertThat(moves(further, dir)).isEqualTo(2);
+    }
+
+    // 11-17·11-18 모양: 전일 종가 기준선 언저리를 오르내리기만 한 종목은 간격이 지나도 다시 발행하지 않는다.
+    @Test
+    void aSymbolHoveringAroundThePreviousCloseThresholdIsPublishedOnceADay(@TempDir Path dir) throws IOException {
+        List<String> lines = rows("TEST01", seg(0, 399, 10_450, 10_000, 10_450, 1_000),
+                seg(400, 2_399, 10_510, 10_000, 10_450, 2_000), seg(2_400, 2_999, 10_480, 10_000, 10_450, 3_000),
+                seg(3_000, 10_999, 10_530, 10_000, 10_450, 4_000), seg(11_000, 11_999, 10_470, 10_000, 10_450, 5_000),
+                seg(12_000, 12_999, 10_520, 10_000, 10_450, 6_000));
+
+        assertThat(moves(lines, dir)).isEqualTo(1);
     }
 
     @Test
     void aMoveAgainstThePreviousCloseAloneIsPublishedWhenItLasts(@TempDir Path dir) throws IOException {
-        List<String> lines = rows("TEST01", seg(0, 399, 10_250, 10_000, 10_250, 1_000), seg(400, 459, 10_310, 10_000, 10_250, 2_000));
+        List<String> lines = rows("TEST01", seg(0, 399, 10_450, 10_000, 10_450, 1_000), seg(400, 459, 10_520, 10_000, 10_450, 2_000));
 
         assertThat(moves(lines, dir)).isEqualTo(1);
     }

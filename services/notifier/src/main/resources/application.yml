@@ -33,9 +33,10 @@ spring:
       mail.smtp.writetimeout: 10000
 
 notifier:
-  # false = 드라이런(로그만). 실제 발송에는 .env에 NOTIFIER_SEND_ENABLED=true와 SMTP_*, 발신 주소가 필요하다. 받는 사람은 DB(member_mail)에서 고른다.
+  # false = 드라이런(로그만). 실제 발송에는 .env에 NOTIFIER_SEND_ENABLED=true와 SMTP_*가 필요하다. 받는 사람은 DB(member_mail)에서 고른다.
   send-enabled: ${NOTIFIER_SEND_ENABLED:false}
-  sender: ${NOTIFIER_SENDER:}
+  # 메일 서비스는 로그인한 계정 주소로만 보내게 하므로 발신 주소를 따로 두지 않는다(ADR-011).
+  sender: ${SMTP_USERNAME:}
   subject-prefix: ${NOTIFIER_SUBJECT_PREFIX:[시뮬레이션]}
 
 logging:
