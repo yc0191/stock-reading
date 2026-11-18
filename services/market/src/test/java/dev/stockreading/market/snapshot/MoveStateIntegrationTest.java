@@ -115,6 +115,29 @@ class MoveStateIntegrationTest {
     }
 
     @Test
+    void markingEndedKeepsThePriceAndIsReadBackAsEndedOnlyOnce() {
+        MoveStateRepository repository = repository();
+        repository.save("ITM006", DetectionType.PREV_CLOSE, 10_500, T0, T0.plusMinutes(1));
+        assertThat(repository().find("ITM006", DetectionType.PREV_CLOSE).get().ended()).isFalse();
+
+        // 마지막 발행보다 이른 풀림(지난 시세 재생)은 표시하지 않는다.
+        repository.markEnded("ITM006", DetectionType.PREV_CLOSE, T0.plusSeconds(30));
+        assertThat(repository().find("ITM006", DetectionType.PREV_CLOSE).get().ended()).isFalse();
+
+        repository.markEnded("ITM006", DetectionType.PREV_CLOSE, T0.plusMinutes(5));
+        // 이미 끝난 변동은 처음 풀린 시각을 그대로 둔다.
+        repository.markEnded("ITM006", DetectionType.PREV_CLOSE, T0.plusMinutes(9));
+
+        Optional<MoveState> state = repository().find("ITM006", DetectionType.PREV_CLOSE);
+        assertState(state, 10_500, T0.plusMinutes(5));
+        assertThat(state.get().ended()).isTrue();
+
+        // 다시 발행해 저장하면 진행 중인 변동으로 돌아온다.
+        repository.save("ITM006", DetectionType.PREV_CLOSE, 11_100, T0.plusMinutes(20), T0.plusMinutes(21));
+        assertThat(repository().find("ITM006", DetectionType.PREV_CLOSE).get().ended()).isFalse();
+    }
+
+    @Test
     void trackerStartedAgainKeepsTheIntervalBetweenMovesOfTheSameSymbol() {
         MoveDetector detector = mock(MoveDetector.class);
         MovePublisher publisher = mock(MovePublisher.class);

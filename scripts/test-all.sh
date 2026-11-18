@@ -61,7 +61,7 @@ if [ "$PLAN" = 1 ]; then
   if [ "$LIVE" = 1 ]; then
     echo "6. 시세 흐름 실제: 일회용 Kafka, market(테스트 전용 데이터베이스), collector(실제 시세, 종목 1개), 수동 실행 명령 collect 1건, 저장 확인"
     echo "6b. 브리핑·메일 실제: news·notifier(발송 켬, [테스트], 1통)·briefing(실제 LLM) 기동, 가짜 변동·기사·수집 완료 넣기,"
-    echo "    리포트(generatedBy=llm)와 메일 발송 1통 확인, 본문은 build/test-all-live/ 에 저장"
+    echo "    리포트(generatedBy=llm)와 메일 발송 1통 확인, 본문은 build/test-all-live/ 에 저장(급변동 리포트 멈춤 기간에는 건너뜀)"
   else
     echo "6. 시세 흐름 실제: 건너뜀($LIVE_SKIP_REASON)"
     echo "6b. 브리핑·메일 실제: 건너뜀($LIVE_SKIP_REASON)"
@@ -942,11 +942,28 @@ else
   stage live "시세 흐름 실제" fail "$LIVE_FAIL_REASON" $((SECONDS - t)) live/py/scripts.xml
 fi
 
+# 브리핑 설정의 급변동 리포트 멈춤 기간(한국 날짜)이면 그 끝 날짜를 출력한다. 이 단계는 가짜 변동으로 리포트를 확인하므로
+# 멈춤 기간에는 리포트가 나오지 않아 돌리지 않는다.
+move_report_pause_end() {
+  PYTHONPATH="$ROOT/services/briefing/src" "$PY" -c '
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from briefing.config import CoreSettings
+s, today = CoreSettings(), datetime.now(ZoneInfo("Asia/Seoul")).date()
+start, end = s.move_report_pause_start, s.move_report_pause_end
+print(end if start and end and start <= today < end else "")' 2>/dev/null
+}
+
 log "6b. 브리핑·메일 실제"
 t=$SECONDS
+PAUSE_END=""
+[ "$LIVE" = 1 ] && PAUSE_END=$(move_report_pause_end)
 if [ "$LIVE" = 0 ]; then
   echo "건너뜀($LIVE_SKIP_REASON)"
   stage livebrief "브리핑·메일 실제" skip "$LIVE_SKIP_REASON" 0
+elif [ -n "$PAUSE_END" ]; then
+  echo "건너뜀(급변동 리포트 멈춤 기간, $PAUSE_END 부터 다시 돎)"
+  stage livebrief "브리핑·메일 실제" skip "급변동 리포트 멈춤 기간, $PAUSE_END 부터 다시 돎" 0
 elif [ "${QUOTE_LIVE_OK:-0}" = 0 ]; then
   # 브리핑 서비스를 띄우지 않았으므로 LLM·메일은 부르지 않았다.
   stage livebrief "브리핑·메일 실제" fail "시세 흐름 실제가 통과하지 않아 돌리지 않음" 0
