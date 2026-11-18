@@ -124,9 +124,9 @@ rm -f "$W/bin/flock"
 
 echo "== 비밀 설정(runtime.env) =="
 RT() { cat "$STATE/runtime.env" 2>/dev/null; }
-good_config() { # 필수 비밀번호 8개 + 특수문자 값
+good_config() { # 필수 비밀번호 9개 + 특수문자 값
   {
-    for n in POSTGRES_ADMIN_PASSWORD MARKET_DB_PASSWORD NEWS_DB_PASSWORD BRIEFING_DB_PASSWORD PERSONAL_OWNER_DB_PASSWORD PERSONAL_WRITER_DB_PASSWORD COLLECTOR_DB_PASSWORD NOTIFIER_DB_PASSWORD; do
+    for n in POSTGRES_ADMIN_PASSWORD MARKET_DB_PASSWORD NEWS_DB_PASSWORD BRIEFING_DB_PASSWORD PERSONAL_OWNER_DB_PASSWORD PERSONAL_WRITER_DB_PASSWORD COLLECTOR_DB_PASSWORD NOTIFIER_DB_PASSWORD OPS_CHECKER_DB_PASSWORD; do
       printf '/cfg/%s\tpw-%s\n' "$n" "$n"
     done
     printf '/cfg/SMTP_PASSWORD\ta$b#c d\n'

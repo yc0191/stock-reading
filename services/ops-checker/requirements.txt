@@ -1,0 +1,16 @@
+boto3==1.44.5
+botocore==1.44.5
+confluent-kafka==2.16.2
+iniconfig==2.3.1
+jmespath==1.1.0
+packaging==26.3
+pluggy==1.7.0
+psycopg==3.3.9
+psycopg-binary==3.3.9
+Pygments==2.21.0
+pytest==9.2.0
+python-dateutil==2.9.0.post0
+PyYAML==6.0.3
+s3transfer==0.19.3
+six==1.17.0
+urllib3==2.8.0

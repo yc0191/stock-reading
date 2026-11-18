@@ -38,3 +38,18 @@ output "deploy_version_parameters" {
     urgent  = aws_ssm_parameter.urgent_version.name
   }
 }
+
+output "ops_results_bucket" {
+  description = "서버 설정의 OPS_RESULTS_BUCKET 과 GitHub 저장소 변수 OPS_RESULTS_BUCKET 에 넣을 값."
+  value       = aws_s3_bucket.ops_results.bucket
+}
+
+output "ops_results_reader_role_arn" {
+  description = "github_auth = oidc 일 때 GitHub 저장소 변수 OPS_RESULTS_AWS_ROLE_ARN 에 넣을 값."
+  value       = local.github_oidc ? aws_iam_role.ops_results_reader[0].arn : null
+}
+
+output "ops_results_reader_iam_user" {
+  description = "github_auth = access_key 일 때 접근 키를 발급해 GitHub Secrets(OPS_RESULTS_AWS_ACCESS_KEY_ID, OPS_RESULTS_AWS_SECRET_ACCESS_KEY)에 넣을 사용자."
+  value       = local.github_oidc ? null : aws_iam_user.ops_results_reader[0].name
+}

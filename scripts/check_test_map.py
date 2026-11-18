@@ -18,7 +18,8 @@ from pathlib import Path, PurePosixPath
 
 MAP_DIR = Path("docs") / "test-map"
 JAVA_SERVICES = ("collector", "market", "news", "notifier")
-MAP_FILES = tuple(f"{name}.md" for name in (*JAVA_SERVICES, "briefing", "scripts"))
+PYTHON_SERVICES = ("briefing", "ops-checker")
+MAP_FILES = tuple(f"{name}.md" for name in (*JAVA_SERVICES, *PYTHON_SERVICES, "scripts"))
 COLUMNS = ("기능", "대상", "단위", "가상", "실제")
 TEST_COLUMNS = ("단위", "가상", "실제")
 MIN_ROWS, MAX_ROWS = 3, 12
@@ -80,9 +81,9 @@ def inventory(root: Path, map_file: str) -> Inventory:
     if service in JAVA_SERVICES:
         base = root / "services" / service / "src"
         return Inventory(java_types(base / "main" / "java", root), java_types(base / "test" / "java", root))
-    if service == "briefing":
-        base = root / "services" / "briefing"
-        return Inventory(files(base / "src" / "briefing", root, ("*.py",), True),
+    if service in PYTHON_SERVICES:
+        base = root / "services" / service
+        return Inventory(files(base / "src" / service.replace("-", "_"), root, ("*.py",), True),
                          files(base / "tests", root, ("*.py",), True))
     return Inventory(files(root / "scripts", root, ("*.py", "*.sh"), False),
                      files(root / "scripts" / "tests", root, ("*.py",), True))
@@ -292,10 +293,11 @@ def scope_of(path: str):
             if path.startswith(f"services/{service}/src/{kind}/java/") and p.suffix == ".java":
                 return f"{service}.md", kind
     if p.suffix == ".py":
-        if path.startswith("services/briefing/src/briefing/"):
-            return "briefing.md", "main"
-        if path.startswith("services/briefing/tests/"):
-            return "briefing.md", "test"
+        for service in PYTHON_SERVICES:
+            if path.startswith(f"services/{service}/src/{service.replace('-', '_')}/"):
+                return f"{service}.md", "main"
+            if path.startswith(f"services/{service}/tests/"):
+                return f"{service}.md", "test"
         if path.startswith("scripts/tests/"):
             return "scripts.md", "test"
     if p.suffix in (".py", ".sh") and len(p.parts) == 2 and p.parts[0] == "scripts":

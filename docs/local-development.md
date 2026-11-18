@@ -5,7 +5,7 @@
 - JDK 21 (이 프로젝트 전용으로 지정, 기본 Java를 바꾸지 않아도 됨)
 - Docker Desktop (실행 중이어야 함)
 - Gradle은 래퍼(`./gradlew`)를 사용
-- 새로 클론했거나 새 작업 폴더를 만들었으면 `scripts/setup-dev.sh`를 먼저 돌립니다. `.env`와 `JAVA_HOME_21`(JDK 21)을 확인해 알려 주고, 브리핑 venv 만들기·의존성 설치와 차트 글꼴 내려받기는 직접 합니다. `--check`는 아무것도 만들지 않고 상태만 봅니다. 아래 명령은 이 스크립트가 하는 일을 하나씩 한 것입니다.
+- 새로 클론했거나 새 작업 폴더를 만들었으면 `scripts/setup-dev.sh`를 먼저 돌립니다. `.env`와 `JAVA_HOME_21`(JDK 21)을 확인해 알려 주고, 브리핑 venv와 확인기 venv 만들기·의존성 설치와 차트 글꼴 내려받기는 직접 합니다. `--check`는 아무것도 만들지 않고 상태만 봅니다. 아래 명령은 이 스크립트가 하는 일을 하나씩 한 것입니다.
 
 ```bash
 # JDK 21 위치를 환경변수로 지정 (Homebrew 예시)
@@ -241,6 +241,23 @@ JAVA_HOME_21=<JDK 21 경로> DAILY_E2E_SMTP_SINK=1 scripts/manual-daily-briefing
 - 서비스 DB 계정은 `.env`(또는 `DAILY_E2E_ENV_FILE`)의 `MARKET_/NEWS_/BRIEFING_DB_USER·PASSWORD`를 읽고, 판 본문은 `DAILY_E2E_OUT_DIR`(기본 임시 폴더, 저장소 안은 거절)에 씁니다.
 - 결과에는 Claude 호출 수(브리핑 로그에서 Claude SDK의 HTTP 요청 줄을 셈, 다시 보낸 요청 포함)와 드라이런 메일마다 제목·HTML 글자 수·그림 수와 크기가 나옵니다. 가짜 모드에서는 가짜 서버가 받은 호출 수도 함께 나옵니다.
 
+## 조치 판정 확인기 (`ops-checker`)
+
+판정 기준을 `ops-checks/<이슈>-<시도>.yml`에 두면 확인기가 수집기의 판 시작 알림(`daily.collection.completed`)을 받아 개장일 마감 후 판에 지표를 계산합니다. 휴장이면 계산 없이 휴장 결과만, 아침 판 알림은 아무것도 하지 않습니다. 결과는 DB `ops` 스키마(`check_run`, `check_result`)와 S3 결과 파일에 남고, GitHub Actions(`.github/workflows/ops-verdict.yml`)가 그 파일로 이슈를 판정합니다(절차: [`docs/incidents/README.md`](incidents/README.md), 설계: [ADR-014](adr/014-ops-checker.md)). 기준 파일 형식의 원본은 `services/ops-checker/src/ops_checker/criteria.py`, 설정과 기본값은 같은 폴더 `config.py`입니다.
+
+- **DB 계정:** `.env`의 `OPS_CHECKER_DB_USER`·`OPS_CHECKER_DB_PASSWORD`(값은 `.env`에만 둡니다. 형식은 `.env.example`). 이 계정은 `market`·`briefing` 스키마의 모든 표를 읽기만 하고(앞으로 생길 표 포함), `personal`은 읽지 못하며, `ops` 스키마에만 씁니다. 로컬 Compose는 마이그레이션 단계에서 이 계정과 `ops` 표를 만듭니다. 기존 개발 DB는 마이그레이션 단계를 다시 돌려야 계정이 생깁니다(`docker compose -f infra/compose/docker-compose.yml --env-file .env run --rm ops-migrate`).
+- **결과 파일:** 확인기는 `OPS_RESULTS_BUCKET`(S3 버킷 이름)이 필요하고 AWS 자격증명으로 올립니다. 테스트는 실제 버킷에 올리지 않습니다. 흐름은 가짜 알림·가짜 DB·가짜 S3 테스트로 확인합니다.
+- **venv:** 확인기는 자체 venv(`services/ops-checker/.venv`)를 씁니다. `scripts/setup-dev.sh`가 브리핑 venv와 같은 방식으로 만듭니다.
+
+```bash
+# 테스트 (실제 Kafka·DB·S3를 부르지 않음)
+services/ops-checker/.venv/bin/python -m pytest services/ops-checker
+# 판정 스크립트 테스트 (가짜 결과 파일, GitHub에 접속하지 않음)
+services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests/test_ops_verdict.py
+```
+
+확인기의 실제 DB 테스트(`services/ops-checker/tests/test_postgres_db.py`)는 `OPS_IT_DB_URL`·`OPS_IT_DB_USER`·`OPS_IT_DB_PASSWORD`가 있을 때만 켜지고, `scripts/test-all.sh`의 실제 DB 단계가 임시 DB에서 돌립니다. 켜는 조건은 테스트 지도([`test-map/ops-checker.md`](test-map/ops-checker.md))가 원본입니다. 기준 파일을 새로 쓰면 지표 SQL을 개발 DB에서 읽기 전용으로 먼저 돌려 한 행 한 칸(0~1 비율 또는 빈 값)을 내는지 확인합니다.
+
 ## 이메일 발송기 (`notifier`)
 
 `briefing.generated`(급변동 건별)와 `briefing.daily.generated`(데일리 브리핑 판) → 이메일. **기본은 드라이런**(로그만 남기고 아무것도 보내지 않음)이며, 켜려면 `.env`에 아래를 채웁니다. 기본값은 `application.yml`이 원본입니다.
@@ -447,6 +464,7 @@ DB 계정 키(값은 `.env`에만 두고 문서에는 적지 않습니다. 형�
 | `PERSONAL_WRITER_DB_USER` / `PERSONAL_WRITER_DB_PASSWORD` | 값을 넣고 고치는 계정(사람이 SQL을 실행할 때 씁니다). `personal` 전체를 읽고 쓰며 `market.etf`·`market.stock`을 읽습니다 |
 | `COLLECTOR_DB_USER` / `COLLECTOR_DB_PASSWORD` | 수집기 계정. `personal.collect_target`과 `market.news_search_target` 두 뷰만 읽습니다 |
 | `NOTIFIER_DB_USER` / `NOTIFIER_DB_PASSWORD` | 발송기 계정(읽기 전용). 받는 사람을 고르려고 `member`, `member_mail`, `member_portfolio`와 `market.etf`·`market.stock`을 읽습니다 |
+| `OPS_CHECKER_DB_USER` / `OPS_CHECKER_DB_PASSWORD` | 확인기 계정. `market`·`briefing` 스키마를 읽기만 하고(앞으로 생길 표 포함) `ops` 스키마에 씁니다. `personal`은 읽지 못합니다(아래 "조치 판정 확인기") |
 | `BRIEFING_DB_USER` / `BRIEFING_DB_PASSWORD` | 브리핑 계정. 데일리 판을 멤버마다 짜려고 열 단위로만 읽습니다: `member`(`id`, `enabled`), `member_mail`(`member_id`, `enabled`, `receive_morning`, `receive_post_close`), `member_portfolio`(`member_id`, `etf_id`, `stock_id`, `relation`), `market.etf`(`id`, `market`, `symbol`), `market.stock`(`id`, `market`, `symbol`, `name`). 메일 주소(`member_mail.email`)와 멤버 이름은 읽지 못하고 `personal`에 쓰지도 못합니다 |
 
 SQL로 값을 넣는 예시(모두 가짜 값입니다. 전체는 [`docs/examples/holdings.example.sql`](examples/holdings.example.sql)):

@@ -27,7 +27,7 @@
 - 이슈마다 종류 라벨 1개(`bug`, `enhancement`, `documentation`, `refactor`, `chore`)와 영역 라벨 1개 이상(`area: collector`, `market`, `news`, `notifier`, `briefing`, `infra`, `contracts`)을 답니다. 문서만 바꾸는 이슈는 `documentation`이면 영역 라벨이 없어도 됩니다.
 - 종류 라벨은 양식이 달고, 영역 라벨은 양식의 "관련 서비스"에서 고른 대로 `issue-labels` 워크플로가 답니다. 빠지면 그 워크플로가 `needs-labels` 라벨과 안내 댓글을 답니다.
 - 결정을 기다리는 이슈에는 `needs-decision`을 답니다.
-- 판정 기준을 정하고 운영 결과를 기다리는 이슈에는 `verifying`을 답니다(절차는 `docs/incidents/README.md`).
+- 판정 기준을 정하고 운영 결과를 기다리는 이슈에는 `verifying`을 답니다. 측정일을 채우면 조치 판정 워크플로가 `verifying`을 떼고 `check-passed`(통과) 또는 `check-failed`(실패)를 붙이며, 닫기는 작업자가 합니다(절차는 `docs/incidents/README.md`).
 
 ## 마일스톤: 주제
 

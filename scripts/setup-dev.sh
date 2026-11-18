@@ -4,6 +4,7 @@
 # - JDK 21: JAVA_HOME_21 이 JDK 21 을 가리키는지 본다. 셸 설정은 바꾸지 않고, 찾은 위치와 지정할 줄을 알려 준다.
 # - 브리핑 venv: 없으면 만들고 requirements.txt 를 설치한다(있으면 설치만 다시 해 의존성 변경을 따라간다).
 # - 차트 글꼴: scripts/install_font.py 로 받는다(이미 맞는 파일이 있으면 내려받지 않음).
+# - 확인기 venv: services/ops-checker/.venv 를 같은 방식으로 만든다(확인기 테스트용).
 #
 # 사용법: scripts/setup-dev.sh [--check]
 #   --check  아무것도 만들거나 받지 않고 상태만 본다
@@ -113,6 +114,32 @@ elif "$PY_SYS" scripts/install_font.py; then
   report "차트 글꼴" ok "있음"
 else
   report "차트 글꼴" bad "내려받지 못했습니다(위 출력 참고)"
+fi
+
+# ---------------------------------------------------------------- 확인기 venv
+
+CHECKER_VENV="services/ops-checker/.venv"
+if [ "$CHECK" = 1 ]; then
+  if [ -x "$CHECKER_VENV/bin/python" ]; then
+    report "확인기 venv" ok "있음(의존성 설치 여부는 --check 없이 실행해 맞춥니다)"
+  else
+    report "확인기 venv" bad "없습니다"
+  fi
+else
+  if [ ! -x "$CHECKER_VENV/bin/python" ]; then
+    echo "확인기 venv 만들기($CHECKER_VENV)"
+    "$PY_SYS" -m venv "$CHECKER_VENV" || true
+  fi
+  if [ ! -x "$CHECKER_VENV/bin/python" ]; then
+    report "확인기 venv" bad "만들지 못했습니다($PY_SYS -m venv)"
+  else
+    echo "확인기 의존성 설치"
+    if "$CHECKER_VENV/bin/python" -m pip install -q --disable-pip-version-check -r services/ops-checker/requirements.txt; then
+      report "확인기 venv" ok "의존성 설치됨"
+    else
+      report "확인기 venv" bad "의존성 설치에 실패했습니다(위 pip 출력 참고)"
+    fi
+  fi
 fi
 
 # ---------------------------------------------------------------- 결과

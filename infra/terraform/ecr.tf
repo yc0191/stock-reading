@@ -1,6 +1,6 @@
 locals {
-  # 서비스 5개와 DB 표 만들기 단계(migrate). CI 가 같은 커밋 태그로 6개를 모두 올린다.
-  image_names = ["collector", "market", "news", "notifier", "briefing", "migrate"]
+  # 서비스 6개와 DB 표 만들기 단계(migrate). CI 가 같은 커밋 태그로 7개를 모두 올린다.
+  image_names = ["collector", "market", "news", "notifier", "briefing", "ops-checker", "migrate"]
 }
 
 resource "aws_ecr_repository" "image" {

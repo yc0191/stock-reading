@@ -8,6 +8,8 @@
 |---|---|
 | `services/collector`, `market`, `news`, `notifier` | Java 21 + Spring Boot 서비스 (Gradle 모듈) |
 | `services/briefing` | Python 서비스 (Gradle 모듈이 아니며 자체 venv 사용) |
+| `services/ops-checker` | Python 서비스: 이슈 조치 판정 확인기 (자체 venv 사용) |
+| `ops-checks/` | 이슈별 조치 판정 기준 파일 (확인기 이미지에 실림) |
 | `contracts/events/` | 서비스 간 이벤트 JSON Schema와 v1 샘플 |
 | `build-logic/` | 모든 서비스가 공유하는 Gradle 규약 플러그인 (루트 `build.gradle.kts`는 일부러 비어 있음) |
 | `scripts/` | 설정 로더 (Python) |

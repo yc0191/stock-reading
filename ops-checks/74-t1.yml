@@ -1,0 +1,19 @@
+# 확인기 시험용 기준 파일(#74 시세 제공자 연결 실패). comment: false 라 이슈에 댓글·라벨을 달지 않고 DB와 S3 결과 파일에만 남는다.
+# 운영 첫 장날 이 값을 손 판정(수집기 연결 실패 기록 조회)과 비교해 확인기 방식을 시험한다.
+issue: 74
+attempt: t1
+comment: false
+fix_commit: "4003328"
+days: 2
+metrics:
+  - key: quote_failure_ratio
+    # 오늘(한국 날짜) 시세 조회 실패 기록 / (실패 기록 + 저장한 시세). 둘 다 0이면 비워 판정 보류.
+    sql: >-
+      WITH day AS (SELECT (now() AT TIME ZONE 'Asia/Seoul')::date::timestamp AT TIME ZONE 'Asia/Seoul' AS start),
+      failed AS (SELECT count(*) AS n FROM market.quote_failure, day WHERE occurred_at >= day.start),
+      stored AS (SELECT count(*) AS n FROM market.price_snapshot, day WHERE as_of >= day.start)
+      SELECT CASE WHEN failed.n + stored.n = 0 THEN NULL ELSE failed.n::numeric / (failed.n + stored.n) END
+      FROM failed, stored
+    pass: "< 0.01"
+human:
+  - 장중 시세 조회가 끊긴 시간대가 없었는지 수집기 로그로 확인

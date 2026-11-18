@@ -1,0 +1,136 @@
+# 조치 판정. 평일 18:00 KST 에 확인기가 S3 에 남긴 결과 파일을 받아 scripts/ops_verdict.py 로 판정하고,
+# 판정 스크립트가 만든 할 일 파일대로 verifying 이슈에 결과 댓글을 달고 라벨을 바꾼다(이슈는 닫지 않는다).
+# 결과 파일이 없거나 오류이면 작업을 실패로 끝내 GitHub 실패 알림으로 확인기·수집기 멈춤을 알린다.
+# 공개 저장소라 로그와 댓글에는 비율·판정·날짜·버전·이슈 번호·실패 종류만 남기고 버킷 이름·리전은 가린다.
+# 필요한 저장소 변수: AWS_REGION, OPS_RESULTS_BUCKET, OPS_RESULTS_AWS_ROLE_ARN (접근 키를 쓰면 역할 변수는 비움)
+#   OPS_VERDICT_ENABLED: 'true' 일 때만 예약 실행이 돈다(확인기가 운영에서 돌기 전까지 '결과 파일 없음' 실패 알림을 막는 스위치).
+#   손 실행(workflow_dispatch)은 이 변수와 상관없이 돈다.
+# 접근 키를 쓰는 계정의 저장소 비밀: OPS_RESULTS_AWS_ACCESS_KEY_ID, OPS_RESULTS_AWS_SECRET_ACCESS_KEY
+# 라벨 check-passed, check-failed 는 저장소에 미리 있어야 한다.
+name: ops-verdict
+
+on:
+  schedule:
+    # UTC 09:00 = 한국 시간 18:00. schedule 은 기본 브랜치의 워크플로로 돈다.
+    - cron: "0 9 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  id-token: write
+
+# 같은 날을 두 번 세거나 두 번 댓글 달지 않게 실행을 차례로 돌린다.
+concurrency:
+  group: ops-verdict
+  cancel-in-progress: false
+
+jobs:
+  verdict:
+    if: github.event_name != 'schedule' || vars.OPS_VERDICT_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          # 조치 커밋이 그날 운영 버전의 조상인지 보려면 모든 브랜치의 이력이 필요하다.
+          fetch-depth: 0
+      - name: 버킷·리전 가리기
+        env:
+          AWS_REGION_VALUE: ${{ vars.AWS_REGION }}
+          BUCKET_VALUE: ${{ vars.OPS_RESULTS_BUCKET }}
+        run: |
+          echo "::add-mask::$AWS_REGION_VALUE"
+          echo "::add-mask::$BUCKET_VALUE"
+      - uses: aws-actions/configure-aws-credentials@v4.1.0
+        with:
+          # OIDC(역할)가 기본. 역할 변수가 비고 키 비밀값이 있으면 접근 키로 들어간다(infra/terraform 의 github_auth).
+          role-to-assume: ${{ vars.OPS_RESULTS_AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.OPS_RESULTS_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.OPS_RESULTS_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+          mask-aws-account-id: true
+      - name: 결과 파일 받기
+        env:
+          BUCKET: ${{ vars.OPS_RESULTS_BUCKET }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/results"
+          if ! aws s3 sync "s3://$BUCKET/results/" "$RUNNER_TEMP/results" --only-show-errors >/dev/null 2>&1; then
+            echo "::error::결과 파일 읽기 실패"; exit 1
+          fi
+      - name: 이슈 정보 모으기
+        run: |
+          # 기준 파일에 나온 이슈마다 열림 여부, 라벨, 이 작업이 단 댓글만 모은다(남이 쓴 댓글의 표시는 믿지 않는다).
+          echo '{}' > "$RUNNER_TEMP/issues.json"
+          for n in $(find ops-checks -maxdepth 1 -name '*.yml' 2>/dev/null | sed -E 's#.*/([0-9]+)-.*#\1#' | sort -un); do
+            # 댓글이 많아도 인자 길이 한도에 걸리지 않게 파일로 넘기고, 쓰는 값만 뽑는다.
+            if ! gh api "repos/$REPO/issues/$n" --jq '{open: (.state == "open"), labels: [.labels[].name]}' \
+                   > "$RUNNER_TEMP/info.json" 2>/dev/null \
+               || ! gh api "repos/$REPO/issues/$n/comments" --paginate \
+                   --jq '[.[] | select(.user.login == "github-actions[bot]") | .body]' \
+                   > "$RUNNER_TEMP/comments.json" 2>/dev/null; then
+              echo "::error::이슈 정보 읽기 실패(이슈 #$n)"; exit 1
+            fi
+            jq --arg n "$n" --slurpfile info "$RUNNER_TEMP/info.json" --slurpfile comments "$RUNNER_TEMP/comments.json" \
+              '.[$n] = ($info[0] + {comments: ($comments | add // [])})' \
+              "$RUNNER_TEMP/issues.json" > "$RUNNER_TEMP/issues.next" && mv "$RUNNER_TEMP/issues.next" "$RUNNER_TEMP/issues.json"
+          done
+      - name: 직전 실행 날짜 구하기
+        # 이 워크플로의 직전 완료 예약 실행(결론 무관, 스위치가 꺼져 건너뜀으로 끝난 실행은 뺌)의 한국 날짜.
+        # 그 날짜 이하의 실패는 그때 이미 알렸다.
+        run: |
+          if ! prev=$(gh api "repos/$REPO/actions/workflows/ops-verdict.yml/runs?event=schedule&status=completed&per_page=100" \
+                        --jq '[.workflow_runs[] | select(.conclusion != "skipped")][0].created_at // empty' 2>/dev/null); then
+            echo "::error::직전 실행 조회 실패"; exit 1
+          fi
+          if [ -n "$prev" ]; then
+            echo "ALERT_SINCE=$(TZ=Asia/Seoul date -d "$prev" +%F)" >> "$GITHUB_ENV"
+          fi
+      - name: 판정
+        run: |
+          set +e
+          extra=()
+          [ -n "$ALERT_SINCE" ] && extra+=(--alert-since "$ALERT_SINCE")
+          [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && extra+=(--manual)
+          python3 scripts/ops_verdict.py --results-dir "$RUNNER_TEMP/results" --criteria-dir ops-checks \
+            --issues "$RUNNER_TEMP/issues.json" --repo . --today "$(TZ=Asia/Seoul date +%F)" \
+            --out "$RUNNER_TEMP/todo.json" "${extra[@]}"
+          echo "VERDICT_RC=$?" >> "$GITHUB_ENV"
+      - name: 댓글·라벨 달기
+        run: |
+          failed=0
+          todo="$RUNNER_TEMP/todo.json"
+          {
+            echo "### 조치 판정"
+            jq -r '.summary[] | "- " + .' "$todo"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for n in $(jq -r '.issues | keys[]' "$todo"); do
+            issue_failed=0
+            count=$(jq -r --arg n "$n" '.issues[$n].comments | length' "$todo")
+            for ((i = 0; i < count; i++)); do
+              jq -r --arg n "$n" --argjson i "$i" '.issues[$n].comments[$i]' "$todo" > "$RUNNER_TEMP/comment.md"
+              if ! gh issue comment "$n" --repo "$REPO" --body-file "$RUNNER_TEMP/comment.md" >/dev/null 2>&1; then
+                echo "::error::댓글 달기 실패(이슈 #$n)"; failed=1; issue_failed=1; break
+              fi
+            done
+            # 댓글이 모두 달린 이슈만 라벨을 바꾼다. 실패하면 다음 실행이 표시를 보고 이어서 한다.
+            [ "$issue_failed" = 1 ] && continue
+            remove=$(jq -r --arg n "$n" '.issues[$n].remove_labels | join(",")' "$todo")
+            add=$(jq -r --arg n "$n" '.issues[$n].add_labels | join(",")' "$todo")
+            args=()
+            [ -n "$remove" ] && args+=(--remove-label "$remove")
+            [ -n "$add" ] && args+=(--add-label "$add")
+            if [ ${#args[@]} -gt 0 ] && ! gh issue edit "$n" --repo "$REPO" "${args[@]}" >/dev/null 2>&1; then
+              echo "::error::라벨 바꾸기 실패(이슈 #$n)"; failed=1
+            fi
+          done
+          [ "$failed" = 0 ]
+      - name: 판정 결과 확인
+        # 결과 파일 없음·오류, error 지표는 여기서 작업을 실패로 끝낸다. 자세한 종류는 위 판정 단계 로그에 있다.
+        run: |
+          if [ "$VERDICT_RC" != 0 ]; then
+            echo "::error::판정 실패: 결과 파일 없음·오류 또는 error 지표. 판정 단계 로그 확인"; exit 1
+          fi

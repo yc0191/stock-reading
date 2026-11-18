@@ -80,7 +80,7 @@ valid_version() { [[ "$1" =~ ^[A-Za-z0-9._-]{1,128}$ ]]; }
 # 서비스에 넘길 비밀 설정을 Parameter Store 에서 받아 서버 안 파일(0600)에만 둔다. 이름 하나가 환경변수 하나다.
 # 경로를 정하지 않은 서버(DEPLOY_CONFIG_PARAM_PATH 가 비어 있음)는 건너뛴다. 경로를 정했는데 결과가 비었거나 필수 값이 비면 실패로 멈춘다.
 # 값은 작은따옴표로 감싸 쓴다: Compose 가 값 안의 $ 를 변수로 풀고 ' #' 뒤를 주석으로 보기 때문이다. 값에 작은따옴표가 있으면 감쌀 수 없어 실패로 멈춘다.
-required_secrets="POSTGRES_ADMIN_PASSWORD MARKET_DB_PASSWORD NEWS_DB_PASSWORD BRIEFING_DB_PASSWORD PERSONAL_OWNER_DB_PASSWORD PERSONAL_WRITER_DB_PASSWORD COLLECTOR_DB_PASSWORD NOTIFIER_DB_PASSWORD"
+required_secrets="POSTGRES_ADMIN_PASSWORD MARKET_DB_PASSWORD NEWS_DB_PASSWORD BRIEFING_DB_PASSWORD PERSONAL_OWNER_DB_PASSWORD PERSONAL_WRITER_DB_PASSWORD COLLECTOR_DB_PASSWORD NOTIFIER_DB_PASSWORD OPS_CHECKER_DB_PASSWORD"
 render_runtime_env() {
   [ -n "${DEPLOY_CONFIG_PARAM_PATH:-}" ] || return 0
   local tmp name

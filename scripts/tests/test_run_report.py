@@ -288,6 +288,22 @@ def test_live_calls_do_not_count_skipped_ticks_and_count_token_failure_once():
     assert rr.live_calls({"snapshots": 1, "failures": {"HTTP_ERROR": 1}}) == "토큰 1, 시세 2"
 
 
+def test_result_file_of_a_hyphenated_map_name_is_read_as_that_map(tmp_path):
+    rows = [("확인기 기능", "flow.py", "test_flow.py", NA,
+             "test_postgres_db.py [DB, 켜는 조건: OPS_IT_DB_URL·OPS_IT_DB_USER·OPS_IT_DB_PASSWORD]")]
+    make_maps(tmp_path)
+    write(tmp_path / "docs/test-map/ops-checker.md", map_text(rows))
+    results = tmp_path / "results"
+    py_xml(results, "main", "ops-checker", [("tests.test_flow", "passed")])
+    py_xml(results, "db", "ops-checker", [("tests.test_postgres_db", "passed")])
+    stages(results, *OK_STAGES)
+    code, out = render(tmp_path, results)
+    assert code == 0
+    assert row_of(out, "확인기 기능") == "| 확인기 기능 | 돌았음 | - | 돌았음(DB) |"
+    assert rr._py_group("scripts-ops") == "scripts"
+    assert rr._py_group("ops-checker") == "ops-checker"
+
+
 def test_real_repository_map_is_readable_and_has_the_live_row():
     rows = rr.map_rows(REPO_ROOT, "scripts.md")
     live = [r for r in rows if "test-all.sh" in r.cells["대상"]]

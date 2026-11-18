@@ -14,6 +14,8 @@ COPY services/market/src/main/resources/db/migration /sql/market
 COPY infra/db/personal/init.sql /sql/personal-init.sql
 COPY infra/db/personal/migration /sql/personal
 COPY services/briefing/db/migration /sql/briefing
+COPY infra/db/ops/init.sql /sql/ops-init.sql
+COPY infra/db/ops/migration /sql/ops
 COPY infra/deploy/migrate/migrate.sh /usr/local/bin/migrate.sh
 RUN chmod +x /usr/local/bin/migrate.sh
 # 비밀번호를 받는 컨테이너이므로 root 로 돌리지 않는다. 베이스 이미지에는 일반 사용자가 없어 만든다.
