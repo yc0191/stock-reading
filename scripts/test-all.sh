@@ -14,6 +14,7 @@
 # 환경변수(모두 선택):
 #   TEST_ALL_ENV_FILE  .env 위치(기본 저장소 루트의 .env)
 #   TEST_ALL_PYTHON    브리핑 venv 파이썬(기본 services/briefing/.venv/bin/python)
+#   TEST_ALL_OPS_PYTHON  확인기 venv 파이썬(기본 services/ops-checker/.venv/bin/python)
 #   JAVA_HOME_21       JDK 21 위치(없으면 /usr/libexec/java_home -v 21 로 찾음)
 #   TEST_ALL_AWS_PROFILE  --live 가 Parameter Store 를 읽을 AWS CLI 프로필. --live 에서는 필수이고,
 #                         엉뚱한 계정을 읽지 않도록 기본 자격증명 방식으로 넘어가지 않는다
@@ -51,11 +52,12 @@ if [ "$PLAN" = 1 ]; then
   echo "실행 순서 (--plan: 아무것도 띄우지 않음)"
   echo "1. Java 전체: ./gradlew cleanTest test --no-build-cache"
   echo "2. 브리핑: pytest services/briefing"
+  echo "2b. 확인기: pytest services/ops-checker (확인기 venv)"
   echo "3. 설정 로더·지도 검사: pytest -c scripts/pytest.ini scripts/tests"
   echo "4. 실제 DB 준비: stock-postgres 확인(꺼져 있으면 켬), stock_test_run_<시각>_<pid> 데이터베이스와 market·news·briefing 스키마 생성,"
   echo "   테이블은 Flyway(flyway/flyway 이미지)로 만듦: market → personal 계정·권한(infra/db/personal/init.sql) → personal 순서(personal 이 market 표를 가리킴), 브리핑은 그다음."
   echo "   이미지가 없으면 처음 한 번 받음"
-  echo "5. 실제 DB 테스트: 지도에서 고른 market·news·notifier·브리핑 실제 DB 테스트"
+  echo "5. 실제 DB 테스트: 지도에서 고른 market·news·notifier·브리핑·확인기 실제 DB 테스트"
   echo "5b. 구성 종목 리허설: 일회용 Kafka, 가짜 운용사 서버, market·collector(테스트 전용 데이터베이스), 수동 실행 명령 collect-etf-members 1건,"
   echo "    원문·이력·구성 연결 표 확인 뒤 이 단계가 띄운 것만 정리(외부 호출 없음)"
   if [ "$LIVE" = 1 ]; then
@@ -88,6 +90,7 @@ FLYWAY_IMAGE="flyway/flyway:12.4.0"
 . "$ROOT/scripts/personal-db-lib.sh"
 ENV_FILE="${TEST_ALL_ENV_FILE:-$ROOT/.env}"
 PY="${TEST_ALL_PYTHON:-$ROOT/services/briefing/.venv/bin/python}"
+OPS_PY="${TEST_ALL_OPS_PYTHON:-$ROOT/services/ops-checker/.venv/bin/python}"
 LOCK_DIR="$ROOT/build/test-all.lock"
 LIVE_OUT_DIR="$ROOT/build/test-all-live"
 JAVA_SERVICES="collector market news notifier"
@@ -95,7 +98,7 @@ JAVA_SERVICES="collector market news notifier"
 # 바깥에서 들어온 켜는 변수가 기본 단계에 섞이면 엉뚱한 데이터베이스로 실제 DB 테스트가 돈다. 필요한 단계에서만 넣는다.
 unset MARKET_IT_DB_URL MARKET_IT_DB_USER MARKET_IT_DB_PASSWORD MARKET_IT_DB_MIGRATION_SCHEMA NEWS_IT_DB_URL NEWS_IT_DB_USER NEWS_IT_DB_PASSWORD \
   WRITER_IT_DB_USER WRITER_IT_DB_PASSWORD COLLECTOR_IT_DB_URL COLLECTOR_IT_DB_USER COLLECTOR_IT_DB_PASSWORD NOTIFIER_IT_DB_URL NOTIFIER_IT_DB_USER NOTIFIER_IT_DB_PASSWORD \
-  BRIEFING_IT_DB_URL BRIEFING_IT_DB_USER BRIEFING_IT_DB_PASSWORD \
+  BRIEFING_IT_DB_URL BRIEFING_IT_DB_USER BRIEFING_IT_DB_PASSWORD OPS_IT_DB_URL OPS_IT_DB_USER OPS_IT_DB_PASSWORD \
   QUOTE_FLOW_LIVE_DB_URL QUOTE_FLOW_LIVE_DB_USER QUOTE_FLOW_LIVE_DB_PASSWORD \
   BRIEFING_FLOW_LIVE_KAFKA BRIEFING_FLOW_LIVE_RUN_ID BRIEFING_FLOW_LIVE_DB_URL BRIEFING_FLOW_LIVE_DB_USER \
   BRIEFING_FLOW_LIVE_DB_PASSWORD BRIEFING_FLOW_LIVE_BRIEFING_LOG BRIEFING_FLOW_LIVE_NOTIFIER_LOG \
@@ -281,6 +284,8 @@ else
 fi
 PY_OK=1
 [ -x "$PY" ] || PY_OK=0
+OPS_PY_OK=1
+[ -x "$OPS_PY" ] || OPS_PY_OK=0
 
 collect_java() {
   local phase=$1 services=$2 svc src
@@ -316,6 +321,17 @@ if [ "$PY_OK" = 1 ]; then
   else stage briefing "브리핑" fail "pytest 종료 코드 $rc" $((SECONDS - t)) main/py/briefing.xml; fi
 else
   stage briefing "브리핑" fail "브리핑 venv 파이썬이 없음(TEST_ALL_PYTHON)" 0
+fi
+
+log "2b. 확인기"
+t=$SECONDS
+if [ "$OPS_PY_OK" = 1 ]; then
+  "$OPS_PY" -m pytest services/ops-checker --junitxml="$TMP/results/main/py/ops-checker.xml"
+  rc=$?
+  if [ "$rc" = 0 ]; then stage opschecker "확인기" ok "" $((SECONDS - t)) main/py/ops-checker.xml
+  else stage opschecker "확인기" fail "pytest 종료 코드 $rc" $((SECONDS - t)) main/py/ops-checker.xml; fi
+else
+  stage opschecker "확인기" fail "확인기 venv 파이썬이 없음(TEST_ALL_OPS_PYTHON, scripts/setup-dev.sh)" 0
 fi
 
 log "3. 설정 로더·지도 검사"
@@ -438,7 +454,7 @@ JDBC_URL="jdbc:postgresql://127.0.0.1:5432/$DB_NAME"
 PG_URL="postgresql://127.0.0.1:5432/$DB_NAME"
 
 run_db_tests() {
-  local line group names name gradle_args="" serial_args="" java_groups="" briefing_files="" scripts_files="" rc=0 path
+  local line group names name gradle_args="" serial_args="" java_groups="" briefing_files="" scripts_files="" ops_files="" rc=0 path
   # 지도(docs/test-map)에서 켜는 조건이 *_IT_DB_* 인 테스트를 고른다. 새 실제 DB 테스트를 지도에 올리면 여기에 들어온다.
   while read -r group names; do
     [ -n "$group" ] || continue
@@ -457,6 +473,11 @@ run_db_tests() {
           path=$(find services/briefing/tests -name "$name" -o -name "$name.py" | head -1)
           [ -n "$path" ] && briefing_files="$briefing_files $path"
         done ;;
+      ops-checker)
+        for name in $names; do
+          path=$(find services/ops-checker/tests -name "$name" -o -name "$name.py" | head -1)
+          [ -n "$path" ] && ops_files="$ops_files $path"
+        done ;;
       scripts)
         for name in $names; do
           path=$(find scripts/tests -name "$name" -o -name "$name.py" | head -1)
@@ -465,7 +486,7 @@ run_db_tests() {
       *) echo "실제 DB 테스트를 돌리는 방법이 없는 지도: $group"; rc=1 ;;
     esac
   done < <(python3 scripts/run_report.py db-tests)
-  if [ -z "$java_groups$briefing_files$scripts_files" ]; then echo "지도에서 실제 DB 테스트를 찾지 못했습니다"; return 1; fi
+  if [ -z "$java_groups$briefing_files$scripts_files$ops_files" ]; then echo "지도에서 실제 DB 테스트를 찾지 못했습니다"; return 1; fi
   if [ -n "$java_groups" ]; then
     if [ "$JAVA_OK" = 1 ]; then
       # shellcheck disable=SC2086
@@ -499,6 +520,19 @@ run_db_tests() {
         "$PY" -m pytest $briefing_files --junitxml="$TMP/results/db/py/briefing.xml"
       ) || rc=1
     else
+      rc=1
+    fi
+  fi
+  if [ -n "$ops_files" ]; then
+    if [ "$OPS_PY_OK" = 1 ]; then
+      # 확인기 계정 하나로 읽기 전용 실행과 장부 쓰기를 확인한다(ops 표는 init_ops·migrate_ops 가 이미 만들었다).
+      # shellcheck disable=SC2086
+      (
+        export OPS_IT_DB_URL="$PG_URL" OPS_IT_DB_USER="$OPS_USER" OPS_IT_DB_PASSWORD="$OPS_PW"
+        "$OPS_PY" -m pytest $ops_files --junitxml="$TMP/results/db/py/ops-checker.xml"
+      ) || rc=1
+    else
+      echo "확인기 venv 파이썬이 없어 확인기 실제 DB 테스트를 못 돌림(TEST_ALL_OPS_PYTHON, scripts/setup-dev.sh)"
       rc=1
     fi
   fi

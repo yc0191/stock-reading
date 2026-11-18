@@ -1,24 +1,24 @@
-"""실제 Postgres 로 읽기 전용 실행과 장부 쓰기를 확인한다. OPS_CHECKER_TEST_DB_URL(호스트:포트/DB)·OPS_CHECKER_TEST_DB_USER·OPS_CHECKER_TEST_DB_PASSWORD 가 있고
+"""실제 Postgres 로 읽기 전용 실행과 장부 쓰기를 확인한다. OPS_IT_DB_URL(postgresql://호스트:포트/DB)·OPS_IT_DB_USER·OPS_IT_DB_PASSWORD 가 있고
 ops 마이그레이션이 적용된 데이터베이스에서만 돈다. 끝나면 이 테스트가 쓴 줄만 지운다."""
 import os
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from urllib.parse import urlparse
 
 import pytest
 
 from ops_checker.metrics import MetricError
 from ops_checker.store import PostgresRunStore, PostgresScalarQuery, ResultRow, RunRecord, connector
 
-URL, USER, PASSWORD = (os.environ.get(k) for k in ("OPS_CHECKER_TEST_DB_URL", "OPS_CHECKER_TEST_DB_USER", "OPS_CHECKER_TEST_DB_PASSWORD"))
-pytestmark = pytest.mark.skipif(not (URL and USER and PASSWORD), reason="OPS_CHECKER_TEST_DB_URL·OPS_CHECKER_TEST_DB_USER·OPS_CHECKER_TEST_DB_PASSWORD 없음")
+URL, USER, PASSWORD = (os.environ.get(k) for k in ("OPS_IT_DB_URL", "OPS_IT_DB_USER", "OPS_IT_DB_PASSWORD"))
+pytestmark = pytest.mark.skipif(not (URL and USER and PASSWORD), reason="OPS_IT_DB_URL·OPS_IT_DB_USER·OPS_IT_DB_PASSWORD 없음")
 
 TEST_EVENT = "99999999-9999-4999-8999-999999999999"
 
 
 def connect():
-    hostport, dbname = URL.split("/", 1)
-    host, _, port = hostport.partition(":")
-    return connector(host, int(port or 5432), dbname, USER, PASSWORD)()
+    parsed = urlparse(URL)
+    return connector(parsed.hostname, parsed.port or 5432, parsed.path.lstrip("/"), USER, PASSWORD)()
 
 
 def test_reads_one_cell_and_rejects_writes_and_slow_queries():
@@ -40,7 +40,7 @@ def test_run_and_results_are_written_once_per_event_id():
     store = PostgresRunStore(connect)
     now = datetime(2026, 11, 18, 7, 31, tzinfo=timezone.utc)
     run = RunRecord(date(2026, 11, 18), "post-close", TEST_EVENT, "collected", "v", now, now, "ok")
-    row = ResultRow(999999, "it", "h" * 64, "m", Decimal("0.5"), "< 0.9", "pass")
+    row = ResultRow(999999, "it", "a" * 64, "m", Decimal("0.5"), "< 0.9", "pass")
     try:
         assert not store.exists(TEST_EVENT)
         assert store.record(run, [row]) is True

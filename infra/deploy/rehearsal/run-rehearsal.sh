@@ -87,6 +87,9 @@ make_env_files() {
       # 타이머는 모두 꺼 두고(기본값), 시세는 시뮬레이터, 메일은 드라이런, LLM 키는 비움 -> 규칙 기반 리포트
       echo "COLLECTOR_MARKET_DATA_SOURCE=simulator"
       echo "NOTIFIER_SEND_ENABLED=false"
+      # 확인기는 이 값이 비면 뜨지 않는다. 가짜 값이라 S3 업로드는 실패하고 그 실패는 실행 기록에 남는다(AWS 는 부르지 않음).
+      echo "AWS_REGION=rehearsal-fake-region"
+      echo "OPS_RESULTS_BUCKET=rehearsal-fake-results"
     } >"$ENV_DIR/services.env"
   )
 }
@@ -124,6 +127,8 @@ cmd_build() {
   for name in POSTGRES_ADMIN NEWS MARKET BRIEFING PERSONAL_OWNER PERSONAL_WRITER COLLECTOR NOTIFIER OPS_CHECKER; do
     case $name in POSTGRES_ADMIN) echo "POSTGRES_ADMIN_PASSWORD=x" ;; *) echo "${name}_DB_PASSWORD=x" ;; esac
   done >"$dummy"
+  # 값이 비면 안 되는 설정(AWS_REGION, OPS_RESULTS_BUCKET)도 가짜 값으로 채운다.
+  printf '%s\n' "AWS_REGION=x" "OPS_RESULTS_BUCKET=x" >>"$dummy"
   docker compose -f "$ROOT/infra/deploy/compose/services.yml" --env-file "$dummy" build
   rm -f "$dummy"
 }

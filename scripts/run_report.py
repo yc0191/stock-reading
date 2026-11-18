@@ -6,7 +6,7 @@
 
 결과 폴더 모양(test-all.sh 가 만든다):
   <results>/<단계>/java/<서비스>/TEST-*.xml   Gradle 결과
-  <results>/<단계>/py/<briefing|scripts>[-<이름>].xml  pytest --junitxml 결과('-' 앞이 지도 이름)
+  <results>/<단계>/py/<briefing|ops-checker|scripts>[-<이름>].xml  pytest --junitxml 결과(지도 이름으로 시작하는 가장 긴 이름이 지도 이름)
   <results>/stages.tsv                         단계마다 한 줄(키, 이름, 상태, 설명, 초, 결과 폴더)
   <results>/live/counts.json                   시세 흐름 실제 테스트가 남긴 행 개수(값은 없음)
   <results>/live/briefing-counts.json          브리핑·메일 실제 테스트가 남긴 개수(LLM 호출, 메일 발송 등)
@@ -120,13 +120,19 @@ def load_results(phase_dir: Path) -> dict:
             found.setdefault((group, name), []).extend(_case_status(c) for c in suite.iter("testcase"))
     for xml in sorted((phase_dir / "py").glob("*.xml")):
         # 한 단계에서 같은 지도의 pytest 를 여러 번 돌리면 'scripts-briefing.xml' 처럼 이름을 붙여 따로 남긴다.
-        group = xml.stem.split("-", 1)[0]
+        group = _py_group(xml.stem)
         for suite in _suites(xml):
             for case in suite.iter("testcase"):
                 name = _py_name(case.get("classname", ""))
                 if name:
                     found.setdefault((group, name), []).append(_case_status(case))
     return found
+
+
+def _py_group(stem: str) -> str:
+    """파일 이름 앞부분이 지도 이름이다. 지도 이름에 하이픈이 있어도(ops-checker) 가장 긴 지도 이름을 고른다."""
+    maps = [m[:-3] for m in ctm.MAP_FILES if stem == m[:-3] or stem.startswith(m[:-3] + "-")]
+    return max(maps, key=len) if maps else stem.split("-", 1)[0]
 
 
 def _suites(xml: Path) -> list:

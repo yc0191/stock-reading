@@ -99,6 +99,26 @@ def test_env_example_has_checker_account():
     assert re.search(r"^OPS_CHECKER_DB_PASSWORD=change-me$", env, flags=re.MULTILINE)
 
 
+def test_deploy_env_example_and_rehearsal_pass_the_results_bucket_and_region():
+    example = read("infra/deploy/server/deploy.env.example")
+    assert re.search(r"^OPS_RESULTS_BUCKET=\S+$", example, flags=re.MULTILINE)
+    assert re.search(r"^AWS_REGION=\S+$", example, flags=re.MULTILINE)
+    rehearsal = read("infra/deploy/rehearsal/run-rehearsal.sh")
+    # 서비스 설정 파일과 빌드용 임시 설정 둘 다에 있어야 확인기가 뜨고 compose 가 빈 값 오류를 내지 않는다.
+    assert rehearsal.count("OPS_RESULTS_BUCKET=") == 2
+    assert rehearsal.count("AWS_REGION=") == 2
+
+
+def test_test_all_runs_checker_tests_with_their_own_venv_and_it_db_names():
+    script = read("scripts/test-all.sh")
+    assert '"$OPS_PY" -m pytest services/ops-checker --junitxml="$TMP/results/main/py/ops-checker.xml"' in script
+    assert '"$OPS_PY" -m pytest $ops_files --junitxml="$TMP/results/db/py/ops-checker.xml"' in script
+    assert "OPS_IT_DB_URL OPS_IT_DB_USER OPS_IT_DB_PASSWORD \\\n  QUOTE" in script
+    checker = read("services/ops-checker/tests/test_postgres_db.py")
+    assert '"OPS_IT_DB_URL", "OPS_IT_DB_USER", "OPS_IT_DB_PASSWORD"' in checker
+    assert "OPS_CHECKER_TEST_DB" not in checker + read("docs/test-map/ops-checker.md")
+
+
 def test_test_all_prepares_ops_after_briefing():
     script = read("scripts/test-all.sh")
     assert script.index("migrate_briefing; then") < script.index("init_ops; then") < script.index("migrate_ops; then")
