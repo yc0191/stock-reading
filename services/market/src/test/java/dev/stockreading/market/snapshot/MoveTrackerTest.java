@@ -49,13 +49,17 @@ class MoveTrackerTest {
         when(states.find(anyString(), any(DetectionType.class)))
                 .thenAnswer(inv -> Optional.ofNullable(stored.get(inv.<DetectionType>getArgument(1))));
         doAnswer(inv -> {
-            stored.put(inv.getArgument(1), new MoveState(inv.getArgument(2), inv.getArgument(3)));
+            stored.put(inv.getArgument(1), new MoveState(inv.getArgument(2), inv.getArgument(3), inv.getArgument(4)));
             return null;
         }).when(states).save(anyString(), any(DetectionType.class), anyLong(), any(OffsetDateTime.class), any(OffsetDateTime.class));
         doAnswer(inv -> {
             stored.remove(inv.<DetectionType>getArgument(1));
             return null;
         }).when(states).delete(anyString(), any(DetectionType.class));
+        doAnswer(inv -> {
+            stored.computeIfPresent(inv.<DetectionType>getArgument(1), (type, state) -> endedAt(state, inv.getArgument(2)));
+            return null;
+        }).when(states).markEnded(anyString(), any(DetectionType.class), any(OffsetDateTime.class));
         when(states.findLastPublish(anyString())).thenAnswer(inv -> Optional.ofNullable(lastPublish));
         doAnswer(inv -> {
             lastPublish = new LastPublish(inv.getArgument(1), inv.getArgument(2));
@@ -63,6 +67,14 @@ class MoveTrackerTest {
         }).when(states).saveLastPublish(anyString(), anyLong(), any(OffsetDateTime.class));
         // 아래 기존 시험은 상태 규칙만 보도록 연속 확인(1건)과 재발행 간격(끔)을 꺼 둔다.
         tracker = new MoveTracker(detector, states, publisher, properties(1, 0));
+    }
+
+    // 저장소의 markEnded와 같은 조건: 진행 중이고 마지막 발행보다 늦게 풀렸을 때만 풀린 시각을 넣는다.
+    static MoveState endedAt(MoveState state, OffsetDateTime endedAt) {
+        if (state.ended() || !endedAt.isAfter(state.lastPublishedAt())) {
+            return state;
+        }
+        return new MoveState(state.lastPublishedPrice(), endedAt, state.lastPublishedAt());
     }
 
     private static MarketProperties properties(int confirmCount, int intervalMinutes) {
@@ -90,7 +102,7 @@ class MoveTrackerTest {
         snapshot(T0, 10_200, window(10_200, start));
 
         verify(publisher).publish(eq("TEST01"), any(Detection.class), eq(start), eq(T0), eq("corr-1"));
-        assertThat(stored.get(DetectionType.WINDOW)).isEqualTo(new MoveState(10_200, start));
+        assertThat(stored.get(DetectionType.WINDOW)).isEqualTo(new MoveState(10_200, start, T0));
     }
 
     @Test
@@ -129,17 +141,23 @@ class MoveTrackerTest {
     }
 
     @Test
-    void stateIsClearedWhenTheConditionEndsSoTheNextCrossingIsANewMove() {
+    void aCrossingAfterTheConditionEndsIsPublishedOnlyWhenItMovedTheThresholdFromTheLastPublishedPrice() {
         snapshot(T0, 10_200, window(10_200, T0));
         snapshot(T0.plusSeconds(1), 10_020, Evaluation.clear(DetectionType.WINDOW));
-        assertThat(stored).doesNotContainKey(DetectionType.WINDOW);
+        assertThat(stored.get(DetectionType.WINDOW)).isEqualTo(new MoveState(10_200, T0.plusSeconds(1), T0));
 
-        // 이전 발행 가격(10200)과 거의 같아도 새 변동이므로 바로 발행한다.
-        OffsetDateTime again = T0.plusSeconds(2);
-        snapshot(again, 10_210, window(10_210, again));
+        // 이전 발행 가격(10200)과 거의 같으면 다시 넘어도 발행하지 않는다.
+        snapshot(T0.plusSeconds(2), 10_210, window(10_210, T0.plusSeconds(2)));
+        verify(publisher, times(1)).publish(anyString(), any(), any(), any(), anyString());
+
+        // 10200 -> 10302는 +1.00%. 풀린 뒤의 변동이므로 시작 시각은 다시 넘은 첫 스냅샷으로 새로 잡는다.
+        OffsetDateTime crossedAgain = T0.plusSeconds(2);
+        OffsetDateTime published = T0.plusSeconds(3);
+        snapshot(published, 10_302, window(10_302, published));
 
         verify(publisher, times(2)).publish(anyString(), any(), any(), any(), anyString());
-        verify(publisher).publish(eq("TEST01"), any(), eq(again), eq(again), anyString());
+        verify(publisher).publish(eq("TEST01"), any(), eq(crossedAgain), eq(published), anyString());
+        assertThat(stored.get(DetectionType.WINDOW)).isEqualTo(new MoveState(10_302, crossedAgain, published));
     }
 
     @Test
@@ -362,14 +380,17 @@ class MoveTrackerTest {
     }
 
     @Test
-    void aHeldBackTypeIsPublishedAgainAfterItsConditionClearsAndTheIntervalEnds() {
+    void aHeldBackTypeIsPublishedAfterItsConditionClearsOnlyWhenItMovedTheThresholdFromTheHeldPrice() {
         MoveTracker target = windowPublishedWhilePrevCloseIsHeldBack();
         snapshot(target, T0.plusMinutes(5), 10_000, Evaluation.clear(DetectionType.PREV_CLOSE));
-        assertThat(stored).doesNotContainKey(DetectionType.PREV_CLOSE);
+        assertThat(stored.get(DetectionType.PREV_CLOSE).ended()).isTrue();
 
         OffsetDateTime after = T0.plusSeconds(2).plusMinutes(31);
         threeDetections(target, DetectionType.PREV_CLOSE, after, 10_400);
+        verify(publisher, times(1)).publish(anyString(), any(), any(), any(), anyString());
 
+        // 막은 가격 10400 -> 10504는 +1.00%
+        threeDetections(target, DetectionType.PREV_CLOSE, after.plusMinutes(1), 10_504);
         verify(publisher, times(2)).publish(anyString(), any(), any(), any(), anyString());
     }
 
@@ -411,7 +432,8 @@ class MoveTrackerTest {
         snapshot(target, T0, 10_200, up(DetectionType.WINDOW, 10_200, T0));
         snapshot(target, T0.plusSeconds(1), 10_200, Evaluation.clear(DetectionType.WINDOW));
 
-        snapshot(target, T0.plusSeconds(2), 10_210, up(DetectionType.WINDOW, 10_210, T0));
+        // 10200 -> 10302는 +1.00%로 유형 상태는 넘지만, 간격이 켜져 있었다면 예외 폭(2%) 미만이라 막혔을 값이다.
+        snapshot(target, T0.plusSeconds(2), 10_302, up(DetectionType.WINDOW, 10_302, T0));
 
         verify(publisher, times(2)).publish(anyString(), any(), any(), any(), anyString());
     }
@@ -421,7 +443,7 @@ class MoveTrackerTest {
         MoveTracker target = publishedOnceAt(T0, 10_200);
         snapshot(target, T0.plusMinutes(1), 10_000, Evaluation.clear(DetectionType.WINDOW));
 
-        assertThat(stored).doesNotContainKey(DetectionType.WINDOW);
+        assertThat(stored.get(DetectionType.WINDOW).ended()).isTrue();
         assertThat(lastPublish).isEqualTo(new LastPublish(10_200, T0.plusSeconds(2)));
     }
 
@@ -434,8 +456,9 @@ class MoveTrackerTest {
         try {
             MoveTracker target = publishedOnceAt(T0, 10_200);
             snapshot(target, T0.plusMinutes(5), 10_200, Evaluation.clear(DetectionType.WINDOW));
+            // 10200 -> 10302는 +1.00%로 유형 상태는 넘지만 간격 예외 폭(2%)에는 못 미친다.
             for (int i = 0; i < 20; i++) {
-                snapshot(target, T0.plusMinutes(10).plusSeconds(i), 10_300, up(DetectionType.WINDOW, 10_300, T0));
+                snapshot(target, T0.plusMinutes(10).plusSeconds(i), 10_302, up(DetectionType.WINDOW, 10_302, T0));
             }
 
             assertThat(appender.list).extracting(ILoggingEvent::getFormattedMessage)
@@ -443,6 +466,19 @@ class MoveTrackerTest {
         } finally {
             logger.detachAppender(appender);
         }
+    }
+
+    // 11-17·11-18 운영: 유형 2 기준선 언저리를 오르내린 종목이 더 움직이지 않았는데도 간격이 지날 때마다 다시 발행됐다.
+    @Test
+    void aSymbolHoveringAroundTheThresholdIsNotPublishedAgainAfterTheIntervalWithoutFurtherMovement() {
+        MoveTracker target = confirming();
+        threeDetections(target, DetectionType.PREV_CLOSE, T0, 10_300);
+        snapshot(target, T0.plusMinutes(5), 10_290, Evaluation.clear(DetectionType.PREV_CLOSE));
+
+        // 간격(30분)이 지난 뒤 같은 기준선을 다시 넘었지만 10300 -> 10320은 +0.19%뿐이다.
+        threeDetections(target, DetectionType.PREV_CLOSE, T0.plusMinutes(40), 10_320);
+
+        verify(publisher, times(1)).publish(anyString(), any(), any(), any(), anyString());
     }
 
     // 11-16 운영: 금요일 15:05의 상태가 주말을 넘겨 남아, 월요일 첫 감지 메일의 변동 시각이 금요일로 나갔다.
@@ -464,6 +500,17 @@ class MoveTrackerTest {
         snapshot(FRIDAY, 10_300, up(DetectionType.PREV_CLOSE, 10_300, FRIDAY));
 
         // 지난 거래일에 알린 가격과 거의 같아도 오늘 처음 감지한 변동이므로 알린다.
+        snapshot(MONDAY, 10_310, up(DetectionType.PREV_CLOSE, 10_310, MONDAY));
+
+        verify(publisher).publish(eq("TEST01"), any(Detection.class), eq(MONDAY), eq(MONDAY), anyString());
+    }
+
+    @Test
+    void aMoveFromThePreviousTradingDayThatClearedTodayDoesNotHoldBackTodaysMove() {
+        snapshot(FRIDAY, 10_300, up(DetectionType.PREV_CLOSE, 10_300, FRIDAY));
+        // 월요일 장 시작에 조건이 풀려 금요일 상태가 끝난 변동으로 표시된다.
+        snapshot(MONDAY.minusMinutes(10), 10_000, Evaluation.clear(DetectionType.PREV_CLOSE));
+
         snapshot(MONDAY, 10_310, up(DetectionType.PREV_CLOSE, 10_310, MONDAY));
 
         verify(publisher).publish(eq("TEST01"), any(Detection.class), eq(MONDAY), eq(MONDAY), anyString());

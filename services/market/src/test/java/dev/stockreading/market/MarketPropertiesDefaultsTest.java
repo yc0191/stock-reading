@@ -28,17 +28,17 @@ class MarketPropertiesDefaultsTest {
             assertThat(context).hasNotFailed();
             MarketProperties properties = context.getBean(MarketProperties.class);
             assertThat(properties.windowMinutes()).isEqualTo(5);
-            assertThat(properties.windowThresholdPercent()).isEqualByComparingTo("1.00");
+            assertThat(properties.windowThresholdPercent()).isEqualByComparingTo("3.00");
             // 전일 종가 칸 하나가 하루 안에서 깨져 오는 경우가 있어(2026-11-04 확인) 후보 세 칸의 다수결로 쓴다.
             assertThat(properties.prevCloseFields())
                     .containsExactly("dataBody.bdy_cls_prc", "dataBody.sprc", "dataBody.krx_bdy_clpr");
-            assertThat(properties.prevCloseThresholdPercent()).isEqualByComparingTo("3.00");
+            assertThat(properties.prevCloseThresholdPercent()).isEqualByComparingTo("5.00");
             assertThat(properties.openPriceFields()).containsExactly("dataBody.opn_prc");
             assertThat(properties.confirmCount()).isEqualTo(3);
             // 첫 체결 전에는 누적 거래량과 시가가 모두 0으로 온다(2026-11-11 확인).
             assertThat(properties.firstTradeFields()).containsExactly("dataBody.acml_vlm", "dataBody.opn_prc");
-            assertThat(properties.republishIntervalMinutes()).isEqualTo(30);
-            assertThat(properties.republishExceptionPercent()).isEqualByComparingTo("2.00");
+            assertThat(properties.republishIntervalMinutes()).isEqualTo(120);
+            assertThat(properties.republishExceptionPercent()).isEqualByComparingTo("3.00");
         });
     }
 
