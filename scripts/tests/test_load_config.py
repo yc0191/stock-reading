@@ -83,7 +83,7 @@ def test_value_with_newline_is_rejected():
 
 def test_missing_parameters_are_reported():
     updates, _ = lc.to_env_updates([param("smtp-host", "h")])
-    assert "sender" in lc.missing_names(updates)
+    assert "smtp-password" in lc.missing_names(updates)
     assert "smtp-host" not in lc.missing_names(updates)
 
 

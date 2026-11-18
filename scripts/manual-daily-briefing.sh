@@ -255,7 +255,6 @@ fi
   export SPRING_KAFKA_BOOTSTRAP_SERVERS="$BOOTSTRAP"
   # 받는 사람은 DB(member_mail)에서 고른다. 위에서 넣은 가짜 주소 하나뿐이다.
   export SPRING_DATASOURCE_URL="$JDBC_URL" SPRING_DATASOURCE_USERNAME="$PN_USER" SPRING_DATASOURCE_PASSWORD="$PN_PW"
-  export NOTIFIER_SENDER="$RECIPIENT"
   unset SMTP_HOST SMTP_PORT SMTP_USERNAME SMTP_PASSWORD
   if [ "$SMTP_SINK" = 1 ]; then
     # 이 인스턴스에만 발송을 켠다. 목적지는 루프백 수신 서버뿐이라 암호화·인증은 끈다.

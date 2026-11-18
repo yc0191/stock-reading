@@ -17,7 +17,6 @@ ENV_NAMES = {
     "smtp-port": "SMTP_PORT",
     "smtp-username": "SMTP_USERNAME",
     "smtp-password": "SMTP_PASSWORD",
-    "sender": "NOTIFIER_SENDER",
     # 앱은 받는 주소를 읽지 않는다(DB 의 member_mail 에서 고름). 전체 실행 스크립트(test-all.sh --live)가
     # 테스트 DB 의 가짜 멤버에 넣을 시험용 주소로만 쓴다.
     "recipient": "TEST_ALL_LIVE_RECIPIENT",

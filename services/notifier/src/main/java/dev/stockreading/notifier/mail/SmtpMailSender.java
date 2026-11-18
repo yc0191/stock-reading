@@ -28,7 +28,7 @@ class SmtpMailSender implements MailSenderPort {
 
     SmtpMailSender(JavaMailSender mailSender, NotifierProperties properties) {
         if (isBlank(properties.sender())) {
-            throw new IllegalStateException("notifier.sender must be set when notifier.send-enabled=true");
+            throw new IllegalStateException("notifier.sender (SMTP_USERNAME) must be set when notifier.send-enabled=true");
         }
         if (mailSender instanceof JavaMailSenderImpl impl && isBlank(impl.getHost())) {
             throw new IllegalStateException("spring.mail.host (SMTP_HOST) must be set when notifier.send-enabled=true");
