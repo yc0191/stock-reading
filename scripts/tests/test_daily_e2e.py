@@ -173,6 +173,10 @@ def test_smtp_json_points_the_notifier_only_at_loopback_with_no_account():
     assert mail["properties"]["mail.smtp.auth"] is False and mail["properties"]["mail.smtp.starttls.enable"] is False
 
 
+def test_smtp_json_gives_a_fake_sender_because_the_account_is_empty():
+    assert json.loads(de.smtp_sink_json(2525))["notifier"]["sender"].endswith("@example.com")
+
+
 def test_smtp_json_command_prints_the_same_value(capsys):
     de.main(["daily_e2e.py", "smtp-json", "2525"])
     assert capsys.readouterr().out.strip() == de.smtp_sink_json(2525)

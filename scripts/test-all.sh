@@ -18,7 +18,7 @@
 #   TEST_ALL_AWS_PROFILE  --live 가 Parameter Store 를 읽을 AWS CLI 프로필. --live 에서는 필수이고,
 #                         엉뚱한 계정을 읽지 않도록 기본 자격증명 방식으로 넘어가지 않는다
 #   --live 전용: BROKER_BASE_URL, BROKER_APP_KEY, BROKER_APP_SECRET, TEST_ALL_LIVE_SYMBOL(6자리),
-#               ANTHROPIC_API_KEY, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, NOTIFIER_SENDER, TEST_ALL_LIVE_RECIPIENT,
+#               ANTHROPIC_API_KEY, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, TEST_ALL_LIVE_RECIPIENT,
 #               NEWS_SEARCH_CLIENT_ID, NEWS_SEARCH_CLIENT_SECRET
 #               (선택: SMTP_PORT, BRIEFING_LLM_MODEL)
 #               (비밀이 아닌 뉴스 검색 설정 NEWS_SEARCH_BASE_URL, NEWS_SEARCH_ID_HEADER, NEWS_SEARCH_SECRET_HEADER 는 필수이며
@@ -346,21 +346,6 @@ warn_leftovers() {
   fi
 }
 
-migrate_briefing() {
-  # 브리핑은 테이블을 만들지 않으므로 브리핑 테스트와 기동보다 먼저 Flyway 로 만든다.
-  # 서비스 계정으로 붙고, 비밀번호는 명령줄이 아니라 환경변수로만 넘긴다. 컨테이너는 stock-postgres 의 네트워크를 같이 쓴다.
-  local out
-  if ! out=$(FLYWAY_PASSWORD="$B_PW" docker run --rm --network "container:$PG_CONTAINER" \
-      -v "$ROOT/services/briefing/db/migration:/flyway/sql:ro" \
-      -e FLYWAY_PASSWORD -e FLYWAY_USER="$B_USER" -e FLYWAY_URL="jdbc:postgresql://localhost:5432/$DB_NAME" \
-      -e FLYWAY_SCHEMAS=briefing -e FLYWAY_DEFAULT_SCHEMA=briefing -e FLYWAY_CREATE_SCHEMAS=false \
-      -e FLYWAY_LOCATIONS=filesystem:/flyway/sql "$FLYWAY_IMAGE" migrate 2>&1); then
-    printf '%s\n' "$out" | tail -15
-    return 1
-  fi
-  printf '%s\n' "$out" | grep -E 'Successfully applied|up to date' | head -2
-}
-
 prepare_db() {
   local running waited key role found
   if ! docker info >/dev/null 2>&1; then DB_FAIL_REASON="Docker 에 연결할 수 없음"; return 1; fi
@@ -541,7 +526,7 @@ live_value() {
 }
 
 # 브리핑·메일 단계까지 필요한 키. 시세를 부르기 전에 모두 확인해 메일 설정이 빠졌는데 시세만 부르는 일이 없게 한다.
-LIVE_KEYS="BROKER_BASE_URL BROKER_APP_KEY BROKER_APP_SECRET TEST_ALL_LIVE_SYMBOL ANTHROPIC_API_KEY SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER TEST_ALL_LIVE_RECIPIENT NEWS_SEARCH_CLIENT_ID NEWS_SEARCH_CLIENT_SECRET"
+LIVE_KEYS="BROKER_BASE_URL BROKER_APP_KEY BROKER_APP_SECRET TEST_ALL_LIVE_SYMBOL ANTHROPIC_API_KEY SMTP_HOST SMTP_USERNAME SMTP_PASSWORD TEST_ALL_LIVE_RECIPIENT NEWS_SEARCH_CLIENT_ID NEWS_SEARCH_CLIENT_SECRET"
 
 missing_live_keys() {
   local key missing=""
@@ -763,8 +748,7 @@ run_live_briefing() {
     export NOTIFIER_SEND_ENABLED=true NOTIFIER_SUBJECT_PREFIX="[테스트]"
     SMTP_HOST=$(live_value SMTP_HOST) SMTP_USERNAME=$(live_value SMTP_USERNAME)
     SMTP_PASSWORD=$(live_value SMTP_PASSWORD) SMTP_PORT=$(live_value SMTP_PORT)
-    NOTIFIER_SENDER=$(live_value NOTIFIER_SENDER)
-    export SMTP_HOST SMTP_USERNAME SMTP_PASSWORD NOTIFIER_SENDER
+    export SMTP_HOST SMTP_USERNAME SMTP_PASSWORD
     if [ -n "$SMTP_PORT" ]; then export SMTP_PORT; else unset SMTP_PORT; fi
     # 제목의 한글 머리말이 환경변수에서 깨지지 않게 JVM 이 UTF-8 로 읽게 한다.
     export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8

@@ -42,4 +42,12 @@ class ConfigDefaultsTest {
         environment.getPropertySources().addFirst(new MapPropertySource("env", Map.of("NOTIFIER_SUBJECT_PREFIX", "")));
         assertThat(environment.getProperty("notifier.subject-prefix")).isEmpty();
     }
+
+    @Test
+    void theSenderIsTheSmtpLoginAccount() throws IOException {
+        // 발신 주소가 로그인 계정과 다르면 메일 서비스가 주소를 바꾸거나 받는 쪽 인증이 실패한다.
+        MockEnvironment environment = applicationYmlOnly();
+        environment.getPropertySources().addFirst(new MapPropertySource("env", Map.of("SMTP_USERNAME", "account@example.com")));
+        assertThat(environment.getProperty("notifier.sender")).isEqualTo("account@example.com");
+    }
 }

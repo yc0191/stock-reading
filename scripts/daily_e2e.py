@@ -6,7 +6,7 @@
 - smtp-sink <포트 파일> <메일 폴더>: 127.0.0.1 에서 받기만 하는 가짜 SMTP 수신 서버를 연다. 받은 메일을 .eml 로 폴더에
   쓰고 어디로도 보내지 않는다. 암호화·인증은 받지 않는다(발송기 한 인스턴스만 이 서버로 보낸다).
 - smtp-json <포트>: 발송기를 가짜 SMTP 수신 서버로만 보내는 SPRING_APPLICATION_JSON 값을 출력한다. 호스트는 127.0.0.1 고정,
-  계정·암호는 비우고 인증·암호화는 끈다. 스프링은 이 값을 SPRING_MAIL_* 환경변수보다 먼저 쓰므로 셸에 남은 값이 새지 않는다.
+  계정·암호는 비우고 인증·암호화는 끄며, 발신 주소는 가짜 주소로 준다. 스프링은 이 값을 SPRING_MAIL_* 환경변수보다 먼저 쓰므로 셸에 남은 값이 새지 않는다.
 - seed: 가짜 수집 자료(market.insight 국내 일봉·세계지수·환율종합·시장종합·해외 일봉, filing.collected 공시)를
   계약 스키마로 검사한 뒤 일회용 Kafka 에 발행한다. 값은 모두 TEST·FAKE 접두의 가짜다.
 - notices: 아침 판·마감 후 판 시작 알림(daily.collection.completed, 못 받은 자료 없음) 한 건씩을 발행한다.
@@ -438,7 +438,9 @@ def smtp_sink_json(port: int) -> str:
     return json.dumps({"spring": {"mail": {
         "host": "127.0.0.1", "port": port, "username": "", "password": "",
         "properties": {"mail.smtp.auth": False, "mail.smtp.starttls.enable": False,
-                       "mail.smtp.starttls.required": False}}}}, separators=(",", ":"))
+                       "mail.smtp.starttls.required": False}}},
+        # 발신 주소는 평소 로그인 계정(SMTP_USERNAME)이지만 여기서는 계정을 비우므로 가짜 주소를 따로 준다.
+        "notifier": {"sender": "daily-e2e@example.com"}}, separators=(",", ":"))
 
 
 def main(argv: list[str]) -> None:
