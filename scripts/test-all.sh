@@ -379,7 +379,7 @@ prepare_db() {
   if [ ! -f "$ENV_FILE" ]; then DB_FAIL_REASON=".env 가 없음(TEST_ALL_ENV_FILE)"; return 1; fi
   for key in MARKET_DB_USER MARKET_DB_PASSWORD NEWS_DB_USER NEWS_DB_PASSWORD BRIEFING_DB_USER BRIEFING_DB_PASSWORD \
       PERSONAL_OWNER_DB_USER PERSONAL_OWNER_DB_PASSWORD PERSONAL_WRITER_DB_USER PERSONAL_WRITER_DB_PASSWORD \
-      COLLECTOR_DB_USER COLLECTOR_DB_PASSWORD NOTIFIER_DB_USER NOTIFIER_DB_PASSWORD; do
+      COLLECTOR_DB_USER COLLECTOR_DB_PASSWORD NOTIFIER_DB_USER NOTIFIER_DB_PASSWORD OPS_CHECKER_DB_USER OPS_CHECKER_DB_PASSWORD; do
     if [ -z "$(dotenv_value "$key")" ]; then DB_FAIL_REASON=".env 에 $key 가 없음"; return 1; fi
   done
   M_USER=$(dotenv_value MARKET_DB_USER); M_PW=$(dotenv_value MARKET_DB_PASSWORD)
@@ -388,6 +388,7 @@ prepare_db() {
   PO_USER=$(dotenv_value PERSONAL_OWNER_DB_USER); PO_PW=$(dotenv_value PERSONAL_OWNER_DB_PASSWORD)
   PW_USER=$(dotenv_value PERSONAL_WRITER_DB_USER); PW_PW=$(dotenv_value PERSONAL_WRITER_DB_PASSWORD)
   PC_USER=$(dotenv_value COLLECTOR_DB_USER); PC_PW=$(dotenv_value COLLECTOR_DB_PASSWORD)
+  OPS_USER=$(dotenv_value OPS_CHECKER_DB_USER); OPS_PW=$(dotenv_value OPS_CHECKER_DB_PASSWORD)
   PN_USER=$(dotenv_value NOTIFIER_DB_USER); PN_PW=$(dotenv_value NOTIFIER_DB_PASSWORD)
   for role in "$M_USER" "$N_USER" "$B_USER" "$PO_USER" "$PW_USER" "$PC_USER" "$PN_USER"; do
     # SQL 에 그대로 넣으므로 이름 형식을 먼저 확인한다.
@@ -395,6 +396,8 @@ prepare_db() {
     found=$(printf "SELECT 1 FROM pg_roles WHERE rolname = '%s';\n" "$role" | admin_sql 2>/dev/null)
     if [ "$found" != 1 ]; then DB_FAIL_REASON="서비스 계정 $role 이 없음(계정은 만들지 않음, docs/local-development.md 참고: personal 계정은 infra/db/personal/init.sql 로 만듦)"; return 1; fi
   done
+  # 확인기 계정은 init_ops 가 없으면 만든다(infra/db/ops/init.sql). SQL 에 그대로 넣으므로 이름 형식만 먼저 확인한다.
+  if ! [[ "$OPS_USER" =~ ^[a-z_][a-z0-9_]*$ ]]; then DB_FAIL_REASON=".env 의 확인기 계정 이름 형식이 맞지 않음"; return 1; fi
   warn_leftovers
   if ! printf 'CREATE DATABASE "%s";\n' "$DB_NAME" | admin_sql >/dev/null; then
     DB_FAIL_REASON="데이터베이스 $DB_NAME 를 만들지 못함"; return 1
@@ -414,6 +417,8 @@ SQL
   if ! init_personal; then DB_FAIL_REASON="personal 계정·권한 스크립트 실패(infra/db/personal/init.sql)"; return 1; fi
   if ! migrate_personal; then DB_FAIL_REASON="personal 표 Flyway 적용 실패(docker 이미지 $FLYWAY_IMAGE)"; return 1; fi
   if ! migrate_briefing; then DB_FAIL_REASON="브리핑 테이블 Flyway 적용 실패(docker 이미지 $FLYWAY_IMAGE)"; return 1; fi
+  if ! init_ops; then DB_FAIL_REASON="ops 계정·권한 스크립트 실패(infra/db/ops/init.sql)"; return 1; fi
+  if ! migrate_ops; then DB_FAIL_REASON="ops 표 Flyway 적용 실패(docker 이미지 $FLYWAY_IMAGE)"; return 1; fi
 }
 
 log "4. 실제 DB 준비"
@@ -433,7 +438,7 @@ JDBC_URL="jdbc:postgresql://127.0.0.1:5432/$DB_NAME"
 PG_URL="postgresql://127.0.0.1:5432/$DB_NAME"
 
 run_db_tests() {
-  local line group names name gradle_args="" serial_args="" java_groups="" briefing_files="" rc=0 path
+  local line group names name gradle_args="" serial_args="" java_groups="" briefing_files="" scripts_files="" rc=0 path
   # 지도(docs/test-map)에서 켜는 조건이 *_IT_DB_* 인 테스트를 고른다. 새 실제 DB 테스트를 지도에 올리면 여기에 들어온다.
   while read -r group names; do
     [ -n "$group" ] || continue
@@ -452,10 +457,15 @@ run_db_tests() {
           path=$(find services/briefing/tests -name "$name" -o -name "$name.py" | head -1)
           [ -n "$path" ] && briefing_files="$briefing_files $path"
         done ;;
+      scripts)
+        for name in $names; do
+          path=$(find scripts/tests -name "$name" -o -name "$name.py" | head -1)
+          [ -n "$path" ] && scripts_files="$scripts_files $path"
+        done ;;
       *) echo "실제 DB 테스트를 돌리는 방법이 없는 지도: $group"; rc=1 ;;
     esac
   done < <(python3 scripts/run_report.py db-tests)
-  if [ -z "$java_groups$briefing_files" ]; then echo "지도에서 실제 DB 테스트를 찾지 못했습니다"; return 1; fi
+  if [ -z "$java_groups$briefing_files$scripts_files" ]; then echo "지도에서 실제 DB 테스트를 찾지 못했습니다"; return 1; fi
   if [ -n "$java_groups" ]; then
     if [ "$JAVA_OK" = 1 ]; then
       # shellcheck disable=SC2086
@@ -487,6 +497,20 @@ run_db_tests() {
         # 멤버 읽기 테스트는 personal 쓰기 계정과 market 주인 계정으로 값을 넣는다(브리핑 계정은 읽기만 한다).
         export WRITER_IT_DB_USER="$PW_USER" WRITER_IT_DB_PASSWORD="$PW_PW" MARKET_IT_DB_USER="$M_USER" MARKET_IT_DB_PASSWORD="$M_PW"
         "$PY" -m pytest $briefing_files --junitxml="$TMP/results/db/py/briefing.xml"
+      ) || rc=1
+    else
+      rc=1
+    fi
+  fi
+  if [ -n "$scripts_files" ]; then
+    if [ "$PY_OK" = 1 ]; then
+      # 확인기 계정의 권한 테스트는 확인기 계정으로 읽고, market·briefing 주인 계정으로 새 표를 만들어 본다.
+      # shellcheck disable=SC2086
+      (
+        export OPS_IT_DB_URL="$PG_URL" OPS_IT_DB_USER="$OPS_USER" OPS_IT_DB_PASSWORD="$OPS_PW"
+        export MARKET_IT_DB_USER="$M_USER" MARKET_IT_DB_PASSWORD="$M_PW"
+        export BRIEFING_IT_DB_USER="$B_USER" BRIEFING_IT_DB_PASSWORD="$B_PW"
+        "$PY" -m pytest -c scripts/pytest.ini $scripts_files --junitxml="$TMP/results/db/py/scripts-ops.xml"
       ) || rc=1
     else
       rc=1

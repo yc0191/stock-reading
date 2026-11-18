@@ -145,6 +145,48 @@ services:
       personal-init:
         condition: service_completed_successfully
 
+  # ops 스키마(확인기 장부)의 계정과 권한을 만든다(infra/db/ops/init.sql). 여러 번 돌려도 같다. market·briefing 표가 만들어진 뒤에 돈다.
+  ops-init:
+    image: pgvector/pgvector:0.8.7-pg17-trixie
+    container_name: stock-ops-init
+    entrypoint: ["psql", "-v", "ON_ERROR_STOP=1", "-f", "/init/init.sql"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB}
+      PGUSER: ${POSTGRES_ADMIN_USER}
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      MARKET_DB_USER: ${MARKET_DB_USER}
+      BRIEFING_DB_USER: ${BRIEFING_DB_USER}
+      OPS_CHECKER_DB_USER: ${OPS_CHECKER_DB_USER}
+      OPS_CHECKER_DB_PASSWORD: ${OPS_CHECKER_DB_PASSWORD}
+    volumes:
+      - ../db/ops/init.sql:/init/init.sql:ro
+    depends_on:
+      market-migrate:
+        condition: service_completed_successfully
+      briefing-migrate:
+        condition: service_completed_successfully
+
+  # ops 표(확인기 장부)를 Flyway로 만든다(infra/db/ops/migration). 계정이 만들어진 뒤에 돈다.
+  # 새 파일을 더한 뒤에는 `docker compose -f infra/compose/docker-compose.yml --env-file .env run --rm ops-migrate`로 다시 적용한다.
+  ops-migrate:
+    image: flyway/flyway:12.4.0
+    container_name: stock-ops-migrate
+    command: migrate
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      FLYWAY_USER: ${OPS_CHECKER_DB_USER}
+      FLYWAY_PASSWORD: ${OPS_CHECKER_DB_PASSWORD}
+      FLYWAY_SCHEMAS: ops
+      FLYWAY_DEFAULT_SCHEMA: ops
+      FLYWAY_CREATE_SCHEMAS: "false"
+      FLYWAY_LOCATIONS: filesystem:/flyway/sql
+    volumes:
+      - ../db/ops/migration:/flyway/sql:ro
+    depends_on:
+      ops-init:
+        condition: service_completed_successfully
+
   # 개발 전용 GUI이며 localhost에만 열린다. Kafka UI: http://localhost:8080  Adminer: http://localhost:8081
   kafka-ui:
     image: provectuslabs/kafka-ui:v0.7.2

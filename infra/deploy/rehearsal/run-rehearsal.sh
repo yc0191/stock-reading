@@ -59,7 +59,7 @@ make_env_files() {
   pw() { openssl rand -hex 12; }
   (
     umask 077
-    a=$(pw); m=$(pw); n=$(pw); b=$(pw); po=$(pw); pwr=$(pw); c=$(pw); no=$(pw)
+    a=$(pw); m=$(pw); n=$(pw); b=$(pw); po=$(pw); pwr=$(pw); c=$(pw); no=$(pw); ops=$(pw)
     {
       echo "DATA_PRIVATE_IP=$DATA_IP"
       echo "POSTGRES_DB=stock"
@@ -82,6 +82,8 @@ make_env_files() {
       echo "COLLECTOR_DB_PASSWORD=$c"
       echo "NOTIFIER_DB_USER=notifier_svc"
       echo "NOTIFIER_DB_PASSWORD=$no"
+      echo "OPS_CHECKER_DB_USER=ops_checker"
+      echo "OPS_CHECKER_DB_PASSWORD=$ops"
       # 타이머는 모두 꺼 두고(기본값), 시세는 시뮬레이터, 메일은 드라이런, LLM 키는 비움 -> 규칙 기반 리포트
       echo "COLLECTOR_MARKET_DATA_SOURCE=simulator"
       echo "NOTIFIER_SEND_ENABLED=false"
@@ -119,7 +121,7 @@ cmd_build() {
   # 필수 비밀번호가 비면 Compose 가 어떤 명령이든 실패하므로, 빌드에는 아무 값이나 채운 임시 설정을 준다(이미지에는 들어가지 않음).
   local dummy
   dummy=$(mktemp)
-  for name in POSTGRES_ADMIN NEWS MARKET BRIEFING PERSONAL_OWNER PERSONAL_WRITER COLLECTOR NOTIFIER; do
+  for name in POSTGRES_ADMIN NEWS MARKET BRIEFING PERSONAL_OWNER PERSONAL_WRITER COLLECTOR NOTIFIER OPS_CHECKER; do
     case $name in POSTGRES_ADMIN) echo "POSTGRES_ADMIN_PASSWORD=x" ;; *) echo "${name}_DB_PASSWORD=x" ;; esac
   done >"$dummy"
   docker compose -f "$ROOT/infra/deploy/compose/services.yml" --env-file "$dummy" build

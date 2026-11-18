@@ -16,7 +16,7 @@ x-java-env: &java-env
   SPRING_KAFKA_BOOTSTRAP_SERVERS: ${DATA_PRIVATE_IP:-127.0.0.1}:9092
 
 services:
-  # DB 표와 계정 권한을 맞춘다(market -> personal 계정 -> personal -> briefing). 서비스는 이 단계가 끝난 뒤 뜬다.
+  # DB 표와 계정 권한을 맞춘다(market -> personal 계정 -> personal -> briefing -> ops 계정 -> ops). 서비스는 이 단계가 끝난 뒤 뜬다.
   flyway-migrate:
     image: ${ECR_REGISTRY:-local}/stock-reading-migrate:${DEPLOY_VERSION:-dev}
     build:
@@ -44,6 +44,8 @@ services:
       NOTIFIER_DB_USER: ${NOTIFIER_DB_USER:-notifier_svc}
       NOTIFIER_DB_PASSWORD: ${NOTIFIER_DB_PASSWORD:?NOTIFIER_DB_PASSWORD 값이 비어 있음}
       NEWS_DB_USER: ${NEWS_DB_USER:-news_svc}
+      OPS_CHECKER_DB_USER: ${OPS_CHECKER_DB_USER:-ops_checker}
+      OPS_CHECKER_DB_PASSWORD: ${OPS_CHECKER_DB_PASSWORD:?OPS_CHECKER_DB_PASSWORD 값이 비어 있음}
 
   collector:
     <<: *service
