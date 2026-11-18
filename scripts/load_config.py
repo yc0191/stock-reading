@@ -139,6 +139,8 @@ def fetch_parameters(profile, region, run=subprocess.run, prefix=PREFIX):
 
 
 def write_atomic(path, text):
+    # 작업 폴더의 .env 는 공유 원본을 가리키는 링크일 수 있다. 링크 자리에 바꿔 넣으면 링크가 끊기고 원본은 그대로 남는다.
+    path = os.path.realpath(path)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(text)

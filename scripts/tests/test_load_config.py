@@ -111,6 +111,17 @@ def test_main_writes_when_all_values_present(tmp_path, capsys):
     assert "v-smtp-password" not in capsys.readouterr().out
 
 
+def test_main_writes_through_a_linked_env_file_to_its_target(tmp_path):
+    shared = tmp_path / "shared.env"
+    shared.write_text("SMTP_HOST=old\n")
+    link = tmp_path / ".env"
+    link.symlink_to(shared)
+    code = lc.main(["--env-file", str(link)], run=fake_run(full_parameters()))
+    assert code == 0
+    assert link.is_symlink()
+    assert "SMTP_HOST=v-smtp-host" in shared.read_text()
+
+
 def test_main_writes_nothing_when_partial(tmp_path):
     env = tmp_path / ".env"
     env.write_text("SMTP_HOST=old\n")
