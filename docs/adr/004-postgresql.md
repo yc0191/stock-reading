@@ -12,7 +12,7 @@ MySQL, MongoDB, OpenSearch/Elasticsearch, TimescaleDB, DynamoDB/Cassandra
 ## 결정
 **PostgreSQL + pgvector**. 한 인스턴스 안에서 서비스별로 **스키마와 DB 계정**을 나누고, 서비스는 자기 스키마에만 쓴다.
 
-2026-11-11 변경: 종목·검색어·멤버 같은 업무 데이터는 DB 표가 원본이고, 다른 서비스는 필요한 표·열만 읽기 전용 권한으로 직접 읽는다. 같은 목록을 이벤트로 퍼뜨리면 서비스마다 어긋나 종목이 오류 없이 빠질 수 있어서다. 계정별 권한의 원본은 `infra/db/personal/init.sql`과 마이그레이션이다.
+종목·검색어·멤버 같은 업무 데이터는 DB 표가 원본이고, 다른 서비스는 필요한 표·열만 읽기 전용 권한으로 직접 읽는다. 같은 목록을 이벤트로 퍼뜨리면 서비스마다 어긋나 종목이 오류 없이 빠질 수 있어서다. 계정별 권한의 원본은 `infra/db/personal/init.sql`과 마이그레이션이다.
 
 ## 이유 (문서로 확인)
 1. **벡터 검색을 같은 DB에서:** pgvector가 HNSW·IVFFlat 인덱스와 거리 계산을 지원해 별도 벡터 DB가 필요 없다.
@@ -27,3 +27,5 @@ MySQL, MongoDB, OpenSearch/Elasticsearch, TimescaleDB, DynamoDB/Cassandra
 ## 감수하는 점
 - 벡터 인덱스(HNSW)는 메모리를 더 쓴다. 실측 후 IVFFlat을 검토한다.
 - 벡터 규모가 커지면 한계가 있어, 벡터 저장소는 교체할 수 있게 인터페이스 뒤에 둔다.
+
+경위: [history/004-postgresql.md](history/004-postgresql.md)

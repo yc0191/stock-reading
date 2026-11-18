@@ -16,8 +16,8 @@
 - 수집기 자신의 수집은 수집기 안 타이머(`@Scheduled`)가 실행 입구(`CollectorJobs`)를 직접 부른다. 같은 작업은 겹쳐 돌지 않고, 밀린 회차는 몰아서 실행하지 않는다.
 - 사람이 작업 하나를 지금 1회 돌리는 입구로 `collector.command` 토픽을 둔다. 수집기만 선언하고 읽는다. 받는 규칙의 원본은 `contracts/events/collector.command.v1.schema.json`, 쓰는 법은 `docs/local-development.md`(수동 실행)다.
 - 다른 서비스로 가는 신호도 시계 신호가 아니라 수집기가 한 일의 결과 이벤트로 보낸다.
-  - 2026-11-13 변경: 구성 종목 조회는 시세처리기로 가는 tick(`collect-members`)이 아니라 수집기 타이머 작업(`collect-etf-members`)이 되었다. 수집기가 운용사 사이트에서 받고 결과는 `etf.members.fetched` 이벤트로 시세처리기에 넘긴다.
-  - 2026-11-13 변경: 데일리 판 시작은 `schedule.tick`(`daily-briefing-morning`·`daily-briefing-post-close`)이 아니라 수집기의 판 시작 알림(`daily.collection.completed`, 못 받은 자료 목록과 휴장 여부를 담음)으로 한다. 아침 판은 개장 흐름 구간이 끝날 때, 마감 후 판은 마감 후 수집이 끝날 때 나가고, 알림이 한도 시각까지 없으면 브리핑이 있는 자료로 시작한다. 이로써 `schedule.tick` 토픽은 쓰는 곳이 없어 선언도 없앴다(옛 계약 파일만 남김, ADR-010). 시각과 한도의 원본은 수집기 `collector.daily-briefing`과 브리핑 `DailySettings`다.
+  - 구성 종목 조회는 시세처리기로 가는 tick이 아니라 수집기 타이머 작업(`collect-etf-members`)이다. 수집기가 운용사 사이트에서 받고 결과는 `etf.members.fetched` 이벤트로 시세처리기에 넘긴다.
+  - 데일리 판 시작은 시계 신호(`schedule.tick`)가 아니라 수집기의 판 시작 알림(`daily.collection.completed`, 못 받은 자료 목록과 휴장 여부를 담음)으로 한다. 아침 판은 개장 흐름 구간이 끝날 때, 마감 후 판은 마감 후 수집이 끝날 때 나가고, 알림이 한도 시각까지 없으면 브리핑이 있는 자료로 시작한다. `schedule.tick` 토픽은 쓰는 곳이 없어 선언하지 않는다(옛 계약 파일만 남김, ADR-010). 시각과 한도의 원본은 수집기 `collector.daily-briefing`과 브리핑 `DailySettings`다.
 
 ## 이유
 1. 같은 서비스 안의 시각 실행은 타이머로 충분하다. ADR-006의 "서비스 간 통신은 Kafka 이벤트로 한다"는 서비스 사이의 규칙이고, 서비스 안 타이머는 서비스 간 통신이 아니다.
@@ -30,3 +30,4 @@
 - 명령 결과는 수집기 로그와 평소 발행 이벤트로만 보인다. 건너뛰거나 무시한 명령의 응답 이벤트는 없다.
 - 휴장일에 수집기까지 꺼져 있으면 휴장 알림이 없어 브리핑이 한도 시각에 판을 만들 수 있다. 판 시작 알림이 브리핑에 늦게 닿으면 그 판은 한도 시각 판으로 이미 나갔을 수 있고, 늦은 알림은 무시한다.
 
+경위: [history/012-collector-timers-and-command-topic.md](history/012-collector-timers-and-command-topic.md)
