@@ -1,7 +1,8 @@
 # test-all.sh 와 manual-daily-briefing.sh 가 함께 쓰는 DB 준비 함수. 직접 실행하지 않고 source 한다.
-# 쓰는 변수: ROOT, PG_CONTAINER, DB_NAME, FLYWAY_IMAGE, M_USER, M_PW(시세처리기), N_USER(뉴스), B_USER(브리핑), PO_*(personal 소유), PW_*(쓰기), PC_*(수집기), PN_*(발송기).
+# 쓰는 변수: ROOT, PG_CONTAINER, DB_NAME, FLYWAY_IMAGE, M_USER, M_PW(시세처리기), N_USER(뉴스), B_USER, B_PW(브리핑), PO_*(personal 소유), PW_*(쓰기), PC_*(수집기), PN_*(발송기), OPS_*(확인기).
 # 순서: market 표(migrate_market) → personal 계정·권한(init_personal) → personal 표(migrate_personal).
 # personal 표가 market.etf·market.stock 을 가리키는 외래 키를 가지므로 이 순서를 지킨다.
+# 확인기(ops)는 market·briefing 표를 읽으므로 둘이 만들어진 뒤에 init_ops → migrate_ops 를 한다.
 
 # market 표를 Flyway 로 만든다. personal 이 market.etf·market.stock 을 가리키므로 personal 보다 먼저 한다.
 # schema 를 주면(두 번째 인자) 그 스키마에 target 버전(세 번째 인자)까지만 적용한다(옛 표 이관 테스트용).
@@ -45,3 +46,37 @@ migrate_personal() {
   printf '%s\n' "$out" | grep -E 'Successfully applied|up to date' | head -2
 }
 
+migrate_briefing() {
+  # 브리핑은 테이블을 만들지 않으므로 브리핑 테스트와 기동보다 먼저 Flyway 로 만든다.
+  # 서비스 계정으로 붙고, 비밀번호는 명령줄이 아니라 환경변수로만 넘긴다. 컨테이너는 stock-postgres 의 네트워크를 같이 쓴다.
+  local out
+  if ! out=$(FLYWAY_PASSWORD="$B_PW" docker run --rm --network "container:$PG_CONTAINER" \
+      -v "$ROOT/services/briefing/db/migration:/flyway/sql:ro" \
+      -e FLYWAY_PASSWORD -e FLYWAY_USER="$B_USER" -e FLYWAY_URL="jdbc:postgresql://localhost:5432/$DB_NAME" \
+      -e FLYWAY_SCHEMAS=briefing -e FLYWAY_DEFAULT_SCHEMA=briefing -e FLYWAY_CREATE_SCHEMAS=false \
+      -e FLYWAY_LOCATIONS=filesystem:/flyway/sql "$FLYWAY_IMAGE" migrate 2>&1); then
+    printf '%s\n' "$out" | tail -15
+    return 1
+  fi
+  printf '%s\n' "$out" | grep -E 'Successfully applied|up to date' | head -2
+}
+
+# ops 계정·권한을 만든다(infra/db/ops/init.sql). market·briefing 표가 만들어진 뒤에 한다. 비밀번호는 환경변수로만 넘긴다.
+init_ops() {
+  OPS_CHECKER_DB_USER="$OPS_USER" OPS_CHECKER_DB_PASSWORD="$OPS_PW" MARKET_DB_USER="$M_USER" BRIEFING_DB_USER="$B_USER" \
+    docker exec -i -e OPS_CHECKER_DB_USER -e OPS_CHECKER_DB_PASSWORD -e MARKET_DB_USER -e BRIEFING_DB_USER "$PG_CONTAINER" \
+      sh -c 'psql -qAtX -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$1" -f -' sh "$DB_NAME" < "$ROOT/infra/db/ops/init.sql" >/dev/null
+}
+
+migrate_ops() {
+  local out
+  if ! out=$(FLYWAY_PASSWORD="$OPS_PW" docker run --rm --network "container:$PG_CONTAINER" \
+      -v "$ROOT/infra/db/ops/migration:/flyway/sql:ro" \
+      -e FLYWAY_PASSWORD -e FLYWAY_USER="$OPS_USER" -e FLYWAY_URL="jdbc:postgresql://localhost:5432/$DB_NAME" \
+      -e FLYWAY_SCHEMAS=ops -e FLYWAY_DEFAULT_SCHEMA=ops -e FLYWAY_CREATE_SCHEMAS=false \
+      -e FLYWAY_LOCATIONS=filesystem:/flyway/sql "$FLYWAY_IMAGE" migrate 2>&1); then
+    printf '%s\n' "$out" | tail -15
+    return 1
+  fi
+  printf '%s\n' "$out" | grep -E 'Successfully applied|up to date' | head -2
+}

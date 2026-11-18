@@ -1,6 +1,6 @@
 #!/bin/bash
 # 서비스 표와 계정 권한을 순서대로 맞춘다. 여러 번 실행해도 같다(Flyway 는 적용한 파일을 건너뛰고, init.sql 은 이미 있는 것을 그대로 둔다).
-# 순서: market 표 -> personal 계정·권한(market 표를 가리킴) -> personal 표 -> briefing 표. 로컬 Compose 의 *-migrate 단계와 같다.
+# 순서: market 표 -> personal 계정·권한(market 표를 가리킴) -> personal 표 -> briefing 표 -> ops 계정·권한(market·briefing 표를 읽음) -> ops 표. 로컬 Compose 의 *-migrate 단계와 같다.
 # 비밀번호는 환경변수로만 받고 명령줄에 쓰지 않는다.
 set -euo pipefail
 
@@ -30,3 +30,9 @@ flyway_migrate personal "$PERSONAL_OWNER_DB_USER" "$PERSONAL_OWNER_DB_PASSWORD" 
   "-placeholders.briefing_user=${BRIEFING_DB_USER}"
 
 flyway_migrate briefing "$BRIEFING_DB_USER" "$BRIEFING_DB_PASSWORD" /sql/briefing
+
+echo "ops 계정·권한"
+PGHOST="$DB_HOST" PGPORT="${DB_PORT:-5432}" PGDATABASE="$db" PGUSER="$POSTGRES_ADMIN_USER" PGPASSWORD="$POSTGRES_ADMIN_PASSWORD" \
+  psql -v ON_ERROR_STOP=1 -f /sql/ops-init.sql
+
+flyway_migrate ops "$OPS_CHECKER_DB_USER" "$OPS_CHECKER_DB_PASSWORD" /sql/ops

@@ -5,15 +5,15 @@ Lightsail 서버 2대에서 전체를 돌리는 데 쓰는 이미지·Compose·�
 | 서버 | 돌리는 것 | 파일 |
 |---|---|---|
 | 데이터 서버 (2GB) | Kafka, Postgres | `compose/data.yml`, `server/data.env.example`, `server/backup-postgres.sh`, `server/systemd/stock-backup.*` |
-| 서비스 서버 (2GB) | collector, market, news, notifier, briefing와 DB 표 만들기 단계(`flyway-migrate`) | `compose/services.yml`, `server/deploy.env.example`, `server/apply-deploy.sh`, `server/systemd/stock-deploy-*` |
+| 서비스 서버 (2GB) | collector, market, news, notifier, briefing, 조치 판정 확인기(`ops-checker`)와 DB 표 만들기 단계(`flyway-migrate`) | `compose/services.yml`, `server/deploy.env.example`, `server/apply-deploy.sh`, `server/systemd/stock-deploy-*` |
 
 ## 이미지
 
-- 서비스 5개: `services/<이름>/Dockerfile`. 빌드 컨텍스트는 저장소 루트(`docker build -f services/<이름>/Dockerfile .`)이고 `.dockerignore`가 비밀값(`.env*`)과 큰 폴더를 컨텍스트에서 뺍니다. Java 4개는 빌드 단계에서 `bootJar`를 만들어 jre 이미지에 담고, briefing은 venv(미리 만든 바퀴만 설치)와 한글 글꼴(SHA-256 고정, `scripts/install_font.py`)을 담습니다. 실행 이미지는 `linux/amd64`로 고정합니다(Lightsail은 x86).
-- DB 표 만들기 이미지: `infra/deploy/migrate/Dockerfile`. 배포한 버전의 market·personal·briefing SQL과 `personal` 계정·권한 스크립트를 담아, 서버에 있는 저장소 사본이 낡아도 그 버전의 SQL이 적용됩니다. **서비스 이미지와 같은 버전 태그로 올려야 합니다**(CI가 6번째 이미지로 만듭니다).
-- 이미지 이름은 `${ECR_REGISTRY}/stock-reading-<이름>:${DEPLOY_VERSION}`(이름: collector, market, news, notifier, briefing, migrate)이고, 버전은 커밋 해시입니다.
+- 서비스 6개: `services/<이름>/Dockerfile`. 빌드 컨텍스트는 저장소 루트(`docker build -f services/<이름>/Dockerfile .`)이고 `.dockerignore`가 비밀값(`.env*`)과 큰 폴더를 컨텍스트에서 뺍니다. Java 4개는 빌드 단계에서 `bootJar`를 만들어 jre 이미지에 담고, briefing은 venv(미리 만든 바퀴만 설치)와 한글 글꼴(SHA-256 고정, `scripts/install_font.py`)을, 확인기는 파이썬 의존성과 기준 파일 폴더 `ops-checks/`를 담습니다(기준 파일은 이미지에 실려 배포됩니다). 실행 이미지는 `linux/amd64`로 고정합니다(Lightsail은 x86).
+- DB 표 만들기 이미지: `infra/deploy/migrate/Dockerfile`. 배포한 버전의 market·personal·briefing SQL과 `personal` 계정·권한 스크립트를 담아, 서버에 있는 저장소 사본이 낡아도 그 버전의 SQL이 적용됩니다. **서비스 이미지와 같은 버전 태그로 올려야 합니다**(CI가 함께 만듭니다).
+- 이미지 이름은 `${ECR_REGISTRY}/stock-reading-<이름>:${DEPLOY_VERSION}`(이름: collector, market, news, notifier, briefing, ops-checker, migrate)이고, 버전은 커밋 해시입니다.
 - **태그 고정 방침:** 앱 이미지는 커밋 해시 태그로 고정합니다(같은 커밋은 같은 앱 코드). 베이스 이미지(`eclipse-temurin`, `python`)는 일부러 떠다니는 태그(`21-jre`, `3.13-slim`)를 써서 빌드할 때마다 보안 패치를 받습니다. 그래서 같은 커밋도 빌드한 날에 따라 베이스 계층은 다를 수 있습니다. Kafka·Postgres(pgvector)·Flyway는 버전을 고정합니다.
-- DB 표 만들기 이미지는 root가 아닌 사용자(`flyway`, uid 10001)로 돕니다(서비스 5개도 uid 10001).
+- DB 표 만들기 이미지는 root가 아닌 사용자(`flyway`, uid 10001)로 돕니다(서비스 6개도 uid 10001).
 - briefing은 DB 주소를 코드에서 `localhost:5432`로 고정해 읽습니다. 그래서 이미지 안의 `docker-entrypoint.sh`가 `localhost:5432`를 `DB_HOST`로 넘기는 중계(`socat`)를 함께 띄웁니다. 코드가 `DB_HOST`를 읽게 되면 이 중계는 없앱니다.
 
 ## 메모리
@@ -41,10 +41,24 @@ Lightsail 서버 2대에서 전체를 돌리는 데 쓰는 이미지·Compose·�
 - 적용·건너뜀·버림마다 이유를 로그(journald)에 남깁니다. 이미지·설정 값은 남기지 않습니다.
 - 서비스를 다시 띄우면 수집기의 뉴스 검색 하루 호출 횟수(메모리에만 있음)가 0으로 돌아갑니다.
 - 비밀 설정은 `DEPLOY_CONFIG_PARAM_PATH` 아래 Parameter Store 값에서 받아(이름 하나가 환경변수 하나, 예: `<경로>/MARKET_DB_PASSWORD`) 서버 안 `DEPLOY_STATE_DIR/runtime.env`(권한 600)에만 둡니다. 값은 작은따옴표로 감싸 써서 `$`, `#`, 공백이 들어 있어도 Compose가 그대로 읽습니다. 값에 작은따옴표가 있으면 감쌀 수 없어 배포를 실패로 멈춥니다.
-- 받아 온 설정이 비었거나(경로 오류 등) 필수 값(DB 비밀번호 8개)이 비면 서비스를 다시 띄우지 않고 실패로 끝납니다. `services.yml`도 같은 비밀번호가 비면 Compose 단계에서 실패하게 해 두었습니다(`${VAR:?}`).
+- 받아 온 설정이 비었거나(경로 오류 등) 필수 값(DB 비밀번호 9개, `apply-deploy.sh`의 `required_secrets`)이 비면 서비스를 다시 띄우지 않고 실패로 끝납니다. `services.yml`도 같은 비밀번호가 비면 Compose 단계에서 실패하게 해 두었습니다(`${VAR:?}`).
 - 시험·수동 실행을 위한 환경변수: `DEPLOY_NOW`(지금 시각, ISO 8601), `DEPLOY_STATE_DIR`, `DEPLOY_STANDBY_PARAM`, `DEPLOY_URGENT_PARAM`, `DEPLOY_ENV_FILE`.
 
 서버에는 저장소 사본이 `/opt/stock-reading`에 있다고 가정합니다(systemd 유닛의 경로). 사본은 자동으로 갱신하지 않으므로 Compose·스크립트를 바꾼 릴리스는 서버에서 사본을 갱신해야 합니다(DB SQL은 이미지에 들어 있어 해당하지 않습니다).
+
+## 조치 판정 확인기 운영 반영
+
+확인기(`ops-checker`)는 수집기의 판 시작 알림으로 개장일 마감 후 판에 기준 파일(`ops-checks/`)의 지표를 읽기 전용으로 계산해 DB `ops` 스키마와 S3 결과 파일에 남기고, 평일 18:00(한국 시간) GitHub Actions(`ops-verdict`)가 그 결과로 이슈를 판정합니다([ADR-014](../../docs/adr/014-ops-checker.md)). 처음 운영에 반영할 때 아래를 순서대로 합니다(작업자가 직접).
+
+1. `terraform apply`: 결과 버킷(공개 차단, 암호화, 보관 기간 지나면 삭제), 확인기용 쓰기 전용 사용자(`results/`에 올리기만 허용), Actions용 읽기 전용 신분을 만듭니다([`infra/terraform`](../terraform/README.md)). ECR에 확인기 저장소가 있어야 이미지가 올라갑니다.
+2. Parameter Store(`DEPLOY_CONFIG_PARAM_PATH` 아래)에 `OPS_CHECKER_DB_PASSWORD`와, 확인기용 쓰기 전용 사용자(`terraform output ops_results_writer_iam_user`)의 접근 키(`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)를 넣습니다. 키는 콘솔에서 만들고, 서버 계정의 키는 넣지 않습니다. 값은 로그·문서에 남기지 않습니다. 비밀번호는 배포 때 `flyway-migrate`가 `ops` 계정을 만들 때도 씁니다.
+3. 서비스 서버 `/etc/stock-reading/deploy.env`에 `OPS_RESULTS_BUCKET`(결과 버킷 이름)을 넣습니다(`server/deploy.env.example`). 비어 있으면 확인기가 뜨지 않습니다.
+4. GitHub 저장소 변수 `AWS_REGION`·`OPS_RESULTS_BUCKET`과 읽기 신분(`OPS_RESULTS_AWS_ROLE_ARN`, 접근 키를 쓰는 계정은 비밀값 `OPS_RESULTS_AWS_ACCESS_KEY_ID`·`OPS_RESULTS_AWS_SECRET_ACCESS_KEY`)을 넣습니다(`terraform output`).
+5. 결과 라벨 `check-passed`, `check-failed`를 만듭니다.
+6. 확인기가 든 버전이 서비스 서버에 배포되어 첫 개장일 결과 파일이 올라온 것을 확인한 뒤, 저장소 변수 `OPS_VERDICT_ENABLED`를 `true`로 켭니다. 그 전에 켜면 결과 파일이 없다는 실패 알림이 옵니다. 손 실행(`workflow_dispatch`)은 이 값과 상관없이 돕니다.
+
+- 확인기는 서버 밖에 포트를 열지 않고 Kafka·DB·S3로 나가기만 합니다.
+- 결과 파일 올리기에 실패한 날(그날 `ops` 장부의 `check_run`이 오류로 남습니다)의 결과는 다시 만들 수 없습니다. 수동 재계산 명령은 아직 없습니다.
 
 ## 백업
 

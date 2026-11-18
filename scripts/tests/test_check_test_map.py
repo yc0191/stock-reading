@@ -54,6 +54,17 @@ def make_repo(root: Path) -> Path:
         ("실행부", "main", "해당 없음 - 통신뿐", "test_runner", "없음 - 나중에 채움 [서비스 흐름]"),
     ], helper="contracts.py"))
 
+    write(root / "services/ops-checker/src/ops_checker/__init__.py", "")
+    for module in ("flow", "metrics", "main"):
+        write(root / f"services/ops-checker/src/ops_checker/{module}.py", "")
+    for name in ("test_flow.py", "test_metrics.py", "fakes.py"):
+        write(root / f"services/ops-checker/tests/{name}", "")
+    write(root / "docs/test-map/ops-checker.md", map_text([
+        ("흐름", "`__init__.py`, flow.py", "test_flow.py", "test_flow.py", "해당 없음 - 가짜로 충분"),
+        ("지표", "metrics.py", "test_metrics.py", "해당 없음 - 외부 의존 없음", "없음 - 나중에 채움 [DB]"),
+        ("실행부", "main", "해당 없음 - 통신뿐", "해당 없음 - 통신뿐", "없음 - 나중에 채움 [서비스 흐름]"),
+    ], helper="fakes.py"))
+
     for name in ("load_config.py", "tool.py", "run-me.sh"):
         write(root / f"scripts/{name}", "")
     write(root / "scripts/pytest.ini", "[pytest]\n")
@@ -436,3 +447,12 @@ def test_changed_with_an_unknown_base_returns_two(tmp_path, capsys):
     rc, out = changed(root, "no-such-branch", capsys=capsys)
 
     assert rc == 2 and "no-such-branch" in out
+
+
+def test_ops_checker_files_are_checked_and_mapped_to_their_own_map(tmp_path):
+    root = make_repo(tmp_path)
+    write(root / "services/ops-checker/src/ops_checker/extra.py", "")
+    errors = ctm.check(root)
+    assert any(e.startswith("docs/test-map/ops-checker.md:") and "extra.py" in e for e in errors)
+    assert ctm.scope_of("services/ops-checker/src/ops_checker/flow.py") == ("ops-checker.md", "main")
+    assert ctm.scope_of("services/ops-checker/tests/test_flow.py") == ("ops-checker.md", "test")

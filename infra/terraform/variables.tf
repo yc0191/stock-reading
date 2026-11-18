@@ -94,3 +94,14 @@ variable "ecr_keep_images" {
   type        = number
   default     = 3
 }
+
+variable "ops_results_bucket_name" {
+  description = "확인기 결과 파일(results/<날짜>/post-close.json)을 둘 S3 버킷 이름. 전 세계에서 유일해야 하며 백업 버킷과 따로 둔다. 서버 설정의 OPS_RESULTS_BUCKET 과 같다."
+  type        = string
+}
+
+variable "ops_results_retention_days" {
+  description = "결과 파일을 보관하는 날 수. 판정 작업이 이 기간 안의 처리하지 않은 날을 읽는다."
+  type        = number
+  default     = 14
+}

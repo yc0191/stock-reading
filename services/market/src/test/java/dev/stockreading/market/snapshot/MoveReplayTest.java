@@ -123,13 +123,18 @@ class MoveReplayTest {
         when(states.find(anyString(), any(DetectionType.class)))
                 .thenAnswer(inv -> Optional.ofNullable(stored.get(key(inv.getArgument(0), inv.getArgument(1)))));
         doAnswer(inv -> {
-            stored.put(key(inv.getArgument(0), inv.getArgument(1)), new MoveState(inv.getArgument(2), inv.getArgument(3)));
+            stored.put(key(inv.getArgument(0), inv.getArgument(1)), new MoveState(inv.getArgument(2), inv.getArgument(3), inv.getArgument(4)));
             return null;
         }).when(states).save(anyString(), any(DetectionType.class), anyLong(), any(OffsetDateTime.class), any(OffsetDateTime.class));
         doAnswer(inv -> {
             stored.remove(key(inv.getArgument(0), inv.getArgument(1)));
             return null;
         }).when(states).delete(anyString(), any(DetectionType.class));
+        doAnswer(inv -> {
+            stored.computeIfPresent(key(inv.getArgument(0), inv.getArgument(1)),
+                    (k, state) -> MoveTrackerTest.endedAt(state, inv.getArgument(2)));
+            return null;
+        }).when(states).markEnded(anyString(), any(DetectionType.class), any(OffsetDateTime.class));
         Map<String, LastPublish> lastPublishes = new HashMap<>();
         when(states.findLastPublish(anyString())).thenAnswer(inv -> Optional.ofNullable(lastPublishes.get(inv.<String>getArgument(0))));
         doAnswer(inv -> {

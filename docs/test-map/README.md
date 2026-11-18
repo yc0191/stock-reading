@@ -9,6 +9,7 @@
 | [news.md](news.md) | `services/news` |
 | [notifier.md](notifier.md) | `services/notifier` |
 | [briefing.md](briefing.md) | `services/briefing` |
+| [ops-checker.md](ops-checker.md) | `services/ops-checker` |
 | [scripts.md](scripts.md) | `scripts/` |
 
 ## 표의 칸

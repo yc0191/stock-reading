@@ -5,7 +5,7 @@
 
 ## 맥락
 기준 1(되돌리기 어려운 선택)·기준 3(대안이 둘 이상): 배포 플랫폼과 접속 경로는 Terraform·서버 스크립트·CI를 함께 다시 짜야 바뀌고, 서버 종류·대수·실행 방식과 CI 인증 방식은 실제로 여럿을 비교해 골랐다.
-서비스 5개와 Kafka·Postgres를 한 사람이 운영하며, 바깥 접속을 받지 않는 원칙(ADR-007)을 지켜야 한다.
+서비스 6개와 Kafka·Postgres를 한 사람이 운영하며, 바깥 접속을 받지 않는 원칙(ADR-007)을 지켜야 한다.
 
 ## 고려한 대안
 1. EC2: 서버·디스크·트래픽 요금이 따로 붙어 요금 구조가 복잡하다.
@@ -16,14 +16,15 @@
 6. S3 원격 상태: 여럿이 Terraform을 함께 쓸 때 필요하고, 지금은 한 사람이 쓴다.
 
 ## 결정
-- Lightsail 서버 2대를 쓴다. 데이터 서버는 Kafka·Postgres, 서비스 서버는 서비스 5개를 돌리며, 서버마다 Docker Compose로 띄운다.
+- Lightsail 서버 2대를 쓴다. 데이터 서버는 Kafka·Postgres, 서비스 서버는 서비스 6개를 돌리며, 서버마다 Docker Compose로 띄운다.
 - 이미지는 ECR에 두고 서버가 받아 온다(pull). ECS는 쓰지 않는다.
 - 관리 접속은 Lightsail 콘솔의 브라우저 SSH에서만 받고, 두 서버끼리는 사설 주소로만 통신한다(ADR-007).
+- 확인기가 남기는 결과 파일은 백업 버킷과 따로 둔 결과 버킷에 둔다. 서버 계정은 그 버킷에 쓰기만 하고, GitHub Actions의 판정 작업은 읽기만 하는 별도 신분으로 읽는다(ADR-014).
 - Terraform 상태 파일은 저장소 밖 로컬에 둔다.
 - CI 인증은 OIDC가 기본이다. OIDC 등록이 계정 정책으로 막힌 계정은 접근 키를 쓰며, 키는 콘솔에서 발급하고 주기적으로 교체한다.
 - 빌드 중 외부 패키지 저장소 의존을 줄인다. 필요한 도구는 완성된 공식 이미지에서 복사한다(`infra/deploy/migrate/Dockerfile`).
 
-원본: 서버·방화벽·저장소·IAM은 `infra/terraform/`, 서버 안 Compose·배포 타이머·백업은 `infra/deploy/README.md`, 이미지 빌드와 대기 버전은 `.github/workflows/deploy-images.yml`, 긴급 배포는 `.github/workflows/emergency-deploy.yml`이다.
+원본: 서버·방화벽·저장소·IAM은 `infra/terraform/`, 결과 버킷과 판정용 읽기 신분은 `infra/terraform/ops_results.tf`, 서버 안 Compose·배포 타이머·백업은 `infra/deploy/README.md`, 이미지 빌드와 대기 버전은 `.github/workflows/deploy-images.yml`, 긴급 배포는 `.github/workflows/emergency-deploy.yml`이다.
 
 ## 이유
 1. 정해진 묶음 요금이라 비용을 예측하기 쉽고, 두 대로 나누면 서비스 쪽 메모리 부족이 Kafka·DB를 끌고 내려가지 않는다.

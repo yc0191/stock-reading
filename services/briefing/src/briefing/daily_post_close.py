@@ -32,7 +32,13 @@ from briefing.daily_report import (
     section_title,
 )
 from briefing.daily_review import NOT_COMPARED, review_tally_line
-from briefing.job_log import REASON_MERGED_INTO_MORNING, REASON_NO_EVIDENCE, MoveRun, RunStatus
+from briefing.job_log import (
+    REASON_MERGED_INTO_MORNING,
+    REASON_MOVE_REPORT_PAUSED,
+    REASON_NO_EVIDENCE,
+    MoveRun,
+    RunStatus,
+)
 from briefing.llm_output import weak_note_line
 from briefing.move_figures import (
     KOSDAQ_NAME,
@@ -159,9 +165,11 @@ def _signed_percent(rate: Decimal) -> str:
 
 
 def move_line(move: MoveRun, names: dict[str, str]) -> str:
-    """급변동 한 건의 한 줄: 시각 · ETF 또는 주식 · 등락 · 리포트 결과."""
+    """급변동 한 건의 한 줄: 시각 · ETF 또는 주식 · 등락 · 리포트 결과. 리포트를 멈춘 기간의 변동은 결과 없이 쓴다."""
     at = move.move_at.astimezone(KST)
     change = _signed_percent(Decimal(str(move.change_percent))) if move.change_percent is not None else NO_DATA
+    if move.status == RunStatus.SUCCEEDED.value and move.failure_reason == REASON_MOVE_REPORT_PAUSED:
+        return f"{at:%H:%M} {names.get(move.symbol, move.symbol)} {change}"
     if move.status == RunStatus.SUCCEEDED.value and move.failure_reason == REASON_MERGED_INTO_MORNING:
         return f"{at:%H:%M} {names.get(move.symbol, move.symbol)} {change} · {MOVE_MERGED_TEXT}"
     result = MOVE_RESULT_TEXT.get(move.status, move.status)
