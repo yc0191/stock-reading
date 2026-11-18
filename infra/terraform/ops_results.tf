@@ -144,3 +144,26 @@ resource "aws_iam_user_policy" "ops_results_reader" {
   user   = aws_iam_user.ops_results_reader[0].name
   policy = data.aws_iam_policy_document.ops_results_reader.json
 }
+
+# ---------------------------------------------------------------------------
+# 확인기가 결과 파일을 올리는 쓰기 전용 신분. 서버 계정 키를 확인기 컨테이너에 넣지 않으려고 따로 둔다.
+# 읽기·삭제는 주지 않는다. 접근 키는 Terraform 이 만들지 않고 사람이 콘솔에서 발급해 비밀 설정에 넣는다.
+# ---------------------------------------------------------------------------
+
+resource "aws_iam_user" "ops_results_writer" {
+  name = "${var.name_prefix}-ops-results-writer"
+}
+
+data "aws_iam_policy_document" "ops_results_writer" {
+  statement {
+    sid       = "WriteOpsResults"
+    actions   = ["s3:PutObject", "s3:AbortMultipartUpload"]
+    resources = ["${aws_s3_bucket.ops_results.arn}/results/*"]
+  }
+}
+
+resource "aws_iam_user_policy" "ops_results_writer" {
+  name   = "write-ops-results"
+  user   = aws_iam_user.ops_results_writer.name
+  policy = data.aws_iam_policy_document.ops_results_writer.json
+}

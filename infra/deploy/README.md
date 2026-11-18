@@ -50,8 +50,8 @@ Lightsail 서버 2대에서 전체를 돌리는 데 쓰는 이미지·Compose·�
 
 확인기(`ops-checker`)는 수집기의 판 시작 알림으로 개장일 마감 후 판에 기준 파일(`ops-checks/`)의 지표를 읽기 전용으로 계산해 DB `ops` 스키마와 S3 결과 파일에 남기고, 평일 18:00(한국 시간) GitHub Actions(`ops-verdict`)가 그 결과로 이슈를 판정합니다([ADR-014](../../docs/adr/014-ops-checker.md)). 처음 운영에 반영할 때 아래를 순서대로 합니다(작업자가 직접).
 
-1. `terraform apply`: 결과 버킷(공개 차단, 암호화, 보관 기간 지나면 삭제), 서버 계정의 결과 쓰기 권한, Actions용 읽기 전용 신분을 만듭니다([`infra/terraform`](../terraform/README.md)). ECR에 확인기 저장소가 있어야 이미지가 올라갑니다.
-2. Parameter Store(`DEPLOY_CONFIG_PARAM_PATH` 아래)에 `OPS_CHECKER_DB_PASSWORD`와, 결과 버킷에 쓸 수 있는 서버 계정의 접근 키(`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)를 넣습니다. 값은 로그·문서에 남기지 않습니다. 비밀번호는 배포 때 `flyway-migrate`가 `ops` 계정을 만들 때도 씁니다.
+1. `terraform apply`: 결과 버킷(공개 차단, 암호화, 보관 기간 지나면 삭제), 확인기용 쓰기 전용 사용자(`results/`에 올리기만 허용), Actions용 읽기 전용 신분을 만듭니다([`infra/terraform`](../terraform/README.md)). ECR에 확인기 저장소가 있어야 이미지가 올라갑니다.
+2. Parameter Store(`DEPLOY_CONFIG_PARAM_PATH` 아래)에 `OPS_CHECKER_DB_PASSWORD`와, 확인기용 쓰기 전용 사용자(`terraform output ops_results_writer_iam_user`)의 접근 키(`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)를 넣습니다. 키는 콘솔에서 만들고, 서버 계정의 키는 넣지 않습니다. 값은 로그·문서에 남기지 않습니다. 비밀번호는 배포 때 `flyway-migrate`가 `ops` 계정을 만들 때도 씁니다.
 3. 서비스 서버 `/etc/stock-reading/deploy.env`에 `OPS_RESULTS_BUCKET`(결과 버킷 이름)을 넣습니다(`server/deploy.env.example`). 비어 있으면 확인기가 뜨지 않습니다.
 4. GitHub 저장소 변수 `AWS_REGION`·`OPS_RESULTS_BUCKET`과 읽기 신분(`OPS_RESULTS_AWS_ROLE_ARN`, 접근 키를 쓰는 계정은 비밀값 `OPS_RESULTS_AWS_ACCESS_KEY_ID`·`OPS_RESULTS_AWS_SECRET_ACCESS_KEY`)을 넣습니다(`terraform output`).
 5. 결과 라벨 `check-passed`, `check-failed`를 만듭니다.

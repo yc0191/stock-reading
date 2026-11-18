@@ -202,7 +202,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-stock}
       OPS_CHECKER_DB_USER: ${OPS_CHECKER_DB_USER:-ops_checker}
       OPS_CHECKER_DB_PASSWORD: ${OPS_CHECKER_DB_PASSWORD:?OPS_CHECKER_DB_PASSWORD 값이 비어 있음}
-      # 결과 파일을 올리는 버킷(results/ 쓰기만 허용된 서버 계정). 접근 키는 비밀 설정(Parameter Store)에서 받는다.
+      # 결과 파일을 올리는 버킷. 접근 키는 results/ 쓰기만 허용된 전용 사용자의 것으로, 비밀 설정(Parameter Store)에서 받는다.
       OPS_RESULTS_BUCKET: ${OPS_RESULTS_BUCKET:?OPS_RESULTS_BUCKET 값이 비어 있음}
       AWS_DEFAULT_REGION: ${AWS_REGION:?AWS_REGION 값이 비어 있음}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}

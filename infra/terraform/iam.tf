@@ -159,13 +159,6 @@ data "aws_iam_policy_document" "server" {
     actions   = ["s3:PutObject", "s3:AbortMultipartUpload"]
     resources = ["${aws_s3_bucket.backup.arn}/${var.backup_prefix}/*"]
   }
-
-  # 확인기가 결과 파일을 올린다. 읽기·삭제는 주지 않는다.
-  statement {
-    sid       = "WriteOpsResults"
-    actions   = ["s3:PutObject", "s3:AbortMultipartUpload"]
-    resources = ["${aws_s3_bucket.ops_results.arn}/results/*"]
-  }
 }
 
 resource "aws_iam_user_policy" "server" {

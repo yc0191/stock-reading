@@ -44,6 +44,11 @@ output "ops_results_bucket" {
   value       = aws_s3_bucket.ops_results.bucket
 }
 
+output "ops_results_writer_iam_user" {
+  description = "확인기용 접근 키를 발급할 사용자(키는 콘솔에서 작업자가 만들어 비밀 설정 AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY 에 넣는다)."
+  value       = aws_iam_user.ops_results_writer.name
+}
+
 output "ops_results_reader_role_arn" {
   description = "github_auth = oidc 일 때 GitHub 저장소 변수 OPS_RESULTS_AWS_ROLE_ARN 에 넣을 값."
   value       = local.github_oidc ? aws_iam_role.ops_results_reader[0].arn : null
