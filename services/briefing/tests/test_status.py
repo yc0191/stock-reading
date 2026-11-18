@@ -296,3 +296,13 @@ def test_a_rule_based_move_not_sent_for_lack_of_evidence_is_not_counted_as_rule_
     r = report(runs=[run(0, "morning"), run(1, reason="no_evidence", by="rule-based")])
     assert "규칙 기반 0)" in lines(r)[4] and "보내지 않은 급변동 1건" in lines(r)[4]
     assert "규칙 기반 급변동" not in lines(r)[5]
+
+
+def test_moves_during_the_report_pause_are_counted_apart_from_successes():
+    runs = [run(0, "morning"), run(1), run(2, reason="move_report_paused", by=None),
+            run(3, reason="move_report_paused", by=None)]
+    line = lines(report(runs=runs))[4]
+    assert line == ("- 브리핑: 급변동 3건(성공 1 · 실패 0 · 진행 중 0 · 규칙 기반 0 · 리포트 멈춤 2)"
+                    " · 근거 없어 보내지 않은 급변동 0건 · 아침 판 성공")
+    assert "리포트 멈춤" not in lines(report(runs=runs[:2]))[4]
+    assert "멈춤" not in lines(report(runs=runs))[5]

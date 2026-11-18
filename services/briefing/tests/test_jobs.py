@@ -616,3 +616,63 @@ def test_a_stored_notice_with_unprocessed_articles_still_starts_the_fetch_and_wa
 def test_a_malformed_or_other_stored_notice_raises_value_error(core, message):
     with pytest.raises(ValueError):
         core.on_news_stored(message, T)
+
+
+# ---- 급변동 리포트 멈춤 기간(#84). 기본 설정의 기간은 2026-11-19부터 2026-12-01 전까지(한국 날짜)다.
+
+PAUSED = datetime(2026, 11, 20, 10, 0, 31, tzinfo=KST)
+
+
+def test_a_move_during_the_report_pause_is_only_recorded(core, rec):
+    core.on_move(move(as_of=PAUSED), PAUSED)
+    core.on_news_stored(completed(started_at=PAUSED + DELTA), PAUSED + DELTA)
+    # T+5분 재검색 시각과 수집 기다림 한도가 지나도 아무것도 하지 않는다.
+    core.on_tick(PAUSED + S.collection_wait_limit + SEC)
+
+    assert rec.api.submitted == []
+    assert rec.sent == [] and rec.readied == []
+    assert core.next_deadline() is None
+    assert [r.job_id for r in rec.log.starts] == [JOB_ID]
+    [result] = rec.log.finishes
+    assert (result.status, result.failure_reason, result.result_event_id) == (
+        RunStatus.SUCCEEDED, "move_report_paused", None)
+
+
+def test_the_same_event_id_during_the_pause_is_recorded_once(core, rec):
+    core.on_move(move(as_of=PAUSED), PAUSED)
+    core.on_move(move(as_of=PAUSED), PAUSED + SEC)
+
+    assert len(rec.log.starts) == 1 and len(rec.log.finishes) == 1
+
+
+@pytest.mark.parametrize("now, paused", [
+    (datetime(2026, 11, 18, 23, 59, 59, tzinfo=KST), False),
+    (datetime(2026, 11, 19, 0, 0, 0, tzinfo=KST), True),
+    (datetime(2026, 11, 30, 23, 59, 59, tzinfo=KST), True),
+    (datetime(2026, 12, 1, 0, 0, 0, tzinfo=KST), False),
+    # 한국 날짜로 판단한다. UTC로는 11-30이지만 한국 시간으로는 12-01이다.
+    (datetime(2026, 11, 30, 15, 0, 0, tzinfo=timezone.utc), False),
+])
+def test_the_pause_covers_the_start_date_and_ends_on_the_end_date(core, rec, now, paused):
+    core.on_move(move(as_of=now), now)
+    core.on_news_stored(completed(started_at=now + DELTA), now + DELTA)
+
+    assert (rec.api.submitted == []) is paused
+    assert bool(rec.log.finishes) is paused
+
+
+def test_moves_are_reported_as_usual_from_the_end_date(rec):
+    core = BriefingCore(rec, rec.api, rec, job_log=rec.log)
+    resumed = datetime(2026, 12, 1, 10, 0, 31, tzinfo=KST)
+    core.on_move(move(as_of=resumed), resumed)
+    core.on_news_stored(completed(started_at=resumed + DELTA), resumed + DELTA)
+
+    assert len(rec.api.of(HISTORY)) == 1 and rec.log.finishes == []
+
+
+def test_an_empty_pause_setting_never_pauses(rec):
+    core = BriefingCore(rec, rec.api, rec, CoreSettings(move_report_pause_start=None), job_log=rec.log)
+    core.on_move(move(as_of=PAUSED), PAUSED)
+    core.on_news_stored(completed(started_at=PAUSED + DELTA), PAUSED + DELTA)
+
+    assert len(rec.api.of(HISTORY)) == 1 and rec.log.finishes == []
