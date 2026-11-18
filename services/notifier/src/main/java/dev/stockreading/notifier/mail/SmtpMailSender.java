@@ -16,7 +16,7 @@ import dev.stockreading.notifier.NotifierProperties;
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
 
-/** SMTP로 실제 발송한다(AWS SES SMTP 인터페이스 또는 다른 SMTP 서버). 발송이 켜져 있을 때만 활성화된다. */
+/** SMTP로 실제 발송한다(메일 서비스의 발송 전용 계정 SMTP). 발송이 켜져 있을 때만 활성화된다. */
 @Component
 @ConditionalOnProperty(name = "notifier.send-enabled", havingValue = "true")
 class SmtpMailSender implements MailSenderPort {

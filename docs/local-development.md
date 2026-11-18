@@ -248,9 +248,9 @@ JAVA_HOME_21=<JDK 21 경로> DAILY_E2E_SMTP_SINK=1 scripts/manual-daily-briefing
 | 설정 | 설명 |
 |---|---|
 | `NOTIFIER_SEND_ENABLED` | `true`일 때만 실제 발송 |
-| `NOTIFIER_SENDER` | 발신 주소. **개인정보이므로 `.env`에만** 둡니다. SES 샌드박스에서는 받는 사람 주소도 SES에서 인증된 주소여야 함 |
+| `NOTIFIER_SENDER` | 발신 주소. **개인정보이므로 `.env`에만** 둡니다. `SMTP_USERNAME`과 같은 주소여야 합니다(다르면 메일 서비스가 로그인한 계정 주소로 바꿀 수 있음) |
 | `NOTIFIER_DB_USER` / `NOTIFIER_DB_PASSWORD` | 받는 사람을 고르려고 `personal` 스키마와 `market.etf`·`market.stock`을 읽는 읽기 전용 계정. 받는 주소는 설정값이 아니라 `personal.member_mail`에 있고, 메일을 보내기 직전에 읽습니다 |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | SES 콘솔의 "SMTP settings"에서 만든 전용 자격증명(STARTTLS) |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | 메일 서비스의 SMTP(587 STARTTLS). 사용자는 발송 전용 계정 주소 전체, 비밀번호는 그 계정에서 만든 앱 비밀번호(공백 없이). 채널을 고른 이유는 ADR-011 |
 | `NOTIFIER_SUBJECT_PREFIX` | 제목 머리말. 데이터가 가짜인 동안 진짜 투자 정보로 오해하지 않도록 |
 
 발송기는 데일리 브리핑 결과 토픽 `briefing.daily.generated`도 브리핑과 같은 파티션 수로 선언합니다(`Topics`). 이 토픽의 메시지 한 건(멤버 한 명의 판 하나)마다 메일 한 통을 만들어 이벤트의 멤버 번호(`memberId`)가 가리키는 멤버에게만 보냅니다(`DailyBriefingListener`). 그 멤버가 사용 중이고 그 판 수신을 켰을 때만 보내며 아니면 경고만 남깁니다. 멤버 번호가 없는 v1 이벤트는 받는 사람을 알 수 없어 건너뜁니다. (급변동 메일 제목은 `[이름(코드)] 하락 -1.34% 브리핑` 꼴이고, `briefing.generated`에 `todayChangePercent`·`moveMinutes`가 있는 짧은 시간 변동은 본문 첫 줄처럼 `[이름(코드)] 14:39 기준 오늘 -2.00% · 1분 새 +1.00% 반등 브리핑` 꼴입니다. 브리핑이 분을 쓰지 않아 `moveMinutes`가 빠지면 `1분 새` 대신 `짧은 시간`으로 씁니다. 시각은 `asOf`의 한국 시간이며 가격은 넣지 않습니다.) 데일리 메일 제목은 머리말 뒤에 판 종류와 날짜(이번 발송 시각의 한국 날짜)를 붙인 `[시뮬레이션] 아침 판 데일리 브리핑 2026-10-20` 꼴이고, 본문은 받은 글 뒤에 자료 없음 항목, 다룬 범위, 추적 ID, 생성 방식을 붙입니다. 메시지에 선택 칸 `html`이 있으면 글자판과 HTML, 인라인 그림(`images`)을 묶은 메일로 보내고 같은 꼬리를 HTML 끝에 작은 글씨로 붙이며, 없으면 글자 메일입니다. `images` 중 잘못된 그림(깨진 base64, png·jpeg·gif가 아닌 형식, 공백·꺾쇠·줄바꿈이 든 Content-ID, 빈 데이터)은 그 그림만 빼고 나머지로 묶음 메일을 그대로 보내며, 모두 잘못돼도 HTML 묶음 메일은 나갑니다. 뺀 그림 수와 이유 종류만 경고 로그에 남깁니다. 드라이런 로그에는 HTML 글자 수와 그림 크기만 남기고 내용은 찍지 않습니다.
