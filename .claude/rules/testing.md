@@ -23,7 +23,7 @@ paths:
 | 설정 로더·지도 검사 (Python) | `services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests` | 브리핑 venv를 함께 씀. 별도 ini 필요 |
 | 전체 실행 | `scripts/test-all.sh` | 위 셋과 실제 DB 테스트를 돌리고 기능별 결과 표를 출력. Docker와 개발용 Postgres 컨테이너 필요 |
 
-설치와 환경 준비, 실제 DB 테스트와 `--live` 실행은 `docs/local-development.md`의 "테스트"를 따릅니다.
+설치와 환경 준비, 실제 DB 테스트와 `--live` 실행은 `docs/dev/testing.md`를 따릅니다.
 
 ## 테스트 목록의 원본
 

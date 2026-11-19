@@ -26,7 +26,7 @@ spring:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
       properties:
-        # 보내는 모든 메시지 헤더에 본문 correlationId 를 싣는다(추적 ID, docs/local-development.md).
+        # 보내는 모든 메시지 헤더에 본문 correlationId 를 싣는다(추적 ID, docs/conventions.md).
         interceptor.classes: dev.stockreading.market.trace.CorrelationIdProducerInterceptor
 
 market:
@@ -72,7 +72,7 @@ market:
     # 개장 흐름(아침 판)이 판 기준 시각부터 거슬러 읽는 시세 구간의 안전 상한. 요청 구간이 이보다 길면 이 기간까지만 읽는다.
     open-flow-max-window: PT30M
 
-# 브리핑이 부르는 내부 조회 API(docs/local-development.md 의 "내부 조회 API"). 서버 밖으로 열지 않는다.
+# 브리핑이 부르는 내부 조회 API(docs/conventions.md 의 "내부 조회 API"). 서버 밖으로 열지 않는다.
 server:
   # 로컬에서는 시세처리기(8091)·뉴스처리기(8092)가 한 기계에 함께 뜨고, 로컬 compose 가 쓰는 8080·8081 과 겹치지 않게 둔다.
   port: 8091
@@ -86,5 +86,5 @@ server:
 
 logging:
   pattern:
-    # 메시지를 처리하는 동안 찍히는 로그 줄마다 그 메시지의 correlationId 를 붙인다(추적 ID, docs/local-development.md).
+    # 메시지를 처리하는 동안 찍히는 로그 줄마다 그 메시지의 correlationId 를 붙인다(추적 ID, docs/conventions.md).
     correlation: "[%X{correlationId:-}] "

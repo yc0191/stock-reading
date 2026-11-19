@@ -1,6 +1,6 @@
 """추적 ID: 이벤트 본문의 correlationId를 Kafka 헤더, 로그 줄, 서비스 간 HTTP 호출로 옮길 때 쓰는 이름과 로그 문맥.
 
-이름의 원본은 docs/local-development.md의 "추적 ID" 절이며, 5개 서비스가 같은 값을 쓴다. Kafka는 import하지 않는다.
+이름의 원본은 docs/conventions.md의 "추적 ID" 절이며, 5개 서비스가 같은 값을 쓴다. Kafka는 import하지 않는다.
 """
 from __future__ import annotations
 

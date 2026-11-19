@@ -41,5 +41,5 @@ notifier:
 
 logging:
   pattern:
-    # 메시지를 처리하는 동안 찍히는 로그 줄마다 그 메시지의 correlationId 를 붙인다(추적 ID, docs/local-development.md).
+    # 메시지를 처리하는 동안 찍히는 로그 줄마다 그 메시지의 correlationId 를 붙인다(추적 ID, docs/conventions.md).
     correlation: "[%X{correlationId:-}] "

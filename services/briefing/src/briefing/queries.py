@@ -2,7 +2,7 @@
 
 작업 코드는 조회를 맡기고(submit) 결과는 나중에 콜백으로 받는다. 결과는 수신 루프 스레드에서 전달되므로 작업 상태에
 잠금이 필요 없고, 호출이 응답을 기다리거나 재시도 간격을 쉬는 동안에도 다른 작업과 Kafka 받기는 멈추지 않는다.
-요청 본문과 응답 본문은 contracts/events/의 옛 요청·응답 이벤트 payload와 같은 JSON이다(docs/local-development.md "내부 조회 API").
+요청 본문과 응답 본문은 contracts/events/의 옛 요청·응답 이벤트 payload와 같은 JSON이다(docs/conventions.md "내부 조회 API").
 """
 from __future__ import annotations
 
