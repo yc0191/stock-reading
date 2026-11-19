@@ -25,7 +25,7 @@
 - LLM을 쓰지 않는다. 잴 수 없는 항목은 기준 파일에 사람 확인(`human`)으로 적고, 댓글에 개수만 알린다.
 - 공개 저장소이므로 댓글과 로그에는 비율·판정·날짜·버전·이슈 번호·실패 종류만 쓴다. 건수·종목·서버 주소·버킷 이름·SQL 본문은 쓰지 않는다.
 
-원본: 기준 파일 형식과 계산은 `services/ops-checker/`, 결과 버킷과 권한은 `infra/terraform/ops_results.tf`, 쓰는 법과 운영 반영은 `docs/local-development.md`·`infra/deploy/README.md`, 판정 절차는 `docs/incidents/README.md`다.
+원본: 기준 파일 형식과 계산은 `services/ops-checker/`, 결과 버킷과 권한은 `infra/terraform/ops_results.tf`, 쓰는 법과 운영 반영은 `docs/dev/services.md`·`infra/deploy/README.md`, 판정 절차는 `docs/incidents/README.md`다.
 
 ## 이유
 1. 서버에서 알림으로 도는 확인기는 세션·노트북과 무관하고, 휴장일에는 계산하지 않아 측정일에 세지 않는다.

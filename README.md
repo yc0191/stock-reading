@@ -135,7 +135,7 @@ sequenceDiagram
 
 ## 더 보기
 
-- 로컬 실행: [`docs/local-development.md`](docs/local-development.md)
+- 로컬 실행: [`docs/dev/README.md`](docs/dev/README.md)
 - 기능별 테스트: [`docs/test-map/`](docs/test-map/README.md)
 - 설계 결정: [`docs/adr/`](docs/adr/README.md)
 - 운영 문제 기록: [`docs/incidents/`](docs/incidents/README.md)

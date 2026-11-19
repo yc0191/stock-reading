@@ -395,7 +395,7 @@ prepare_db() {
     # SQL 에 그대로 넣으므로 이름 형식을 먼저 확인한다.
     if ! [[ "$role" =~ ^[a-z_][a-z0-9_]*$ ]]; then DB_FAIL_REASON=".env 의 서비스 계정 이름 형식이 맞지 않음"; return 1; fi
     found=$(printf "SELECT 1 FROM pg_roles WHERE rolname = '%s';\n" "$role" | admin_sql 2>/dev/null)
-    if [ "$found" != 1 ]; then DB_FAIL_REASON="서비스 계정 $role 이 없음(계정은 만들지 않음, docs/local-development.md 참고: personal 계정은 infra/db/personal/init.sql 로 만듦)"; return 1; fi
+    if [ "$found" != 1 ]; then DB_FAIL_REASON="서비스 계정 $role 이 없음(계정은 만들지 않음, docs/dev/setup.md 참고: personal 계정은 infra/db/personal/init.sql 로 만듦)"; return 1; fi
   done
   # 확인기 계정은 init_ops 가 없으면 만든다(infra/db/ops/init.sql). SQL 에 그대로 넣으므로 이름 형식만 먼저 확인한다.
   if ! [[ "$OPS_USER" =~ ^[a-z_][a-z0-9_]*$ ]]; then DB_FAIL_REASON=".env 의 확인기 계정 이름 형식이 맞지 않음"; return 1; fi

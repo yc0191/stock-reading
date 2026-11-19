@@ -11,7 +11,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * 이벤트 본문의 correlationId 를 Kafka 헤더, 로그 문맥(MDC), 서비스 간 HTTP 호출로 옮길 때 쓰는 이름과 읽는 법.
- * 이름의 원본은 docs/local-development.md 의 "추적 ID" 절이며, 5개 서비스가 같은 값을 쓴다(서비스끼리 코드를 나누지 않아 복제).
+ * 이름의 원본은 docs/conventions.md 의 "추적 ID" 절이며, 5개 서비스가 같은 값을 쓴다(서비스끼리 코드를 나누지 않아 복제).
  */
 public final class CorrelationId {
 
