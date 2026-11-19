@@ -62,12 +62,20 @@ class PriceFieldCheckTest {
     }
 
     @Test
-    void knownGapOfRuleATieOfOneFailAndOnePassIsKept() {
-        // 규칙 A의 알려진 빈틈(동률은 통과): 전일대비 칸이 비어 판단한 검사가 등락률(실패)·고저가(통과) 둘뿐이면
-        // 1대1이라 과반이 아니어서 깨진 값이어도 시세로 보낸다. 바꾸려면 규칙부터 다시 정한다.
-        String body = PriceChecks.body("10050", "10000", "", "D", "-1.00", "10100", "9800");
+    void rateMismatchDropsThePriceEvenWhenTheOtherChecksTie() {
+        // 운영에서 본 모양: 현재가 칸만 엉뚱하게 오고 전일대비 칸은 비었으며, 장 시작 전 거래로 넓어진 고가 안에 들어온다.
+        // 판단한 검사가 등락률(실패)·고저가(통과) 1대1이라 과반 규칙만으로는 통과하던 값이다.
+        String body = PriceChecks.body("10350", "10000", "", "D", "-1.00", "10500", "9800");
 
-        assertThat(check.failedChecks(10050, body)).isEmpty();
+        assertThat(check.failedChecks(10350, body)).containsExactly(RATE);
+    }
+
+    @Test
+    void rateMismatchDropsThePriceEvenWhenTheOtherTwoChecksPass() {
+        // 등락률은 제공자가 현재가로 계산해 보내므로 현재가가 맞으면 어긋나지 않는다. 그래서 하나만 어긋나도 버린다.
+        String body = PriceChecks.body("9960", "10000", "40", "D", "-1.00", "10100", "9800");
+
+        assertThat(check.failedChecks(9960, body)).containsExactly(RATE);
     }
 
     @Test
@@ -77,12 +85,20 @@ class PriceFieldCheckTest {
     }
 
     @Test
-    void oneBrokenComparisonFieldDoesNotDropAGoodPrice() {
+    void oneBrokenComparisonFieldOtherThanTheRateDoesNotDropAGoodPrice() {
         String brokenHigh = PriceChecks.body("9900", "10000", "100", "D", "-1.00", "1", "9800");
-        String brokenRate = PriceChecks.body("9900", "10000", "100", "D", "55.55", "10100", "9800");
+        String brokenChange = PriceChecks.body("9900", "10000", "636", "D", "-1.00", "10100", "9800");
 
         assertThat(check.failedChecks(9900, brokenHigh)).isEmpty();
-        assertThat(check.failedChecks(9900, brokenRate)).isEmpty();
+        assertThat(check.failedChecks(9900, brokenChange)).isEmpty();
+    }
+
+    @Test
+    void aBrokenRateFieldDropsEvenAGoodPrice() {
+        // 감수하는 손해: 현재가는 맞고 등락률 칸만 깨져 와도 버린다. 운영 3거래일 원문에서는 이런 응답이 없었다.
+        String brokenRate = PriceChecks.body("9900", "10000", "100", "D", "55.55", "10100", "9800");
+
+        assertThat(check.failedChecks(9900, brokenRate)).containsExactly(RATE);
     }
 
     @Test

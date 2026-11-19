@@ -13,7 +13,7 @@
 스냅샷마다 두 유형을 평가합니다. 유형 1(`window`)은 최근 이력의 가장 오래된 스냅샷과, 유형 2(`prevClose`)는 원문의 전일 종가(후보 칸 다수결)와 비교하며, 조건이 연속으로 확인될 때만 발행합니다. 한 번 발행한 뒤에는 마지막 발행 가격에서 더 움직여야 다시 발행하고, 종목 단위 재발행 간격이 있습니다. 상태는 그날(한국 날짜) 것만 쓰며 `move_state` 테이블에 둡니다. 오늘 등락률(`todayChangePercent`)은 응답 칸을 옮기지 않고 코드가 계산합니다.
 
 - 규칙과 이유: `services/market/src/main/java/dev/stockreading/market/snapshot/`의 `MoveTracker`(발행 관문, 날짜 경계), `MoveDetector`(기준값, 튄 점, 첫 체결 전 응답, 전일 종가 다수결) 주석
-- 설정과 기본값: `services/market/src/main/resources/application.yml`의 `market.*`(`window-minutes`, `window-threshold-percent`, `prev-close-fields`, `prev-close-threshold-percent`, `open-price-fields`, `confirm-count`, `first-trade-fields`, `republish-interval-minutes`, `republish-exception-percent`). 칸 경로 설정은 같은 파일 주석에 적힌 환경변수(`MARKET_PREV_CLOSE_FIELDS` 등)로 덮어쓸 수 있고, 빈 값일 때의 동작도 그 주석에 있습니다.
+- 설정과 기본값: `services/market/src/main/resources/application.yml`의 `market.*`(`window-minutes`, `window-threshold-percent`, `prev-close-fields`, `prev-close-threshold-percent`, `open-price-fields`, `confirm-count`, `confirm-spread-percent`, `first-trade-fields`, `republish-interval-minutes`, `republish-exception-percent`). 칸 경로 설정은 같은 파일 주석에 적힌 환경변수(`MARKET_PREV_CLOSE_FIELDS` 등)로 덮어쓸 수 있고, 빈 값일 때의 동작도 그 주석에 있습니다.
 - 메시지 모양: `contracts/events/market.move.v1.schema.json`
 
 ### 내부 조회 API

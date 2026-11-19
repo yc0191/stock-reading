@@ -79,7 +79,7 @@ class MoveTrackerTest {
 
     private static MarketProperties properties(int confirmCount, int intervalMinutes) {
         return new MarketProperties(5, new BigDecimal("1.00"), List.of("fake.a"), new BigDecimal("3.00"), List.of(),
-                confirmCount, List.of("fake.volume", "fake.open"), intervalMinutes, new BigDecimal("2.00"));
+                confirmCount, new BigDecimal("1.00"), List.of("fake.volume", "fake.open"), intervalMinutes, new BigDecimal("2.00"));
     }
 
     private static Detection detection(DetectionType type, long price, OffsetDateTime startedAt) {
@@ -291,6 +291,68 @@ class MoveTrackerTest {
         ArgumentCaptor<Detection> published = ArgumentCaptor.forClass(Detection.class);
         verify(publisher, times(1)).publish(anyString(), published.capture(), any(), any(), anyString());
         assertThat(published.getValue().type()).isEqualTo(DetectionType.WINDOW);
+    }
+
+    @Test
+    void aSingleSpikeInsideAnOngoingMoveIsNotPublishedNorIsTheReturnFromIt() {
+        // 운영에서 본 모양: 기준을 넘은 상태가 이어지는 중에 현재가 한 건만 튀었다가 다음 스냅샷에 제자리로 돌아온다.
+        // 상태만 세면 튄 값이 연속 확인을 이어받아 발행되고, 돌아온 값도 튄 값 대비 다시 크게 움직여 한 번 더 발행된다.
+        MoveTracker target = confirming();
+        for (int i = 0; i < 3; i++) {
+            snapshot(target, T0.plusSeconds(i), 10_400, up(DetectionType.PREV_CLOSE, 10_400, T0));
+        }
+        verify(publisher, times(1)).publish(anyString(), any(), any(), any(), anyString());
+
+        OffsetDateTime later = T0.plusMinutes(150);
+        snapshot(target, later, 10_400, up(DetectionType.PREV_CLOSE, 10_400, T0));
+        snapshot(target, later.plusSeconds(2), 10_850, up(DetectionType.PREV_CLOSE, 10_850, T0));
+        snapshot(target, later.plusSeconds(4), 10_400, up(DetectionType.PREV_CLOSE, 10_400, T0));
+        snapshot(target, later.plusSeconds(6), 10_400, up(DetectionType.PREV_CLOSE, 10_400, T0));
+        snapshot(target, later.plusSeconds(8), 10_400, up(DetectionType.PREV_CLOSE, 10_400, T0));
+
+        verify(publisher, times(1)).publish(anyString(), any(), any(), any(), anyString());
+    }
+
+    @Test
+    void aJumpThatHoldsIsPublishedOnceThreeSimilarPricesFollow() {
+        MoveTracker target = confirming();
+        for (int i = 0; i < 3; i++) {
+            snapshot(target, T0.plusSeconds(i), 10_400, up(DetectionType.PREV_CLOSE, 10_400, T0));
+        }
+
+        OffsetDateTime later = T0.plusMinutes(150);
+        snapshot(target, later, 10_850, up(DetectionType.PREV_CLOSE, 10_850, T0));
+        snapshot(target, later.plusSeconds(2), 10_860, up(DetectionType.PREV_CLOSE, 10_860, T0));
+        verify(publisher, times(1)).publish(anyString(), any(), any(), any(), anyString());
+
+        snapshot(target, later.plusSeconds(4), 10_850, up(DetectionType.PREV_CLOSE, 10_850, T0));
+
+        verify(publisher, times(2)).publish(anyString(), any(), any(), any(), eq("corr-1"));
+        assertThat(lastPublish.price()).isEqualTo(10_850L);
+    }
+
+    @Test
+    void confirmingPricesExactlyTheSpreadPercentApartArePublished() {
+        MoveTracker target = confirming();
+
+        // 가장 낮은 10200 대비 10302는 정확히 +1.00%(허용 폭)
+        snapshot(target, T0, 10_200, up(DetectionType.PREV_CLOSE, 10_200, T0));
+        snapshot(target, T0.plusSeconds(1), 10_302, up(DetectionType.PREV_CLOSE, 10_302, T0));
+        snapshot(target, T0.plusSeconds(2), 10_250, up(DetectionType.PREV_CLOSE, 10_250, T0));
+
+        verify(publisher, times(1)).publish(anyString(), any(), any(), any(), anyString());
+    }
+
+    @Test
+    void confirmingPricesJustOverTheSpreadPercentApartAreNotPublished() {
+        MoveTracker target = confirming();
+
+        // 가장 낮은 10200 대비 10303은 +1.01%로 허용 폭을 넘는다.
+        snapshot(target, T0, 10_200, up(DetectionType.PREV_CLOSE, 10_200, T0));
+        snapshot(target, T0.plusSeconds(1), 10_303, up(DetectionType.PREV_CLOSE, 10_303, T0));
+        snapshot(target, T0.plusSeconds(2), 10_250, up(DetectionType.PREV_CLOSE, 10_250, T0));
+
+        verify(publisher, never()).publish(anyString(), any(), any(), any(), anyString());
     }
 
     // ---- 종목 단위 재발행 간격

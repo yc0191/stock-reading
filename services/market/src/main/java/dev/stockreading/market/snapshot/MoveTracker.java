@@ -3,6 +3,8 @@ package dev.stockreading.market.snapshot;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -15,7 +17,8 @@ import dev.stockreading.market.MarketProperties;
 
 /**
  * 감지 결과를 market.move 발행으로 잇는다. 발행하려면 세 관문을 지난다.
- * 첫째, 변동 조건이 받은 스냅샷 기준으로 confirmCount건 연속 이어져야 한다(한 건만 튄 값은 발행하지 않는다).
+ * 첫째, 변동 조건이 받은 스냅샷 기준으로 confirmCount건 연속 이어지고, 그 가격들이 허용 폭 안에 모여야 한다
+ * (한 건만 튄 값은 조건이 이어지던 중이어도 발행하지 않는다).
  * 둘째, 종목·유형별로 한 번 발행한 뒤에는 마지막 발행 가격에서 임계값 이상 더 움직일 때만 재발행한다.
  * 감지 조건이 풀려도 그날은 마지막 발행 가격을 남겨, 기준선 언저리를 오르내리기만 한 종목을 다시 발행하지 않는다.
  * 풀린 뒤 다시 발행하는 변동은 새 변동으로 보고 시작 시각을 새로 잡는다. 판단 불가(UNKNOWN) 스냅샷이 끼면 연속 건수를 다시 센다.
@@ -48,12 +51,15 @@ class MoveTracker {
     private static final class Streak {
         final int direction;
         final OffsetDateTime firstAsOf;
+        // 마지막 confirmCount건의 가격. 조건만 세면 이어지던 변동에 튄 값 한 건이 끼어도 확인을 이어받으므로 가격이 모였는지도 본다.
+        final Deque<Long> recentPrices = new ArrayDeque<>();
         int count = 1;
         boolean suppressionLogged;
 
-        Streak(int direction, OffsetDateTime firstAsOf) {
+        Streak(int direction, OffsetDateTime firstAsOf, long price) {
             this.direction = direction;
             this.firstAsOf = firstAsOf;
+            recentPrices.addLast(price);
         }
     }
 
@@ -68,8 +74,8 @@ class MoveTracker {
                 // 판단할 수 없는 스냅샷이 끼면 연속이 아니므로 건수를 처음부터 다시 센다. 저장한 발행 상태는 그대로 둔다.
                 case UNKNOWN -> streaks.remove(key);
                 case DETECTED -> {
-                    Streak streak = countStreak(key, asOf, evaluation.detection());
-                    if (streak.count >= properties.confirmCount()) {
+                    Streak streak = countStreak(key, asOf, price, evaluation.detection());
+                    if (streak.count >= properties.confirmCount() && pricesAgree(streak)) {
                         publishIfAllowed(symbol, asOf, price, evaluation.detection(), streak, correlationId);
                     }
                 }
@@ -77,15 +83,29 @@ class MoveTracker {
         }
     }
 
-    private Streak countStreak(String key, OffsetDateTime asOf, Detection detection) {
+    private Streak countStreak(String key, OffsetDateTime asOf, long price, Detection detection) {
         int direction = detection.changePercent().signum();
         return streaks.compute(key, (k, streak) -> {
             if (streak == null || streak.direction != direction || fromEarlierDay(streak.firstAsOf, asOf)) {
-                return new Streak(direction, asOf);
+                return new Streak(direction, asOf, price);
             }
             streak.count++;
+            streak.recentPrices.addLast(price);
+            while (streak.recentPrices.size() > Math.max(1, properties.confirmCount())) {
+                streak.recentPrices.removeFirst();
+            }
             return streak;
         });
+    }
+
+    /** 확인한 가격들이 가장 낮은 가격 대비 허용 폭 안에 모여 있는지. */
+    private boolean pricesAgree(Streak streak) {
+        long low = streak.recentPrices.stream().mapToLong(Long::longValue).min().orElse(0);
+        long high = streak.recentPrices.stream().mapToLong(Long::longValue).max().orElse(0);
+        if (low <= 0) {
+            return true;
+        }
+        return ChangeRate.percent(low, high).compareTo(properties.confirmSpreadPercent()) <= 0;
     }
 
     private void publishIfAllowed(
