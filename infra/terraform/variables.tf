@@ -105,3 +105,15 @@ variable "ops_results_retention_days" {
   type        = number
   default     = 14
 }
+
+variable "monthly_budget_usd" {
+  description = "월 지출 알림의 한도(달러). 실제 지출이 80%·100%를 넘거나 월말 예상이 100%를 넘으면 메일을 보낸다. 서버 묶음을 바꾸면 함께 본다."
+  type        = number
+  default     = 40
+}
+
+variable "budget_alert_email" {
+  description = "월 지출 알림을 받을 메일 주소. 공개 저장소에 두지 않으려고 기본값이 없으며 terraform.tfvars 에만 쓴다."
+  type        = string
+  sensitive   = true
+}
