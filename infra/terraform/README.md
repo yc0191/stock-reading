@@ -11,7 +11,7 @@ Lightsail 서버 2대, 방화벽, ECR 저장소 7개, S3 백업 버킷, 배포 �
 | ECR 7개 | `stock-reading-{collector,market,news,notifier,briefing,ops-checker,migrate}`. 최근 3개만 보관 |
 | S3 버킷 | Postgres 백업. 35일(5주) 지나면 삭제, 공개 차단, TLS만 허용 |
 | Parameter Store | 대기 버전·긴급 버전 값. 이름만 만들고 값은 CI가 씀(Terraform은 값을 되돌리지 않음) |
-| IAM | GitHub Actions 권한(ECR 푸시, 배포 버전 쓰기, 대기 버전 읽기)과 서버용 권한(설정 읽기, 메일 발송, ECR 받기, 백업 쓰기, 배포 버전 읽기), 확인기 결과 쓰기 전용 사용자와 판정 작업의 결과 읽기 신분(`ops_results.tf`). 접근 키는 만들지 않음 |
+| IAM | GitHub Actions 권한(ECR 푸시, 배포 버전 쓰기, 대기 버전 읽기)과 서버용 권한(설정 읽기, ECR 받기, 백업 쓰기, 배포 버전 읽기), 확인기 결과 쓰기 전용 사용자와 판정 작업의 결과 읽기 신분(`ops_results.tf`). 접근 키는 만들지 않음 |
 | 예산 | 월 지출 알림 하나(`budgets.tf`). 한도 `monthly_budget_usd`(기본 $40), 실제 80%·100%와 월말 예상 100%에 메일. 알림만 보내고 자원은 멈추지 않음 |
 
 비밀 설정 값은 이 코드가 만들지 않고 직접 넣습니다.
