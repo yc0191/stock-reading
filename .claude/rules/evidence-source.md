@@ -44,6 +44,6 @@ paths:
 
 ## 6. 함께 고칠 문서
 
-- `docs/local-development.md`: 설정 키, "내부 조회 API"의 조회 경로와 재시도 규칙
+- `docs/dev/briefing.md`·`docs/dev/collector-sources.md`: 설정 키. `docs/conventions.md`: "내부 조회 API"의 조회 경로
 - `docs/adr/010-event-format.md`의 "근거 조회 규칙": 새 조회와 선택 필드 이름
 - README의 흐름도, 시간 규칙이 바뀌면 `CLAUDE.md` 설계 규칙

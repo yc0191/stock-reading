@@ -1,7 +1,7 @@
 """QueryPort 가짜(시세처리기·뉴스처리기 내부 조회 API 대신). 맡긴 조회를 모아 두고, 테스트가 답하거나 끝내 실패시킨다.
 
 답은 옛 Kafka 응답 이벤트 모양의 JSON(테스트 도우미가 만들던 것)이나 응답 본문(dict)으로 줄 수 있다. 응답 본문은 옛 응답
-이벤트의 payload와 같다(docs/local-development.md "내부 조회 API"). 실제 HTTP는 쓰지 않는다.
+이벤트의 payload와 같다(docs/conventions.md "내부 조회 API"). 실제 HTTP는 쓰지 않는다.
 """
 import json
 

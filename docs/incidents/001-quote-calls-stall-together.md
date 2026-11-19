@@ -68,4 +68,4 @@
 
 - 이슈 #45, PR #47, [003](003-quote-provider-blocks-overseas-ip.md)(이슈 #74, PR #73), 이슈 #80
 - 코드: 수집기 `BrokerClient` 생성자(HTTP 버전, 연결 맺기 제한), `currentPrice`(응답 대기 제한)
-- 설정: 수집기 `application.yml`의 `collector.broker.quote-timeout-seconds`, 환경변수 설명은 [local-development.md](../local-development.md)의 `BROKER_QUOTE_TIMEOUT_SECONDS`
+- 설정: 수집기 `application.yml`의 `collector.broker.quote-timeout-seconds`, 환경변수 설명은 [dev/collector-sources.md](../dev/collector-sources.md)의 `BROKER_QUOTE_TIMEOUT_SECONDS`

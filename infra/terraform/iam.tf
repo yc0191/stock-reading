@@ -133,12 +133,6 @@ data "aws_iam_policy_document" "server" {
   }
 
   statement {
-    sid       = "SendMail"
-    actions   = ["ses:SendEmail", "ses:SendRawEmail"]
-    resources = ["arn:aws:ses:${var.aws_region}:${local.account_id}:identity/*"]
-  }
-
-  statement {
     sid       = "EcrLogin"
     actions   = ["ecr:GetAuthorizationToken"]
     resources = ["*"]

@@ -134,7 +134,7 @@ trap 'echo "중단됨: 이 실행이 만든 것을 정리합니다"; exit 130' I
 
 # ---------------------------------------------------------------- 준비
 
-[ -x "$PY" ] || fail "브리핑 venv 가 없습니다(services/briefing/.venv, docs/local-development.md 참고)"
+[ -x "$PY" ] || fail "브리핑 venv 가 없습니다(services/briefing/.venv, docs/dev/briefing.md 참고)"
 [ -n "${JAVA_HOME_21:-}" ] && [ -x "$JAVA_HOME_21/bin/java" ] || fail "JAVA_HOME_21 이 JDK 21 을 가리키지 않습니다"
 [ -f "$ENV_FILE" ] || fail "서비스 DB 계정을 읽을 파일이 없습니다($ENV_FILE)"
 OUT_DIR=$(cd "$OUT_DIR" 2>/dev/null && pwd -P) || fail "결과 폴더가 없습니다"

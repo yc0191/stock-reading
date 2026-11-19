@@ -1,0 +1,36 @@
+# #96 시세 튄 값 막기, 시도 1. 지표와 통과값은 이슈의 "시도 1 · 판정 기준" 댓글을 옮긴 것이다.
+# 칸 검사로 버린 응답은 시세 조회 실패 기록(quote_failure)에 FIELD_MISMATCH 로 남는다. 분모는 저장한 시세와 실패 기록을 합친 조회 수다.
+# 급변동 가격은 브리핑 작업 기록의 급변동 작업(job_kind = 'move', 리포트를 멈춘 것 포함, #84) 입력인 market.move 이벤트 원문에서 읽는다.
+issue: 96
+attempt: 1
+fix_commit: "583434d"
+days: 2
+metrics:
+  - key: field_mismatch_ratio
+    # 오늘(한국 날짜) 칸 검사로 버린 응답 / (실패 기록 + 저장한 시세). 바뀐 규칙이 더 버리는 응답은 저장 시세의 약 0.0006%로 쟀으므로
+    # 기준선(11-17~19 장중 약 0.13~0.18%)과 거의 같아야 한다. 통과선은 기준선의 약 2배다. 둘 다 0이면 비워 판정 보류.
+    sql: >-
+      WITH day AS (SELECT (now() AT TIME ZONE 'Asia/Seoul')::date::timestamp AT TIME ZONE 'Asia/Seoul' AS start),
+      failed AS (SELECT count(*) AS n, count(*) FILTER (WHERE failure_type = 'FIELD_MISMATCH') AS mismatch
+        FROM market.quote_failure, day WHERE occurred_at >= day.start),
+      stored AS (SELECT count(*) AS n FROM market.price_snapshot, day WHERE as_of >= day.start)
+      SELECT CASE WHEN failed.n + stored.n = 0 THEN NULL ELSE failed.mismatch::numeric / (failed.n + stored.n) END
+      FROM failed, stored
+    pass: "< 0.003"
+  - key: outlier_move_ratio
+    # 발행 가격이 같은 종목의 앞뒤 60초 시세 중앙값과 2% 넘게 다른 급변동 / 오늘 급변동 수. 급변동이 없으면 0.
+    # 비교 시각은 브리핑이 급변동을 받은 시각(started_at)이다. 이벤트의 asOf 는 전일 대비 유형에서 변동이 시작된 시각이라 발행 시각과 다를 수 있다.
+    # 중앙값을 쓰므로 튄 값 한 건이 자기 비교 대상에 섞여도 결과가 바뀌지 않는다. 11-18 사례는 이 방식으로 약 4.2% 어긋나 걸리고, 그 밖의 급변동은 2% 안이었다.
+    sql: >-
+      WITH day AS (SELECT (now() AT TIME ZONE 'Asia/Seoul')::date::timestamp AT TIME ZONE 'Asia/Seoul' AS start),
+      moves AS (SELECT job_id, input -> 'payload' ->> 'symbol' AS symbol, (input -> 'payload' ->> 'price')::numeric AS price,
+        started_at AS at
+        FROM briefing.job_run, day WHERE job_kind = 'move' AND started_at >= day.start),
+      near AS (SELECT moves.job_id, moves.price, percentile_cont(0.5) WITHIN GROUP (ORDER BY s.price) AS median
+        FROM moves CROSS JOIN day JOIN market.price_snapshot s ON s.symbol = moves.symbol
+          AND s.as_of >= day.start - INTERVAL '1 minute'
+          AND s.as_of BETWEEN moves.at - INTERVAL '60 seconds' AND moves.at + INTERVAL '60 seconds'
+        GROUP BY moves.job_id, moves.price)
+      SELECT CASE WHEN (SELECT count(*) FROM moves) = 0 THEN 0
+        ELSE (SELECT count(*) FROM near WHERE median > 0 AND abs(price - median) * 100 / median > 2)::numeric / (SELECT count(*) FROM moves) END
+    pass: "== 0"

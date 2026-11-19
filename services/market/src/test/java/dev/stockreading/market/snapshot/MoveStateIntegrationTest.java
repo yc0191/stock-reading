@@ -155,7 +155,7 @@ class MoveStateIntegrationTest {
 
     private static MarketProperties properties() {
         return new MarketProperties(5, new BigDecimal("1.00"), List.of("fake.a"), new BigDecimal("3.00"), List.of(),
-                1, List.of("fake.volume", "fake.open"), 30, new BigDecimal("2.00"));
+                1, new BigDecimal("1.00"), List.of("fake.volume", "fake.open"), 30, new BigDecimal("2.00"));
     }
 
     // DB는 시각을 UTC 오프셋으로 돌려주므로 같은 순간인지로 비교한다.

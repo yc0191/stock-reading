@@ -6,7 +6,7 @@ paths:
 
 # 설계 문서 규칙
 
-ADR, README, `docs/local-development.md` 같은 설계 문서를 쓰거나 고칠 때 읽습니다. 형식과 상태 정의는 `docs/adr/README.md`가 기준입니다.
+ADR, README, `docs/dev/`, `docs/conventions.md` 같은 설계 문서를 쓰거나 고칠 때 읽습니다. 형식과 상태 정의는 `docs/adr/README.md`가 기준입니다.
 
 ## ADR을 쓰는 때
 
@@ -18,7 +18,7 @@ ADR은 아래 셋 중 하나에 해당할 때만 씁니다. 해당하는 기준�
 
 ## ADR을 쓰지 않는 것
 
-- 기능 구현 설명(이벤트 필드, 설정값, 재시도 횟수, 테이블 구조): 원본은 코드와 스키마이고, 쓰는 방법은 `docs/local-development.md`에 둡니다.
+- 기능 구현 설명(이벤트 필드, 설정값, 재시도 횟수, 테이블 구조): 원본은 코드와 스키마이고, 쓰는 방법은 `docs/dev/`에, 여러 서비스가 함께 지키는 약속(내부 조회 API, 저장 끝 알림, 추적 ID)은 `docs/conventions.md`에 둡니다.
 - 기존 결정의 일부 변경: 새 ADR을 만들지 않고, 해당 문장을 현재 결정으로 고쳐 씁니다. ADR에는 경위를 쓰지 않고, 무엇이 언제 왜 바뀌었는지는 `docs/adr/history/<ADR 파일명>`에 날짜순 한 줄씩 쌓습니다. 결정 전체가 뒤집힐 때만 상태를 `대체됨(Superseded by ADR-0xx)`으로 바꾸고 새 ADR을 씁니다.
 - 작업 범위, 진행 상황, 할 일
 
@@ -38,13 +38,14 @@ ADR은 아래 셋 중 하나에 해당할 때만 씁니다. 해당하는 기준�
 | 이벤트 필드·형식 | `contracts/events/*.schema.json` |
 | 토픽 이름·파티션 수 | 각 서비스의 `Topics`, 브리핑 `main.py` |
 | 설정값과 기본값 | 각 서비스의 `application.yml`, 브리핑 `config.py`·`main.py` |
-| 설치·실행 방법 | `docs/local-development.md` |
+| 설치·실행 방법 | `docs/dev/` (색인: `docs/dev/README.md`) |
+| 서비스 간 약속(내부 조회 API, 저장 끝 알림, 추적 ID) | `docs/conventions.md` |
 | 기능별 테스트 목록과 켜는 조건 | `docs/test-map/` |
 | 되돌리기 어려운 결정의 이유 | 해당 ADR |
 | 구현 방식을 고른 이유 | 그 코드 옆의 주석 |
 | 이번 변경을 한 이유 | 커밋 메시지의 `<why>` |
 | 운영 문제의 조사와 판단 흐름 | `docs/incidents/`의 해당 기록 |
-| 아직 정하지 않은 결정 | `docs/local-development.md`의 "아직 정하지 않은 것" |
+| 아직 정하지 않은 결정 | `docs/dev/README.md`의 "아직 정하지 않은 것" |
 
 ## 상태
 
@@ -55,7 +56,7 @@ ADR은 아래 셋 중 하나에 해당할 때만 씁니다. 해당하는 기준�
 ## 함께 맞출 곳
 
 - ADR을 추가하거나 상태를 바꾸면 `docs/adr/README.md`의 표(번호, 주제, 상태)를 같이 고칩니다.
-- 실행 명령, 설정 키, 테스트 명령이 바뀌면 `docs/local-development.md`를 같이 고칩니다. 테스트를 추가·삭제하거나 켜는 조건을 바꾸면 테스트 지도(`docs/test-map/`)를 같이 고칩니다.
+- 실행 명령, 설정 키, 테스트 명령이 바뀌면 `docs/dev/`의 해당 파일을 같이 고칩니다. 테스트를 추가·삭제하거나 켜는 조건을 바꾸면 테스트 지도(`docs/test-map/`)를 같이 고칩니다.
 - 아키텍처, 기술 스택, 서비스 구성이 바뀌면 README의 흐름도, 기술 스택, 로드맵 체크박스를 같이 고칩니다.
 - 문서를 옮기거나 지우면 링크가 끊기지 않는지 확인합니다.
 

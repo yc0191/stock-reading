@@ -19,7 +19,7 @@ import tools.jackson.databind.ObjectMapper;
 /**
  * 현재가가 같은 응답의 전일대비·등락률·고저가와 맞는지 본다. 시세 제공자가 가끔 현재가 칸만 엉뚱한 값으로 보내는데,
  * 그 응답의 전일대비·등락률은 원래 현재가로 계산돼 오므로 서로 어긋난다. 비교 칸도 따로 깨질 수 있어
- * 판단할 수 있는 검사 중 과반이 어긋날 때만 버린다.
+ * 등락률 검사가 어긋나면 그것만으로 버리고, 등락률을 판단할 수 없으면 판단할 수 있는 검사 중 과반이 어긋날 때 버린다.
  */
 @Component
 @ConditionalOnProperty(name = "collector.market-data.source", havingValue = "broker")
@@ -89,7 +89,10 @@ class PriceFieldCheck {
                 failed.add(entry.getKey());
             }
         }
-        return decided > 0 && failed.size() * 2 > decided ? List.copyOf(failed) : List.of();
+        // 등락률은 제공자가 현재가로 계산해 보내므로 현재가만 깨지면 반드시 어긋난다. 다른 칸은 제공자가 따로 깨뜨려 보내거나
+        // (고가·저가는 장 시작 전 대체거래소 거래로도 넓어져) 동률로 깨진 현재가를 통과시켰으므로, 등락률이 어긋나면 그것만으로 버린다.
+        boolean rateFailed = results.get(Check.RATE) == Result.BAD;
+        return rateFailed || (decided > 0 && failed.size() * 2 > decided) ? List.copyOf(failed) : List.of();
     }
 
     static String exceptionType(List<Check> failed) {

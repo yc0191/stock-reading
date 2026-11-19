@@ -35,6 +35,7 @@ class MarketPropertiesDefaultsTest {
             assertThat(properties.prevCloseThresholdPercent()).isEqualByComparingTo("5.00");
             assertThat(properties.openPriceFields()).containsExactly("dataBody.opn_prc");
             assertThat(properties.confirmCount()).isEqualTo(3);
+            assertThat(properties.confirmSpreadPercent()).isEqualByComparingTo("1.00");
             // 첫 체결 전에는 누적 거래량과 시가가 모두 0으로 온다(2026-11-11 확인).
             assertThat(properties.firstTradeFields()).containsExactly("dataBody.acml_vlm", "dataBody.opn_prc");
             assertThat(properties.republishIntervalMinutes()).isEqualTo(120);
