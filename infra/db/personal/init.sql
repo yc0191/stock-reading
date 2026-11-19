@@ -12,7 +12,7 @@
 --   notifier  발송기. 받는 사람을 고르려고 personal의 표를 읽는다(member_mail 포함).
 --   briefing  브리핑 서비스(기존 계정). 데일리 판을 멤버마다 짜려고 멤버 번호·사용 여부·수신 설정·포트폴리오와 market.etf의 종목코드, market.stock의 종목코드·이름만 읽는다. 메일 주소 열(member_mail.email)은 읽지 못하고 personal에 쓰지도 못한다. 표 권한은 personal 마이그레이션이 준다.
 --   news      뉴스 서비스(기존 계정). market의 구성 종목 표(etf, stock, etf_stock_map)만 읽는다. personal은 읽지 못한다.
---   market    시세처리기(기존 계정). personal.active_portfolio 뷰만 읽는다(보유·관심 구분 계산). member, member_mail, member_portfolio는 읽지 못한다.
+--   market    시세처리기(기존 계정). personal.active_portfolio 뷰만 읽는다(포트폴리오에 담긴 ETF 찾기, 보유·관심 구분은 읽지 않음). member, member_mail, member_portfolio는 읽지 못한다.
 \set ON_ERROR_STOP on
 
 \getenv owner_user PERSONAL_OWNER_DB_USER
