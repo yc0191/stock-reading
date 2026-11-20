@@ -97,7 +97,7 @@ class PostgresRunStore:
 
 
 class PostgresScalarQuery:
-    """지표 SQL 을 읽기 전용 트랜잭션에서 SQL 하나당 10초 상한으로 돌린다. 끝나면 언제나 되돌린다."""
+    """지표 SQL 을 읽기 전용 트랜잭션에서 SQL 하나당 SQL_TIMEOUT_SECONDS 상한으로 돌린다. 끝나면 언제나 되돌린다."""
 
     def __init__(self, connect) -> None:
         self._connect = connect

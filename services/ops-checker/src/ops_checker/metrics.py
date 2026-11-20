@@ -9,7 +9,9 @@ from typing import Protocol
 from ops_checker.criteria import Metric, parse_pass
 
 PASS, FAIL, HOLD, ERROR = "pass", "fail", "hold", "error"
-SQL_TIMEOUT_SECONDS = 10
+# 급변동마다 앞뒤 시세를 모으는 지표가 장 마감 직후 10초를 넘었다. 지표가 모두 상한까지 걸려도
+# Kafka 소비자의 poll 간격 기본 상한(300초) 안에 끝나도록 지표 수를 생각해 30초로 둔다.
+SQL_TIMEOUT_SECONDS = 30
 
 _COMPARE = {"<": operator.lt, "<=": operator.le, ">": operator.gt, ">=": operator.ge, "==": operator.eq}
 
