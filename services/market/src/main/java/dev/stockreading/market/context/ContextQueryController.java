@@ -73,5 +73,15 @@ class ContextQueryController {
         if (request.openFlowSince() != null) {
             checks.notAfter("openFlowSince", checks.time("openFlowSince", request.openFlowSince()), asOf);
         }
+        // 그래프용 장중 흐름·기간 종가도 선택 칸이다.
+        if (request.intradaySince() != null) {
+            checks.notAfter("intradaySince", checks.time("intradaySince", request.intradaySince()), asOf);
+        }
+        if (request.maxIntradayPoints() != null) {
+            checks.positive("maxIntradayPoints", request.maxIntradayPoints());
+        }
+        if (request.maxDailyCloses() != null) {
+            checks.positive("maxDailyCloses", request.maxDailyCloses());
+        }
     }
 }

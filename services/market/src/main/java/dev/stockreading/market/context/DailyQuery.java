@@ -29,7 +29,8 @@ import tools.jackson.databind.ObjectMapper;
  * <p>ETF 목록은 종목 테이블의 국내 ETF 중 관계가 HELD 또는 WATCH인 종목이다. 받은 시각이 [하한, 기준 시각] 안인
  * 국내 일봉(daily-price)이 있으면 값을 싣고, 없거나 읽지 못하면 값을 비우고 이유를 싣되, 받은 시각이 같은 범위 안인 장중 시세가
  * 있으면 그 시세로 계산한 하루 등락 대체값을 싣는다. 미국 종목은 대응표로 찾고, 해외 등락률·세계지수 계산·받은 시각 하한은
- * 배경 자료 응답(market.context)과 같은 규칙을 쓴다. 저장 상태를 바꾸지 않는 조회라 같은 요청을 다시 받아도
+ * 배경 자료 응답(market.context)과 같은 규칙을 쓴다. 요청한 판에만 개장 흐름, 그래프용 장중 흐름(1분 간격 시세)과
+ * 기간 종가(여러 거래일 일봉 종가)를 ETF마다 붙인다. 저장 상태를 바꾸지 않는 조회라 같은 요청을 다시 받아도
  * 같은 내용으로 다시 답할 뿐이다(브리핑은 연결 실패·시간 초과 때 같은 요청을 다시 부른다).
  */
 @Component
@@ -48,13 +49,15 @@ class DailyQuery {
     private final OperationsReader operationsReader;
     private final OpenFlowCalculator openFlow;
     private final DayRateFallback dayRateFallback;
+    private final IntradaySeriesCalculator intradaySeries;
+    private final DailyCloseHistory dailyCloses;
 
     DailyQuery(BackgroundRepository repository, WorldIndexRates worldIndexRates,
             OverseasCloseRateQuery closeRateQuery, HoldingsPort holdings, MemberChangesPort memberChanges,
             ContextProperties contextProperties,
             DailyProperties dailyProperties, OperationsReader operationsReader,
             ObjectMapper mapper, OpenFlowPort openFlowPort, IntradayQuotePort intradayQuotes,
-            MarketProperties marketProperties) {
+            IntradaySeriesPort intradaySeriesPort, MarketProperties marketProperties) {
         this.repository = repository;
         this.marketBackground = new MarketBackground(repository, worldIndexRates,
                 contextProperties.worldIndexPrevLookback());
@@ -68,6 +71,9 @@ class DailyQuery {
         this.openFlow = new OpenFlowCalculator(openFlowPort, mapper, marketProperties.openPriceFields(),
                 marketProperties.prevCloseFields());
         this.dayRateFallback = new DayRateFallback(intradayQuotes, mapper, marketProperties.prevCloseFields());
+        this.intradaySeries = new IntradaySeriesCalculator(intradaySeriesPort, openFlowPort, mapper,
+                marketProperties.prevCloseFields());
+        this.dailyCloses = new DailyCloseHistory(repository, dailyPriceReader);
     }
 
     /** 내부 조회 API 가 부른다. 같은 요청에는 같은 내용을 돌려준다. */
@@ -75,7 +81,8 @@ class DailyQuery {
         OffsetDateTime asOf = OffsetDateTime.parse(request.asOf());
         OffsetDateTime requestedSince = OffsetDateTime.parse(request.since());
         if (request.maxResponseBytes() < 1 || request.maxEtfs() < 1 || request.maxTickers() < 1
-                || requestedSince.isAfter(asOf)) {
+                || requestedSince.isAfter(asOf) || notPositive(request.maxIntradayPoints())
+                || notPositive(request.maxDailyCloses())) {
             // 잘못된 요청은 답하지 않는다. 내부 조회 API 는 먼저 400 으로 거른다.
             throw new IllegalArgumentException("invalid daily request jobId=" + request.jobId()
                     + " seq=" + request.seq());
@@ -132,6 +139,12 @@ class DailyQuery {
         if (request.openFlowSince() != null) {
             addOpenFlow(request, etfs, asOf);
         }
+        if (request.intradaySince() != null) {
+            addIntradaySeries(request, etfs, asOf);
+        }
+        if (request.wantsDailyCloses()) {
+            addDailyCloses(request, etfs, asOf);
+        }
 
         Set<String> tickers = new LinkedHashSet<>();
         etfs.forEach(etf -> tickers.addAll(etf.tickers()));
@@ -174,6 +187,63 @@ class DailyQuery {
             // 종목코드는 보유 종목이 드러나므로 건수만 남긴다.
             log.warn("open flow unavailable jobId={} seq={} etfs={}", request.jobId(), request.seq(), failed);
         }
+    }
+
+    /**
+     * 요청했을 때만 ETF마다 그래프용 장중 흐름을 붙인다. 읽을 구간은 요청 시작 시각부터 기준 시각까지이고, 안전 상한보다 길면
+     * 기준 시각에서 그 기간만큼만 거슬러 읽는다. 점 수는 요청값과 안전 상한 중 작은 값까지다. 한 ETF의 조회가 실패해도
+     * 나머지 응답은 보낸다(그 ETF는 칸이 없다).
+     */
+    private void addIntradaySeries(DailyRequest request, List<DailyPayload.Etf> etfs, OffsetDateTime asOf) {
+        OffsetDateTime requested = OffsetDateTime.parse(request.intradaySince());
+        if (requested.isAfter(asOf)) {
+            throw new IllegalArgumentException("invalid daily request jobId=" + request.jobId()
+                    + " seq=" + request.seq());
+        }
+        OffsetDateTime floor = asOf.minus(dailyProperties.intradayMaxWindow());
+        OffsetDateTime from = requested.isAfter(floor) ? requested : floor;
+        int maxPoints = request.maxIntradayPoints() == null ? dailyProperties.intradayMaxPoints()
+                : Math.min(request.maxIntradayPoints(), dailyProperties.intradayMaxPoints());
+        int failed = 0;
+        for (int i = 0; i < etfs.size(); i++) {
+            DailyPayload.Etf etf = etfs.get(i);
+            try {
+                etfs.set(i, etf.withIntradaySeries(intradaySeries.calculate(etf.symbol(), from, asOf, maxPoints)));
+            } catch (RuntimeException e) {
+                failed++;
+            }
+        }
+        if (failed > 0) {
+            // 종목코드는 보유 종목이 드러나므로 건수만 남긴다.
+            log.warn("intraday series unavailable jobId={} seq={} etfs={}", request.jobId(), request.seq(), failed);
+        }
+    }
+
+    /**
+     * 요청했을 때만 ETF마다 그래프용 기간 종가를 붙인다. 받은 시각이 [기준 시각 - 안전 기간, 기준 시각] 안인 국내 일봉 원문을 쓰며,
+     * 판 범위(since)와는 따로 둔다(몇 달 치를 모아야 하므로). 거래일 수는 요청값과 안전 상한 중 작은 값까지다.
+     * 한 ETF의 조회가 실패해도 나머지 응답은 보낸다(그 ETF는 칸이 없다).
+     */
+    private void addDailyCloses(DailyRequest request, List<DailyPayload.Etf> etfs, OffsetDateTime asOf) {
+        OffsetDateTime from = asOf.minus(dailyProperties.dailyClosesLookback());
+        int max = Math.min(request.maxDailyCloses(), dailyProperties.dailyClosesMax());
+        int failed = 0;
+        for (int i = 0; i < etfs.size(); i++) {
+            DailyPayload.Etf etf = etfs.get(i);
+            try {
+                etfs.set(i, etf.withDailyCloses(dailyCloses.collect(etf.symbol(), from, asOf, max)));
+            } catch (RuntimeException e) {
+                failed++;
+            }
+        }
+        if (failed > 0) {
+            // 종목코드는 보유 종목이 드러나므로 건수만 남긴다.
+            log.warn("daily closes unavailable jobId={} seq={} etfs={}", request.jobId(), request.seq(), failed);
+        }
+    }
+
+    private static boolean notPositive(Integer value) {
+        return value != null && value < 1;
     }
 
     /** 대체값은 부가 정보라 시세 조회가 실패해도 그 ETF는 일봉 없음 그대로 보낸다. */

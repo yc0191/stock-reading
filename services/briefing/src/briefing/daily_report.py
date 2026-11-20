@@ -56,6 +56,7 @@ from briefing.llm import (API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCall
                           attempt_usage,
                           llm_config)
 from briefing.open_flow import OPEN_SOURCE_TEXT, OpenFlow, signed
+from briefing.price_series import DailyCloses, IntradaySeries
 from briefing.move_figures import USD_KRW_NAME, display, exchange_rate_figure, investor_flows, overseas_quotes
 from briefing.sources import (
     BACKGROUND_LABEL,
@@ -191,6 +192,10 @@ class EtfDay:
     # 하루 등락 대체값(응답의 intradayFallback). 마감 후 판에서 판 범위 안에 받은 것만 남는다.
     intraday_at: datetime | None = None
     intraday_price: str | None = None
+    # 그래프용 장중 흐름·기간 종가(응답의 선택 칸 intradaySeries·dailyCloses). 칸이 없거나 범위 밖이면 None이다.
+    # 그래프에만 쓰고 LLM 입력에는 넣지 않는다.
+    intraday_series: IntradaySeries | None = None
+    daily_closes: DailyCloses | None = None
 
     def has_day(self) -> bool:
         if self.is_fallback():

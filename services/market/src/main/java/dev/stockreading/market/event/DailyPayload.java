@@ -44,23 +44,35 @@ public record DailyPayload(
             boolean tickersTruncated,
             @JsonInclude(JsonInclude.Include.NON_NULL) ContextPayload.EtfInfo etf,
             @JsonInclude(JsonInclude.Include.NON_NULL) OpenFlow openFlow,
-            @JsonInclude(JsonInclude.Include.NON_NULL) IntradayFallback intradayFallback) {
+            @JsonInclude(JsonInclude.Include.NON_NULL) IntradayFallback intradayFallback,
+            @JsonInclude(JsonInclude.Include.NON_NULL) IntradaySeries intradaySeries,
+            @JsonInclude(JsonInclude.Include.NON_NULL) DailyCloses dailyCloses) {
 
         public Etf(String symbol, String date, String close, String prevClose, String rate, String fetchedAt,
                 String missingReason, List<String> tickers, boolean tickersTruncated, ContextPayload.EtfInfo etf) {
             this(symbol, date, close, prevClose, rate, fetchedAt, missingReason, tickers, tickersTruncated, etf, null,
-                    null);
+                    null, null, null);
         }
 
         public Etf withOpenFlow(OpenFlow flow) {
             return new Etf(symbol, date, close, prevClose, rate, fetchedAt, missingReason, tickers, tickersTruncated,
-                    etf, flow, intradayFallback);
+                    etf, flow, intradayFallback, intradaySeries, dailyCloses);
         }
 
         /** 일봉 없는 ETF에 장중 시세로 계산한 전일 종가·하루 등락을 채운다. missingReason은 일봉이 없는 이유로 남는다. */
         public Etf withIntradayFallback(String fallbackPrevClose, String fallbackRate, IntradayFallback fallback) {
             return new Etf(symbol, date, close, fallbackPrevClose, fallbackRate, fetchedAt, missingReason, tickers,
-                    tickersTruncated, etf, openFlow, fallback);
+                    tickersTruncated, etf, openFlow, fallback, intradaySeries, dailyCloses);
+        }
+
+        public Etf withIntradaySeries(IntradaySeries series) {
+            return new Etf(symbol, date, close, prevClose, rate, fetchedAt, missingReason, tickers, tickersTruncated,
+                    etf, openFlow, intradayFallback, series, dailyCloses);
+        }
+
+        public Etf withDailyCloses(DailyCloses closes) {
+            return new Etf(symbol, date, close, prevClose, rate, fetchedAt, missingReason, tickers, tickersTruncated,
+                    etf, openFlow, intradayFallback, intradaySeries, closes);
         }
 
         public Etf(String symbol, String date, String close, String prevClose, String rate, String fetchedAt,
@@ -111,6 +123,45 @@ public record DailyPayload(
         public static OpenFlow none() {
             return new OpenFlow(OPEN_FLOW_NO_SNAPSHOT, null, null, null, null, null, null, null, null, null, null);
         }
+    }
+
+    public static final String INTRADAY_SERIES_PRESENT = "present";
+    public static final String INTRADAY_SERIES_NO_SNAPSHOT = "no-snapshot";
+
+    /**
+     * 그래프용 장중 흐름. 요청이 intradaySince를 보냈을 때만 ETF마다 담긴다. 범위 안 시세를 1분마다 그 분의 마지막 시세 한 점으로
+     * 솎은 것이며 points는 시세 시각 오름차순이다. 범위 안 시세가 없으면 status만 no-snapshot이고 prevClose는 null, points는 비어 있다.
+     * 점 수가 상한을 넘으면 늦은 점부터 남기고 truncated가 true다.
+     */
+    public record IntradaySeries(String status, String prevClose, boolean truncated, List<IntradayPoint> points) {
+
+        public static IntradaySeries none() {
+            return new IntradaySeries(INTRADAY_SERIES_NO_SNAPSHOT, null, false, List.of());
+        }
+    }
+
+    /** 장중 흐름의 한 점: 시세 시각, 가격(원), 전일 종가 대비 등락률(%, 소수 둘째 자리 반올림, 전일 종가를 모르면 null). */
+    public record IntradayPoint(String at, String price, String rateVsPrevClose) {
+    }
+
+    public static final String DAILY_CLOSES_PRESENT = "present";
+    public static final String DAILY_CLOSES_NO_DAILY_PRICE = "no-daily-price";
+
+    /**
+     * 그래프용 기간 종가. 요청이 maxDailyCloses를 보냈을 때만 ETF마다 담긴다. 저장한 국내 일봉 원문들의 레코드를 일자로 모아
+     * 같은 일자는 가장 늦게 받은 원문의 값을 쓰며, points는 일자 오름차순이다. fetchedAt은 쓴 원문 중 가장 늦게 받은 것의 받은 시각이다.
+     * 원문이 없으면 status만 no-daily-price이고 fetchedAt은 null, points는 비어 있다. 거래일 수가 상한을 넘으면 최근 일자부터 남기고
+     * truncated가 true다.
+     */
+    public record DailyCloses(String status, String fetchedAt, boolean truncated, List<DailyClose> points) {
+
+        public static DailyCloses none() {
+            return new DailyCloses(DAILY_CLOSES_NO_DAILY_PRICE, null, false, List.of());
+        }
+    }
+
+    /** 기간 종가의 하루: 일자(yyyyMMdd), 종가, 등락률. 값은 일봉 원문을 공백만 걷어 옮기며 등락률이 없으면 null이다. */
+    public record DailyClose(String date, String close, String rate) {
     }
 
     /**

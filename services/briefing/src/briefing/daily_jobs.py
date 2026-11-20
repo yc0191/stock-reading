@@ -79,6 +79,8 @@ from briefing.job_log import (
 from briefing.evidence import MARKET_WIDE
 from briefing.final_check import FinalCheck
 from briefing.open_flow import in_range, open_flow_start, parse_open_flow
+from briefing.price_series import (closes_in_range, intraday_in_range, intraday_series_start, parse_daily_closes,
+                                   parse_intraday_series)
 from briefing.job_step import job_scope
 from briefing.ports import FailureReason, RequestPort
 from briefing.queries import Query, QueryKind, QueryPort, QueryResult
@@ -210,6 +212,8 @@ class _DailyJob:
     researching: bool = False
     # 아침 판만: 개장 시세를 읽을 구간의 시작. 판 시각이 장 시작 전이라 읽지 않으면 None.
     open_flow_since: datetime | None = None
+    # 두 판 모두: 그래프용 장중 흐름을 읽을 구간의 시작. 판 시각이 장 시작 전이라 읽지 않으면 None.
+    intraday_since: datetime | None = None
     # 판을 시작시킨 쪽이 알린 빠진 자료(못 받은 수집 자료, 알림 없이 시작함). 판의 자료 없음 목록 맨 앞에 붙는다.
     notes: tuple[str, ...] = ()
 
@@ -264,6 +268,7 @@ class DailyCore:
                         notes=notes)
         if edition == EDITION_MORNING:
             job.open_flow_since = open_flow_start(scheduled_for, self.core_settings)
+        job.intraday_since = intraday_series_start(scheduled_for, self.core_settings)
         self._jobs[job_id] = job
         # 작업 한 줄은 시작 때 만들고 끝날 때 고친다. 입력은 시작시킨 알림 원문(한도 시각이면 그 사실)이다.
         self.job_log.start(JobStart(job_id, JobKind(edition), raw,
@@ -393,6 +398,11 @@ class DailyCore:
             payload["includeOperations"] = True
         if job.open_flow_since is not None:
             payload["openFlowSince"] = format_timestamp(job.open_flow_since)
+        # 그래프용 자료. 장중 흐름은 장 시작 뒤 판만, 기간 종가는 두 판 모두 요청한다.
+        if job.intraday_since is not None:
+            payload["intradaySince"] = format_timestamp(job.intraday_since)
+            payload["maxIntradayPoints"] = s.max_intraday_points
+        payload["maxDailyCloses"] = s.max_daily_closes
         self._submit(job, QueryKind.DAILY, STAGE_DAILY_DATA, payload, now, self._on_daily_data)
 
     def _send_articles(self, job: _DailyJob, symbol: str, now: datetime) -> None:
@@ -446,7 +456,18 @@ class DailyCore:
             job.edition != EDITION_POST_CLOSE or not job.range_start <= e.intraday_at <= job.scheduled_for) else e
                       for e in rechecked)
         self._note_excluded(job, "intradayFallback", sum(1 for a, b in zip(rechecked, final) if a is not b))
-        return final
+        # 그래프용 장중 흐름은 읽은 구간(장 시작~판 시각) 밖이거나 요청하지 않았는데 온 것을 버린다.
+        s = self.settings
+        series = tuple(replace(e, intraday_series=None) if e.intraday_series is not None and (
+            job.intraday_since is None or not intraday_in_range(e.intraday_series, job.intraday_since,
+                                                                 job.scheduled_for, s.max_intraday_points)) else e
+                       for e in final)
+        self._note_excluded(job, "intradaySeries", sum(1 for a, b in zip(final, series) if a is not b))
+        # 기간 종가는 쓴 일봉을 받은 시각이 판 범위 밖이면(상태형 자료) 버린다.
+        closes = tuple(replace(e, daily_closes=None) if e.daily_closes is not None and not closes_in_range(
+            e.daily_closes, job.range_start, job.scheduled_for, s.max_daily_closes) else e for e in series)
+        self._note_excluded(job, "dailyCloses", sum(1 for a, b in zip(series, closes) if a is not b))
+        return closes
 
     def _recheck_state(self, job: _DailyJob, close_rates: tuple[CloseRate, ...],
                        background: tuple[Background, ...]) -> tuple[tuple[CloseRate, ...], tuple[Background, ...]]:
@@ -936,7 +957,18 @@ def _parse_etf_day(e: dict[str, Any]) -> EtfDay:
                   tuple(e["tickers"]), bool(e["tickersTruncated"]), parse_etf_info(e.get("etf")),
                   e.get("missingReason"), open_flow=parse_open_flow(e.get("openFlow")),
                   intraday_at=parse_timestamp(fallback["receivedAt"]) if fallback is not None else None,
-                  intraday_price=fallback["price"] if fallback is not None else None)
+                  intraday_price=fallback["price"] if fallback is not None else None,
+                  intraday_series=_optional_chart_field(parse_intraday_series, e.get("intradaySeries")),
+                  daily_closes=_optional_chart_field(parse_daily_closes, e.get("dailyCloses")))
+
+
+def _optional_chart_field(parse: Callable[[Any], Any], raw: Any) -> Any:
+    """그래프용 선택 칸. 형식이 틀려도 그 칸만 없는 것으로 두어, 일봉·등락 같은 본문 자료까지 버리지 않는다."""
+    try:
+        return parse(raw)
+    except (KeyError, TypeError, ValueError) as error:
+        log.warning("malformed chart field in the daily response: %s", type(error).__name__)
+        return None
 
 
 def _malformed(kind: QueryKind, job_id: str, error: Exception) -> None:

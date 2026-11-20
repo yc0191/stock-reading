@@ -46,6 +46,22 @@ class DailyPriceReaderTest {
         assertThat(reader.latest("{\"dataBody\": {}}")).isEmpty();
     }
 
+    @Test
+    void closesReadEveryRecordWithADateAndACloseKeepingTheFirstOfADuplicatedDate() {
+        String response = body(
+                record("20261020", "  9850 ", "10000", " -1.50"),
+                record("20261019", "10000", "9900", "   "),
+                record("20261019", "1", "1", "0.00"),
+                record("        ", "9800", "9700", "1.03"),
+                record("20261016", "   ", "9800", "1.02"));
+
+        assertThat(reader.closes(response)).containsExactly(
+                new DailyPriceReader.Close("20261020", "9850", "-1.50"),
+                new DailyPriceReader.Close("20261019", "10000", null));
+        assertThat(reader.closes("not json")).isEmpty();
+        assertThat(reader.closes("{\"dataBody\": {}}")).isEmpty();
+    }
+
     static String body(String... records) {
         return "{\"dataBody\": {\"out2\": [" + String.join(", ", records) + "]}}";
     }
