@@ -71,10 +71,16 @@ class ArticleQueryIntegrationTest {
         insertResearch("r-other-job", SINCE.plusHours(5), OTHER_RESEARCH_JOB, "ITR001");
         insertResearch("r-until", UNTIL, RESEARCH_JOB, "ITR002");
         insertResearch("r-after", UNTIL.plusSeconds(1), RESEARCH_JOB, "ITR001");
+        // 앞선 작업이 먼저 찾은 기사를 뒤의 작업(다음 회차, 다른 문장)이 다시 찾은 경우. 예전 칸에는 처음 작업만 남는다.
+        insertResearch("r-shared", SINCE.plusHours(6), FIRST_ROUND_JOB, "ITR004");
+        linkResearch("r-shared", SECOND_ROUND_JOB);
+        insertResearch("r-second-only", SINCE.plusHours(7), SECOND_ROUND_JOB, "ITR004");
     }
 
     private static final UUID RESEARCH_JOB = UUID.fromString("b1000000-0000-4000-8000-000000000001");
     private static final UUID OTHER_RESEARCH_JOB = UUID.fromString("b2000000-0000-4000-8000-000000000002");
+    private static final UUID FIRST_ROUND_JOB = UUID.fromString("b3000000-0000-4000-8000-000000000003");
+    private static final UUID SECOND_ROUND_JOB = UUID.fromString("b4000000-0000-4000-8000-000000000004");
 
     @Test
     void researchJobQueryReturnsOnlyThatJobsArticlesInRangeWhateverTheirTags() {
@@ -83,6 +89,15 @@ class ArticleQueryIntegrationTest {
         // 기간 양끝은 포함하고, 다른 작업의 기사와 정기 수집 기사(q-*)는 빠진다.
         assertThat(found).extracting(ArticleQueryRepository.StoredArticle::title)
                 .containsExactly("r-until", "r-middle", "r-since");
+    }
+
+    @Test
+    void articleFoundAgainByALaterResearchJobIsReturnedForBothJobs() {
+        assertThat(repository.findByResearchJob(FIRST_ROUND_JOB, SINCE, UNTIL, 100))
+                .extracting(ArticleQueryRepository.StoredArticle::title).containsExactly("r-shared");
+        // 뒤의 작업은 자기가 처음 찾은 기사와 앞선 작업이 먼저 저장한 기사를 함께 받는다.
+        assertThat(repository.findByResearchJob(SECOND_ROUND_JOB, SINCE, UNTIL, 100))
+                .extracting(ArticleQueryRepository.StoredArticle::title).containsExactly("r-second-only", "r-shared");
     }
 
     @Test
@@ -178,6 +193,16 @@ class ArticleQueryIntegrationTest {
     private static void insertResearch(String title, OffsetDateTime publishedAt, UUID jobId, String symbol) {
         insert(title, publishedAt, symbol);
         jdbc.sql("UPDATE news_article SET from_research = true, research_job_id = :jobId WHERE title = :title")
+                .param("jobId", jobId).param("title", title).update();
+        linkResearch(title, jobId);
+    }
+
+    // 저장 경로(NewsArticleRepository)처럼 기사와 그 기사를 찾은 재검색 작업을 잇는다.
+    private static void linkResearch(String title, UUID jobId) {
+        jdbc.sql("""
+                        INSERT INTO news_article_research (article_id, research_job_id)
+                        SELECT id, :jobId FROM news_article WHERE title = :title
+                        """)
                 .param("jobId", jobId).param("title", title).update();
     }
 

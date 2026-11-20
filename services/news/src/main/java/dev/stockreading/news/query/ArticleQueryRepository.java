@@ -52,14 +52,16 @@ class ArticleQueryRepository {
     }
 
     /**
-     * 그 재검색 작업이 처음 찾은 기사(research_job_id 가 그 값인 기사)를 [since, until] 구간(양끝 포함)에서 최신순으로
-     * 최대 limit건 돌려준다. 종목 태그는 보지 않는다. 순서 규칙(최신순, 같으면 id)은 findByRange 와 같다.
+     * 그 재검색 작업이 찾은 기사(news_article_research 로 그 작업과 이어진 기사)를 [since, until] 구간(양끝 포함)에서
+     * 최신순으로 최대 limit건 돌려준다. 앞선 작업이 먼저 찾은 기사도 이 작업이 다시 찾았으면 들어간다. 종목 태그는 보지
+     * 않는다. 순서 규칙(최신순, 같으면 id)은 findByRange 와 같다. 연결은 (기사, 작업)마다 한 행이라 조인해도 겹치지 않는다.
      */
     List<StoredArticle> findByResearchJob(UUID researchJobId, OffsetDateTime since, OffsetDateTime until, int limit) {
         return jdbc.sql("""
                         SELECT a.article_key, a.title, a.summary, a.publisher, a.url, a.published_at
                         FROM news_article a
-                        WHERE a.research_job_id = :researchJobId
+                        JOIN news_article_research r ON r.article_id = a.id
+                        WHERE r.research_job_id = :researchJobId
                           AND a.published_at >= :since AND a.published_at <= :until
                         ORDER BY a.published_at DESC, a.id DESC
                         LIMIT :limit
