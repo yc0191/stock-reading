@@ -20,7 +20,7 @@
 - 판정 기준은 저장소의 기준 파일(`ops-checks/`)이다. 이미지에 실려 배포되고, 결과마다 파일 바이트의 SHA-256 지문을 남겨 어느 기준으로 쟀는지 대조한다. 형식의 원본은 `services/ops-checker/src/ops_checker/criteria.py`다.
 - 지표 SQL은 읽기 전용 계정으로 계산한다. 이 계정은 market·briefing 스키마를 앞으로 생길 표까지 읽고, personal에는 권한이 없으며, 쓰기는 `ops` 스키마(`infra/db/ops/`)에만 한다. 필요한 표·열만 읽는다는 ADR-004의 읽기 규칙에 대한 예외이며, 이유는 지표마다 읽는 표가 달라 기준 파일을 쓸 때마다 권한을 고치지 않기 위해서다.
 - 결과는 DB `ops` 장부와 S3 결과 파일에 남긴다. 파일에는 비율·판정·버전·지문만 담는다(`results.py`). 확인기는 결과 파일을 올리기만 하는 전용 사용자의 키로 올리고, 서버 계정의 키는 받지 않는다.
-- 판정은 GitHub Actions(`.github/workflows/ops-verdict.yml`, `scripts/ops_verdict.py`)가 한다. 서버가 밖으로 나가 결과를 올리고(ADR-007), Actions가 결과 버킷을 읽어 지문과 조치 커밋의 운영 반영을 확인하고 측정일을 세어 `verifying` 이슈에 댓글을 달고 `check-passed`/`check-failed`로 라벨을 바꾼다. 이슈를 닫는 것은 사람이다.
+- 판정은 GitHub Actions(`.github/workflows/ops-verdict.yml`, `scripts/ops_verdict.py`)가 한다. 서버가 밖으로 나가 결과를 올리고(ADR-007), Actions가 결과 버킷을 읽어 지문과 조치 커밋의 운영 반영을 확인하고 측정일을 세어 `verifying` 이슈에 댓글을 달고, 측정일이 차면 통과·실패를 최종 댓글로 남기고 `verifying`을 뗀다. 이슈를 닫는 것은 사람이다.
 - 결과 파일이 없거나 오류가 있으면 작업을 실패로 끝내 GitHub 실패 알림으로 확인기·수집기의 멈춤을 알린다.
 - LLM을 쓰지 않는다. 잴 수 없는 항목은 기준 파일에 사람 확인(`human`)으로 적고, 댓글에 개수만 알린다.
 - 공개 저장소이므로 댓글과 로그에는 비율·판정·날짜·버전·이슈 번호·실패 종류만 쓴다. 건수·종목·서버 주소·버킷 이름·SQL 본문은 쓰지 않는다.

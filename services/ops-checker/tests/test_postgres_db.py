@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 import pytest
 
+from ops_checker import store
 from ops_checker.metrics import MetricError
 from ops_checker.store import PostgresRunStore, PostgresScalarQuery, ResultRow, RunRecord, connector
 
@@ -21,7 +22,9 @@ def connect():
     return connector(parsed.hostname, parsed.port or 5432, parsed.path.lstrip("/"), USER, PASSWORD)()
 
 
-def test_reads_one_cell_and_rejects_writes_and_slow_queries():
+def test_reads_one_cell_and_rejects_writes_and_slow_queries(monkeypatch):
+    # 실제 상한까지 기다리지 않게 상한을 1초로 줄여 시간 초과 처리만 확인한다.
+    monkeypatch.setattr(store, "SQL_TIMEOUT_SECONDS", 1)
     query = PostgresScalarQuery(connect)
     assert query.scalar("SELECT 0.25::numeric") == [(Decimal("0.25"),)]
     with pytest.raises(MetricError) as write:
@@ -31,7 +34,7 @@ def test_reads_one_cell_and_rejects_writes_and_slow_queries():
         query.scalar("SELECT 1 FROM no_such_table")
     assert broken.value.reason == "sql-failed"
     with pytest.raises(MetricError) as slow:
-        query.scalar("SELECT pg_sleep(11)")
+        query.scalar("SELECT pg_sleep(2)")
     assert slow.value.reason == "timeout"
     assert query.scalar("SELECT 1") == [(1,)]   # 실패 뒤에도 연결이 되살아 있다
 

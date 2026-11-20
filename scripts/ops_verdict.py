@@ -1,4 +1,4 @@
-"""조치 판정: 확인기가 남긴 결과 파일을 읽어 이슈에 달 댓글과 라벨 변경을 '할 일 파일'로 만든다.
+"""조치 판정: 확인기가 남긴 결과 파일을 읽어 이슈에 달 댓글과 뗄 라벨을 '할 일 파일'로 만든다.
 
 사용:
   python3 scripts/ops_verdict.py --results-dir R --criteria-dir C --issues I --repo G --today YYYY-MM-DD --out O
@@ -7,7 +7,7 @@
 - C: 기준 파일 폴더(ops-checks/). 지문은 파일 바이트의 SHA-256
 - I: {"<이슈 번호>": {"open": bool, "labels": [str], "comments": [str]}} (comments 는 이 작업이 단 댓글만)
 - G: git 저장소 경로. 조치 커밋이 그날 운영 버전의 조상인지 본다
-- O: {"issues": {"<이슈>": {"comments": [...], "remove_labels": [...], "add_labels": [...]}}, "summary": [...]}
+- O: {"issues": {"<이슈>": {"comments": [...], "remove_labels": [...]}}, "summary": [...]}
 - 선택: --alert-since YYYY-MM-DD 를 주면 그 날짜 이하의 '빠진 평일'과 'error 지표가 있는 날'은 이미 알린 실패로 보고
   종료 코드에 넣지 않고 summary 에만 적는다(날마다 같은 실패가 반복 알림되지 않게). 주지 않으면 모두 실패로 친다.
 - 선택: --manual 은 손 실행용이다. 오늘 결과 파일이 아직 없어도 실패로 치지 않는다(오늘은 파일이 있을 때만 처리).
@@ -62,7 +62,6 @@ class Criteria:
 class IssueTodo:
     comments: list[str] = field(default_factory=list)
     remove_labels: list[str] = field(default_factory=list)
-    add_labels: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -206,7 +205,7 @@ def final_comment(c: Criteria, verdict: str) -> str:
     return "\n".join([
         f"<!-- ops-check-final attempt={c.attempt} verdict={verdict} -->",
         f"**조치 판정 결과: {result}** 이슈 #{c.issue} 시도 {c.attempt}, 측정일 {c.days}일 완료. {detail}",
-        f"`verifying` 라벨을 떼고 `check-{'passed' if verdict == 'pass' else 'failed'}` 라벨을 붙였습니다. 이슈는 닫지 않았으니 확인 뒤 사람이 닫습니다."])
+        "`verifying` 라벨을 뗍니다. 이슈는 닫지 않으니 확인 뒤 사람이 닫습니다."])
 
 
 def judge_criteria(c: Criteria, days: dict[str, dict[str, Any] | None], info: dict[str, Any] | None,
@@ -261,8 +260,8 @@ def judge_criteria(c: Criteria, days: dict[str, dict[str, Any] | None], info: di
         verdict = "pass" if all(v == "pass" for v in counted.values()) else "fail"
         if not has_final:
             todo.comments.append(final_comment(c, verdict))
+        # 결과(통과·실패)는 최종 댓글에만 남긴다. 결과 라벨은 두지 않아 라벨 수를 늘리지 않는다.
         todo.remove_labels.append("verifying")
-        todo.add_labels.append("check-passed" if verdict == "pass" else "check-failed")
         report.summary.append(f"{tag}: 측정일 {c.days}일 완료, {VERDICT_LABEL[verdict]}")
 
 
@@ -281,13 +280,12 @@ def run(results_dir: Path, criteria_dir: Path, issues: dict[str, Any], repo: Pat
     # 라벨 변경은 같은 이슈의 여러 시도에서 겹칠 수 있어 중복만 없앤다.
     for todo in report.todo.values():
         todo.remove_labels = list(dict.fromkeys(todo.remove_labels))
-        todo.add_labels = list(dict.fromkeys(todo.add_labels))
     return report
 
 
 def write_output(report: Report, out: Path) -> None:
-    issues = {str(n): {"comments": t.comments, "remove_labels": t.remove_labels, "add_labels": t.add_labels}
-              for n, t in sorted(report.todo.items()) if t.comments or t.remove_labels or t.add_labels}
+    issues = {str(n): {"comments": t.comments, "remove_labels": t.remove_labels}
+              for n, t in sorted(report.todo.items()) if t.comments or t.remove_labels}
     out.write_text(json.dumps({"issues": issues, "summary": report.summary}, ensure_ascii=False, indent=2) + "\n",
                    encoding="utf-8")
 

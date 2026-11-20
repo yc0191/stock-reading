@@ -73,8 +73,7 @@ sudo /opt/stock-reading/infra/deploy/server/apply-deploy.sh recover
 2. Parameter Store(`DEPLOY_CONFIG_PARAM_PATH` 아래)에 `OPS_CHECKER_DB_PASSWORD`와, 확인기용 쓰기 전용 사용자(`terraform output ops_results_writer_iam_user`)의 접근 키(`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)를 넣습니다. 키는 콘솔에서 만들고, 서버 계정의 키는 넣지 않습니다. 값은 로그·문서에 남기지 않습니다. 비밀번호는 배포 때 `flyway-migrate`가 `ops` 계정을 만들 때도 씁니다.
 3. 서비스 서버 `/etc/stock-reading/deploy.env`에 `OPS_RESULTS_BUCKET`(결과 버킷 이름)을 넣습니다(`server/deploy.env.example`). 비어 있으면 확인기가 뜨지 않습니다.
 4. GitHub 저장소 변수 `AWS_REGION`·`OPS_RESULTS_BUCKET`과 읽기 신분(`OPS_RESULTS_AWS_ROLE_ARN`, 접근 키를 쓰는 계정은 비밀값 `OPS_RESULTS_AWS_ACCESS_KEY_ID`·`OPS_RESULTS_AWS_SECRET_ACCESS_KEY`)을 넣습니다(`terraform output`).
-5. 결과 라벨 `check-passed`, `check-failed`를 만듭니다.
-6. 확인기가 든 버전이 서비스 서버에 배포되어 첫 개장일 결과 파일이 올라온 것을 확인한 뒤, 저장소 변수 `OPS_VERDICT_ENABLED`를 `true`로 켭니다. 그 전에 켜면 결과 파일이 없다는 실패 알림이 옵니다. 손 실행(`workflow_dispatch`)은 이 값과 상관없이 돕니다.
+5. 확인기가 든 버전이 서비스 서버에 배포되어 첫 개장일 결과 파일이 올라온 것을 확인한 뒤, 저장소 변수 `OPS_VERDICT_ENABLED`를 `true`로 켭니다. 그 전에 켜면 결과 파일이 없다는 실패 알림이 옵니다. 손 실행(`workflow_dispatch`)은 이 값과 상관없이 돕니다.
 
 - 확인기는 서버 밖에 포트를 열지 않고 Kafka·DB·S3로 나가기만 합니다.
 - 결과 파일 올리기에 실패한 날(그날 `ops` 장부의 `check_run`이 오류로 남습니다)의 결과는 다시 만들 수 없습니다. 수동 재계산 명령은 아직 없습니다.
