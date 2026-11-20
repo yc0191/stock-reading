@@ -78,7 +78,7 @@ class DailyQueryTest {
                 memberChanges, new ContextProperties(Duration.ofDays(4), 32_768, maxTickers, List.of("C", "S"), Duration.ofDays(7)),
                 new DailyProperties(maxEtfs, null), operationsReader, mapper, openFlowPort, intradayQuotes,
                 new MarketProperties(5, BigDecimal.ONE, List.of("f.a", "f.b", "f.c"), BigDecimal.ONE, List.of("f.open"),
-                        1, BigDecimal.ONE, List.of(), 0, new BigDecimal("2.00")));
+                        1, BigDecimal.ONE, List.of(), 0, new BigDecimal("2.00"), BigDecimal.TEN));
     }
 
     private DailyQuery listener() {

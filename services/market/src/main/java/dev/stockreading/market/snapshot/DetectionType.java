@@ -3,7 +3,8 @@ package dev.stockreading.market.snapshot;
 /** 급변동 감지 유형. wire 값은 market.move 계약의 detectionType이다. */
 enum DetectionType {
     WINDOW("window"),
-    PREV_CLOSE("prevClose");
+    PREV_CLOSE("prevClose"),
+    PREV_CLOSE_HIGH("prevCloseHigh");
 
     private final String wire;
 

@@ -40,6 +40,7 @@ class MarketPropertiesDefaultsTest {
             assertThat(properties.firstTradeFields()).containsExactly("dataBody.acml_vlm", "dataBody.opn_prc");
             assertThat(properties.republishIntervalMinutes()).isEqualTo(120);
             assertThat(properties.republishExceptionPercent()).isEqualByComparingTo("3.00");
+            assertThat(properties.highThresholdPercent()).isEqualByComparingTo("7.00");
         });
     }
 

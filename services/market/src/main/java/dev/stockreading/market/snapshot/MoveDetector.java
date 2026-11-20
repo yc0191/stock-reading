@@ -13,18 +13,20 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
-/** 스냅샷 하나가 유형 1(window), 유형 2(prevClose)에 해당하는지 평가한다. 변동률은 코드가 계산한다(ADR-007). */
+/** 스냅샷 하나가 유형 1(window), 유형 2(prevClose), 레벨 상(prevCloseHigh)에 해당하는지 평가한다. 변동률은 코드가 계산한다(ADR-007). */
 @Component
 class MoveDetector {
 
     private static final Logger log = LoggerFactory.getLogger(MoveDetector.class);
 
     private final PriceSnapshotRepository repository;
+    private final MoveStateRepository states;
     private final MarketProperties properties;
     private final ObjectMapper mapper;
 
-    MoveDetector(PriceSnapshotRepository repository, MarketProperties properties, ObjectMapper mapper) {
+    MoveDetector(PriceSnapshotRepository repository, MoveStateRepository states, MarketProperties properties, ObjectMapper mapper) {
         this.repository = repository;
+        this.states = states;
         this.properties = properties;
         this.mapper = mapper;
         if (!prevCloseEnabled()) {
@@ -45,7 +47,29 @@ class MoveDetector {
     List<Evaluation> evaluate(String symbol, OffsetDateTime asOf, long price, String raw) {
         Long prevClose = prevCloseEnabled() ? readPrevClose(symbol, raw) : null;
         BigDecimal today = prevClose == null ? null : ChangeRate.percent(prevClose, price);
-        return List.of(evaluateWindow(symbol, asOf, price, today), evaluatePrevClose(asOf, price, prevClose, today));
+        return List.of(evaluateWindow(symbol, asOf, price, today), evaluatePrevClose(asOf, price, prevClose, today),
+                evaluateHigh(symbol, asOf, price, prevClose, today));
+    }
+
+    /**
+     * 레벨 상은 상 기준가 대비 변동을 본다. 기준가는 그날 처음엔 전일 종가이고, 상을 발행하면 그 발행 가격으로 바뀐다.
+     * 저장된 발행 가격이 지난 거래일 것이면 쓰지 않아 다음 날은 전일 종가부터 다시 시작한다.
+     * 중(window, prevClose)과 달리 오늘 등락이 아니라 기준가 대비라서, 상을 낸 뒤 반등해도 기준가 대비로 크면 상이다.
+     */
+    private Evaluation evaluateHigh(String symbol, OffsetDateTime asOf, long price, Long prevClose, BigDecimal today) {
+        Long base = states.find(symbol, DetectionType.PREV_CLOSE_HIGH)
+                .filter(state -> !MoveTracker.fromEarlierDay(state.lastPublishedAt(), asOf))
+                .map(MoveState::lastPublishedPrice)
+                .orElse(prevClose);
+        if (base == null || base <= 0) {
+            return Evaluation.unknown(DetectionType.PREV_CLOSE_HIGH);
+        }
+        BigDecimal threshold = properties.highThresholdPercent();
+        BigDecimal change = ChangeRate.percent(base, price);
+        if (change.abs().compareTo(threshold) < 0) {
+            return Evaluation.clear(DetectionType.PREV_CLOSE_HIGH);
+        }
+        return Evaluation.detected(new Detection(DetectionType.PREV_CLOSE_HIGH, base, price, change, threshold, asOf, today));
     }
 
     /**
