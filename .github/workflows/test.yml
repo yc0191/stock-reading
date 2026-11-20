@@ -39,6 +39,18 @@ jobs:
           services/briefing/.venv/bin/python -m pip install -r services/briefing/requirements.txt
       - run: services/briefing/.venv/bin/python -m pytest services/briefing
 
+  ops-checker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-python@v5.6.0
+        with:
+          python-version: "3.13"
+      - run: |
+          python -m venv services/ops-checker/.venv
+          services/ops-checker/.venv/bin/python -m pip install -r services/ops-checker/requirements.txt
+      - run: services/ops-checker/.venv/bin/python -m pytest services/ops-checker
+
   scripts:
     runs-on: ubuntu-latest
     steps:

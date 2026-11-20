@@ -123,7 +123,7 @@ python3 scripts/check_test_map.py --changed --staged           # 스테이징한
 
 지도 검사는 스테이징 여부와 상관없이 작업 폴더의 파일을 봅니다. 커밋하지 않을 새 파일이 지도에 없어도 커밋이 막히므로, 그런 파일은 지우거나 옮겨 두고 커밋합니다.
 
-PR과 `develop`·`main` 푸시 때는 GitHub Actions(`.github/workflows/test.yml`)가 Java 전체, 브리핑, 설정 로더·지도 검사 테스트를 돌립니다. 실제 DB와 실제 서비스 흐름 테스트는 켜는 환경변수가 없어 건너뛰므로 커밋 전에 `scripts/test-all.sh`로 돌립니다. PR 실행에서는 기준 브랜치와의 차이로 `--changed`를 돌린 목록이 실행 결과 요약에 붙습니다(실패로 만들지 않음).
+PR과 `develop`·`main` 푸시 때는 GitHub Actions(`.github/workflows/test.yml`)가 Java 전체, 브리핑, 확인기, 설정 로더·지도 검사 테스트를 돌립니다. 실제 DB와 실제 서비스 흐름 테스트는 켜는 환경변수가 없어 건너뛰므로 커밋 전에 `scripts/test-all.sh`로 돌립니다. PR 실행에서는 기준 브랜치와의 차이로 `--changed`를 돌린 목록이 실행 결과 요약에 붙습니다(실패로 만들지 않음).
 
 ## 지도를 고치는 방법
 

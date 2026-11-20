@@ -136,6 +136,11 @@ resource "aws_iam_role_policy" "ops_results_reader" {
 resource "aws_iam_user" "ops_results_reader" {
   count = local.github_oidc ? 0 : 1
   name  = "${var.name_prefix}-ops-results-reader"
+
+  # 콘솔에서 키를 발급하면 키 설명이 사용자 태그로 붙는다. apply 가 그 태그를 지우지 않게 한다.
+  lifecycle {
+    ignore_changes = [tags]
+  }
 }
 
 resource "aws_iam_user_policy" "ops_results_reader" {
@@ -152,6 +157,11 @@ resource "aws_iam_user_policy" "ops_results_reader" {
 
 resource "aws_iam_user" "ops_results_writer" {
   name = "${var.name_prefix}-ops-results-writer"
+
+  # 콘솔에서 키를 발급하면 키 설명이 사용자 태그로 붙는다. apply 가 그 태그를 지우지 않게 한다.
+  lifecycle {
+    ignore_changes = [tags]
+  }
 }
 
 data "aws_iam_policy_document" "ops_results_writer" {
