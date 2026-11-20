@@ -73,7 +73,7 @@ def w(tmp_path):
     return World(tmp_path)
 
 
-def test_two_passing_days_post_day_comments_final_comment_and_swap_label(w):
+def test_two_passing_days_post_day_comments_final_comment_and_remove_label(w):
     w.criteria(801)
     w.result(MON, 801)
     w.result(TUE, 801, value=0.2)
@@ -83,27 +83,30 @@ def test_two_passing_days_post_day_comments_final_comment_and_swap_label(w):
     assert len(t.comments) == 3
     assert "1/2일째" in t.comments[0] and "2/2일째" in t.comments[1]
     assert "10.00%" in t.comments[0] and "< 0.5" in t.comments[0] and "사람 확인 필요 1개" in t.comments[0]
-    assert t.remove_labels == ["verifying"] and t.add_labels == ["check-passed"]
+    assert "verdict=pass" in t.comments[2] and "결과: 통과" in t.comments[2]
+    assert "check-passed" not in t.comments[2] and "check-failed" not in t.comments[2]
+    assert t.remove_labels == ["verifying"]
 
 
 def test_any_failing_day_makes_check_failed(w):
     w.criteria(801)
     w.result(MON, 801, verdict="fail", value=0.9)
     w.result(TUE, 801)
-    assert w.run(TUE).todo[801].add_labels == ["check-failed"]
+    t = w.run(TUE).todo[801]
+    assert "verdict=fail" in t.comments[-1] and t.remove_labels == ["verifying"]
 
 
 def test_days_already_in_comments_are_not_counted_or_commented_again(w):
     w.criteria(801)
     w.result(MON, 801)
     first = w.run(MON).todo[801]
-    assert len(first.comments) == 1 and first.add_labels == []
+    assert len(first.comments) == 1 and first.remove_labels == []
     w.issues["801"]["comments"] = list(first.comments)
     assert w.run(MON).todo[801].comments == []
     w.result(TUE, 801)
     second = w.run(TUE).todo[801]
     assert "2/2일째" in second.comments[0] and not any("3/2" in c for c in second.comments)
-    assert second.add_labels == ["check-passed"]
+    assert "verdict=pass" in second.comments[-1] and second.remove_labels == ["verifying"]
 
 
 def test_final_verdict_uses_comment_marks_even_if_result_file_is_gone(w):
@@ -113,56 +116,56 @@ def test_final_verdict_uses_comment_marks_even_if_result_file_is_gone(w):
     (w.results_dir / MON / "post-close.json").unlink()
     (w.results_dir / MON).rmdir()
     w.result(TUE, 801)
-    assert w.run(TUE).todo[801].add_labels == ["check-failed"]
+    assert "verdict=fail" in w.run(TUE).todo[801].comments[-1]
 
 
-def test_label_is_retried_without_second_final_comment(w):
+def test_label_removal_is_retried_without_second_final_comment(w):
     w.criteria(801, days=1)
     w.result(MON, 801)
     w.issues["801"]["comments"] = list(w.run(MON).todo[801].comments)
     t = w.run(MON).todo[801]
-    assert t.comments == [] and t.add_labels == ["check-passed"] and t.remove_labels == ["verifying"]
+    assert t.comments == [] and t.remove_labels == ["verifying"]
 
 
 def test_changed_criteria_hash_is_not_counted(w):
     w.criteria(801, days=1)
     w.result(MON, 801, hash_="0" * 64)
     r = w.run(MON)
-    assert r.failures == [] and not r.todo[801].add_labels and any("지문" in s for s in r.summary)
+    assert r.failures == [] and not r.todo[801].remove_labels and any("지문" in s for s in r.summary)
 
 
 def test_fix_commit_not_in_deployed_version_is_not_counted(w):
     w.criteria(801, days=1)
     w.result(MON, 801, deploy=w.unrelated)
     r = w.run(MON)
-    assert not r.todo[801].add_labels and any("배포 전" in s for s in r.summary)
+    assert not r.todo[801].remove_labels and any("배포 전" in s for s in r.summary)
 
 
 def test_fix_commit_equal_to_deployed_version_is_counted(w):
     w.criteria(801, days=1)
     w.result(MON, 801, deploy=w.fix)
-    assert w.run(MON).todo[801].add_labels == ["check-passed"]
+    assert w.run(MON).todo[801].remove_labels == ["verifying"]
 
 
 def test_unresolvable_deploy_version_fails_the_job(w):
     w.criteria(801, days=1)
     w.result(MON, 801, deploy="deadbeef")
     r = w.run(MON)
-    assert any("배포 버전 확인 불가" in f for f in r.failures) and not r.todo[801].add_labels
+    assert any("배포 버전 확인 불가" in f for f in r.failures) and not r.todo[801].remove_labels
 
 
 def test_hold_is_not_counted_and_not_a_failure(w):
     w.criteria(801, days=1)
     w.result(MON, 801, verdict="hold", value=None, reason="empty")
     r = w.run(MON)
-    assert r.failures == [] and not r.todo[801].add_labels
+    assert r.failures == [] and not r.todo[801].remove_labels
 
 
 def test_error_metric_is_not_counted_and_fails_the_job_with_kind_only(w):
     w.criteria(801, days=1)
     w.result(MON, 801, verdict="error", value=None, reason="timeout")
     r = w.run(MON)
-    assert r.failures == [f"{MON} 이슈 #801 시도 t1 error 지표(timeout)"] and not r.todo[801].add_labels
+    assert r.failures == [f"{MON} 이슈 #801 시도 t1 error 지표(timeout)"] and not r.todo[801].remove_labels
 
 
 def test_missing_weekday_result_fails_with_fixed_message(w):
@@ -195,7 +198,7 @@ def test_market_closed_weekday_is_ok_and_not_counted(w):
     w.result(MON, 801)
     w.result(TUE, status="market-closed")
     r = w.run(TUE)
-    assert r.failures == [] and len(r.todo[801].comments) == 1 and not r.todo[801].add_labels
+    assert r.failures == [] and len(r.todo[801].comments) == 1 and not r.todo[801].remove_labels
 
 
 @pytest.mark.parametrize("raw", ["{not json", "[]", json.dumps({"day": MON, "status": "x", "checks": []})])
@@ -217,7 +220,7 @@ def test_no_comment_or_label_when_comment_false_or_issue_not_open_verifying(w, s
     w.result(MON, 801)
     r = w.run(MON)
     assert r.failures == []
-    assert not (r.todo[801].comments or r.todo[801].add_labels or r.todo[801].remove_labels)
+    assert not (r.todo[801].comments or r.todo[801].remove_labels)
     assert r.summary
 
 
@@ -242,7 +245,7 @@ def test_malformed_criteria_file_fails_but_others_continue(w):
     (w.criteria_dir / "802-t1.yml").write_text("issue: abc\n")
     w.result(MON, 801)
     r = w.run(MON)
-    assert r.failures == ["기준 파일 형식 오류"] and r.todo[801].add_labels == ["check-passed"]
+    assert r.failures == ["기준 파일 형식 오류"] and "verdict=pass" in r.todo[801].comments[-1]
 
 
 def test_cli_writes_todo_file_and_exit_code(w, tmp_path):
@@ -253,7 +256,8 @@ def test_cli_writes_todo_file_and_exit_code(w, tmp_path):
     args = ["--results-dir", str(w.results_dir), "--criteria-dir", str(w.criteria_dir), "--issues", str(issues),
             "--repo", str(w.repo), "--today", MON, "--out", str(out)]
     assert ov.main(args) == 0
-    assert json.loads(out.read_text())["issues"]["801"]["add_labels"] == ["check-passed"]
+    todo = json.loads(out.read_text())["issues"]["801"]
+    assert todo["remove_labels"] == ["verifying"] and "add_labels" not in todo
     issues.write_text("{broken")
     assert ov.main(args) == 1
 
