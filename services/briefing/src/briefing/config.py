@@ -108,6 +108,10 @@ DEFAULT_QUERY_SETTINGS = QuerySettings()
 class DailySettings:
     """데일리 브리핑(아침 판, 마감 후 판)의 설정값."""
 
+    # 판 하나가 보낼 수 있는 문장 단위 재검색 요청 합계. 판은 ETF마다 문장이 있어 급변동(CoreSettings)보다 크게 둔다.
+    # 요청은 처음에 한꺼번에 나가므로 늘려도 전체 시간 상한(CoreSettings.research_total_limit)은 그대로다.
+    max_research_requests: int = 20
+
     # 범위 시작은 예정 시각에서 직전 평일의 같은 시각이다. 그래도 이보다 오래 거슬러 가지 않는다.
     max_lookback: timedelta = timedelta(days=7)
     # 다시 부르는 규칙은 급변동 근거 조회와 같다(QuerySettings).

@@ -32,8 +32,10 @@ from briefing.daily_prompts import (
     NO_REASON_STATEMENT,
     OUTPUT_SCHEMA,
     OUTPUT_SCHEMA_MORNING,
+    OUTPUT_SCHEMA_OUTLOOK_REWRITE,
     OUTPUT_SCHEMA_POST_CLOSE,
     REWRITE_ADDENDUM,
+    REWRITE_ADDENDUM_OUTLOOK,
     REWRITE_ADDENDUM_POST_CLOSE,
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_POST_CLOSE,
@@ -900,6 +902,29 @@ class DailyOutput:
         return tuple(p.shortfall for p in (*self.points, *self.issues, *self.others, *self.outlooks) if p.shortfall)
 
 
+# 문장 단위 재검색이 가리키는 문장 자리. 번호는 이 칸 차례로 1부터 붙는다(밤사이 이슈·ETF 이유 → 환율·금리 → ETF별 예상).
+RESEARCH_FIELDS = ("points", "issues", "outlooks")
+
+
+def sentence_slots(output: DailyOutput) -> list[tuple[str, int]]:
+    """(칸 이름, 칸 안 순서) 목록. n번째 자리가 문장 번호 n이다. 다시 써도 칸 길이는 그대로라 번호가 바뀌지 않는다."""
+    return [(name, n) for name in RESEARCH_FIELDS for n in range(len(getattr(output, name)))]
+
+
+def slot_point(output: DailyOutput | None, no: int) -> Point | None:
+    if output is None or not 0 < no <= len(slots := sentence_slots(output)):
+        return None
+    name, index = slots[no - 1]
+    return getattr(output, name)[index]
+
+
+def with_slot_point(output: DailyOutput, no: int, point: Point) -> DailyOutput:
+    name, index = sentence_slots(output)[no - 1]
+    values = list(getattr(output, name))
+    values[index] = point
+    return replace(output, **{name: tuple(values)})
+
+
 def parse_output(text: str, allowed_refs: frozenset[str],
                  forbidden_tickers: frozenset[str] = frozenset(),
                  weak_without_refs: bool = False) -> DailyOutput:
@@ -1404,30 +1429,46 @@ class DailyLlmWriter:
                            "shortfall": current.shortfall, "newRefs": list(new_refs)}
         if current.symbol is not None:
             data["rewrite"]["symbol"] = current.symbol
+        # 밤사이 이슈·ETF 이유의 입력 모양은 그대로 두고, 환율·금리 칸과 ETF별 예상에만 종류(와 방향)를 알린다.
+        if current.kind in (POINT_FX, POINT_RATE, POINT_OUTLOOK):
+            data["rewrite"]["kind"] = current.kind
+        if current.direction is not None:
+            data["rewrite"]["direction"] = current.direction
         user = json.dumps(data, ensure_ascii=False)
         allowed = frozenset(e.ref for s in sections for e in s.entries)
-        tickers = self.forbidden_tickers(i) if i.edition == EDITION_POST_CLOSE else frozenset()
-        prompt, addendum = (SYSTEM_PROMPT_POST_CLOSE, REWRITE_ADDENDUM_POST_CLOSE) \
-            if i.edition == EDITION_POST_CLOSE else (SYSTEM_PROMPT, REWRITE_ADDENDUM)
+        post_close = i.edition == EDITION_POST_CLOSE
+        tickers = self.forbidden_tickers(i) if post_close else frozenset()
+        outlook = current.kind == POINT_OUTLOOK
+        system = SYSTEM_PROMPT_POST_CLOSE if post_close else SYSTEM_PROMPT
+        if outlook:
+            addendum, schema = REWRITE_ADDENDUM_OUTLOOK, OUTPUT_SCHEMA_OUTLOOK_REWRITE
+        elif post_close and current.kind == POINT_ETF:
+            addendum, schema = REWRITE_ADDENDUM_POST_CLOSE, OUTPUT_SCHEMA
+        else:
+            addendum, schema = REWRITE_ADDENDUM, OUTPUT_SCHEMA
+        # 이유를 찾지 못한 ETF 이유, 금리 기사가 없다는 칸, 예상 어려움만 근거 번호 없이 둘 수 있다(근거 약함이어야 함).
+        no_refs_ok = current.kind in (POINT_ETF, POINT_FX, POINT_RATE, POINT_OUTLOOK)
+        shared = not post_close and current.kind in ("", POINT_FX, POINT_RATE)
         rejected: list[LlmAttempt] = []
         for attempt in range(1, self.max_attempts + 1):
             raw: str | None = None
             usage: LlmUsage | None = None
             try:
-                reply = self.client.complete(prompt, user, OUTPUT_SCHEMA, addendum)
+                reply = self.client.complete(system, user, schema, addendum)
                 raw, usage = reply.text, reply.usage
-                output = parse_output(raw, allowed, tickers, weak_without_refs=current.kind == POINT_ETF)
+                output = parse_output(raw, allowed, tickers, weak_without_refs=no_refs_ok)
                 if output.insufficient_evidence or len(output.points) != 1:
                     raise InvalidDailyOutput("rewrite must return exactly one point")
+                direction = _rewritten_direction(raw, output.points[0]) if outlook else None
                 repeated = member_repeat_reason(
                     output.points[0].statement, _issues_by_etf(i).get(current.symbol or "", ())) \
                     if current.kind == POINT_ETF else None
                 if repeated is not None:
                     raise _repeat_error(repeated)
-                # 아침 판 밤사이 이슈는 멤버 모두에게 같은 글이라 다시 쓴 문장도 ETF 이름을 쓰면 안 된다.
+                # 아침 판 밤사이 이슈·환율·금리는 멤버 모두에게 같은 글이라 다시 쓴 문장도 ETF 이름을 쓰면 안 된다.
                 rewritten = output.points[0]
-                if i.edition == EDITION_MORNING and (mentions_any(rewritten.statement, summary_banned_names(i))
-                                                     or mentions_any(rewritten.shortfall or "", summary_banned_names(i))):
+                if shared and (mentions_any(rewritten.statement, summary_banned_names(i))
+                               or mentions_any(rewritten.shortfall or "", summary_banned_names(i))):
                     raise InvalidDailyOutput("point mentions an etf name or code")
             except (LlmCallError, InvalidDailyOutput) as error:
                 rejected.append(LlmAttempt(attempt, type(error).__name__, str(error), user, raw,
@@ -1435,10 +1476,24 @@ class DailyLlmWriter:
                 log.warning("daily LLM sentence rewrite attempt %d/%d failed for job %s: %s",
                             attempt, self.max_attempts, i.job_id, error)
                 continue
-            # 다시 쓴 문장은 원래 문장의 종류와 ETF를 이어받는다.
-            point = replace(output.points[0], kind=current.kind, symbol=current.symbol)
+            # 다시 쓴 문장은 원래 문장의 종류와 ETF를 이어받는다. ETF별 예상은 새로 정한 방향을 쓴다.
+            point = replace(output.points[0], kind=current.kind, symbol=current.symbol,
+                            direction=direction if outlook else current.direction)
             return PointRewrite(point, tuple(rejected), AcceptedAttempt(attempt, user, raw, usage, groups))
         return PointRewrite(None, tuple(rejected))
+
+
+def _rewritten_direction(raw: str, point: Point) -> str:
+    """다시 쓴 ETF별 예상의 방향. 처음 작성의 검사와 같다: 목록 안 값이어야 하고, 방향을 정했으면 근거 번호가 있어야 하며,
+    '예상 어려움'은 근거 약함이어야 한다."""
+    direction = json.loads(raw)["points"][0].get("direction")
+    if direction not in DIRECTIONS:
+        raise InvalidDailyOutput("etf direction is not one of the allowed values")
+    if direction == DIRECTION_UNSURE and point.shortfall is None:
+        raise InvalidDailyOutput("etf direction is unsure but is not marked weak")
+    if direction != DIRECTION_UNSURE and not point.refs:
+        raise InvalidDailyOutput("etf has a direction but cites no refs")
+    return direction
 
 
 def build_daily_writer(env: Mapping[str, str],

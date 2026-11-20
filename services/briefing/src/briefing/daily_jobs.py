@@ -44,7 +44,9 @@ from briefing.daily_report import (
     DailyOutput,
     EtfDay,
     GENERATED_BY_LLM,
+    POINT_ETF,
     POINT_NOTABLE,
+    RELATION_HELD,
     build_llm_input,
     build_sections,
     daily_text,
@@ -52,6 +54,9 @@ from briefing.daily_report import (
     llm_text,
     missing_items,
     rule_based_text,
+    sentence_slots,
+    slot_point,
+    with_slot_point,
 )
 from briefing.llm import usage_record
 from briefing.events import (
@@ -671,8 +676,8 @@ class DailyCore:
 
     def rewrite_point(self, draft: DailyDraft, no: int, round: int, articles: tuple[Article, ...],
                       research_articles: tuple[Article, ...], now: datetime) -> DailyDraft | None:
-        """근거가 약한 문장 하나만 다시 쓰고 본문을 다시 만든다. 끝내 못 쓰면 None."""
-        current = draft.draft.output.points[no - 1]
+        """근거가 약한 문장 하나(no는 sentence_slots의 번호)만 다시 쓰고 본문을 다시 만든다. 끝내 못 쓰면 None."""
+        current = slot_point(draft.draft.output, no)
         rewritten_input = replace(draft.input, research_articles=research_articles)
         sections = build_sections(rewritten_input, self.settings)
         result = self.writer.rewrite_point(rewritten_input, sections, current, no, tuple(a.article_id for a in articles))
@@ -685,9 +690,7 @@ class DailyCore:
         if result.point is None:
             return None
         self._accepted(draft.job, now, result.accepted, missing, sentence_no=no, round=round)
-        points = list(draft.draft.output.points)
-        points[no - 1] = result.point
-        output = replace(draft.draft.output, points=tuple(points))
+        output = with_slot_point(draft.draft.output, no, result.point)
         # 환율·금리 이슈 칸과 아침 판 ETF 예상의 근거도 초안 단계처럼 인용한 번호에 들어간다.
         new = _Draft(llm_text(rewritten_input, sections, output), GENERATED_BY_LLM, output.cited_refs(), False,
                      output.weak_shortfalls(), output, draft.draft.rewritten + (no,))
@@ -873,26 +876,55 @@ class DailyDraft:
 
 @dataclass
 class DailySentences:
-    """데일리 판 요약의 문장(point) 하나를 재검색의 문장 하나로 본다."""
+    """데일리 판 본문의 문장 하나(sentence_slots의 한 자리)를 재검색의 문장 하나로 본다."""
 
     core: DailyCore
+    _held_by_job: dict[str, frozenset[str] | None] = field(default_factory=dict, init=False)
 
     def can_research(self, draft: DailyDraft) -> bool:
         # 기사 조회 요청에는 종목코드가 필수라 보유 ETF 자료가 없으면 재검색하지 않는다.
         return bool(draft.input.etfs) and self.core.writer is not None
 
+    def request_limit(self) -> int | None:
+        return self.core.settings.max_research_requests
+
     def weak_sentences(self, draft: DailyDraft) -> tuple[WeakSentence, ...]:
+        """다시 찾을 약한 문장(밤사이 이슈, ETF 이유, 환율·금리 칸, 아침 판 ETF별 예상)을 찾을 차례로 돌려준다.
+
+        차례는 보유 ETF → 환율·금리 → 밤사이 이슈 → 관심 ETF다. 요청 합계 상한 안에서 모두 한 번씩 먼저 찾고, 남은 요청으로
+        두 번째를 찾으므로 차례가 뒤인 문장이 상한에 걸린다. 보유는 멤버 중 한 명이라도 보유한 ETF이고, 멤버를 읽지 못하면
+        모두 보유로 본다. 눈에 띄는 점은 '근거 약함'을 그대로 보여 주고, 마감 후 판에서 시장과 같은 방향(부호가 같고 차이가
+        설정값 이내)으로 움직인 ETF의 이유는 시장 전체의 움직임으로 설명되므로 따로 찾지 않는다."""
         output = draft.draft.output
         if output is None or output.insufficient_evidence:
             return ()
-        # 근거 약한 ETF 이유만 다시 찾는다. 눈에 띄는 점은 '근거 약함'을 그대로 보여 주고, 시장과 같은 방향(부호가 같고
-        # 차이가 설정값 이내)으로 움직인 ETF는 시장 전체의 움직임으로 설명되므로 따로 찾지 않는다.
         etfs = {e.symbol: e for e in draft.input.etfs or ()}
-        return tuple(WeakSentence(n, p.statement, p.shortfall)
-                     for n, p in enumerate(output.points, start=1)
-                     if p.shortfall and p.kind != POINT_NOTABLE
-                     and not (p.symbol in etfs and moves_with_market(etfs[p.symbol].rate, draft.input.background or (),
-                                                       self.core.settings)))
+        held = self._held(draft)
+        found = []
+        for no, (name, _) in enumerate(sentence_slots(output), start=1):
+            p = slot_point(output, no)
+            if p is None or not p.shortfall or p.kind == POINT_NOTABLE:
+                continue
+            if p.kind == POINT_ETF and p.symbol in etfs and moves_with_market(
+                    etfs[p.symbol].rate, draft.input.background or (), self.core.settings):
+                continue
+            if p.symbol is not None:
+                rank = 0 if held is None or p.symbol in held else 3
+            else:
+                rank = 1 if name == "issues" else 2
+            found.append((rank, no, WeakSentence(no, p.statement, p.shortfall)))
+        return tuple(w for _, _, w in sorted(found, key=lambda f: (f[0], f[1])))
+
+    def _held(self, draft: DailyDraft) -> frozenset[str] | None:
+        """멤버 중 누구라도 보유한 ETF. 판마다 한 번 읽어 둔다. 멤버를 모르거나 읽지 못하면 None."""
+        job = draft.job
+        if job is None:
+            return None
+        if job.job_id not in self._held_by_job:
+            members = self.core.members.daily_members(job.edition) if self.core.members is not None else None
+            self._held_by_job[job.job_id] = None if members is None else frozenset(
+                symbol for m in members for symbol, relation in m.etfs if relation == RELATION_HELD)
+        return self._held_by_job[job.job_id]
 
     def whole_insufficient(self, draft: DailyDraft) -> bool:
         return draft.draft.insufficient_evidence
@@ -910,8 +942,7 @@ class DailySentences:
         if sentence is not None:
             context["sentence"] = sentence.text
             context["shortfall"] = sentence.shortfall
-            output = draft.draft.output
-            point = output.points[sentence.no - 1] if output is not None and 0 < sentence.no <= len(output.points) else None
+            point = slot_point(draft.draft.output, sentence.no)
             if point is not None and point.symbol is not None:
                 context["etf"] = next(({"symbol": e.symbol, "name": e.label()}
                                        for e in draft.input.etfs or () if e.symbol == point.symbol), None)
@@ -938,10 +969,10 @@ class DailySentences:
         return self.core.rewrite_whole(draft, round, research_articles, now)
 
     def sentence_text(self, draft: DailyDraft, sentence_no: int) -> str | None:
-        output = draft.draft.output
-        if output is None or sentence_no == WHOLE_REPORT or sentence_no > len(output.points):
+        if sentence_no == WHOLE_REPORT:
             return None
-        return output.points[sentence_no - 1].statement
+        point = slot_point(draft.draft.output, sentence_no)
+        return point.statement if point is not None else None
 
     def publish(self, draft: DailyDraft, now: datetime, research_count: int) -> None:
         self.core.publish_draft(draft, now, research_count)

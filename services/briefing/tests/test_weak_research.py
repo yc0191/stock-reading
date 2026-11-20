@@ -247,6 +247,35 @@ def test_move_sentence_that_becomes_strong_on_the_second_search_is_searched_twic
     assert (result.research_count, result.weak_count) == (2, 0)
 
 
+def test_a_second_search_is_told_the_used_search_terms_and_does_not_repeat_them():
+    first = one_cause("다시 찾았지만 아직 약합니다.", ["r1"], STILL_SHORTFALL)
+    second = one_cause("한 번 더 찾은 기사로 확인했습니다.", ["r2"])
+    # 둘째 회차의 검색어 LLM이 첫 회차 검색어를 띄어쓰기만 바꿔 다시 낸다.
+    flow = Flow([MOVE_ONE_WEAK, first, second], [queries("검색어 하나"), queries("검색어  하나", "검색어 둘")])
+    flow.to_report()
+    first_context = json.loads(flow.query_llm.calls[0][1])
+    flow.complete_research(research_id=rid(2, 1))
+    flow.answer_research([R1], research_id=rid(2, 1))
+
+    # 처음 찾을 때의 입력 모양은 그대로이고, 둘째 회차에만 이미 쓴 검색어를 알려 준다.
+    assert "usedQueries" not in first_context
+    assert json.loads(flow.query_llm.calls[1][1])["usedQueries"] == ["검색어 하나"]
+    # 이미 쓴 검색어는 빼고 새 검색어로만 찾는다.
+    assert sentence_requests(flow)[1].value["payload"]["queries"] == ["검색어 둘"]
+
+
+def test_a_second_search_whose_terms_were_all_used_is_not_sent():
+    first = one_cause("다시 찾았지만 아직 약합니다.", ["r1"], STILL_SHORTFALL)
+    flow = Flow([MOVE_ONE_WEAK, first], [queries("검색어 하나"), queries("검색어 하나")])
+    flow.to_report()
+    flow.complete_research(research_id=rid(2, 1))
+    flow.answer_research([R1], research_id=rid(2, 1))
+
+    assert [r.value["payload"]["jobId"] for r in sentence_requests(flow)] == [rid(2, 1)]
+    (briefing,) = flow.briefings()
+    assert weak_shown(briefing.value["payload"]["text"], STILL_SHORTFALL)
+
+
 def test_move_sentence_still_weak_after_two_searches_keeps_the_weak_note_and_is_not_searched_a_third_time():
     first = one_cause("다시 찾았지만 아직 약합니다.", ["r1"], STILL_SHORTFALL)
     second = one_cause("한 번 더 찾았지만 여전히 약합니다.", ["r2"], SECOND_SHORTFALL)
@@ -513,8 +542,12 @@ class DailyLlm(FakeLlm):
         if data["insufficientEvidence"]:
             return json.dumps({"points": [], "etfs": [], "insufficientEvidence": True})
         issue = {"statement": "환율이 영향을 줄 수 있습니다.", "refs": ["B1"], "weak": False, "shortfall": ""}
-        etfs = [{"symbol": e["symbol"], "direction": "상승", "reason": "미국 지수가 영향을 줄 수 있습니다.",
-                 "refs": ["B1"], "weak": False, "shortfall": ""} for e in user["outlookEtfs"]]
+        strong = {"direction": "상승", "reason": "미국 지수가 영향을 줄 수 있습니다.", "refs": ["B1"], "weak": False,
+                  "shortfall": ""}
+        # etfs를 준 응답은 그 예상을 앞 ETF부터 차례로 쓰고, 남는 ETF는 튼튼한 예상으로 채운다.
+        given = data.pop("etfs", [])
+        etfs = [{**(given[n] if n < len(given) else strong), "symbol": e["symbol"]}
+                for n, e in enumerate(user["outlookEtfs"])]
         return json.dumps({**data, "etfs": etfs, "fxIssue": issue, "rateIssue": issue}, ensure_ascii=False)
 
     @staticmethod
@@ -538,12 +571,12 @@ class DailyLlm(FakeLlm):
 class DailyFlow:
     """판 하나를 자료 수집 -> 요약 -> 문장 단위 재검색 -> 다시 쓰기까지 돌리는 도우미."""
 
-    def __init__(self, edition, report_outputs, query_outputs, etfs=None, settings=S, status=None):
+    def __init__(self, edition, report_outputs, query_outputs, etfs=None, settings=S, status=None, daily_settings=None):
         self.edition = edition
         self.job_type, self.at, self.ref = EDITIONS[edition]
         self.requests, self.records = Requests(), FakeJobLog()
         self.report_llm, self.query_llm = DailyLlm(edition, *report_outputs), FakeLlm(*query_outputs)
-        daily_settings = DailySettings()
+        daily_settings = daily_settings or DailySettings()
         self.sentences = SentenceResearch(
             QueryWriter(self.query_llm, settings.max_research_queries, settings.research_query_attempts),
             self.requests, self.requests.api, self.records, settings)
@@ -727,6 +760,28 @@ def test_morning_rewrite_leaves_exactly_one_outlook_record_that_matches_the_fina
     assert "다시 찾은 기사가 영향을 줬을 수 있습니다." in text
 
 
+def test_a_rewritten_morning_outlook_leaves_its_new_direction_in_the_outlook_record():
+    flow = DailyFlow("morning", [], [])
+    unsure = {"direction": "예상 어려움", "reason": "근거가 부족합니다.", "refs": [], "weak": True, "shortfall": SHORTFALL}
+    rewritten = json.dumps({"points": [{"direction": "하락", "statement": "새 기사로 내릴 수 있습니다.", "refs": ["r1"],
+                                        "weak": False, "shortfall": ""}], "insufficientEvidence": False},
+                           ensure_ascii=False)
+    flow.report_llm.outputs = [json.dumps({**json.loads(daily_output(point(STRONG_TEXT, flow.ref))), "etfs": [unsure]},
+                                          ensure_ascii=False), rewritten]
+    flow.query_llm.outputs = [queries(*QUERIES)]
+    flow.to_first_report()
+    # 문장 번호: 밤사이 이슈 1, 환율 2, 금리 3, 첫 ETF 예상 4.
+    flow.complete(flow.rid(4))
+    flow.stable([in_range(flow)], flow.rid(4))
+
+    (event,) = flow.published()
+    (entry,) = flow.records.of_type(EntryType.ETF_OUTLOOK)
+    first = entry.data["outlooks"][0]
+    # 마감 후 판이 다시 읽어 대조하는 기록에 다시 쓴 방향과 이유가 남는다.
+    assert (first["direction"], first["reason"], first["weak"]) == ("하락", "새 기사로 내릴 수 있습니다.", False)
+    assert "하락 예상" in event.value["payload"]["text"]
+
+
 def test_daily_with_several_weak_sentences_sends_one_separate_research_job_per_sentence(edition):
     flow = DailyFlow(edition, [], [])
     flow.report_llm.outputs = [two_weak(flow), daily_output(point("둘째 문장을 다시 썼습니다.", "r1")),
@@ -796,7 +851,9 @@ def test_daily_sentence_still_weak_after_two_searches_carries_the_shortfall_and_
 
 
 def test_daily_sentences_over_the_request_limit_are_not_searched_and_keep_the_weak_note(edition):
-    flow = DailyFlow(edition, [], [], settings=CoreSettings(max_research_requests=1))
+    # 판의 요청 합계 상한은 급변동(CoreSettings)이 아니라 판 설정(DailySettings)을 따른다.
+    flow = DailyFlow(edition, [], [], settings=CoreSettings(max_research_requests=99),
+                     daily_settings=DailySettings(max_research_requests=1))
     flow.report_llm.outputs = [two_weak(flow), daily_output(point("둘째 문장을 다시 썼습니다.", "r1"))]
     flow.query_llm.outputs = [queries("검색어 하나")]
     flow.to_first_report()

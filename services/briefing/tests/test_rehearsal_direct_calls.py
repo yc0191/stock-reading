@@ -171,7 +171,7 @@ def rehearsal():
             consumer_factory=consumer_factory, producer_factory=producer_factory, declare_topics=lambda _: None,
             query_writer=QueryWriter(StepRecordingLlm(SequenceLlm(json.dumps({"queries": ["업종 소식"]})), store,
                                                       clock)),
-            daily_writer=DailyLlmWriter(StepRecordingLlm(SequenceLlm(good_output("B1")), store, clock), 3),
+            daily_writer=DailyLlmWriter(StepRecordingLlm(SequenceLlm(sourced_morning()), store, clock), 3),
             daily_settings=DailySettings(), member_store=FakeMembers(),
             api_factory=lambda: HttpQueries({"market": services.url, "news": services.url}, store, clock, FAST))
         runner.open()
@@ -193,6 +193,15 @@ def run_until(runner, condition, timeout=10.0):
             return
         time.sleep(0.01)
     raise AssertionError("rehearsal did not reach the expected state in time")
+
+
+def sourced_morning():
+    """근거 약한 칸이 없는 아침 판 출력. 약한 칸이 있으면 문장 단위 재검색이 시작되는데, 이 리허설은 재검색에 답하지 않는다.
+    다른 리허설이 good_output을 바꿔 끼울 수 있어 부를 때 만든다."""
+    output = json.loads(good_output("B1"))
+    if "rateIssue" in output:
+        output["rateIssue"] = {"statement": "금리가 영향을 줄 수 있습니다.", "refs": ["B1"], "weak": False, "shortfall": ""}
+    return json.dumps(output, ensure_ascii=False)
 
 
 def research_stored():

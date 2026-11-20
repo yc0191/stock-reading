@@ -20,6 +20,7 @@ from briefing.daily_report import (
     conclusion,
     llm_text,
     member_repeat_reason,
+    sentence_slots,
     summary_banned_names,
 )
 from briefing.events import EDITION_POST_CLOSE
@@ -99,10 +100,13 @@ class DailyFinalCheck:
     def sentences(self, draft: DailyDraft) -> tuple[MailSentence, ...]:
         rewritten = draft.draft.rewritten
         names = {e.symbol: e.label() for e in draft.input.etfs or ()}
+        # 다시 쓴 문장 번호는 재검색의 문장 자리(sentence_slots) 번호다.
+        slots = {slot: n for n, slot in enumerate(sentence_slots(draft.draft.output), start=1)} \
+            if draft.draft.output is not None else {}
         out = []
         for no, u in enumerate(_units(draft.draft.output), start=1):
             p = u.point
-            again = WHOLE_REPORT in rewritten or (u.field == "points" and u.index + 1 in rewritten)
+            again = WHOLE_REPORT in rewritten or slots.get((u.field, u.index)) in rewritten
             out.append(MailSentence(
                 no, u.kind, u.statement, p.refs if p else (), bool(p and p.shortfall), again,
                 # 이유를 찾지 못한 ETF의 정해진 문장은 고쳐 쓰지 않는다(결론 줄이 이 문장으로 ETF 수를 센다).

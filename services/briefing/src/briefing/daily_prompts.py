@@ -219,10 +219,40 @@ REWRITE_ADDENDUM_POST_CLOSE = """
 - 새 기사가 같은 사건 묶음(sameEventArticles)에 들었으면 묶음의 다른 기사와 함께 읽어 종합하고, 기사끼리 수치·해석이 다르면 위의 규칙대로 양쪽을 쓰고 단정하지 않습니다.
 - 근거 번호·단정 금지·티커 금지·구성 종목 이슈 되풀이 금지 같은 위의 규칙은 그대로 지킵니다."""
 
+# 아침 판 ETF별 예상 하나를 다시 쓸 때의 출력 형식. 새 근거로 방향이 바뀔 수 있어 방향을 함께 받는다.
+OUTPUT_SCHEMA_OUTLOOK_REWRITE: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "points": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"direction": {"type": "string", "enum": list(DIRECTIONS)}, "statement": {"type": "string"},
+                               **_REASONED_ITEM},
+                "required": ["direction", "statement", "refs", "weak", "shortfall"],
+                "additionalProperties": False,
+            },
+        },
+        "insufficientEvidence": {"type": "boolean"},
+    },
+    "required": ["points", "insufficientEvidence"],
+    "additionalProperties": False,
+}
+
+REWRITE_ADDENDUM_OUTLOOK = """
+
+다시 쓰기 요청:
+- 입력의 rewrite 칸은 근거가 약하다고 한 ETF별 예상 하나(symbol은 그 ETF 종목코드, direction은 원래 방향, sentence는 그 이유)와 그 부족한 점(shortfall)입니다. newRefs는 그 부족한 점을 채우려고 새로 찾아 항목 "재검색 기사"에 담은 기사의 ref입니다.
+- 위의 출력 형식 대신 다음 JSON 하나만 냅니다. points에는 다시 쓴 예상 하나만 담고, insufficientEvidence는 false로 둡니다.
+{"points":[{"direction":"상승","statement":"...","refs":["..."],"weak":false,"shortfall":""}],"insufficientEvidence":false}
+- direction과 statement는 위의 etfs 규칙(방향의 뜻, 근거 번호, '예상 어려움'일 때 refs 빈 목록과 weak true)을 그대로 따릅니다. 새 기사로 근거가 채워졌으면 방향을 새로 정할 수 있습니다.
+- 새 기사에 없는 내용은 지어내지 않습니다."""
+
 REWRITE_ADDENDUM = """
 
 다시 쓰기 요청:
 - 입력의 rewrite 칸은 근거가 약하다고 한 문장 하나(sentence)와 그 부족한 점(shortfall)입니다. newRefs는 그 부족한 점을 채우려고 새로 찾아 항목 "재검색 기사"에 담은 기사의 ref입니다.
+- rewrite의 kind가 "fx"면 환율 이슈 칸, "rate"면 금리 이슈 칸의 문장이며 위의 fxIssue·rateIssue 규칙을 따릅니다(금리 기사가 여전히 없으면 정해진 문장을 쓰고 refs는 빈 목록, weak는 true입니다). kind가 없으면 밤사이 이슈 문장입니다.
 - 위의 출력 형식 대신 다음 JSON 하나만 냅니다. points에는 다시 쓴 문장 하나만 담고 다른 문장은 쓰지 않으며, insufficientEvidence는 false로 둡니다. etfs·fxIssue·rateIssue·otherIssues는 쓰지 않습니다.
 {"points":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"insufficientEvidence":false}
 - 새 기사로 부족한 점이 채워지면 weak를 false로, 그래도 약하면 weak를 true로 하고 shortfall에 아직 부족한 점을 씁니다. 새 기사에 없는 내용은 지어내지 않습니다.

@@ -315,3 +315,16 @@ def test_the_final_check_reads_and_fixes_the_other_issues_too():
     assert [(u.field, u.kind, u.statement) for u in units] == [("points", "summary", "밤사이 이슈입니다."),
                                                                ("others", "other", "해외 원유가 내렸습니다.")]
 
+
+def test_the_final_check_marks_a_rewritten_outlook_by_its_research_sentence_number():
+    from types import SimpleNamespace
+    from briefing.daily_jobs import DailyDraft, _Draft
+    from briefing.daily_report import POINT_OUTLOOK, DailyInput
+    output = DailyOutput((Point("밤사이 이슈입니다.", ("B1",)),), False,
+                         outlooks=(Point("예상입니다.", ("B1",), None, POINT_OUTLOOK, "TEST01", "상승"),))
+    i = DailyInput("job", "morning", T, T, (), False, (), (), (), False)
+    # 재검색 문장 번호: 밤사이 이슈 1, ETF 예상 2. 2번을 다시 썼다.
+    draft = DailyDraft(SimpleNamespace(job_id="job"), i, (), _Draft("", "llm", (), False, (), output, (2,)))
+    sentences = DailyFinalCheck(None).sentences(draft)
+    assert [(s.kind, s.rewritten) for s in sentences] == [("summary", False), ("outlook", True)]
+

@@ -54,7 +54,7 @@ PYTHONPATH=services/briefing/src services/briefing/.venv/bin/python -m briefing.
 - `CoreSettings`: 급변동 근거의 Δ·시간 범위·건수 상한, 저장 끝 알림 대기 상한, 같은 종목 변동 묶음, 재검색 상한, 같은 사건 기사 묶기(`article_group_*`, 데일리 판도 같은 값), 아침 판 개장 흐름 범위(`open_flow_*`)
 - 급변동 리포트 멈춤 기간(#84): `CoreSettings.move_report_pause_start`·`move_report_pause_end`
 - `QuerySettings`: 내부 조회 API를 다시 부르는 규칙(응답 제한, 최대 시도, 시도 사이 간격, 동시 호출 수). 급변동·데일리 판·재검색이 함께 씁니다.
-- `DailySettings`: 데일리 판의 범위, 상한, 장 시작 시각과 아침 판 합침 구간, 한도 시각, 보합 폭, 차트·이벤트 크기 상한, 멈춘 작업 기준
+- `DailySettings`: 데일리 판의 범위, 상한, 장 시작 시각과 아침 판 합침 구간, 한도 시각, 보합 폭, 차트·이벤트 크기 상한, 멈춘 작업 기준, 판의 문장 단위 재검색 요청 합계(급변동은 `CoreSettings`)
 - `StoreSettings`: 작업 기록 저장을 다시 시도하는 횟수와 간격
 - 수신 루프가 한 번에 읽는 메시지 수와 시간: `main.py`의 `MAX_MESSAGES_PER_RUN`, `MAX_READ_SECONDS`
 
