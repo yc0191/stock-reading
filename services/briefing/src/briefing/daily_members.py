@@ -24,6 +24,8 @@ from briefing.daily_report import (
     build_sections,
 )
 from briefing.daily_review import ReviewInput
+from briefing.llm_output import ticker_pattern
+from briefing.sources import US_MARKET, EtfMember
 from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
 
 
@@ -97,20 +99,44 @@ def member_sections(mine: DailyInput, full_sections: tuple[Section, ...],
     return tuple(sections)
 
 
-def member_output(output: DailyOutput | None, mine: DailyInput, sections: tuple[Section, ...]) -> DailyOutput | None:
-    """LLM 본문에서 이 멤버에게 보여도 되는 문장만 남긴다. 다른 멤버의 ETF를 다룬 문장과, 이 멤버의 항목에 없는 근거를
-    인용한 문장은 뺀다. 요약 줄과 환율·금리 이슈는 ETF 하나하나를 나열하지 않는 시장 전체 글이라 그대로 둔다."""
+def foreign_us_names(full: DailyInput, mine: DailyInput) -> tuple[frozenset[str], frozenset[str]]:
+    """다른 멤버의 ETF에만 담긴 미국 구성 종목의 (티커, 이름). 이 멤버의 ETF에도 담긴 종목은 빼며, 한 글자 이름은
+    일반 낱말과 겹쳐 뺀다."""
+    def members(i: DailyInput) -> list[EtfMember]:
+        return [m for e in i.etfs or () if e.etf is not None for m in e.etf.members if m.market == US_MARKET]
+
+    own = members(mine)
+    own_tickers, own_names = {m.symbol for m in own}, {m.name for m in own if m.name}
+    others = [m for m in members(full) if m.symbol not in own_tickers]
+    return (frozenset(m.symbol for m in others),
+            frozenset(m.name for m in others if m.name and len(m.name) >= 2 and m.name not in own_names))
+
+
+def member_output(output: DailyOutput | None, mine: DailyInput, sections: tuple[Section, ...],
+                  foreign: tuple[frozenset[str], frozenset[str]] = (frozenset(), frozenset())) -> DailyOutput | None:
+    """LLM 본문에서 이 멤버에게 보여도 되는 문장만 남긴다. 다른 멤버의 ETF를 다룬 문장, 이 멤버의 항목에 없는 근거를
+    인용한 문장, 다른 멤버의 ETF에만 담긴 미국 종목(foreign: 티커, 이름)을 쓴 문장은 뺀다. 마감 후 판 요약 줄은 근거
+    번호가 없는 시장 전체 글이라 그대로 둔다. 환율·금리 이슈가 빠지면 본문은 코드가 받은 숫자로 그 칸을 채운다."""
     if output is None:
         return None
     symbols = frozenset(e.symbol for e in mine.etfs or ())
     refs = frozenset(e.ref for s in sections for e in s.entries)
+    tickers, names = ticker_pattern(foreign[0]), foreign[1]
+
+    def names_foreign(text: str) -> bool:
+        return bool(tickers is not None and tickers.search(text)) or any(name in text for name in names)
 
     def visible(p: Point) -> bool:
         if p.kind != POINT_NOTABLE and p.symbol is not None and p.symbol not in symbols:
+            return False
+        # 시장 전체 근거만 인용해도 Claude가 ETF 구성 정보에서 본 남의 보유 종목을 쓸 수 있어 문장으로도 본다.
+        if names_foreign(p.statement) or names_foreign(p.shortfall or ""):
             return False
         return all(ref in refs for ref in p.refs)
 
     return replace(output,
                    points=tuple(p for p in output.points if visible(p)),
+                   issues=tuple(p for p in output.issues if visible(p)),
                    outlooks=tuple(p for p in output.outlooks if visible(p)),
-                   reviews=tuple(p for p in output.reviews if visible(p)))
+                   reviews=tuple(p for p in output.reviews if visible(p)),
+                   others=tuple(p for p in output.others if visible(p)))

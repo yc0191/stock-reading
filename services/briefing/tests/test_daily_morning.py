@@ -4,10 +4,17 @@ import json
 import pytest
 
 from briefing.daily_jobs import DailyCore
-from briefing.daily_morning import OUTLOOK_NOTE, outlook_records
+from briefing.daily_html import render_html
+from briefing.daily_morning import NO_OVERNIGHT, OUTLOOK_NOTE, morning_text, outlook_records
 from briefing.daily_prompts import OUTPUT_SCHEMA_MORNING, SYSTEM_PROMPT
+from briefing.daily_members import member_output
 from briefing.daily_report import (
+    DailyInput,
     DailyLlmWriter,
+    DailyOutput,
+    Entry,
+    Point,
+    Section,
     InvalidDailyOutput,
     build_sections,
     parse_morning_output,
@@ -90,6 +97,72 @@ def test_a_ticker_in_an_outlook_reason_is_rejected():
         parse(reply([etf_item("TEST01"), bad]), frozenset({"TESTA"}))
 
 
+def other(statement="해외 원유가 크게 내렸습니다.", refs=("B2",)):
+    return {"statement": statement, "refs": list(refs), "weak": False, "shortfall": ""}
+
+
+def test_other_issues_are_kept_in_order_up_to_the_limit_and_may_be_missing():
+    out = parse(reply([etf_item("TEST01"), etf_item("TEST02")],
+                      otherIssues=[other(f"그 밖의 이슈 {n}입니다.") for n in range(1, 5)]))
+    # 상한(3)을 넘는 문장은 거부하지 않고 앞에서부터 상한까지만 쓴다.
+    assert [p.statement for p in out.others] == ["그 밖의 이슈 1입니다.", "그 밖의 이슈 2입니다.", "그 밖의 이슈 3입니다."]
+    assert {p.kind for p in out.others} == {"other"} and "B2" in out.cited_refs()
+    assert parse(reply([etf_item("TEST01"), etf_item("TEST02")])).others == ()
+
+
+@pytest.mark.parametrize("bad, reason", [
+    (other(refs=()), "otherIssues"),           # 근거 번호 없음
+    (other(refs=("Z9",)), "were not given"),   # 목록 밖 근거 번호
+])
+def test_an_other_issue_needs_a_ref_from_the_list(bad, reason):
+    with pytest.raises(InvalidDailyOutput, match=reason):
+        parse(reply([etf_item("TEST01"), etf_item("TEST02")], otherIssues=[bad]))
+
+
+@pytest.mark.parametrize("field", ["points", "fxIssue", "otherIssues"])
+def test_an_etf_name_in_a_sentence_every_member_gets_is_rejected_but_not_in_an_etf_reason(field):
+    named = {"statement": "TEST ETF ONE이 오를 수 있습니다.", "refs": ["B1"], "weak": False, "shortfall": ""}
+    extra = {"points": [named]} if field == "points" else {field: [named] if field == "otherIssues" else named}
+    with pytest.raises(InvalidDailyOutput, match="etf name or code"):
+        parse_morning_output(reply([etf_item("TEST01"), etf_item("TEST02")], **extra), ALLOWED, frozenset(), SYMBOLS,
+                             frozenset({"TEST01", "TEST ETF ONE"}))
+    reason = etf_item("TEST01")
+    reason["reason"] = "TEST ETF ONE은 밤사이 지수 상승을 따라 오를 수 있습니다."
+    assert parse_morning_output(reply([reason, etf_item("TEST02")]), ALLOWED, frozenset(), SYMBOLS,
+                                frozenset({"TEST01", "TEST ETF ONE"})).outlooks
+
+
+def test_an_etf_name_in_the_shortfall_of_a_shared_sentence_is_rejected():
+    # 부족한 점은 근거 약함 모음으로 멤버 모두에게 나간다.
+    named = {"statement": "환율이 영향을 줄 수 있습니다.", "refs": ["B1"], "weak": True,
+             "shortfall": "TEST ETF ONE에 담긴 자산 기사가 더 필요합니다."}
+    with pytest.raises(InvalidDailyOutput, match="etf name or code"):
+        parse_morning_output(reply([etf_item("TEST01"), etf_item("TEST02")], fxIssue=named), ALLOWED, frozenset(),
+                             SYMBOLS, frozenset({"TEST01", "TEST ETF ONE"}))
+
+
+def test_the_weak_count_has_every_weak_sentence_the_mail_shows():
+    weak = {"statement": "문장입니다.", "refs": ["B1"], "weak": True, "shortfall": "자료가 더 필요합니다."}
+    out = parse(reply([etf_item("TEST01"), etf_item("TEST02", "예상 어려움", (), weak=True)], rateIssue=weak,
+                      otherIssues=[weak]))
+    assert out.weak_shortfalls() == ("자료가 더 필요합니다.", "자료가 더 필요합니다.", "근거가 더 필요합니다.")
+
+
+def test_a_member_left_without_overnight_issues_gets_a_line_saying_so_in_text_and_html():
+    i = DailyInput("job", "morning", MORNING_AT, MORNING_AT, (), False, (), (), (), False)
+    out = DailyOutput((), False, (), (Point("환율이 영향을 줄 수 있습니다.", (), "기사가 더 필요합니다.", "fx"),))
+    assert f"■ 밤사이 이슈\n  {NO_OVERNIGHT}" in morning_text(i, (), out)
+    assert NO_OVERNIGHT in render_html(i, (), out)
+
+
+def test_a_member_does_not_get_an_other_issue_that_cites_evidence_outside_their_items():
+    out = parse(reply([etf_item("TEST01"), etf_item("TEST02")],
+                      otherIssues=[other("모두가 받는 이슈입니다.", ("B1",)), other("다른 멤버 공시입니다.", ("B2",))]))
+    mine = DailyInput("job", "morning", MORNING_AT, MORNING_AT, (), False, (), (), (), False)
+    sections = (Section("TEST", "있음", (), (Entry("B1", {}, "자료 하나"),)),)
+    assert [p.statement for p in member_output(out, mine, sections).others] == ["모두가 받는 이슈입니다."]
+
+
 def test_insufficient_evidence_skips_the_outlook_and_the_issue_cells():
     out = parse(json.dumps({"points": [], "etfs": [], "insufficientEvidence": True}))
     assert out.insufficient_evidence and out.outlooks == () and outlook_records(out) == []
@@ -159,10 +232,32 @@ def test_the_mail_shows_each_direction_the_issue_cells_and_the_notes_in_text_and
     line = next(ln for ln in text.splitlines() if "TEST01" in ln and "예상" in ln)
     assert "상승 예상" in line
     assert "예상 어려움(근거 부족)" in next(ln for ln in text.splitlines() if "TEST02" in ln and "예상" in ln)
-    for heading in ("환율 이슈", "금리 이슈", "ETF별 예상"):
+    for heading in ("밤사이 이슈", "환율·금리", "내 ETF: 개장 흐름과 예상"):
         assert heading in text and heading in html
+    assert "  - 환율: " in text and "  - 금리: " in text
     assert "투자 조언이 아니" in text and OUTLOOK_NOTE in text and OUTLOOK_NOTE in html
-    assert text.index("요약:") < text.index("환율 이슈:") < text.index("금리 이슈:") < text.index("■ ETF별 예상")
+    assert text.index("■ 밤사이 이슈") < text.index("■ 환율·금리") < text.index("■ 내 ETF")
+    # 방향을 정하지 못한 ETF는 줄 끝에 근거 약함 표시만 하고, 부족한 점은 아래 한곳에 모은다.
+    assert "TEST02" in text and "  - TEST02: 기사가 더 있어야 합니다." in text
+
+
+def test_the_mail_leads_with_overnight_issues_and_leaves_the_raw_figures_to_the_evidence_list():
+    output = morning_output(symbols=("TEST01", "TEST02"),
+                            otherIssues=[{"statement": "개장 직후 외국인이 순매수했습니다.", "refs": ["B1"],
+                                          "weak": False, "shortfall": ""}])
+    payload, _, _ = run_morning(output)
+    text, html = payload["text"], payload["html"]
+    # 항목별 숫자 목록(미국 지수 종가, '받은 값 있음')은 본문에서 빠지고 인용한 자료만 근거 목록에 남는다.
+    for gone in ("■ 미국 지수", "받은 값 있음", "■ 범위 안 미국 공시", "요약:"):
+        assert gone not in text and gone not in html
+    assert text.index("■ 밤사이 이슈") < text.index("■ 환율·금리") < text.index("■ 그 밖의 이슈") < text.index("■ 내 ETF")
+    assert "  - 개장 직후 외국인이 순매수했습니다. [근거 1]" in text and "개장 직후 외국인이 순매수했습니다." in html
+    # 근거 약함은 줄 끝 표시와 면책 위 모음으로만 보인다.
+    assert "  - 금리: 받은 자료에 금리 관련 기사가 없습니다. (근거 약함)" in text
+    assert "※ 근거 약함 1건" in text and "  - 금리: 금리 기사가 더 있어야 합니다." in text
+    assert "※ 근거 약함 1건" in html and text.index("※ 근거 약함") < text.index("※ 투자 조언")
+    # 개장 전 판이라 개장 흐름이 없는 ETF는 그렇다고 쓴다.
+    assert "개장 흐름 자료 없음  상승 예상" in text
 
 
 def test_the_outlook_is_left_in_the_job_log_once_in_a_readable_form():

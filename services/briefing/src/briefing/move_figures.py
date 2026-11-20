@@ -57,6 +57,26 @@ class IndexFigure:
 
 
 @dataclass(frozen=True)
+class OverseasQuote:
+    """시장종합 원문의 해외 시세 행(해외 지수·선물·원유 등). 등락률은 원문에 부호가 붙어 온다."""
+
+    name: str
+    price: Decimal | None
+    rate: Decimal | None
+    # 원문 시각 칸 그대로(yyyyMMdd 또는 yyyyMMddHHmmss). 현지 시각인지는 원문이 밝히지 않는다.
+    at: str | None
+
+
+@dataclass(frozen=True)
+class InvestorFlow:
+    """시장종합 원문의 투자자별 순매수 행. 단위는 원문이 밝히지 않아 숫자만 옮긴다."""
+
+    investor: str
+    kospi: Decimal | None
+    kosdaq: Decimal | None
+
+
+@dataclass(frozen=True)
 class UsCloseSummary:
     """담긴 미국 종목의 직전 정규장 등락률 집계. 숫자로 읽은 등락률만 센다."""
 
@@ -98,8 +118,8 @@ def round_cent(value: Decimal) -> Decimal:
     return value.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
-def _rows(item: Background | None) -> list[dict]:
-    """배경 원문의 본문 목록(out2). 원문이 없거나 모양이 다르면 빈 목록."""
+def _rows(item: Background | None, block: str = "out2") -> list[dict]:
+    """배경 원문의 본문 목록(기본 out2). 원문이 없거나 모양이 다르면 빈 목록."""
     if item is None or item.status != BACKGROUND_OK or item.response is None:
         return []
     try:
@@ -107,7 +127,7 @@ def _rows(item: Background | None) -> list[dict]:
     except (json.JSONDecodeError, TypeError):
         return []
     body = data.get("dataBody") if isinstance(data, dict) else None
-    rows = body.get("out2") if isinstance(body, dict) else None
+    rows = body.get(block) if isinstance(body, dict) else None
     return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
 
 
@@ -169,6 +189,27 @@ def index_figure(background: Sequence[Background], name: str) -> IndexFigure | N
         rate=to_decimal(row.get("up_dwn_r_p2")),
         fetched_at=item.fetched_at,
     )
+
+
+def _text(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()
+
+
+def overseas_quotes(background: Sequence[Background]) -> tuple[OverseasQuote, ...]:
+    """시장종합 원문의 해외 시세 행(out4). 이름이 빈 행은 원문의 빈자리라 뺀다."""
+    rows = _rows(_background(background, MARKET_SUMMARY_API), "out4")
+    return tuple(OverseasQuote(name, to_decimal(row.get("now_prc")), to_decimal(row.get("up_dwn_r_p2")),
+                               _text(row.get("dt_tm")))
+                 for row in rows for name in [_text(row.get("symbl_nm"))] if name is not None)
+
+
+def investor_flows(background: Sequence[Background]) -> tuple[InvestorFlow, ...]:
+    """시장종합 원문의 투자자별 순매수 행(out5). 투자자 이름이 빈 행은 뺀다."""
+    rows = _rows(_background(background, MARKET_SUMMARY_API), "out5")
+    return tuple(InvestorFlow(name, to_decimal(row.get("kspi_nt_b")), to_decimal(row.get("ksdq_nt_b")))
+                 for row in rows for name in [_text(row.get("invstr_clsf_nm"))] if name is not None)
 
 
 def versus(change_percent: float | None, index: IndexFigure | None) -> Decimal | None:

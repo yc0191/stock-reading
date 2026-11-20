@@ -69,7 +69,7 @@ PYTHONPATH=services/briefing/src services/briefing/.venv/bin/python -m briefing.
 | 급변동 근거 조회와 다시 부르기 | `jobs.py`, `http_queries.py` |
 | 비교 숫자, 머리말 | `move_figures.py`, `report.py` |
 | 같은 사건 기사 묶기 | `article_groups.py` |
-| LLM 출력 검사(인용 번호, 미국 티커 거부, 근거 약함 줄) | `llm_output.py` |
+| LLM 출력 검사(인용 번호, 미국 티커 거부(급변동·마감 후 판), 근거 약함 줄) | `llm_output.py` |
 | 근거가 약한 문장 단위 재검색 | `sentence_research.py`, `research.py` |
 | 발행 직전 마지막 검사 | `final_check.py`, `move_final_check.py`, `daily_final_check.py` |
 | 데일리 판 시작, 한도 시각, 휴장 알림 | `daily_start.py` |

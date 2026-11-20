@@ -10,7 +10,8 @@ from datetime import timedelta
 import pytest
 
 from briefing.daily_final_check import FIX_ADDENDUM as DAILY_FIX_ADDENDUM
-from briefing.daily_final_check import DailyFinalCheck
+from briefing.daily_final_check import DailyFinalCheck, _units
+from briefing.daily_report import POINT_OTHER, DailyOutput, Point
 from briefing.daily_prompts import SYSTEM_PROMPT as MORNING_PROMPT
 from briefing.daily_prompts import SYSTEM_PROMPT_POST_CLOSE
 from briefing.final_check import CHOSE_AFTER, CHOSE_BEFORE, REVIEW_SYSTEM_PROMPT, FinalCheck
@@ -296,3 +297,21 @@ def test_daily_review_failing_every_attempt_publishes_the_current_body(edition):
     assert REWRITTEN in daily_text(flow)
     assert len(final_entries(flow.records, "review-failed")) == 1
     assert chosen(flow.records)["why"] == "검토 호출이 끝내 실패해 지금 본문을 냄"
+
+
+def test_a_morning_fix_naming_an_etf_in_a_shared_sentence_is_rejected_and_the_body_before_the_fix_stays():
+    # 아침 판 밤사이 이슈는 멤버 모두에게 같은 글이라 고친 문장도 ETF 종목코드를 쓰면 받지 않는다.
+    bad = json.dumps({"statement": "TEST01이 오를 수 있습니다.", "refs": ["B1"]}, ensure_ascii=False)
+    flow = daily_flow("morning", [review(1), bad, bad, bad])
+
+    assert "TEST01이 오를 수 있습니다." not in daily_text(flow)
+    assert chosen(flow.records)["chosen"] == CHOSE_BEFORE
+
+
+def test_the_final_check_reads_and_fixes_the_other_issues_too():
+    other = Point("해외 원유가 내렸습니다.", ("B1",), None, POINT_OTHER)
+    output = DailyOutput((Point("밤사이 이슈입니다.", ("B1",)),), False, others=(other,))
+    units = _units(output)
+    assert [(u.field, u.kind, u.statement) for u in units] == [("points", "summary", "밤사이 이슈입니다."),
+                                                               ("others", "other", "해외 원유가 내렸습니다.")]
+

@@ -627,6 +627,11 @@ def out_of_range(flow):
     return news_article("r2", flow.at - timedelta(days=5))
 
 
+def weak_shown(text, shortfall):
+    """본문에 부족한 점이 보이는가. 마감 후 판은 약한 줄 바로 아래에, 아침 판은 면책 위 근거 약함 모음에 쓴다."""
+    return (WEAK_NOTE_PREFIX + shortfall) in text or f": {shortfall}" in text
+
+
 def two_weak(flow):
     return daily_output(point("지수가 오른 가운데 자료가 있습니다.", flow.ref),
                         point("업종 소식이 영향을 줬을 수 있습니다.", flow.ref, SHORTFALL),
@@ -782,7 +787,7 @@ def test_daily_sentence_still_weak_after_two_searches_carries_the_shortfall_and_
 
     (event,) = flow.published()
     text = event.value["payload"]["text"]
-    assert (WEAK_NOTE_PREFIX + SECOND_SHORTFALL) in text and (WEAK_NOTE_PREFIX + STILL_SHORTFALL) not in text
+    assert weak_shown(text, SECOND_SHORTFALL) and not weak_shown(text, STILL_SHORTFALL)
     assert len(flow.research_requests()) == 2 and len(flow.query_llm.calls) == 2
     (limit,) = flow.records.of_reason(ResearchReason.SENTENCE_LIMIT)
     assert (limit.stage, limit.sentence_no) == (ResearchStep.LIMIT.value, 1)
@@ -805,7 +810,7 @@ def test_daily_sentences_over_the_request_limit_are_not_searched_and_keep_the_we
 
     (event,) = flow.published()
     text = event.value["payload"]["text"]
-    assert (WEAK_NOTE_PREFIX + SECOND_SHORTFALL) in text and "둘째 문장을 다시 썼습니다." in text
+    assert weak_shown(text, SECOND_SHORTFALL) and "둘째 문장을 다시 썼습니다." in text
     (result,) = flow.records.results()
     assert (result.weak_count, result.research_count) == (1, 1)
 
@@ -830,7 +835,7 @@ def test_daily_total_time_limit_publishes_the_body_at_that_moment(edition):
 
     (event,) = flow.published()
     text = event.value["payload"]["text"]
-    assert "둘째 문장을 다시 썼습니다." in text and (WEAK_NOTE_PREFIX + SECOND_SHORTFALL) in text
+    assert "둘째 문장을 다시 썼습니다." in text and weak_shown(text, SECOND_SHORTFALL)
     (limit,) = flow.records.of_reason(ResearchReason.TIME_LIMIT)
     assert limit.sentence_no == 3
     flow.complete(flow.rid(3))
@@ -867,7 +872,7 @@ def test_daily_sentence_rewrite_citing_a_ref_outside_the_list_is_rejected_and_th
     (event,) = flow.published()
     text = event.value["payload"]["text"]
     assert "지어낸 근거" not in text and "업종 소식이 영향을 줬을 수 있습니다." in text
-    assert (WEAK_NOTE_PREFIX + SHORTFALL) in text
+    assert weak_shown(text, SHORTFALL)
     rejected = [e for e in flow.records.of_type(EntryType.LLM_REJECTED) if e.sentence_no == 1]
     assert [e.attempts for e in rejected] == [1, 2, 3]
     assert "were not given" in rejected[0].data["llm"]["rejectReason"]
@@ -900,7 +905,7 @@ def test_daily_research_that_never_answers_publishes_the_first_result_with_its_w
     flow.sentences.on_tick(flow.now)
 
     (event,) = flow.published()
-    assert (WEAK_NOTE_PREFIX + SHORTFALL) in event.value["payload"]["text"]
+    assert weak_shown(event.value["payload"]["text"], SHORTFALL)
     assert [r.reason for r in flow.records.failures() if r.stage == ResearchStep.COMPLETION.value] == [
         ResearchReason.COMPLETION_TIMEOUT.value]
     assert len(flow.report_llm.calls) == 1

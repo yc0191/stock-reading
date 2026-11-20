@@ -21,7 +21,14 @@ from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DEFAULT_SETTINGS, CoreSettings, DailySettings
 from briefing.daily_chart import chart_bars, no_data_names, render_day_chart
 from briefing.daily_html import ChartSlot, render_html
-from briefing.daily_members import MemberPort, MemberPortfolio, member_input, member_output, member_sections
+from briefing.daily_members import (
+    MemberPort,
+    MemberPortfolio,
+    foreign_us_names,
+    member_input,
+    member_output,
+    member_sections,
+)
 from briefing.daily_morning import outlook_records
 from briefing.daily_inputs import EtfArticles, member_issues, moves_with_market, notable_candidates
 from briefing.daily_relevance import split_related
@@ -749,7 +756,8 @@ class DailyCore:
             try:
                 mine = member_input(daily_input, member)
                 mine_sections = member_sections(mine, sections, self.settings)
-                mine_draft = replace(draft, output=member_output(draft.output, mine, mine_sections))
+                mine_draft = replace(draft, output=member_output(draft.output, mine, mine_sections,
+                                                                 foreign_us_names(daily_input, mine)))
                 text = daily_text(mine, mine_sections, mine_draft.output, status_text)
                 missing = [*job.notes, *missing_items(mine_sections), *status_missing]
                 event, _ = self._daily_event(job, now, member.member_id, mine, mine_sections, mine_draft, text,
