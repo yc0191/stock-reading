@@ -59,7 +59,8 @@ class ContextQuery {
 
         List<ContextPayload.Background> background =
                 new ArrayList<>(marketBackground.market(properties.worldIndexContinents(), since, asOf, maxBytes));
-        background.add(marketBackground.single(BackgroundKind.DAILY_PRICE, request.symbol(), since, asOf, maxBytes));
+        background.add(marketBackground.single(BackgroundKind.DAILY_PRICE, request.symbol(), since, asOf, maxBytes,
+                response -> RecentDailyRecords.keep(response, properties.dailyPriceRecords())));
 
         Optional<EtfInfo> etf = holdings.etfInfo(request.symbol());
         return new ContextPayload(request.jobId(), request.seq(), request.symbol(), tickers, closeRates, background,

@@ -19,6 +19,7 @@ import tools.jackson.databind.ObjectMapper;
  */
 class DailyPriceReader {
 
+    static final String RECORDS = "out2";
     static final String DATE_FIELD = "dt";
     static final String CLOSE_FIELD = "cls_prc_p2";
     static final String PREV_CLOSE_FIELD = "bdy_cls_prc_p2";
@@ -34,7 +35,7 @@ class DailyPriceReader {
     Optional<Record> latest(String response) {
         JsonNode records;
         try {
-            records = mapper.readTree(response).path("dataBody").path("out2");
+            records = mapper.readTree(response).path("dataBody").path(RECORDS);
         } catch (JacksonException e) {
             return Optional.empty();
         }
@@ -63,7 +64,7 @@ class DailyPriceReader {
     List<Close> closes(String response) {
         JsonNode records;
         try {
-            records = mapper.readTree(response).path("dataBody").path("out2");
+            records = mapper.readTree(response).path("dataBody").path(RECORDS);
         } catch (JacksonException e) {
             return List.of();
         }

@@ -68,7 +68,7 @@ class DailyQueryTest {
         intradaySeriesPort = mock(IntradaySeriesPort.class);
         when(intradaySeriesPort.minuteLasts(anyString(), any(), any(), anyInt()))
                 .thenReturn(List.of());
-        when(repository.dailyPriceHistory(anyString(), any(), any())).thenReturn(List.of());
+        when(repository.dailyPriceHistory(anyString(), any(), any(), anyInt())).thenReturn(List.of());
         when(intradayQuotes.lastReceived(anyString(), any(), any())).thenReturn(Optional.empty());
         when(repository.latest(any(), any(), any(), any())).thenReturn(Optional.empty());
         when(repository.worldIndexRows(anyString(), any(), any())).thenReturn(List.of());
@@ -81,8 +81,8 @@ class DailyQueryTest {
 
     private DailyQuery listener(int maxTickers, int maxEtfs) {
         return new DailyQuery(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
-                memberChanges, new ContextProperties(Duration.ofDays(4), 32_768, maxTickers, List.of("C", "S"), Duration.ofDays(7)),
-                new DailyProperties(maxEtfs, null, null, 420, 130, null), operationsReader, mapper, openFlowPort,
+                memberChanges, new ContextProperties(Duration.ofDays(4), 32_768, maxTickers, List.of("C", "S"), Duration.ofDays(7), 30),
+                new DailyProperties(maxEtfs, null, null, 420, 130, null, null), operationsReader, mapper, openFlowPort,
                 intradayQuotes, intradaySeriesPort,
                 new MarketProperties(5, BigDecimal.ONE, List.of("f.a", "f.b", "f.c"), BigDecimal.ONE, List.of("f.open"),
                         1, BigDecimal.ONE, List.of(), 0, new BigDecimal("2.00")));
@@ -660,7 +660,7 @@ class DailyQueryTest {
         assertThat(payload.etfs().get(0).intradaySeries()).isNull();
         assertThat(payload.etfs().get(0).dailyCloses()).isNull();
         verifyNoInteractions(intradaySeriesPort);
-        verify(repository, never()).dailyPriceHistory(anyString(), any(), any());
+        verify(repository, never()).dailyPriceHistory(anyString(), any(), any(), anyInt());
     }
 
     @Test
@@ -727,7 +727,7 @@ class DailyQueryTest {
     void maxDailyClosesAddsRecentClosesWhereTheLatestReceivedResponseWinsForTheSameDate() throws IOException {
         tracked("TEST01");
         OffsetDateTime newest = AS_OF.minusMinutes(30);
-        when(repository.dailyPriceHistory(eq("TEST01"), any(), any())).thenReturn(List.of(
+        when(repository.dailyPriceHistory(eq("TEST01"), any(), any(), anyInt())).thenReturn(List.of(
                 dailyRow(newest,
                         DailyPriceReaderTest.record("20261020", " 9850", "10000", " -1.50"),
                         DailyPriceReaderTest.record("20261019", "10000", "9950", "0.50")),
@@ -746,13 +746,13 @@ class DailyQueryTest {
                 .containsExactly(tuple("20261016", "9950", "0.51"), tuple("20261019", "10000", "0.50"),
                         tuple("20261020", "9850", "-1.50"));
         // 판 범위(since)가 아니라 안전 기간(200일)만큼 거슬러 읽는다.
-        verify(repository).dailyPriceHistory("TEST01", AS_OF.minusDays(200), AS_OF);
+        verify(repository).dailyPriceHistory("TEST01", AS_OF.minusDays(200), AS_OF, 7);
     }
 
     @Test
     void dailyClosesKeepTheMostRecentDatesUpToTheLimitAndSkipRowsOrDatesPastAsOf() throws IOException {
         tracked("TEST01", "TEST02");
-        when(repository.dailyPriceHistory(eq("TEST01"), any(), any())).thenReturn(List.of(
+        when(repository.dailyPriceHistory(eq("TEST01"), any(), any(), anyInt())).thenReturn(List.of(
                 // 기준 시각 뒤에 받은 원문과 기준 날짜 뒤 일자는 쓰지 않는다.
                 dailyRow(AS_OF.plusSeconds(1), DailyPriceReaderTest.record("20261020", "1", "1", "0.00")),
                 dailyRow(AS_OF.minusHours(1),
@@ -774,7 +774,7 @@ class DailyQueryTest {
     @Test
     void aFailedDailyHistoryReadLeavesOnlyThatEtfWithoutCloses() throws IOException {
         tracked("TEST01", "TEST02");
-        when(repository.dailyPriceHistory(eq("TEST01"), any(), any())).thenThrow(new IllegalStateException("db down"));
+        when(repository.dailyPriceHistory(eq("TEST01"), any(), any(), anyInt())).thenThrow(new IllegalStateException("db down"));
 
         DailyPayload payload = answer(listener(), withField(request(), "\"maxDailyCloses\": 130"));
 

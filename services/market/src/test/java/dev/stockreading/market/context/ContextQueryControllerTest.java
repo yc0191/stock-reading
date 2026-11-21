@@ -85,11 +85,11 @@ class ContextQueryControllerTest {
         givenStoredData();
 
         ContextProperties properties =
-                new ContextProperties(Duration.ofDays(4), 32_768, 100, List.of("C", "S"), Duration.ofDays(7));
+                new ContextProperties(Duration.ofDays(4), 32_768, 100, List.of("C", "S"), Duration.ofDays(7), 30);
         contextListener = new ContextQuery(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
                 properties);
         dailyListener = new DailyQuery(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
-                memberChanges, properties, new DailyProperties(50, Duration.ofMinutes(30), null, 420, 130, null),
+                memberChanges, properties, new DailyProperties(50, Duration.ofMinutes(30), null, 420, 130, null, null),
                 operationsReader, mapper, openFlowPort, (symbol, since, asOf) -> Optional.empty(),
                 (symbol, since, asOf, limit) -> List.of(),
                 new MarketProperties(5, BigDecimal.ONE, List.of("f.a", "f.b", "f.c"), BigDecimal.ONE,

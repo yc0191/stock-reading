@@ -14,6 +14,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param worldIndexContinents 배경 자료로 줄 세계지수 대륙구분(설정 순서대로 담는다)
  * @param worldIndexPrevLookback 세계지수 직전 영업일 행을 기준 시각보다 이 기간까지 이르게 받은 것에서 찾는다.
  *                             요청 범위와는 따로 둔다
+ * @param dailyPriceRecords    배경 자료로 주는 국내 일봉 원문의 일자 레코드 수. 저장한 원문은 그래프용으로 더 길지만,
+ *                             배경으로는 최근 일자만 남겨 원문 크기 상한을 넘지 않게 한다(저장 원문은 바꾸지 않는다)
  */
 @ConfigurationProperties("market.context")
 public record ContextProperties(
@@ -21,7 +23,8 @@ public record ContextProperties(
         int maxResponseBytes,
         int maxTickers,
         List<String> worldIndexContinents,
-        Duration worldIndexPrevLookback) {
+        Duration worldIndexPrevLookback,
+        int dailyPriceRecords) {
 
     public ContextProperties {
         // 상한이 비면 응답이 끝없이 커지거나 모든 자료가 없음이 되어 조용히 틀린 응답이 나가므로 시작 단계에서 막는다.
@@ -34,6 +37,10 @@ public record ContextProperties(
         // 이 기간이 없으면 판 범위가 짧을 때 직전 종가를 못 찾아 등락률이 조용히 비므로 시작 단계에서 막는다.
         if (worldIndexPrevLookback == null || worldIndexPrevLookback.isNegative() || worldIndexPrevLookback.isZero()) {
             throw new IllegalArgumentException("market.context.world-index-prev-lookback must be positive");
+        }
+        // 0이면 일봉 배경이 늘 빈 원문이 되어 조용히 근거가 빠지므로 시작 단계에서 막는다.
+        if (dailyPriceRecords < 1) {
+            throw new IllegalArgumentException("market.context.daily-price-records must be positive");
         }
         worldIndexContinents = worldIndexContinents == null ? List.of() : List.copyOf(worldIndexContinents);
     }

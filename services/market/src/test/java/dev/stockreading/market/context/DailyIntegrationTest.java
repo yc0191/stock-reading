@@ -88,11 +88,15 @@ class DailyIntegrationTest {
         insert("DT0007", "{\"v\": \"too-old\"}", asOf.minusDays(10));
         insert("DT0008", "{\"v\": \"other\"}", asOf.minusHours(1));
 
-        List<BackgroundRepository.StoredResponse> rows = repository.dailyPriceHistory("DT0007", asOf.minusDays(5), asOf);
+        List<BackgroundRepository.StoredResponse> rows = repository.dailyPriceHistory("DT0007", asOf.minusDays(5), asOf, 7);
 
         assertThat(rows).extracting(BackgroundRepository.StoredResponse::response)
                 .containsExactly("{\"v\": \"at\"}", "{\"v\": \"day2\"}", "{\"v\": \"day1-late\"}");
         assertThat(rows.get(0).fetchedAt()).isEqualTo(asOf);
+        // 건수 상한이 있으면 최근 것부터 그만큼만 읽는다.
+        assertThat(repository.dailyPriceHistory("DT0007", asOf.minusDays(5), asOf, 2))
+                .extracting(BackgroundRepository.StoredResponse::response)
+                .containsExactly("{\"v\": \"at\"}", "{\"v\": \"day2\"}");
     }
 
     private static long count() {

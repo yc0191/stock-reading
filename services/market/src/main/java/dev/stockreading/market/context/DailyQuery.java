@@ -231,7 +231,8 @@ class DailyQuery {
         for (int i = 0; i < etfs.size(); i++) {
             DailyPayload.Etf etf = etfs.get(i);
             try {
-                etfs.set(i, etf.withDailyCloses(dailyCloses.collect(etf.symbol(), from, asOf, max)));
+                etfs.set(i, etf.withDailyCloses(dailyCloses.collect(etf.symbol(), from, asOf, max,
+                        dailyProperties.dailyClosesMaxResponses())));
             } catch (RuntimeException e) {
                 failed++;
             }
