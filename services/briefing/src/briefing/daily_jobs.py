@@ -961,7 +961,10 @@ class DailySentences:
 
     def query_context(self, draft: DailyDraft, sentence: WeakSentence | None) -> dict[str, Any]:
         llm = build_llm_input(draft.input, draft.sections, self.core.settings, group=False)
-        background = [e.llm for s in draft.sections for e in s.entries if e.llm.get("category") == BACKGROUND_LABEL]
+        # 배경은 원문(response)을 빼고 코드가 꺼낸 숫자(지수 등락률, 원/달러, 해외 시세 등)와 받은 시각만 준다. 검색어를 고르는 데
+        # 원문은 필요 없고, 원문을 넣으면 검색어 한 번에 입력이 수만 토큰이 된다(급변동은 처음부터 숫자만 준다).
+        background = [{k: v for k, v in e.llm.items() if k != "response"}
+                      for s in draft.sections for e in s.entries if e.llm.get("category") == BACKGROUND_LABEL]
         context: dict[str, Any] = {
             "edition": llm["edition"], "rangeStart": llm["rangeStart"], "asOf": llm["asOf"],
             "foundArticleTitles": [a.title for a in draft.input.research_articles],
