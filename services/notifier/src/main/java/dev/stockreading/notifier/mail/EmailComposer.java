@@ -40,12 +40,17 @@ public class EmailComposer {
         }
         String subject = subjectPrefix.isEmpty() ? core : subjectPrefix + " " + core;
 
-        String body = payload.text()
-                + "\n\n----------------------------------------"
-                + "\n브리핑 ID: " + briefing.eventId()
-                + "\n추적 ID: " + briefing.correlationId()
-                + "\n생성 방식: " + payload.generatedBy();
-        return new EmailMessage(subject, body, null, List.of(), FROM_NAME);
+        List<String> footer = List.of(
+                "브리핑 ID: " + briefing.eventId(),
+                "추적 ID: " + briefing.correlationId(),
+                "생성 방식: " + payload.generatedBy());
+        String body = payload.text() + "\n\n----------------------------------------\n" + String.join("\n", footer);
+        // html이 있으면 글자판과 함께 묶음 메일로, 없으면(이전 형식) 글자판만 보낸다.
+        if (!MailHtml.hasHtml(payload.html())) {
+            return new EmailMessage(subject, body, null, List.of(), FROM_NAME);
+        }
+        return new EmailMessage(subject, body, MailHtml.withFooter(payload.html(), footer),
+                MailHtml.decodeImages(payload.images(), briefing.eventId()), FROM_NAME);
     }
 
     /**

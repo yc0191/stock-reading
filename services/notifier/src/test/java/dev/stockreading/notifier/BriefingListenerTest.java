@@ -61,6 +61,31 @@ class BriefingListenerTest {
     }
 
     @Test
+    void anEventWithHtmlIsSentAsATextAndHtmlMailWithItsImages() {
+        listener().onBriefing(sample);
+
+        ArgumentCaptor<EmailMessage> email = ArgumentCaptor.forClass(EmailMessage.class);
+        verify(mailSender).send(eq("to@example.com"), email.capture());
+        assertThat(email.getValue().hasHtml()).isTrue();
+        assertThat(email.getValue().body()).contains("근거 후보");
+        assertThat(email.getValue().images()).hasSize(1);
+    }
+
+    @Test
+    void anOlderEventWithoutHtmlIsStillSentAsATextMail() {
+        String older = sample.replaceAll("(?s),\\s*\"html\".*?\\]\\s*(?=\\}\\s*\\})", "\n  ");
+        assertThat(older).doesNotContain("\"html\"");
+
+        listener().onBriefing(older);
+
+        ArgumentCaptor<EmailMessage> email = ArgumentCaptor.forClass(EmailMessage.class);
+        verify(mailSender).send(eq("to@example.com"), email.capture());
+        assertThat(email.getValue().hasHtml()).isFalse();
+        assertThat(email.getValue().images()).isEmpty();
+        assertThat(email.getValue().subject()).isEqualTo("[시뮬레이션] [TEST 샘플 ETF(TEST01)] 하락 -1.50% 브리핑");
+    }
+
+    @Test
     void theSameBriefingDeliveredTwiceIsEmailedOnce() {
         BriefingListener listener = listener();
 

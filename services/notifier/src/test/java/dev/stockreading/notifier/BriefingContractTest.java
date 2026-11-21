@@ -65,4 +65,40 @@ class BriefingContractTest {
         BriefingEnvelope briefing = JsonMapper.builder().build().readValue(withExtras, BriefingEnvelope.class);
         assertThat(briefing.payload().symbol()).isEqualTo("TEST01");
     }
+
+    private static final String OLD_FORMAT_TAIL = "(?s),\\s*\"html\".*?\\]\\s*(?=\\}\\s*\\})";
+
+    @Test
+    void consumerReadsTheOptionalHtmlAndImages() throws IOException {
+        BriefingEnvelope.Payload payload = JsonMapper.builder().build()
+                .readValue(ContractSchemas.sample("briefing.generated.sample.json"), BriefingEnvelope.class).payload();
+
+        assertThat(payload.html()).contains("cid:chart-1");
+        assertThat(payload.images()).hasSize(1);
+        assertThat(payload.images().get(0).contentId()).isEqualTo("chart-1");
+        assertThat(payload.images().get(0).contentType()).isEqualTo("image/png");
+    }
+
+    @Test
+    void olderEventWithoutHtmlAndImagesStillMatchesTheSchemaAndIsRead() throws IOException {
+        String older = ContractSchemas.sample("briefing.generated.sample.json").replaceAll(OLD_FORMAT_TAIL, "\n  ");
+
+        assertThat(older).doesNotContain("\"html\"").doesNotContain("\"images\"");
+        assertThat(ContractSchemas.validate("briefing.generated.v1.schema.json", older)).isEmpty();
+        BriefingEnvelope.Payload payload = JsonMapper.builder().build().readValue(older, BriefingEnvelope.class).payload();
+        assertThat(payload.html()).isNull();
+        assertThat(payload.images()).isNull();
+    }
+
+    @Test
+    void emptyHtmlAndBadImagesAreRejectedBySchema() throws IOException {
+        String sample = ContractSchemas.sample("briefing.generated.sample.json");
+
+        assertThat(ContractSchemas.validate("briefing.generated.v1.schema.json",
+                sample.replaceAll("\"html\": \"[^\n]*\",", "\"html\": \"\","))).isNotEmpty();
+        assertThat(ContractSchemas.validate("briefing.generated.v1.schema.json",
+                sample.replace("image/png", "image/svg+xml"))).isNotEmpty();
+        assertThat(ContractSchemas.validate("briefing.generated.v1.schema.json",
+                sample.replace("\"chart-1\"", "\"bad id\""))).isNotEmpty();
+    }
 }

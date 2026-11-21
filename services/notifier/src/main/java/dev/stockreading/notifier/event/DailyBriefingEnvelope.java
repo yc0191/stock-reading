@@ -31,6 +31,6 @@ public record DailyBriefingEnvelope(
 
     /** html이 cid:로 가리키는 인라인 그림. data는 base64 문자열이다. */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record Image(String contentId, String contentType, String data) {
+    public record Image(String contentId, String contentType, String data) implements ImageData {
     }
 }

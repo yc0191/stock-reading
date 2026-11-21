@@ -23,6 +23,20 @@
         "moveMinutes": { "type": "integer", "minimum": 1, "description": "선택. 짧은 시간 변동이 변동 시각(asOf)부터 감지까지 몇 분 사이였는지(1분 미만은 1). todayChangePercent와 함께만 담는다. 이 값이 브리핑의 짧은 시간 변동 구간 상한(시세처리기의 구간 길이와 같은 5분)을 넘으면(이어지는 변동을 다시 보내 변동 시각이 처음 시각에 고정된 경우) 실제 구간이 아니므로 칸을 뺀다." },
         "asOf": { "type": "string", "format": "date-time" },
         "text": { "type": "string", "minLength": 1 },
+        "html": { "type": "string", "minLength": 1, "description": "선택. text 와 같은 내용을 꾸민 HTML 본문. 있으면 발송기가 글자판(text)과 HTML을 함께 담은 묶음 메일을 보내고, 없으면(이전 형식) text 만 보낸다. 그림은 images 의 contentId 를 cid: 로 가리킨다. 꼬리(브리핑 ID·추적 ID·생성 방식)는 발송기가 붙이므로 담지 않는다." },
+        "images": {
+          "type": "array",
+          "description": "선택. html 이 cid: 로 가리키는 인라인 그림(briefing.daily.generated v2와 같은 모양). html 이 없으면 쓰이지 않는다.",
+          "items": {
+            "type": "object",
+            "required": ["contentId", "contentType", "data"],
+            "properties": {
+              "contentId": { "type": "string", "pattern": "^[^\\s<>]+$", "description": "html 의 cid: 뒤에 오는 값(꺾쇠 없이)." },
+              "contentType": { "enum": ["image/png", "image/jpeg", "image/gif"], "description": "그림 형식." },
+              "data": { "type": "string", "pattern": "^[A-Za-z0-9+/]+={0,2}$", "description": "그림 바이트의 base64(줄바꿈 없음)." }
+            }
+          }
+        },
         "generatedBy": { "type": "string", "minLength": 1, "description": "알려진 값: rule-based" },
         "evidence": {
           "type": "array",

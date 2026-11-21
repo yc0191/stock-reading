@@ -145,4 +145,88 @@ class EmailComposerTest {
         assertThat(email.body()).startsWith("[TEST 샘플 ETF(TEST01)] 16:00");
         assertThat(email.body()).contains("근거 후보");
     }
+
+    private static final String PNG_1X1 =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+    private static BriefingEnvelope withHtml(String html, List<BriefingEnvelope.Image> images) {
+        Payload p = briefing("-1.50", "TEST 샘플 ETF").payload();
+        Payload payload = new Payload(p.symbol(), p.name(), p.changePercent(), p.asOf(), p.text(), p.generatedBy(),
+                p.evidence(), null, null, html, images);
+        BriefingEnvelope base = briefing("-1.50");
+        return new BriefingEnvelope(base.eventId(), base.eventType(), base.schemaVersion(), base.occurredAt(),
+                base.producedAt(), base.correlationId(), payload);
+    }
+
+    @Test
+    void withoutHtmlTheMailStaysTextOnly() {
+        EmailMessage email = composer("").compose(briefing("-1.50"));
+
+        assertThat(email.hasHtml()).isFalse();
+        assertThat(email.images()).isEmpty();
+        assertThat(email.fromName()).isEqualTo("변동 감지");
+        // 빈 html도 없는 것과 같다(이전 형식과 같은 글자판 메일).
+        assertThat(composer("").compose(withHtml("  ", List.of(new BriefingEnvelope.Image("c1", "image/png", PNG_1X1))))
+                .hasHtml()).isFalse();
+    }
+
+    @Test
+    void htmlMailKeepsTheTextAndSubjectAndGetsTheFooterAndImages() {
+        BriefingEnvelope briefing = withHtml("<html><body><p>안녕</p><img src=\"cid:c1\"></body></html>",
+                List.of(new BriefingEnvelope.Image("c1", "image/png", PNG_1X1)));
+
+        EmailMessage email = composer("[시뮬레이션]").compose(briefing);
+
+        assertThat(email.subject()).isEqualTo("[시뮬레이션] [TEST 샘플 ETF(TEST01)] 하락 -1.50% 브리핑");
+        assertThat(email.fromName()).isEqualTo("변동 감지");
+        assertThat(email.body()).startsWith("[TEST01] 16:00 기준 하락 -1.50%").contains("생성 방식: rule-based");
+        assertThat(email.hasHtml()).isTrue();
+        assertThat(email.html()).startsWith("<html><body><p>안녕</p>").endsWith("</div></body></html>")
+                .contains("브리핑 ID: 9b7d1f20-3a4c-4e8b-b5d6-2c1a0f9e8d77")
+                .contains("추적 ID: collect-2026-10-20T16:00:30+09:00")
+                .contains("생성 방식: rule-based");
+        assertThat(email.images()).hasSize(1);
+        assertThat(email.images().get(0).contentId()).isEqualTo("c1");
+        assertThat(email.images().get(0).data()).startsWith((byte) 0x89, (byte) 'P', (byte) 'N', (byte) 'G');
+    }
+
+    @Test
+    void invalidImagesAreDroppedAndTheHtmlMailStillGoesOut() {
+        List<BriefingEnvelope.Image> images = List.of(
+                new BriefingEnvelope.Image("good", "image/png", PNG_1X1),
+                new BriefingEnvelope.Image("broken", "image/png", "!!not base64!!"),
+                new BriefingEnvelope.Image("badtype", "image/svg+xml", PNG_1X1),
+                new BriefingEnvelope.Image("bad id", "image/png", PNG_1X1));
+
+        EmailMessage email = composer("").compose(withHtml("<p>x</p>", images));
+
+        assertThat(email.hasHtml()).isTrue();
+        assertThat(email.images()).extracting(EmailMessage.InlineImage::contentId).containsExactly("good");
+    }
+
+    @Test
+    void footerValuesAreHtmlEscaped() {
+        BriefingEnvelope base = withHtml("<p>x</p>", null);
+        Payload p = base.payload();
+        Payload payload = new Payload(p.symbol(), p.name(), p.changePercent(), p.asOf(), p.text(), "a&b<i>",
+                p.evidence(), null, null, p.html(), null);
+        BriefingEnvelope hostile = new BriefingEnvelope(base.eventId(), base.eventType(), 1, base.occurredAt(),
+                base.producedAt(), base.correlationId(), payload);
+
+        String html = composer("").compose(hostile).html();
+
+        assertThat(html).doesNotContain("<i>").contains("a&amp;b&lt;i&gt;");
+    }
+
+    @Test
+    void committedSampleCarriesHtmlAndImagesIntoTheMail() throws IOException {
+        BriefingEnvelope sample = tools.jackson.databind.json.JsonMapper.builder().build().readValue(
+                dev.stockreading.notifier.ContractSchemas.sample("briefing.generated.sample.json"), BriefingEnvelope.class);
+
+        EmailMessage email = composer("").compose(sample);
+
+        assertThat(email.hasHtml()).isTrue();
+        assertThat(email.html()).contains("cid:chart-1");
+        assertThat(email.images()).extracting(EmailMessage.InlineImage::contentId).containsExactly("chart-1");
+    }
 }
