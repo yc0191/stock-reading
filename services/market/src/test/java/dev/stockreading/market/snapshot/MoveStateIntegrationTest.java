@@ -115,6 +115,18 @@ class MoveStateIntegrationTest {
     }
 
     @Test
+    void highStateKeepsItsBasePriceAfterBeingMarkedEnded() {
+        MoveStateRepository repository = repository();
+        repository.save("ITM011", DetectionType.PREV_CLOSE_HIGH, 9_280, T0, T0);
+
+        repository.markEnded("ITM011", DetectionType.PREV_CLOSE_HIGH, T0.plusMinutes(1));
+
+        Optional<MoveState> state = repository().find("ITM011", DetectionType.PREV_CLOSE_HIGH);
+        assertThat(state.get().lastPublishedPrice()).isEqualTo(9_280L);
+        assertThat(state.get().ended()).isTrue();
+    }
+
+    @Test
     void markingEndedKeepsThePriceAndIsReadBackAsEndedOnlyOnce() {
         MoveStateRepository repository = repository();
         repository.save("ITM006", DetectionType.PREV_CLOSE, 10_500, T0, T0.plusMinutes(1));
@@ -155,7 +167,7 @@ class MoveStateIntegrationTest {
 
     private static MarketProperties properties() {
         return new MarketProperties(5, new BigDecimal("1.00"), List.of("fake.a"), new BigDecimal("3.00"), List.of(),
-                1, new BigDecimal("1.00"), List.of("fake.volume", "fake.open"), 30, new BigDecimal("2.00"));
+                1, new BigDecimal("1.00"), List.of("fake.volume", "fake.open"), 30, new BigDecimal("2.00"), new BigDecimal("7.00"));
     }
 
     // DB는 시각을 UTC 오프셋으로 돌려주므로 같은 순간인지로 비교한다.

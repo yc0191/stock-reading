@@ -24,6 +24,9 @@ import dev.stockreading.market.MarketProperties;
  * 풀린 뒤 다시 발행하는 변동은 새 변동으로 보고 시작 시각을 새로 잡는다. 판단 불가(UNKNOWN) 스냅샷이 끼면 연속 건수를 다시 센다.
  * 셋째, 종목 단위로 마지막 발행(유형 무관) 뒤 재발행 간격 안이면 마지막 발행 가격 대비 예외 비율 이상 더 움직일 때만 발행한다.
  * 간격 때문에 막은 변동은 그 시점의 가격으로 유형 상태에 남겨, 간격이 끝나도 새 움직임 없이 발행하지 않는다.
+ * 레벨 상(prevCloseHigh)은 둘째·셋째 관문을 따로 쓴다. 상 기준가가 마지막 발행 가격이라 기준 비율 이상 움직인 것만 감지되므로
+ * 재발행 판단이 이미 들어 있고, 종목별 재발행 간격은 적용하지 않는다. 상은 발행마다 새 변동으로 시작 시각을 잡고 연속 확인도 새로 센다.
+ * 상은 종목별 마지막 발행 가격(재발행 간격 판단 기준)을 바꾸지 않으므로 다른 유형의 간격 판단은 상이 있어도 같다.
  * 연속 확인과 유형별 상태는 그날(한국 날짜) 것만 쓴다. 장이 끝나면 조건이 풀렸다는 판정이 오지 않아 상태가 다음 거래일까지 남는데,
  * 그대로 쓰면 다음 날 첫 변동의 시각과 근거 범위가 지난 거래일이 된다.
  */
@@ -124,9 +127,10 @@ class MoveTracker {
         // 이미 시작된 변동이면 처음 시각을 유지한다. 새 변동이면 감지 규칙의 시각과 연속 확인이 시작된 스냅샷의 시각 중 이른 쪽이다.
         OffsetDateTime detectedStart = detection.moveStartedAt().isBefore(streak.firstAsOf)
                 ? detection.moveStartedAt() : streak.firstAsOf;
-        Optional<MoveState> ongoing = state.filter(s -> !s.ended());
+        boolean high = detection.type() == DetectionType.PREV_CLOSE_HIGH;
+        Optional<MoveState> ongoing = high ? Optional.empty() : state.filter(s -> !s.ended());
         OffsetDateTime startedAt = ongoing.map(MoveState::moveStartedAt).orElse(detectedStart);
-        if (insideRepublishInterval(symbol, asOf, price, detection, streak)) {
+        if (!high && insideRepublishInterval(symbol, asOf, price, detection, streak)) {
             // 막은 변동도 이 유형의 상태로 남겨, 간격이 끝나는 순간 새 움직임 없이 발행되지 않게 한다.
             if (ongoing.isEmpty()) {
                 states.save(symbol, detection.type(), price, startedAt, asOf);
@@ -136,7 +140,12 @@ class MoveTracker {
         // 발행한 뒤에 상태를 저장하므로 저장이 실패하면 중복은 있어도 누락은 없다.
         publisher.publish(symbol, detection, startedAt, asOf, correlationId);
         states.save(symbol, detection.type(), price, startedAt, asOf);
-        states.saveLastPublish(symbol, price, asOf);
+        if (high) {
+            // 다음 상의 연속 확인과 시작 시각이 이번 상에서 이어받지 않고 새로 잡히게 한다.
+            streaks.remove(symbol + "/" + detection.type());
+        } else {
+            states.saveLastPublish(symbol, price, asOf);
+        }
     }
 
     /** 간격 안이라 발행하지 않은 변동은 연속 확인이 이어지는 동안 한 번만 로그에 남긴다. */
@@ -162,7 +171,7 @@ class MoveTracker {
     }
 
     /** 지난 시세를 나중에 재생할 때 오늘 상태를 지우지 않도록, 이른 날짜만 지난 거래일 상태로 본다. */
-    private static boolean fromEarlierDay(OffsetDateTime stored, OffsetDateTime asOf) {
+    static boolean fromEarlierDay(OffsetDateTime stored, OffsetDateTime asOf) {
         return stored.atZoneSameInstant(ZONE).toLocalDate().isBefore(asOf.atZoneSameInstant(ZONE).toLocalDate());
     }
 

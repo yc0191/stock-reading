@@ -32,12 +32,12 @@ class DailyEmailComposerTest {
     void attachLogs() {
         logs = new ListAppender<>();
         logs.start();
-        ((Logger) LoggerFactory.getLogger(DailyEmailComposer.class)).addAppender(logs);
+        ((Logger) LoggerFactory.getLogger(MailHtml.class)).addAppender(logs);
     }
 
     @AfterEach
     void detachLogs() {
-        ((Logger) LoggerFactory.getLogger(DailyEmailComposer.class)).detachAppender(logs);
+        ((Logger) LoggerFactory.getLogger(MailHtml.class)).detachAppender(logs);
     }
 
     private static DailyBriefingEnvelope daily(String edition, String rangeEnd, List<String> missingItems) {

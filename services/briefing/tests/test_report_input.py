@@ -315,8 +315,18 @@ def test_the_weak_note_is_one_line_the_same_for_every_kind():
     assert WEAK_NOTE_PREFIX == "근거 약함: "
 
 
+def test_move_body_has_no_weak_note(core, rec):
+    shortfall = "더 필요한 자료입니다."
+    run_us(core)
+    move_out = cause_output(weak=True, shortfall=shortfall)
+    stage, sent, _ = report_stage(LlmWriter(FakeLlm(move_out)))
+    stage.on_ready(rec.readied[0])
+    move_payload = sent.sent[0].value["payload"]
+    assert "근거 약함" not in move_payload["text"] and shortfall not in move_payload["text"]
+
+
 def test_the_morning_body_marks_a_weak_line_and_gathers_the_shortfalls_in_one_place():
-    # 급변동 메일은 약한 항목 바로 아래에 부족한 점을 쓰지만, 아침 판은 줄 끝에 표시만 하고 부족한 점은 면책 위에 모은다.
+    # 급변동 메일은 부족한 점을 본문에 쓰지 않고(작업 기록에만), 아침 판은 줄 끝에 표시만 하고 부족한 점은 면책 위에 모은다.
     shortfall = "더 필요한 자료입니다."
     i = daily_input()
     daily_out = morning_reply([{"statement": "미국 종목이 내렸을 수 있습니다.", "refs": ["U1"], "weak": True,

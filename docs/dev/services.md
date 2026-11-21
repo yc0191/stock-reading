@@ -10,10 +10,10 @@
 
 ### 급변동 감지 (`market.move`)
 
-스냅샷마다 두 유형을 평가합니다. 유형 1(`window`)은 최근 이력의 가장 오래된 스냅샷과, 유형 2(`prevClose`)는 원문의 전일 종가(후보 칸 다수결)와 비교하며, 조건이 연속으로 확인될 때만 발행합니다. 한 번 발행한 뒤에는 마지막 발행 가격에서 더 움직여야 다시 발행하고, 종목 단위 재발행 간격이 있습니다. 상태는 그날(한국 날짜) 것만 쓰며 `move_state` 테이블에 둡니다. 오늘 등락률(`todayChangePercent`)은 응답 칸을 옮기지 않고 코드가 계산합니다.
+스냅샷마다 세 유형을 평가합니다. 유형 1(`window`)은 최근 이력의 가장 오래된 스냅샷과, 유형 2(`prevClose`)는 원문의 전일 종가(후보 칸 다수결)와 비교하며, 조건이 연속으로 확인될 때만 발행합니다. 레벨 상(`prevCloseHigh`)은 상 기준가와 비교합니다. 기준가는 그날 처음엔 전일 종가이고 상을 발행하면 그 발행 가격으로 바뀌며, 기준가 대비 위아래로 7%(`high-threshold-percent`) 이상이면 상입니다. 연속 확인과 가격 모임 규칙은 같고 종목 단위 재발행 간격은 적용하지 않고 종목별 마지막 발행 가격도 바꾸지 않으며(상은 window·prevClose의 재발행 판단에 영향이 없습니다), 한국 날짜가 바뀌면 전일 종가부터 다시 시작합니다. 상 이벤트의 `previousPrice`는 그때의 기준가, `changePercent`는 기준가 대비, `todayChangePercent`는 전일 종가 대비입니다. 중(`window`·`prevClose`)은 한 번 발행한 뒤에는 마지막 발행 가격에서 더 움직여야 다시 발행하고, 종목 단위 재발행 간격이 있습니다. 상태는 그날(한국 날짜) 것만 쓰며 `move_state` 테이블에 둡니다. 오늘 등락률(`todayChangePercent`)은 응답 칸을 옮기지 않고 코드가 계산합니다.
 
 - 규칙과 이유: `services/market/src/main/java/dev/stockreading/market/snapshot/`의 `MoveTracker`(발행 관문, 날짜 경계), `MoveDetector`(기준값, 튄 점, 첫 체결 전 응답, 전일 종가 다수결) 주석
-- 설정과 기본값: `services/market/src/main/resources/application.yml`의 `market.*`(`window-minutes`, `window-threshold-percent`, `prev-close-fields`, `prev-close-threshold-percent`, `open-price-fields`, `confirm-count`, `confirm-spread-percent`, `first-trade-fields`, `republish-interval-minutes`, `republish-exception-percent`). 칸 경로 설정은 같은 파일 주석에 적힌 환경변수(`MARKET_PREV_CLOSE_FIELDS` 등)로 덮어쓸 수 있고, 빈 값일 때의 동작도 그 주석에 있습니다.
+- 설정과 기본값: `services/market/src/main/resources/application.yml`의 `market.*`(`window-minutes`, `window-threshold-percent`, `prev-close-fields`, `prev-close-threshold-percent`, `open-price-fields`, `confirm-count`, `confirm-spread-percent`, `first-trade-fields`, `republish-interval-minutes`, `republish-exception-percent`, `high-threshold-percent`). 칸 경로 설정은 같은 파일 주석에 적힌 환경변수(`MARKET_PREV_CLOSE_FIELDS` 등)로 덮어쓸 수 있고, 빈 값일 때의 동작도 그 주석에 있습니다.
 - 메시지 모양: `contracts/events/market.move.v1.schema.json`
 
 ### 내부 조회 API

@@ -22,6 +22,14 @@
         "kind": "article",
         "ref": "A1"
       }
+    ],
+    "html": "<html><body><p>[TEST 샘플 ETF(TEST01)] 16:00 기준 하락 -1.50%</p><img src=\"cid:chart-1\" alt=\"장중 가격\"></body></html>",
+    "images": [
+      {
+        "contentId": "chart-1",
+        "contentType": "image/png",
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+      }
     ]
   }
 }

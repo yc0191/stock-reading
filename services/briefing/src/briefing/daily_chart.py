@@ -96,8 +96,8 @@ def _font_dir() -> Path:
     return Path(override) if override else DEFAULT_FONT_DIR
 
 
-def _fonts() -> tuple[Any, Any]:
-    """(보통, 굵게) 글꼴. 글꼴 파일이 없으면 경고를 남기고 기본 글꼴을 쓴다."""
+def load_fonts() -> tuple[Any, Any]:
+    """(보통, 굵게) 글꼴. 글꼴 파일이 없으면 경고를 남기고 기본 글꼴을 쓴다. 급변동 차트도 같이 쓴다."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -118,7 +118,7 @@ def render_day_chart(bars: tuple[Bar, ...]) -> bytes | None:
         return None
     from matplotlib.figure import Figure
 
-    regular_font, bold_font = _fonts()
+    regular_font, bold_font = load_fonts()
 
     with warnings.catch_warnings():
         # 글꼴이 없으면 한글 글자마다 경고가 나온다. 글꼴 경고는 위에서 한 번 남겼다.
@@ -288,7 +288,7 @@ def render_line_chart(lines: tuple[Line, ...], title: str, by_time: bool) -> byt
     from matplotlib import dates as mdates
     from matplotlib.figure import Figure
 
-    regular_font, bold_font = _fonts()
+    regular_font, bold_font = load_fonts()
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message="Glyph .* missing from font")
         figure = Figure(figsize=(WIDTH_INCHES, LINE_HEIGHT_INCHES), dpi=DPI)

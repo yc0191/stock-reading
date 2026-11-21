@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, time, timedelta
+from datetime import time, timedelta
 
 
 @dataclass(frozen=True)
@@ -43,15 +43,14 @@ class CoreSettings:
     max_tickers: int = 100
     # LLM 입력에 넣는 ETF 구성 종목 수. 비중 순위가 높은 종목부터 이 수까지 넣는다.
     max_etf_members: int = 10
+    # 레벨 상 리포트의 원인 칸(detail, meaning, conflict) 하나의 글자 수 상한(공백 포함). 근거 번호 표시는 코드가 붙이므로
+    # 세지 않는다. 넘는 출력은 거부하고 다시 부른다. 제목(title)에는 적용하지 않는다.
+    max_cause_chars: int = 60
     # 같은 종목의 market.move는 바로 처리하지 않고 모은다. 마지막 변동 뒤 이 시간 동안 같은 종목 변동이 더 없으면 모인 변동으로
     # 작업 하나를 만든다. 변동이 계속 와도 첫 변동부터 최대 이 시간이 지나면 그때까지 모인 것으로 만든다(영영 밀리지 않게).
     # 0이면 변동마다 바로 작업을 만든다(기본). 급변동 메일을 변동 뒤 약 10분 안에 보내려는 것이며, 같은 종목 중복은 시세처리기가 막는다.
     move_quiet_period: timedelta = timedelta(0)
     move_max_wait: timedelta = timedelta(minutes=30)
-    # 급변동 리포트 멈춤 기간(한국 날짜, 시작일 포함·끝 날짜 제외). 이 기간에 받은 market.move는 작업 기록(job_run)만 남기고
-    # 근거 조회·재검색 요청·LLM 호출·결과 발행을 하지 않는다. 끝 날짜부터는 배포 없이 원래대로 돈다. 비우면 멈추지 않는다(#84).
-    move_report_pause_start: date | None = date(2026, 11, 19)
-    move_report_pause_end: date | None = date(2026, 12, 1)
     # 같은 eventId 중복 처리를 위해 기억하는 작업 키 수. 메모리가 무한히 늘지 않게 한다.
     remembered_jobs: int = 10000
     # 근거 부족 시 재검색: 검색어 LLM이 낼 수 있는 검색어 수, 검색어 LLM 시도 횟수, 재검색 완료 알림을 기다리는 상한.
@@ -75,6 +74,13 @@ class CoreSettings:
     article_group_min_shared_words: int = 2
     article_group_max_gap: timedelta = timedelta(hours=6)
     article_group_min_word_length: int = 2
+    # 레벨 상 메일의 장중 차트: 이 시각(한국 시간)부터 변동 delta 뒤까지 이 간격으로 그린다. 한 장(PNG)과 이벤트 전체(JSON 바이트)가
+    # 넘으면 그림만 빼고 글자판+HTML로 보낸다(데일리 판과 같은 상한, 브리핑 Kafka 발행 한도 1MB 안).
+    chart_start: time = time(9, 0)
+    chart_interval: timedelta = timedelta(seconds=60)
+    max_chart_points: int = 500
+    max_mail_image_bytes: int = 300 * 1024
+    max_mail_event_bytes: int = 900 * 1024
 
 
 @dataclass(frozen=True)

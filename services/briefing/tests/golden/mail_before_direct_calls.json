@@ -65,6 +65,7 @@
    "occurredAt": "2026-10-20T16:00:31+09:00",
    "payload": {
     "asOf": "2026-10-20T16:00:31+09:00",
+    "baseKind": "earlierMove",
     "changePercent": -1.5,
     "evidence": [
      {
@@ -107,10 +108,10 @@
      }
     ],
     "generatedBy": "llm",
-    "moveMinutes": 1,
+    "html": "<html lang=\"ko\"><body style=\"margin:0;padding:16px;background:#ffffff;color:#212121;font-family:'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic','맑은 고딕',sans-serif;font-size:15px;line-height:1.6\"><div style=\"max-width:640px;margin:0 auto\"><h1 style=\"margin:0 0 4px;font-size:20px;font-weight:700;line-height:1.4\">[TEST ETF ONE(TEST01)] 16:00 기준 오늘 <span style=\"color:#1565c0;font-weight:700\">-2.10%</span> · 기준가 대비 <span style=\"color:#1565c0;font-weight:700\">-1.50%</span> 하락 (10,000 → 9,850)</h1><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">1. 공시가 영향을 줬을 수 있습니다.</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">공시가 영향을 줬을 수 있습니다. [근거 1, 2]</li><li style=\"margin:2px 0\">공시가 영향을 줬을 수 있습니다. [근거 1, 2]</li></ul><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">2. 미국 종목 하락과 환율이 함께 나타났습니다.</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">미국 종목 하락과 환율이 함께 나타났습니다. [근거 3, 4]</li><li style=\"margin:2px 0\">미국 종목 하락과 환율이 함께 나타났습니다. [근거 3, 4]</li></ul><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">3. 세계지수 흐름도 배경으로 있습니다.</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">세계지수 흐름도 배경으로 있습니다. [근거 5]</li><li style=\"margin:2px 0\">세계지수 흐름도 배경으로 있습니다. [근거 5]</li></ul><p style=\"margin:2px 0;font-size:12px;color:#9e9e9e\">근거:</p><ol style=\"margin:0;padding-left:20px;font-size:12px;color:#9e9e9e\"><li style=\"margin:2px 0;font-size:12px;color:#9e9e9e\">TESTA 8-K 공시 항목 2.02 — 미국 공시, 접수 10-20 06:00 <a href=\"https://www.sec.gov/Archives/test/0000000001-26-000001.htm\" style=\"color:#9e9e9e\">원문</a></li><li style=\"margin:2px 0;font-size:12px;color:#9e9e9e\">기사 a1 — news.example.com, 발행 10-20 15:30 <a href=\"https://news.example.com/a1\" style=\"color:#9e9e9e\">원문</a></li><li style=\"margin:2px 0;font-size:12px;color:#9e9e9e\">TESTA 직전 정규장 등락률 -1.25% (20261019) — 해외 시세 자료, 마감 10-20 05:00</li><li style=\"margin:2px 0;font-size:12px;color:#9e9e9e\">환율종합 (배경) — 시세 자료(배경), 받음 10-20 15:55</li><li style=\"margin:2px 0;font-size:12px;color:#9e9e9e\">세계지수 S (배경) — 시세 자료(배경), 받음 10-20 15:55</li></ol><p style=\"margin:18px 0 6px;font-size:12px;color:#9e9e9e\">※ 투자 조언이 아니며, 위 내용은 변동 시점 전후에 공개된 자료로 추정한 것일 뿐 원인을 단정하지 않습니다.</p></div></body></html>",
     "name": "TEST ETF ONE",
     "symbol": "TEST01",
-    "text": "[TEST ETF ONE(TEST01)] 16:00 기준 오늘 -2.10% · 1분 새 -1.50% 하락 (10,000 → 9,850)\n\n1. 공시가 영향을 줬을 수 있습니다.\n- 공시가 영향을 줬을 수 있습니다. [근거 1, 2]\n- 공시가 영향을 줬을 수 있습니다. [근거 1, 2]\n  근거 1. TESTA 8-K 공시 항목 2.02 — 미국 공시, 접수 10-20 06:00 https://www.sec.gov/Archives/test/0000000001-26-000001.htm\n  근거 2. 기사 a1 — news.example.com, 발행 10-20 15:30 https://news.example.com/a1\n\n2. 미국 종목 하락과 환율이 함께 나타났습니다.\n- 미국 종목 하락과 환율이 함께 나타났습니다. [근거 3, 4]\n- 미국 종목 하락과 환율이 함께 나타났습니다. [근거 3, 4]\n  근거 3. TESTA 직전 정규장 등락률 -1.25% (20261019) — 해외 시세 자료, 마감 10-20 05:00\n  근거 4. 환율종합 (배경) — 시세 자료(배경), 받음 10-20 15:55\n\n3. 세계지수 흐름도 배경으로 있습니다.\n- 세계지수 흐름도 배경으로 있습니다. [근거 5]\n- 세계지수 흐름도 배경으로 있습니다. [근거 5]\n  근거 5. 세계지수 S (배경) — 시세 자료(배경), 받음 10-20 15:55\n\n확인하지 못한 것:\n- 미국 종목 직전 정규장 등락률: 2개 가운데 1개 받지 못함\n- 시장종합: 원문이 커서 빠짐\n- 국내 일봉: 기간 안에 받은 자료 없음\n- 원/달러 환율: 환율종합 원문에서 값을 찾지 못함\n※ 투자 조언이 아니며, 위 내용은 변동 시점 전후에 공개된 자료로 추정한 것일 뿐 원인을 단정하지 않습니다.",
+    "text": "[TEST ETF ONE(TEST01)] 16:00 기준 오늘 -2.10% · 기준가 대비 -1.50% 하락 (10,000 → 9,850)\n\n1. 공시가 영향을 줬을 수 있습니다.\n- 공시가 영향을 줬을 수 있습니다. [근거 1, 2]\n- 공시가 영향을 줬을 수 있습니다. [근거 1, 2]\n\n2. 미국 종목 하락과 환율이 함께 나타났습니다.\n- 미국 종목 하락과 환율이 함께 나타났습니다. [근거 3, 4]\n- 미국 종목 하락과 환율이 함께 나타났습니다. [근거 3, 4]\n\n3. 세계지수 흐름도 배경으로 있습니다.\n- 세계지수 흐름도 배경으로 있습니다. [근거 5]\n- 세계지수 흐름도 배경으로 있습니다. [근거 5]\n\n근거:\n  1. TESTA 8-K 공시 항목 2.02 — 미국 공시, 접수 10-20 06:00 https://www.sec.gov/Archives/test/0000000001-26-000001.htm\n  2. 기사 a1 — news.example.com, 발행 10-20 15:30 https://news.example.com/a1\n  3. TESTA 직전 정규장 등락률 -1.25% (20261019) — 해외 시세 자료, 마감 10-20 05:00\n  4. 환율종합 (배경) — 시세 자료(배경), 받음 10-20 15:55\n  5. 세계지수 S (배경) — 시세 자료(배경), 받음 10-20 15:55\n※ 투자 조언이 아니며, 위 내용은 변동 시점 전후에 공개된 자료로 추정한 것일 뿐 원인을 단정하지 않습니다.",
     "todayChangePercent": -2.1
    },
    "producedAt": "2026-10-20T16:20:31+09:00",
@@ -128,6 +129,7 @@
    "occurredAt": "2026-10-20T16:00:31+09:00",
    "payload": {
     "asOf": "2026-10-20T16:00:31+09:00",
+    "baseKind": "earlierMove",
     "changePercent": -1.5,
     "evidence": [
      {
@@ -150,13 +152,13 @@
      }
     ],
     "generatedBy": "llm",
-    "moveMinutes": 1,
+    "html": "<html lang=\"ko\"><body style=\"margin:0;padding:16px;background:#ffffff;color:#212121;font-family:'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic','맑은 고딕',sans-serif;font-size:15px;line-height:1.6\"><div style=\"max-width:640px;margin:0 auto\"><h1 style=\"margin:0 0 4px;font-size:20px;font-weight:700;line-height:1.4\">[TEST ETF ONE(TEST01)] 16:00 기준 오늘 <span style=\"color:#1565c0;font-weight:700\">-2.10%</span> · 기준가 대비 <span style=\"color:#1565c0;font-weight:700\">-1.50%</span> 하락 (10,000 → 9,850)</h1><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">1. 기사가 영향을 줬을 수 있습니다.</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">기사가 영향을 줬을 수 있습니다. [근거 1]</li><li style=\"margin:2px 0\">기사가 영향을 줬을 수 있습니다. [근거 1]</li></ul><p style=\"margin:20px 0 6px;font-size:16px;font-weight:700\">2. 다시 찾은 기사가 영향을 줬을 수 있습니다.</p><ul style=\"margin:0;padding-left:20px\"><li style=\"margin:2px 0\">다시 찾은 기사가 영향을 줬을 수 있습니다. [근거 2]</li><li style=\"margin:2px 0\">다시 찾은 기사가 영향을 줬을 수 있습니다. [근거 2]</li></ul><p style=\"margin:2px 0;font-size:12px;color:#9e9e9e\">근거:</p><ol style=\"margin:0;padding-left:20px;font-size:12px;color:#9e9e9e\"><li style=\"margin:2px 0;font-size:12px;color:#9e9e9e\">기사 a1 — news.example.com, 발행 10-20 15:30 <a href=\"https://news.example.com/a1\" style=\"color:#9e9e9e\">원문</a></li><li style=\"margin:2px 0;font-size:12px;color:#9e9e9e\">기사 r1 — news.example.com, 발행 10-20 13:00 <a href=\"https://news.example.com/r1\" style=\"color:#9e9e9e\">원문</a></li></ol><p style=\"margin:18px 0 6px;font-size:12px;color:#9e9e9e\">※ 투자 조언이 아니며, 위 내용은 변동 시점 전후에 공개된 자료로 추정한 것일 뿐 원인을 단정하지 않습니다.</p></div></body></html>",
     "name": "TEST ETF ONE",
     "symbol": "TEST01",
-    "text": "[TEST ETF ONE(TEST01)] 16:00 기준 오늘 -2.10% · 1분 새 -1.50% 하락 (10,000 → 9,850)\n\n1. 기사가 영향을 줬을 수 있습니다.\n- 기사가 영향을 줬을 수 있습니다. [근거 1]\n- 기사가 영향을 줬을 수 있습니다. [근거 1]\n  근거 1. 기사 a1 — news.example.com, 발행 10-20 15:30 https://news.example.com/a1\n\n2. 다시 찾은 기사가 영향을 줬을 수 있습니다.\n- 다시 찾은 기사가 영향을 줬을 수 있습니다. [근거 2]\n- 다시 찾은 기사가 영향을 줬을 수 있습니다. [근거 2]\n  근거 2. 기사 r1 — news.example.com, 발행 10-20 13:00 https://news.example.com/r1\n\n확인하지 못한 것:\n- 미국 공시·미국 종목 등락률: 변동 종목에 미국 종목이 없어 조회하지 않음\n※ 투자 조언이 아니며, 위 내용은 변동 시점 전후에 공개된 자료로 추정한 것일 뿐 원인을 단정하지 않습니다.",
+    "text": "[TEST ETF ONE(TEST01)] 16:00 기준 오늘 -2.10% · 기준가 대비 -1.50% 하락 (10,000 → 9,850)\n\n1. 기사가 영향을 줬을 수 있습니다.\n- 기사가 영향을 줬을 수 있습니다. [근거 1]\n- 기사가 영향을 줬을 수 있습니다. [근거 1]\n\n2. 다시 찾은 기사가 영향을 줬을 수 있습니다.\n- 다시 찾은 기사가 영향을 줬을 수 있습니다. [근거 2]\n- 다시 찾은 기사가 영향을 줬을 수 있습니다. [근거 2]\n\n근거:\n  1. 기사 a1 — news.example.com, 발행 10-20 15:30 https://news.example.com/a1\n  2. 기사 r1 — news.example.com, 발행 10-20 13:00 https://news.example.com/r1\n※ 투자 조언이 아니며, 위 내용은 변동 시점 전후에 공개된 자료로 추정한 것일 뿐 원인을 단정하지 않습니다.",
     "todayChangePercent": -2.1
    },
-   "producedAt": "2026-10-20T16:00:55+09:00",
+   "producedAt": "2026-10-20T16:00:34+09:00",
    "schemaVersion": 1
   },
   "llmInputs": [

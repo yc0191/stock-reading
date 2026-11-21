@@ -72,7 +72,8 @@ DISCLAIMER_STYLE = f"margin:18px 0 6px;font-size:12px;color:{MUTED_COLOR}"
 STATUS_BOX_STYLE = "margin:6px 0 0"
 IMAGE_STYLE = "display:block;max-width:100%;height:auto;margin:0 0 6px;border:0"
 
-RATE = re.compile(r"(?<![\w.])([+\-−]?\d+(?:\.\d+)?)%")
+# %p(퍼센트포인트 차이값)는 등락률이 아니라 색을 칠하지 않는다. 한 덩어리로 맞춰 두고 칠할 때 건너뛴다.
+RATE = re.compile(r"(?<![\w.])([+\-−]?\d+(?:\.\d+)?)%(p?)")
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,8 @@ def _rate_spans(escaped: str) -> str:
     """이스케이프한 글 안의 등락률(+2.1%, -1.5%, 2.04%)에 오름·내림 색을 칠한다."""
 
     def paint(match: re.Match[str]) -> str:
+        if match.group(2):
+            return match.group(0)
         sign = -1 if match.group(1)[0] in "-" + MINUS else 1
         value = sign * float(match.group(1).lstrip("+-" + MINUS))
         color = UP_COLOR if value > 0 else DOWN_COLOR if value < 0 else FLAT_COLOR

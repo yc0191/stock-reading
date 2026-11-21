@@ -93,7 +93,7 @@ class ContextQueryControllerTest {
                 operationsReader, mapper, openFlowPort, (symbol, since, asOf) -> Optional.empty(),
                 (symbol, since, asOf, limit) -> List.of(),
                 new MarketProperties(5, BigDecimal.ONE, List.of("f.a", "f.b", "f.c"), BigDecimal.ONE,
-                        List.of("f.open"), 1, BigDecimal.ONE, List.of(), 0, new BigDecimal("2.00")));
+                        List.of("f.open"), 1, BigDecimal.ONE, List.of(), 0, new BigDecimal("2.00"), BigDecimal.TEN));
         mvc = MockMvcBuilders.standaloneSetup(new ContextQueryController(contextListener, dailyListener))
                 .setControllerAdvice(new InvalidRequestHandler())
                 .addFilters(new CorrelationIdHttpFilter())

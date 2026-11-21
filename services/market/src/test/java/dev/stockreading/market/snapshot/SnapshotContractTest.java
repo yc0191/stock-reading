@@ -101,6 +101,14 @@ class SnapshotContractTest {
     }
 
     @Test
+    void highMoveSampleMatchesSchemaAndCarriesTheBaseAndTodayChange() throws IOException {
+        String sample = ContractSchemas.sample("market.move.high.sample.json");
+
+        assertThat(ContractSchemas.validate("market.move.v1.schema.json", sample)).isEmpty();
+        assertThat(sample).contains("\"detectionType\": \"prevCloseHigh\"").contains("todayChangePercent");
+    }
+
+    @Test
     void moveWithoutTodayChangeStillMatchesSchema() throws IOException {
         String older = ContractSchemas.sample("market.move.sample.json").replaceAll(",\\s*\"todayChangePercent\": [-0-9.]+", "");
 

@@ -14,9 +14,12 @@ from typing import Any, Mapping, Protocol
 
 from briefing.compose import KST
 from briefing.events import parse_timestamp
-from briefing.job_log import REASON_MERGED_INTO_MORNING, REASON_MOVE_REPORT_PAUSED, REASON_NO_EVIDENCE
+from briefing.job_log import LEVEL_HIGH, LEVEL_MID, REASON_MERGED_INTO_MORNING, REASON_NO_EVIDENCE
 
 log = logging.getLogger("briefing.status")
+
+# 지워진 급변동 리포트 멈춤 설정이 남긴 지난 기록의 사유. 새로 쓰지 않고 읽을 때만 알아본다.
+LEGACY_REASON_PAUSED = "move_report_paused"
 
 NO_DATA = "자료 없음"
 JOB_TYPE_RESEARCH = "research-news"
@@ -95,6 +98,8 @@ class JobRunRow:
     failure_reason: str | None
     generated_by: str | None
     started_at: datetime
+    # 급변동의 레벨(job_log.LEVEL_*). 입력의 감지 유형으로 정하므로 입력을 읽지 못하면 중이다.
+    level: str = LEVEL_MID
 
 
 @dataclass(frozen=True)
@@ -243,15 +248,17 @@ def _news_line(collections: list[CollectionRecord] | None, current_research_coun
 @dataclass
 class _Moves:
     total: int = 0
-    succeeded: int = 0
+    # 성공으로 끝난 급변동: 상은 결과 이벤트(메일)를 낸 작업, 중은 대표 기사만 기록한 작업
+    high: int = 0
+    mid: int = 0
     failed: int = 0
-    # 근거 없어 결과 이벤트를 보내지 않은 급변동(작업은 succeeded로 끝나지만 성공에 세지 않는다)
+    # 근거 없어 결과 이벤트를 보내지 않은 급변동(작업은 succeeded로 끝나지만 상·중에 세지 않는다)
     no_evidence: int = 0
     running: int = 0
     rule_based: int = 0
     # 아침 판에 합쳐 따로 리포트를 만들지 않은 변동(성공으로 끝났지만 리포트가 없다)
     merged: int = 0
-    # 급변동 리포트 멈춤 기간이라 리포트를 만들지 않은 변동(성공으로 끝났지만 리포트가 없다)
+    # 급변동 리포트 멈춤 설정이 있던 때의 지난 기록(성공으로 끝났지만 리포트가 없다). 상·중 어디에도 세지 않는다.
     paused: int = 0
     reasons: dict[str, int] = field(default_factory=dict)
 
@@ -264,12 +271,15 @@ def _tally_moves(runs: list[JobRunRow]) -> _Moves:
         moves.total += 1
         if r.status == STATUS_SUCCEEDED and r.failure_reason == REASON_MERGED_INTO_MORNING:
             moves.merged += 1
-        elif r.status == STATUS_SUCCEEDED and r.failure_reason == REASON_MOVE_REPORT_PAUSED:
+        elif r.status == STATUS_SUCCEEDED and r.failure_reason == LEGACY_REASON_PAUSED:
             moves.paused += 1
         elif r.status == STATUS_SUCCEEDED and r.failure_reason == REASON_NO_EVIDENCE:
             moves.no_evidence += 1
         elif r.status == STATUS_SUCCEEDED:
-            moves.succeeded += 1
+            if r.level == LEVEL_HIGH:
+                moves.high += 1
+            else:
+                moves.mid += 1
         elif r.status == STATUS_FAILED:
             moves.failed += 1
             reason = r.failure_reason or "unknown"
@@ -309,8 +319,8 @@ def _briefing_line(runs: list[JobRunRow] | None) -> str:
         return f"- 브리핑: {NO_DATA}"
     m = _tally_moves(runs)
     failed = f"실패 {m.failed}" + (f"[{_reasons_text(m.reasons)}]" if m.reasons else "")
-    no_report = (f" · 아침 판에 합침 {m.merged}" if m.merged else "") + (f" · 리포트 멈춤 {m.paused}" if m.paused else "")
-    return (f"- 브리핑: 급변동 {m.total}건(성공 {m.succeeded} · {failed} · 진행 중 {m.running} · 규칙 기반 {m.rule_based}{no_report})"
+    no_report = (f" · 아침 판에 합침 {m.merged}" if m.merged else "") + (f" · 지난 리포트 멈춤 {m.paused}" if m.paused else "")
+    return (f"- 브리핑: 급변동 {m.total}건(상 {m.high}(메일) · 중 {m.mid}(기록) · {failed} · 진행 중 {m.running} · 규칙 기반 {m.rule_based}{no_report})"
             f" · 근거 없어 보내지 않은 급변동 {m.no_evidence}건 · 아침 판 {_morning_text(_morning(runs))}")
 
 

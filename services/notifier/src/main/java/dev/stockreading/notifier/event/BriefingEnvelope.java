@@ -16,7 +16,10 @@ public record BriefingEnvelope(
         String correlationId,
         Payload payload) {
 
-    /** todayChangePercent, moveMinutes는 짧은 시간 변동일 때만 오는 선택 칸이다. 없으면 null이다. */
+    /**
+     * todayChangePercent, moveMinutes는 짧은 시간 변동일 때만, todayChangePercent, baseKind는 레벨 상일 때만 오는 선택 칸이다. html·images는 꾸민 본문을 보낼 때만 오는
+     * 선택 칸이다(없으면 null, 글자판만 보낸다). 없으면 모두 null이다.
+     */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Payload(
             String symbol,
@@ -27,12 +30,33 @@ public record BriefingEnvelope(
             String generatedBy,
             List<Evidence> evidence,
             BigDecimal todayChangePercent,
-            Integer moveMinutes) {
+            Integer moveMinutes,
+            String html,
+            List<Image> images,
+            String baseKind) {
 
         public Payload(String symbol, String name, BigDecimal changePercent, String asOf, String text,
                 String generatedBy, List<Evidence> evidence) {
-            this(symbol, name, changePercent, asOf, text, generatedBy, evidence, null, null);
+            this(symbol, name, changePercent, asOf, text, generatedBy, evidence, null, null, null, null, null);
         }
+
+        public Payload(String symbol, String name, BigDecimal changePercent, String asOf, String text,
+                String generatedBy, List<Evidence> evidence, BigDecimal todayChangePercent, Integer moveMinutes) {
+            this(symbol, name, changePercent, asOf, text, generatedBy, evidence, todayChangePercent, moveMinutes,
+                    null, null, null);
+        }
+
+        public Payload(String symbol, String name, BigDecimal changePercent, String asOf, String text,
+                String generatedBy, List<Evidence> evidence, BigDecimal todayChangePercent, Integer moveMinutes,
+                String html, List<Image> images) {
+            this(symbol, name, changePercent, asOf, text, generatedBy, evidence, todayChangePercent, moveMinutes,
+                    html, images, null);
+        }
+    }
+
+    /** html이 cid:로 가리키는 인라인 그림. data는 base64 문자열이다. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Image(String contentId, String contentType, String data) implements ImageData {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

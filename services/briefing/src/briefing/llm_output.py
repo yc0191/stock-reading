@@ -42,6 +42,29 @@ _JSON_SYMBOLS = "}{["
 _JSON_FRAGMENT = re.compile(r"\}\s*[,}\])]")
 
 
+def output_optional_sentence(item: dict, name: str, noun: str, error: type[InvalidLlmOutput]) -> str | None:
+    """없어도 되는 문장 칸. 칸이 없거나 비어 있으면 None이고, 있으면 output_sentence와 같이 검사한다."""
+    value = item.get(name)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    return output_sentence(item, name, noun, error)
+
+
+# 문장 끝 마침표. 'U.S.'처럼 대문자·숫자 뒤의 점과 '1.05'의 소수점은 문장 끝으로 세지 않는다.
+_SENTENCE_END = re.compile(r"(?<![A-Z0-9])[.!?](?=\s|$)")
+
+
+def sentence_count(text: str) -> int:
+    """문장 수(마침표·느낌표·물음표로 끝난 수, 끝 표시가 없어도 한 문장)."""
+    return max(1, len(_SENTENCE_END.findall(text.strip())))
+
+
+def check_one_sentence(text: str, what: str, error: type[InvalidLlmOutput]) -> None:
+    """한 문장만 허용하는 칸이 두 문장 이상이면 거부한다. 사유에는 문장 내용을 넣지 않는다."""
+    if sentence_count(text) > 1:
+        raise error(f"{what} is more than one sentence")
+
+
 def check_no_json_residue(text: str, what: str, error: type[InvalidLlmOutput]) -> None:
     """문장이 JSON 기호로 끝나거나 '}],' 같은 조각을 담으면 거부한다. 사유에는 문장 내용을 넣지 않는다."""
     # ']'로 끝나는 문장은 '[속보]' 같은 제목 인용일 수 있어, 여는 '['가 없을 때만 조각으로 본다.

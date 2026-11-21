@@ -97,11 +97,11 @@ def test_move_without_rewrite_or_problem_is_code_checked_and_published_without_a
 
 
 def test_move_with_only_a_weak_mark_left_records_it_and_calls_no_review():
-    # 검색어가 없어 재검색을 못 해 근거 약함 표시가 남는다. 고칠 수 없는 문제라 검토를 부르지 않는다.
+    # 검색어가 없어 재검색을 못 해 근거 약함이 남는다(메일 본문에는 싣지 않는다). 고칠 수 없는 문제라 검토를 부르지 않는다.
     flow = move_flow([move_output((STRONG_TEXT, ["a1"], SHORTFALL))], [queries()], [])
     flow.to_report()
 
-    assert flow.check_llm.calls == [] and "근거 약함" in published_text(flow)
+    assert flow.check_llm.calls == [] and "근거 약함" not in published_text(flow)
     (checked,) = final_entries(flow.records, "code-checked")
     assert [p["kind"] for p in checked.data["problems"]] == ["weak-mark-left"]
 

@@ -1,0 +1,19 @@
+{
+  "eventId": "9d4b1f62-3a8e-4c75-b2d0-6e1a7c9f4b28",
+  "eventType": "market.move",
+  "schemaVersion": 1,
+  "occurredAt": "2026-10-20T10:12:31+09:00",
+  "producedAt": "2026-10-20T10:12:31.480+09:00",
+  "correlationId": "collect-2026-10-20T10:12:30+09:00",
+  "payload": {
+    "symbol": "TEST01",
+    "previousPrice": 9500,
+    "price": 8800,
+    "changePercent": -7.37,
+    "thresholdPercent": 7.0,
+    "asOf": "2026-10-20T10:12:31+09:00",
+    "detectionType": "prevCloseHigh",
+    "moveStartedAt": "2026-10-20T10:12:31+09:00",
+    "todayChangePercent": -12.0
+  }
+}

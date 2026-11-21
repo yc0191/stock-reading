@@ -33,8 +33,8 @@ from briefing.daily_report import (
 )
 from briefing.daily_review import NOT_COMPARED, review_tally_line
 from briefing.job_log import (
+    LEVEL_HIGH,
     REASON_MERGED_INTO_MORNING,
-    REASON_MOVE_REPORT_PAUSED,
     REASON_NO_EVIDENCE,
     MoveRun,
     RunStatus,
@@ -62,10 +62,14 @@ REVIEW_TITLE = "아침 예상 대조"
 MOVES_TITLE = "그날 급변동"
 MOVES_NONE = "없음"
 MOVES_NOT_READ = "기록을 읽지 못했습니다"
-# 급변동 리포트 결과 표시. 모르는 상태 값은 그대로 보인다.
+# 급변동 결과 표시. 상은 리포트·메일 결과, 중은 대표 기사다. 모르는 상태 값은 그대로 보인다.
 # 따로 리포트를 만들지 않고 아침 판이 개장 흐름으로 담은 급변동
 MOVE_MERGED_TEXT = "아침 판에 합침"
+MOVE_MAIL_SENT_TEXT = "메일 보냄"
 MOVE_RESULT_TEXT = {RunStatus.SUCCEEDED.value: "성공", RunStatus.FAILED.value: "실패", RunStatus.RUNNING.value: "진행 중"}
+MOVE_NO_ARTICLE_TEXT = "관련 기사 없음"
+# 대표 기사 확인(중)의 진행 표시
+MOVE_ARTICLE_STATE_TEXT = {RunStatus.FAILED.value: "대표 기사 확인 실패", RunStatus.RUNNING.value: "대표 기사 확인 중"}
 
 
 @dataclass(frozen=True)
@@ -165,17 +169,33 @@ def _signed_percent(rate: Decimal) -> str:
 
 
 def move_line(move: MoveRun, names: dict[str, str]) -> str:
-    """급변동 한 건의 한 줄: 시각 · ETF 또는 주식 · 등락 · 리포트 결과. 리포트를 멈춘 기간의 변동은 결과 없이 쓴다."""
+    """급변동 한 건의 한 줄: 시각 · ETF 또는 주식 · 오늘 등락 · 결과. 상은 '메일 보냄', 중은 대표 기사(제목·언론사·발행 시각)다."""
     at = move.move_at.astimezone(KST)
-    change = _signed_percent(Decimal(str(move.change_percent))) if move.change_percent is not None else NO_DATA
-    if move.status == RunStatus.SUCCEEDED.value and move.failure_reason == REASON_MOVE_REPORT_PAUSED:
-        return f"{at:%H:%M} {names.get(move.symbol, move.symbol)} {change}"
-    if move.status == RunStatus.SUCCEEDED.value and move.failure_reason == REASON_MERGED_INTO_MORNING:
-        return f"{at:%H:%M} {names.get(move.symbol, move.symbol)} {change} · {MOVE_MERGED_TEXT}"
-    result = MOVE_RESULT_TEXT.get(move.status, move.status)
-    if move.status == RunStatus.SUCCEEDED.value and move.failure_reason == REASON_NO_EVIDENCE:
-        return f"{at:%H:%M} {names.get(move.symbol, move.symbol)} {change} · 근거 없어 보내지 않음"
-    return f"{at:%H:%M} {names.get(move.symbol, move.symbol)} {change} · 리포트 {result}"
+    head = f"{at:%H:%M} {names.get(move.symbol, move.symbol)} 오늘 {_today_text(move)}"
+    succeeded = move.status == RunStatus.SUCCEEDED.value
+    if succeeded and move.failure_reason == REASON_MERGED_INTO_MORNING:
+        return f"{head} · {MOVE_MERGED_TEXT}"
+    if succeeded and move.failure_reason == REASON_NO_EVIDENCE:
+        return f"{head} · 근거 없어 보내지 않음"
+    # 레벨 중이어도 리포트를 만든 작업(중 규칙이 생기기 전 기록)은 상처럼 보인다.
+    if move.level == LEVEL_HIGH or move.generated_by is not None:
+        if succeeded:
+            return f"{head} · {MOVE_MAIL_SENT_TEXT}"
+        return f"{head} · 리포트 {MOVE_RESULT_TEXT.get(move.status, move.status)}"
+    if not succeeded:
+        return f"{head} · {MOVE_ARTICLE_STATE_TEXT.get(move.status, move.status)}"
+    if not move.recorded:
+        return head
+    if move.article is None:
+        return f"{head} · {MOVE_NO_ARTICLE_TEXT}"
+    a = move.article
+    return f"{head} · 대표 기사: {a.title} ({a.publisher}, {a.published_at.astimezone(KST):%m-%d %H:%M})"
+
+
+def _today_text(move: MoveRun) -> str:
+    """오늘 등락(전일 종가 대비). 모르면 자료 없음이다."""
+    value = move.today_change_percent
+    return _signed_percent(Decimal(str(value))) if value is not None else NO_DATA
 
 
 def _moves_lines(i: DailyInput) -> tuple[str, ...] | None:

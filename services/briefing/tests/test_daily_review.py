@@ -226,7 +226,9 @@ def test_an_insufficient_output_skips_the_review_check():
 # ---- 급변동 한 줄 ----
 
 def move_input(percent=2.1):
-    return json.dumps({"payload": {"symbol": "TEST01", "changePercent": percent}})
+    # 리포트·메일이 나가는 레벨 상 변동의 입력. 오늘 등락은 변동률과 같게 둔다.
+    return json.dumps({"payload": {"symbol": "TEST01", "changePercent": percent, "detectionType": "prevCloseHigh",
+                                   "todayChangePercent": percent}})
 
 
 def test_a_move_row_reads_the_symbol_time_and_percent_from_the_job_run():
@@ -405,8 +407,8 @@ def test_todays_moves_are_listed_one_line_each_with_the_report_result_and_other_
     seed_move(store, "TEST03", datetime(2026, 10, 20, 17, 30, tzinfo=KST), 1.7, True, "TEST-MOVE-4")
     payload = run(store, llm_with([]))
     moves = payload["text"].split("■ 그날 급변동")[1].split("투자 조언")[0]
-    assert "  - 10:15 TEST 하나(TEST01) +2.10% · 리포트 성공" in moves
-    assert "  - 13:20 TEST 둘(TEST02) −1.80% · 리포트 실패" in moves
+    assert "  - 10:15 TEST 하나(TEST01) 오늘 +2.10% · 메일 보냄" in moves
+    assert "  - 13:20 TEST 둘(TEST02) 오늘 −1.80% · 리포트 실패" in moves
     # 전날 건과 판 시각 뒤에 시작한 건은 없다.
     assert "TEST03" not in moves and "14:00" not in moves and "17:30" not in moves
     assert "리포트 실패" in payload["html"] and "10:15" in payload["html"]
@@ -437,7 +439,8 @@ def test_a_move_whose_percent_is_unknown_is_still_listed():
     at = datetime(2026, 10, 20, 11, 0, tzinfo=KST)
     store.start(JobStart("TEST-MOVE-9", JobKind.MOVE, "{}", move_target("TEST01", at.isoformat()), at))
     moves = run(store, llm_with([]))["text"].split("■ 그날 급변동")[1]
-    assert "11:00 TEST 하나(TEST01) 자료 없음 · 리포트 진행 중" in moves
+    # 입력에 변동률도 감지 유형도 없는 이전 형식이라 레벨은 중이고, 오늘 등락을 모르면 자료 없음이다.
+    assert "11:00 TEST 하나(TEST01) 오늘 자료 없음 · 대표 기사 확인 중" in moves
 
 
 def test_before_the_market_opens_the_job_log_is_not_read_and_no_review_is_shown():
@@ -467,18 +470,85 @@ def test_a_move_not_sent_for_lack_of_evidence_is_shown_as_such_not_as_a_success(
     from briefing.daily_post_close import move_line
     from briefing.job_log import MoveRun
     at = datetime(2026, 10, 20, 10, 15, tzinfo=timezone(timedelta(hours=9)))
-    sent = MoveRun("j1", "TEST01", at, 2.1, "succeeded", "llm", None)
-    skipped = MoveRun("j2", "TEST01", at, 2.1, "succeeded", "llm", "no_evidence")
+    sent = MoveRun("j1", "TEST01", at, 2.1, "succeeded", "llm", None, 2.1, "high")
+    skipped = MoveRun("j2", "TEST01", at, 2.1, "succeeded", "llm", "no_evidence", 2.1, "high")
 
-    assert move_line(sent, {"TEST01": "TEST 하나(TEST01)"}).endswith("· 리포트 성공")
-    assert move_line(skipped, {"TEST01": "TEST 하나(TEST01)"}) == "10:15 TEST 하나(TEST01) +2.10% · 근거 없어 보내지 않음"
+    assert move_line(sent, {"TEST01": "TEST 하나(TEST01)"}) == "10:15 TEST 하나(TEST01) 오늘 +2.10% · 메일 보냄"
+    assert move_line(skipped, {"TEST01": "TEST 하나(TEST01)"}) == \
+        "10:15 TEST 하나(TEST01) 오늘 +2.10% · 근거 없어 보내지 않음"
 
 
-def test_a_move_during_the_report_pause_is_shown_with_its_time_name_and_change_only():
-    from briefing.daily_post_close import move_line
+NAMES = {"TEST01": "TEST 하나(TEST01)"}
+MOVE_AT = datetime(2026, 10, 20, 10, 15, tzinfo=timezone(timedelta(hours=9)))
+
+
+def mid_run(status="succeeded", recorded=False, article=None, today=-5.4, generated_by=None, reason=None):
     from briefing.job_log import MoveRun
-    at = datetime(2026, 11, 20, 10, 15, tzinfo=timezone(timedelta(hours=9)))
-    paused = MoveRun("j1", "TEST01", at, -3.4, "succeeded", None, "move_report_paused")
+    return MoveRun("j1", "TEST01", MOVE_AT, -2.0, status, generated_by, reason, today, "mid", recorded, article)
 
-    # 멈춤 안내나 리포트 결과 문구는 붙이지 않는다.
-    assert move_line(paused, {"TEST01": "TEST 하나(TEST01)"}) == "10:15 TEST 하나(TEST01) −3.40%"
+
+def test_a_mid_move_shows_the_representative_article_with_its_title_publisher_and_time():
+    from briefing.daily_post_close import move_line
+    from briefing.job_log import RepresentativeArticle
+    article = RepresentativeArticle("TEST 기사 제목", "test.example.com", datetime(2026, 10, 20, 10, 2, tzinfo=KST))
+
+    assert move_line(mid_run(recorded=True, article=article), NAMES) == \
+        "10:15 TEST 하나(TEST01) 오늘 −5.40% · 대표 기사: TEST 기사 제목 (test.example.com, 10-20 10:02)"
+
+
+def test_a_mid_move_without_an_article_says_so_and_never_claims_a_mail():
+    from briefing.daily_post_close import move_line
+
+    line = move_line(mid_run(recorded=True), NAMES)
+    assert line == "10:15 TEST 하나(TEST01) 오늘 −5.40% · 관련 기사 없음" and "메일" not in line
+
+
+def test_a_mid_move_that_is_not_finished_or_has_no_record_gets_no_article_text():
+    from briefing.daily_post_close import move_line
+
+    assert move_line(mid_run(status="failed"), NAMES).endswith("· 대표 기사 확인 실패")
+    assert move_line(mid_run(status="running"), NAMES).endswith("· 대표 기사 확인 중")
+    # 기록을 읽지 못했거나 기록이 없는 성공은 결과 문구 없이 시각·종목·오늘 등락만 쓴다.
+    assert move_line(mid_run(), NAMES) == "10:15 TEST 하나(TEST01) 오늘 −5.40%"
+
+
+def test_a_mid_move_that_an_older_run_already_reported_is_shown_as_mailed():
+    from briefing.daily_post_close import move_line
+
+    assert move_line(mid_run(generated_by="llm"), NAMES).endswith("· 메일 보냄")
+
+
+def test_the_today_change_is_unknown_for_an_event_without_it_except_in_the_prev_close_type():
+    from briefing.daily_post_close import move_line
+
+    def line_of(payload):
+        raw = json.dumps({"payload": {"symbol": "TEST01", "changePercent": -1.5, **payload}})
+        run = parse_move_run("j1", raw, json.dumps(move_target("TEST01", "2026-10-20T10:15:00+09:00")),
+                             "succeeded", None, None)
+        return move_line(run, NAMES)
+
+    # 짧은 시간 변동의 변동률은 몇 분 사이의 값이라 오늘 등락으로 쓰지 않는다.
+    assert " 오늘 자료 없음" in line_of({"detectionType": "window"})
+    assert " 오늘 −1.50%" in line_of({"detectionType": "prevClose"})
+    assert " 오늘 −3.00%" in line_of({"detectionType": "window", "todayChangePercent": -3.0})
+
+
+def test_the_day_list_shows_a_mid_move_with_its_representative_article_and_a_high_move_as_mailed():
+    from briefing.job_log import JobLogEntry
+    store = Details()
+    at = datetime(2026, 10, 20, 10, 15, tzinfo=KST)
+    mid_input = json.dumps({"payload": {"symbol": "TEST01", "changePercent": -2.0, "detectionType": "window",
+                                        "todayChangePercent": -5.4}})
+    store.start(JobStart("TEST-MOVE-M", JobKind.MOVE, mid_input, move_target("TEST01", at.isoformat()), at))
+    store.record(JobLogEntry("TEST-MOVE-M", EntryType.REPRESENTATIVE_ARTICLE, "representative-article", "latest-before",
+                             at + timedelta(minutes=5), attempts=1, data={
+                                 "article": {"title": "TEST 기사 제목", "publisher": "test.example.com",
+                                             "publishedAt": "2026-10-20T10:02:00+09:00"}}))
+    store.finish(JobResult("TEST-MOVE-M", RunStatus.SUCCEEDED, at + timedelta(minutes=5)))
+    seed_move(store, "TEST02", datetime(2026, 10, 20, 13, 20, tzinfo=KST), -7.2, True, "TEST-MOVE-H")
+    payload = run(store, llm_with([]))
+    moves = payload["text"].split("■ 그날 급변동")[1].split("투자 조언")[0]
+
+    assert "  - 10:15 TEST 하나(TEST01) 오늘 −5.40% · 대표 기사: TEST 기사 제목 (test.example.com, 10-20 10:02)" in moves
+    assert "  - 13:20 TEST 둘(TEST02) 오늘 −7.20% · 메일 보냄" in moves
+    assert "TEST 기사 제목" in payload["html"] and "메일 보냄" in payload["html"]

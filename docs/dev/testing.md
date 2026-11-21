@@ -59,7 +59,6 @@ TEST_ALL_AWS_PROFILE=<AWS 프로필> scripts/test-all.sh --live
 - `.env`의 `NOTIFIER_SEND_ENABLED`는 바꾸지 않습니다. 발송은 스크립트가 띄운 테스트용 발송기에서만 켜지고, 제목 앞에 `[테스트]`가 붙습니다.
 - 키는 실행할 때마다 Parameter Store에서 새로 읽어 임시 폴더에만 두고, 끝나면 지웁니다. `.env`와 실행 환경변수에 있는 같은 이름의 키는 쓰지 않습니다. 필수 키가 하나라도 비면 시세를 부르기 전에 실패로 끝납니다.
 - LLM 리포트 본문은 받은 메일과 `build/test-all-live/`에만 남습니다. 이 폴더는 git에서 제외됩니다.
-- 브리핑의 급변동 리포트 멈춤 기간(`services/briefing/src/briefing/config.py`의 `CoreSettings.move_report_pause_*`)에는 브리핑·메일 흐름을 건너뜁니다.
 
 ## 실데이터 재생·부하 테스트
 

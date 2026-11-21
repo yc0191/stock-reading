@@ -79,7 +79,7 @@ class MoveTrackerTest {
 
     private static MarketProperties properties(int confirmCount, int intervalMinutes) {
         return new MarketProperties(5, new BigDecimal("1.00"), List.of("fake.a"), new BigDecimal("3.00"), List.of(),
-                confirmCount, new BigDecimal("1.00"), List.of("fake.volume", "fake.open"), intervalMinutes, new BigDecimal("2.00"));
+                confirmCount, new BigDecimal("1.00"), List.of("fake.volume", "fake.open"), intervalMinutes, new BigDecimal("2.00"), new BigDecimal("7.00"));
     }
 
     private static Detection detection(DetectionType type, long price, OffsetDateTime startedAt) {
