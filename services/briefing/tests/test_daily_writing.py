@@ -411,6 +411,17 @@ def test_only_weak_etf_reasons_that_did_not_move_with_the_market_are_searched():
     assert [w.no for w in sentences.weak_sentences(weak_draft(None))] == [1, 2]
 
 
+def test_the_search_context_gives_background_numbers_without_the_raw_response():
+    sentences = DailySentences(type("Core", (), {"settings": DEFAULT_DAILY_SETTINGS})())
+    draft = weak_draft("0.50")
+    [weak] = sentences.weak_sentences(draft)
+    background = sentences.query_context(draft, weak)["background"]
+    # 검색어를 고르는 데 원문은 필요 없고 크기만 커지므로 빼고, 받은 시각 등 나머지 칸은 그대로 준다.
+    assert background and all("response" not in item for item in background)
+    assert all("receivedAt" in item and "ref" in item for item in background)
+    assert any("response" in e.llm for s in draft.sections for e in s.entries if e.llm.get("category") == "배경")
+
+
 def test_the_search_context_names_the_etf_of_the_sentence_but_not_for_a_notable():
     sentences = DailySentences(type("Core", (), {"settings": DEFAULT_DAILY_SETTINGS})())
     draft = weak_draft("0.50")

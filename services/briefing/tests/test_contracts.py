@@ -9,6 +9,7 @@ from briefing.daily_start import SOURCE_LABELS, STATUS_COLLECTED, STATUS_MARKET_
 from briefing.events import (EDITION_MORNING, EDITION_POST_CLOSE, EDITIONS, RESEARCH_JOB_KINDS,
                              daily_briefing_event, research_request_event)
 from briefing.jobs import parse_move
+from briefing.price_series import parse_daily_closes, parse_intraday_series
 from contracts import CONTRACTS_DIR, sample, validate
 
 NOW = datetime(2026, 10, 20, 16, 1, 0, tzinfo=KST)
@@ -1006,3 +1007,56 @@ def test_daily_data_v2_response_accepts_an_open_flow_per_etf_and_rejects_a_broke
     other = sample("market.daily.responded.sample.json", "v2")
     other["payload"]["etfs"][0]["openFlow"] = {**OPEN_FLOW_CELL, "openSource": "guess"}
     assert validate("market.daily.responded.v2.schema.json", other) != []
+
+
+def test_daily_data_request_accepts_the_optional_chart_fields_and_rejects_bad_ones():
+    event = sample("market.daily.requested.sample.json")
+    event["payload"].update(intradaySince="2026-10-20T09:00:00+09:00", maxIntradayPoints=420, maxDailyCloses=130)
+    assert validate("market.daily.requested.v1.schema.json", event) == []
+
+    for field, value in (("intradaySince", "09:00"), ("maxIntradayPoints", 0), ("maxDailyCloses", "130")):
+        broken = json.loads(json.dumps(event))
+        broken["payload"][field] = value
+        assert validate("market.daily.requested.v1.schema.json", broken) != [], field
+
+
+def test_daily_data_v2_sample_chart_cells_match_the_schema_and_are_readable_by_the_briefing():
+    event = sample("market.daily.responded.sample.json", "v2")
+    assert validate("market.daily.responded.v2.schema.json", event) == []
+    first, _, third, _ = event["payload"]["etfs"]
+
+    series = parse_intraday_series(first["intradaySeries"])
+    closes = parse_daily_closes(first["dailyCloses"])
+    assert series.present and len(series.points) == 3 and series.points[0].at.tzinfo is not None
+    assert closes.present and [p.date for p in closes.points] == ["20261016", "20261019", "20261020"]
+    assert not parse_intraday_series(third["intradaySeries"]).present
+    assert not parse_daily_closes(third["dailyCloses"]).present
+
+
+@pytest.mark.parametrize("cell, field", [
+    ("intradaySeries", "status"), ("intradaySeries", "prevClose"), ("intradaySeries", "truncated"),
+    ("intradaySeries", "points"), ("dailyCloses", "status"), ("dailyCloses", "fetchedAt"),
+    ("dailyCloses", "truncated"), ("dailyCloses", "points"),
+])
+def test_daily_data_v2_chart_cells_reject_a_missing_field(cell, field):
+    broken = sample("market.daily.responded.sample.json", "v2")
+    del broken["payload"]["etfs"][0][cell][field]
+
+    assert validate("market.daily.responded.v2.schema.json", broken) != []
+
+
+def test_daily_data_v2_chart_points_reject_malformed_values():
+    def broken(change):
+        event = sample("market.daily.responded.sample.json", "v2")
+        change(event["payload"]["etfs"][0])
+        return event
+
+    cases = {
+        "bad point time": broken(lambda e: e["intradaySeries"]["points"][0].update(at="09:00")),
+        "price with comma": broken(lambda e: e["intradaySeries"]["points"][0].update(price="10,050")),
+        "unknown status": broken(lambda e: e["dailyCloses"].update(status="none")),
+        "dashed date": broken(lambda e: e["dailyCloses"]["points"][0].update(date="2026-10-16")),
+        "extra point field": broken(lambda e: e["dailyCloses"]["points"][0].update(volume="1")),
+    }
+    for name, event in cases.items():
+        assert validate("market.daily.responded.v2.schema.json", event) != [], name

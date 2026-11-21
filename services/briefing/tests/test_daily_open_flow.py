@@ -118,9 +118,9 @@ def test_the_open_flow_goes_into_the_body_the_evidence_list_and_the_llm_input(co
     [event] = published(requests)
     payload = event.value["payload"]
     assert payload["missingItems"] == []
-    assert "■ ETF별 개장 흐름" in payload["text"]
-    assert "시가 +2.00%" in payload["text"] and "09:00~09:09 +1.98%" in payload["text"]
-    assert "현재가 전일 종가 대비 +3.00%" in payload["text"]
+    # 개장 흐름은 숫자 목록 절이 아니라 ETF 줄에 시가 등락률 → 마지막 시세의 등락률로 붙는다.
+    assert "■ ETF별 개장 흐름" not in payload["text"] and "■ 내 ETF: 개장 흐름과 예상" in payload["text"]
+    assert "개장 +2.00% → 09:09 +3.00%" in payload["text"]
     items = {i["name"]: i for i in json.loads(llm.calls[0][1])["items"]}
     [entry] = items[ITEM_OPEN_FLOW]["entries"]
     assert entry["ref"] == "O1" and entry["openRatePercent"] == "2.00" and entry["minutesBeforeAsOf"] == 0

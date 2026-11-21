@@ -382,6 +382,78 @@ class DailyContractTest {
                 json.replace("\"status\":\"no-snapshot\"", "\"status\":\"other\""))).isNotEmpty();
     }
 
+    @Test
+    void requestWithTheChartFieldsMatchesTheSchemaAndRejectsBadValues() throws IOException {
+        String sample = ContractSchemas.sample("market.daily.requested.sample.json");
+        String with = sample.replace("\"includeOperations\": true",
+                "\"includeOperations\": true,\n    \"intradaySince\": \"2026-10-20T09:00:00+09:00\",\n"
+                        + "    \"maxIntradayPoints\": 420,\n    \"maxDailyCloses\": 130");
+
+        assertThat(ContractSchemas.validate("market.daily.requested.v1.schema.json", with)).isEmpty();
+        DailyRequest request = payload(with, DailyRequest.class);
+        assertThat(request.intradaySince()).isEqualTo("2026-10-20T09:00:00+09:00");
+        assertThat(request.maxIntradayPoints()).isEqualTo(420);
+        assertThat(request.maxDailyCloses()).isEqualTo(130);
+        assertThat(request.wantsDailyCloses()).isTrue();
+        DailyRequest without = payload(sample, DailyRequest.class);
+        assertThat(without.intradaySince()).isNull();
+        assertThat(without.maxIntradayPoints()).isNull();
+        assertThat(without.wantsDailyCloses()).isFalse();
+        for (String bad : List.of(with.replace("2026-10-20T09:00:00+09:00", "nine"),
+                with.replace("\"maxIntradayPoints\": 420", "\"maxIntradayPoints\": 0"),
+                with.replace("\"maxDailyCloses\": 130", "\"maxDailyCloses\": \"130\""))) {
+            assertThat(bad).isNotEqualTo(with);
+            assertThat(ContractSchemas.validate("market.daily.requested.v1.schema.json", bad)).isNotEmpty();
+        }
+    }
+
+    @Test
+    void v2SampleCarriesBothChartCellsAndBrokenOnesAreRejected() throws IOException {
+        String sample = ContractSchemas.sample("v2", "market.daily.responded.sample.json");
+        var etfs = mapper.readTree(sample).get("payload").get("etfs");
+        assertThat(etfs.get(0).get("intradaySeries").get("points")).hasSize(3);
+        assertThat(etfs.get(0).get("dailyCloses").get("points")).hasSize(3);
+        assertThat(etfs.get(2).get("intradaySeries").get("status").asString()).isEqualTo("no-snapshot");
+        assertThat(etfs.get(2).get("dailyCloses").get("status").asString()).isEqualTo("no-daily-price");
+
+        // 시각이 아닌 점 시각, 숫자가 아닌 가격, 정해진 목록 밖의 상태, 일자 모양 틀림, 잘림 표시 없음은 계약 위반이다.
+        for (String bad : List.of(sample.replace("\"at\": \"2026-10-20T09:00:59+09:00\"", "\"at\": \"09:00\""),
+                sample.replace("\"price\": \"10050\"", "\"price\": \"10,050\""),
+                sample.replace("\"status\": \"no-daily-price\"", "\"status\": \"none\""),
+                sample.replace("\"date\": \"20261016\"", "\"date\": \"2026-10-16\""),
+                sample.replaceFirst("\"truncated\": false,\n          \"points\"", "\"points\""))) {
+            assertThat(bad).isNotEqualTo(sample);
+            assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", bad)).isNotEmpty();
+        }
+    }
+
+    @Test
+    void producerChartCellsMatchTheSchemaAndAreLeftOutWhenNull() throws IOException {
+        DailyPayload.Etf plain = new DailyPayload.Etf("TEST01", "20261020", "9850", "10000", "-1.50",
+                "2026-10-20T16:30:02+09:00", List.of(), false);
+        DailyPayload.IntradaySeries series = new DailyPayload.IntradaySeries(DailyPayload.INTRADAY_SERIES_PRESENT,
+                null, true, List.of(new DailyPayload.IntradayPoint("2026-10-20T09:00:59+09:00", "10050", null)));
+        DailyPayload.DailyCloses closes = new DailyPayload.DailyCloses(DailyPayload.DAILY_CLOSES_PRESENT,
+                "2026-10-20T16:30:02+09:00", false,
+                List.of(new DailyPayload.DailyClose("20261019", "10000", null),
+                        new DailyPayload.DailyClose("20261020", "9850", "-1.50")));
+        String json = serialize(new DailyPayload(JOB_ID, 1, List.of(
+                plain.withIntradaySeries(series).withDailyCloses(closes),
+                plain.withIntradaySeries(DailyPayload.IntradaySeries.none())
+                        .withDailyCloses(DailyPayload.DailyCloses.none()),
+                plain),
+                List.of(), List.of(ContextPayload.Background.missing("exchange-rate-summary", null)), false));
+
+        assertThat(ContractSchemas.validate("market.daily.responded.v2.schema.json", json)).isEmpty();
+        var etfs = mapper.readTree(json).get("payload").get("etfs");
+        assertThat(etfs.get(0).get("intradaySeries").get("points").get(0).get("rateVsPrevClose").isNull()).isTrue();
+        assertThat(etfs.get(0).get("dailyCloses").get("points").get(1).get("close").asString()).isEqualTo("9850");
+        assertThat(etfs.get(1).get("intradaySeries").get("prevClose").isNull()).isTrue();
+        assertThat(etfs.get(1).get("dailyCloses").get("fetchedAt").isNull()).isTrue();
+        assertThat(etfs.get(2).has("intradaySeries")).isFalse();
+        assertThat(etfs.get(2).has("dailyCloses")).isFalse();
+    }
+
     /** 요청 이벤트 샘플의 payload 를 내부 조회 API 요청 본문으로 읽는다. 요청 본문은 그 payload 와 같은 모양이다. */
     private <T> T payload(String event, Class<T> type) {
         return mapper.treeToValue(mapper.readTree(event).get("payload"), type);

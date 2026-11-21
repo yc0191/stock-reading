@@ -14,7 +14,9 @@ from briefing.move_figures import (
     display,
     exchange_rate_figure,
     index_figure,
+    investor_flows,
     move_figures,
+    overseas_quotes,
     round_cent,
     signed,
     to_decimal,
@@ -104,6 +106,27 @@ def test_market_summary_change_gets_its_sign_from_the_direction_field():
     assert index_figure((item,), KOSPI_NAME).change == Decimal("12.34")
     assert index_figure((item,), KOSDAQ_NAME).change == Decimal("-3.21")
     assert index_figure((item,), KOSDAQ_NAME).rate == Decimal("-0.41")
+
+
+def test_overseas_quotes_and_investor_flows_come_from_their_own_blocks_and_blank_rows_are_skipped():
+    raw = json.dumps({"dataBody": {
+        "out2": [index_row(KOSPI_NAME)],
+        "out4": [{"symbl_nm": "TEST 원유 ", "now_prc": "  11.11", "up_dwn_r_p2": "  -2.22", "dt_tm": "20310302"},
+                 {"symbl_nm": "  ", "now_prc": "", "up_dwn_r_p2": "", "dt_tm": ""},
+                 {"symbl_nm": "TEST 반도체", "now_prc": "3333.33", "up_dwn_r_p2": "4.44", "dt_tm": "20310302160000"}],
+        "out5": [{"invstr_clsf_nm": "TEST개인", "kspi_nt_b": "-5555", "ksdq_nt_b": "-666"},
+                 {"invstr_clsf_nm": "", "kspi_nt_b": "1", "ksdq_nt_b": "1"}]}}, ensure_ascii=False)
+    item = background("market-summary", raw=raw)
+
+    quotes = overseas_quotes((item,))
+    assert [(q.name, q.price, q.rate, q.at) for q in quotes] == [
+        ("TEST 원유", Decimal("11.11"), Decimal("-2.22"), "20310302"),
+        ("TEST 반도체", Decimal("3333.33"), Decimal("4.44"), "20310302160000")]
+    [flow] = investor_flows((item,))
+    assert (flow.investor, flow.kospi, flow.kosdaq) == ("TEST개인", Decimal("-5555"), Decimal("-666"))
+    # 블록이 없거나 원문이 크기 초과로 빠졌으면 빈 목록이다.
+    assert overseas_quotes((market_background(),)) == () and investor_flows((market_background(),)) == ()
+    assert overseas_quotes((background("market-summary", status="too-large"),)) == ()
 
 
 def test_flat_upper_and_lower_limit_directions_and_an_unknown_direction():

@@ -99,9 +99,9 @@ collector:
     retry:
       max-attempts: ${COLLECTOR_INSIGHT_RETRY_MAX_ATTEMPTS:3}
       interval: ${COLLECTOR_INSIGHT_RETRY_INTERVAL:6m}
-    # 일봉 조회의 시장구분과 조회 건수
+    # 일봉 조회의 시장구분과 조회 건수. 데일리 판의 6개월 기간 그래프가 한 번의 응답으로 그려지도록 약 6개월치(거래일)를 받는다.
     daily-market-class: "0"
-    daily-count: 30
+    daily-count: 130
     # 세계지수 대륙구분: S(아시아), C(아메리카), E(유럽). 대륙마다 한 번씩 조회한다.
     continents: C,S,E
     # 보유 미국 종목의 해외 일봉 조회 건수

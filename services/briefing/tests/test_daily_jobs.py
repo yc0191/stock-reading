@@ -25,7 +25,7 @@ from briefing.daily_report import (
     ITEM_ETFS_SPLIT_TITLE,
     ITEM_EXCHANGE,
     ITEM_FILINGS,
-    ITEM_KR_REVIEW,
+    ITEM_MARKET_SUMMARY,
     ITEM_KR_TODAY,
     ITEM_OPEN_FLOW,
     ITEM_US_INDEX,
@@ -354,11 +354,12 @@ def test_morning_edition_uses_us_markets_filings_and_the_previous_korean_session
     # 장 시작(09:00) 전에 시작한 판은 읽을 개장 시세가 없어 그 항목만 빠진다.
     assert payload["missingItems"] == [ITEM_OPEN_FLOW] and payload["generatedBy"] == GENERATED_BY_RULE
     text = payload["text"]
-    for item in (ITEM_US_INDEX, "환율", "미국 종목 직전 장 등락", ITEM_FILINGS, ITEM_KR_REVIEW):
+    for item in (ITEM_US_INDEX, "환율", "미국 종목 직전 장 등락", ITEM_FILINGS, ITEM_MARKET_SUMMARY):
         assert item in text
     assert ITEM_ETFS not in text
     assert "TEST INDEX(TESTIX) 2.04%" in text
-    assert "8-K 공시 항목 2.02" in text
+    # 공시는 양식 이름 대신 항목의 뜻으로 보인다(회사 이름을 모르면 '미국 종목').
+    assert "미국 종목 8-K 공시(실적 발표)" in text
     assert payload["rangeStart"] == "2026-10-19T08:45:00+09:00"
     assert payload["rangeEnd"] == "2026-10-20T08:45:00+09:00"
 
@@ -419,7 +420,7 @@ def test_daily_data_that_finally_fails_is_given_up_and_the_edition_still_goes_ou
     [event] = published(requests)
     payload = event.value["payload"]
     assert payload["generatedBy"] == GENERATED_BY_RULE
-    assert payload["missingItems"] == [ITEM_US_INDEX, "환율", "미국 종목 직전 장 등락", ITEM_FILINGS, ITEM_KR_REVIEW,
+    assert payload["missingItems"] == [ITEM_US_INDEX, "환율", "미국 종목 직전 장 등락", ITEM_FILINGS, ITEM_MARKET_SUMMARY,
                                          ITEM_OPEN_FLOW, ITEM_ETF_ARTICLES]
     assert payload["text"].count(NO_DATA) >= 5
     assert requests.api.of(QueryKind.FILINGS) == []
@@ -483,7 +484,7 @@ def test_llm_writes_the_summary_and_cites_only_given_refs(core):
     [event] = published(requests)
     payload = event.value["payload"]
     assert payload["generatedBy"] == GENERATED_BY_LLM
-    assert "요약:" in payload["text"] and "[근거 1, 2]" in payload["text"]
+    assert "■ 밤사이 이슈" in payload["text"] and "[근거 1, 2]" in payload["text"]
     assert "투자 조언" in payload["text"]
     assert failures.records == []
     assert [e.entry_type for e in details.records] == [EntryType.REPORT_WRITTEN, EntryType.ETF_OUTLOOK,
@@ -632,7 +633,8 @@ def test_every_edition_leaves_one_result_line_with_body_cited_evidence_missing_i
     # 작업 기록의 본문은 멤버를 가르지 않은 판 전체 글이라 멤버 메일의 [보유] 묶음 표시만 다르다.
     assert result.final_text == event.value["payload"]["text"].replace("  [보유]\n", "")
     assert result.generated_by == GeneratedBy.LLM and result.result_event_id == event.value["eventId"]
-    assert (result.weak_count, result.research_count, result.failure_reason) == (0, 0, None)
+    # 근거 약함은 메일에 보이는 문장 모두를 센다: 이 출력에서는 금리 이슈 칸 하나다(재검색 대상은 아님).
+    assert (result.weak_count, result.research_count, result.failure_reason) == (1, 0, None)
     # 빠진 항목이 없으면 missing-items 줄도 없고, 인용한 근거는 최종 본문의 근거 목록에 있다.
     assert details.of_type(EntryType.MISSING_ITEMS) == [] and event.value["payload"]["missingItems"] == []
     assert "근거:" in result.final_text and "[근거 1, 2]" in result.final_text

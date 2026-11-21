@@ -97,5 +97,5 @@ sudo /opt/stock-reading/infra/deploy/server/apply-deploy.sh recover
 
 - `rehearsal/run-rehearsal.sh`: 서버 2대(메모리 상한은 `REHEARSAL_MEM`, Docker 안의 Docker)를 흉내 내 `data.yml`·`services.yml` 전체를 띄우고, 가짜 종목·멤버를 넣고, 수집기 수동 명령과 데일리 판 시작 알림으로 한 바퀴 돌린 뒤 서비스별 메모리를 잽니다. 외부 API·AWS·메일을 부르지 않습니다. 결과는 `rehearsal/memory-report.md`.
 - `rehearsal/test-server-scripts.sh`: 배포 적용·백업 스크립트를 가짜 `aws`·`docker`와 진짜 git(컨테이너 안 가짜 원격 저장소)으로 시험합니다. 확인하는 것은 파일 머리 주석에 있습니다. 정기·긴급 경로의 금지 시간 경계는 이 시험에 없습니다.
-- 두 번째 배포 측정: 리허설 마지막에 서비스가 도는 중 새 버전 태그로 `up -d` 한 번을 해, DB 표 만들기 단계와 옛·새 서비스가 겹치는 순간의 서버 전체 메모리를 잽니다(`run-rehearsal.sh redeploy`). 실제 배포는 옛 서비스가 도는 중에 표 만들기를 먼저 따로 돌리므로 순서가 다릅니다(리허설은 아직 `up -d` 한 번).
+- 두 번째 배포 측정: 리허설 마지막에 서비스가 도는 중 새 버전 태그로 실제 배포와 같은 순서(옛 서비스가 도는 동안 DB 표 만들기를 먼저 따로 돌리고, 성공하면 서비스 교체)로 적용해, 옛·새 서비스가 겹치는 순간의 서버 전체 메모리를 잽니다(`run-rehearsal.sh redeploy`).
 - 셸 스크립트는 `shellcheck -S warning`을 통과해야 합니다.

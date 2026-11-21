@@ -35,6 +35,11 @@ class CoreSettings:
     # 멀리 거슬러 읽지 않는다. 판 시각 뒤에 받은 시세는 쓰지 않는다(상태형 자료).
     open_flow_start: time = time(9, 0)
     open_flow_max_window: timedelta = timedelta(minutes=30)
+    # 데일리 판 그래프용 장중 흐름의 시세 범위: 판 날짜의 장 시작 시각(한국 시간)부터 판 시각까지(아침 판 09:00~판 시각, 마감 후 판은
+    # 하루 전체). 판 시각에서 이 길이보다 멀리 거슬러 읽지 않으며, 마감 후 판 한도 시각(17:30)에도 09:00부터 읽히게 9시간으로 둔다.
+    # 판 시각 뒤에 받은 시세는 쓰지 않는다(상태형 자료). 그래프에만 쓰고 LLM 입력에는 넣지 않는다.
+    intraday_series_start: time = time(9, 0)
+    intraday_series_max_window: timedelta = timedelta(hours=9)
     max_tickers: int = 100
     # LLM 입력에 넣는 ETF 구성 종목 수. 비중 순위가 높은 종목부터 이 수까지 넣는다.
     max_etf_members: int = 10
@@ -109,6 +114,10 @@ DEFAULT_QUERY_SETTINGS = QuerySettings()
 class DailySettings:
     """데일리 브리핑(아침 판, 마감 후 판)의 설정값."""
 
+    # 판 하나가 보낼 수 있는 문장 단위 재검색 요청 합계. 판은 ETF마다 문장이 있어 급변동(CoreSettings)보다 크게 둔다.
+    # 요청은 처음에 한꺼번에 나가므로 늘려도 전체 시간 상한(CoreSettings.research_total_limit)은 그대로다.
+    max_research_requests: int = 20
+
     # 범위 시작은 예정 시각에서 직전 평일의 같은 시각이다. 그래도 이보다 오래 거슬러 가지 않는다.
     max_lookback: timedelta = timedelta(days=7)
     # 다시 부르는 규칙은 급변동 근거 조회와 같다(QuerySettings).
@@ -172,6 +181,11 @@ class DailySettings:
     # 메일 본문 이벤트(briefing.daily.generated)의 그림 크기 상한. 그림 한 장(base64를 푼 크기)과 이벤트 전체(JSON 바이트)가
     # 넘으면 그림만 빼고 글자판+HTML로 보낸다. 그림은 한 판에 4장까지다.
     max_chart_images: int = 4
+    # 그래프용 자료의 상한. 장중 흐름은 ETF마다 1분에 한 점이며 정규장 391분이 다 들어가게 둔다. 기간 종가는 ETF마다 최근 거래일
+    # 수이며 6개월(약 125거래일)이 들어가게 둔다. 시세처리기의 안전 상한(market.daily.intraday-max-points, daily-closes-max)보다
+    # 크지 않게 둔다.
+    max_intraday_points: int = 420
+    max_daily_closes: int = 130
     max_chart_image_bytes: int = 300 * 1024
     max_event_bytes: int = 900 * 1024
 
