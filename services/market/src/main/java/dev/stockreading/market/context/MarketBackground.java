@@ -6,6 +6,7 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.UnaryOperator;
 
 import dev.stockreading.market.event.ContextPayload;
 import dev.stockreading.market.event.EventFactory;
@@ -43,8 +44,15 @@ class MarketBackground {
 
     ContextPayload.Background single(
             BackgroundKind kind, String target, OffsetDateTime since, OffsetDateTime asOf, int maxBytes) {
+        return single(kind, target, since, asOf, maxBytes, UnaryOperator.identity());
+    }
+
+    /** 저장 원문을 응답에 담기 전에 줄이는 단계(shape)를 거친다. 크기 상한은 줄인 뒤의 원문으로 본다. */
+    ContextPayload.Background single(BackgroundKind kind, String target, OffsetDateTime since, OffsetDateTime asOf,
+            int maxBytes, UnaryOperator<String> shape) {
         Optional<BackgroundRepository.StoredResponse> latest = repository.latest(kind, target, since, asOf);
-        return latest.map(row -> background(kind, target, row, maxBytes))
+        return latest.map(row -> background(kind, target,
+                        new BackgroundRepository.StoredResponse(shape.apply(row.response()), row.fetchedAt()), maxBytes))
                 .orElseGet(() -> ContextPayload.Background.missing(kind.wireValue(), target));
     }
 

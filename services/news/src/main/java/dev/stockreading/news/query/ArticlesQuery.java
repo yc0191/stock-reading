@@ -49,6 +49,7 @@ class ArticlesQuery {
         // 한 건 더 읽어 건수 때문에 잘렸는지 판단한다.
         // ETF 로 꺼내면 그 ETF 자체 기사가 먼저, 구성 종목 기사가 그다음이다(태그는 기사 주제 그대로 두고 꺼낼 때 넓힌다).
         // 재검색 작업 id 가 있으면 그 작업이 찾은 기사만 읽고 종목 조건은 보지 않는다(symbol 은 계약상 필수 칸일 뿐이다).
+        // 앞선 작업이 먼저 저장한 기사도 이 작업이 다시 찾았으면 포함한다(news_article_research).
         List<ArticleQueryRepository.StoredArticle> rows = request.researchJobId() == null
                 ? repository.findByRange(request.symbol(), members.membersOf(request.symbol()), since, until, limit + 1)
                 : repository.findByResearchJob(UUID.fromString(request.researchJobId()), since, until, limit + 1);

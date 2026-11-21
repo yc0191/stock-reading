@@ -208,16 +208,16 @@ def test_daily_data_response_from_an_older_format_without_etf_info_still_works(d
     assert "etfInfo" not in json.loads(llm.calls[0][1])
 
 
-def test_daily_summary_naming_a_member_ticker_from_the_etf_info_is_rejected():
+def test_the_morning_summary_may_name_a_member_company_from_the_etf_info():
+    # 아침 판은 미국 종목을 이름·티커로 쓸 수 있다. ETF 이름만 멤버 모두에게 같은 문장에서 막는다.
     i = daily_input(etfs=(with_etf(etf_day(tickers=())),), close_rates=())
     sections = build_sections(i)
-    bad = morning_reply([{"statement": "FAKEB가 내렸을 수 있습니다.", "refs": ["B1"]}])
-    good = morning_reply([{"statement": "미국 종목이 내렸을 수 있습니다.", "refs": ["B1"]}])
-    llm = DailyFakeLlm(bad, good)
+    answer = morning_reply([{"statement": "FAKEB가 내렸을 수 있습니다.", "refs": ["B1"]}])
+    llm = DailyFakeLlm(answer)
 
     result = DailyLlmWriter(llm).write(i, sections)
 
-    assert len(llm.calls) == 2 and result.rejected[0].reason == "point mentions a US ticker"
+    assert len(llm.calls) == 1 and result.rejected == () and "FAKEB가 내렸을 수 있습니다." in result.body.text
 
 
 # ---- 급변동의 미국 티커 거부 ----
@@ -315,26 +315,16 @@ def test_the_weak_note_is_one_line_the_same_for_every_kind():
     assert WEAK_NOTE_PREFIX == "근거 약함: "
 
 
-def test_move_and_daily_bodies_show_the_weak_note_in_the_same_shape(core, rec):
+def test_the_morning_body_marks_a_weak_line_and_gathers_the_shortfalls_in_one_place():
+    # 급변동 메일은 약한 항목 바로 아래에 부족한 점을 쓰지만, 아침 판은 줄 끝에 표시만 하고 부족한 점은 면책 위에 모은다.
     shortfall = "더 필요한 자료입니다."
-    run_us(core)
-    move_out = cause_output(weak=True, shortfall=shortfall)
-    stage, sent, _ = report_stage(LlmWriter(FakeLlm(move_out)))
-    stage.on_ready(rec.readied[0])
-    move_lines = sent.sent[0].value["payload"]["text"].splitlines()
-
     i = daily_input()
     daily_out = morning_reply([{"statement": "미국 종목이 내렸을 수 있습니다.", "refs": ["U1"], "weak": True,
                                 "shortfall": shortfall}])
-    daily_lines = DailyLlmWriter(DailyFakeLlm(daily_out)).write(i, build_sections(i)).body.text.splitlines()
+    text = DailyLlmWriter(DailyFakeLlm(daily_out)).write(i, build_sections(i)).body.text
+    lines = text.splitlines()
 
-    def note(lines):
-        index = next(n for n, line in enumerate(lines) if line.strip() == WEAK_NOTE_PREFIX + shortfall)
-        # 약한 항목 바로 아래 줄이고, 줄 앞에 목록 기호가 없다
-        assert not lines[index].lstrip().startswith("-")
-        return index, lines[index - 1]
-
-    move_index, move_parent = note(move_lines)
-    daily_index, daily_parent = note(daily_lines)
-    assert "[근거" in daily_parent
-    assert move_lines[move_index].strip() == daily_lines[daily_index].strip()
+    assert "  1. 미국 종목이 내렸을 수 있습니다. [근거 1] (근거 약함)" in lines
+    assert WEAK_NOTE_PREFIX + shortfall not in text
+    assert f"  - 밤사이 이슈 1: {shortfall}" in lines
+    assert text.index("※ 근거 약함") < text.index("※ 투자 조언")

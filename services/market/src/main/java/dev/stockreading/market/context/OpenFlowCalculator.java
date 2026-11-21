@@ -70,7 +70,7 @@ class OpenFlowCalculator {
     }
 
     // 가격제한폭(30%)을 넘게 다르면 같은 날 가격으로 볼 수 없다. 시가는 장 시작 직후 첫 시세와 가까워야 한다.
-    private static boolean differsTooMuch(long open, long first) {
+    static boolean differsTooMuch(long open, long first) {
         return Math.abs(open - first) * 100 > first * MAX_OPEN_GAP_PERCENT;
     }
 

@@ -2,18 +2,41 @@ package dev.stockreading.market;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Duration;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
 
+import dev.stockreading.market.context.ContextProperties;
+import dev.stockreading.market.context.DailyProperties;
+
 /** application.yml 의 기본값이 문서와 같은지, 환경변수 이름이 실제로 설정에 묶이는지 확인한다. */
 class MarketPropertiesDefaultsTest {
 
     @Configuration
-    @EnableConfigurationProperties(MarketProperties.class)
+    @EnableConfigurationProperties({MarketProperties.class, DailyProperties.class, ContextProperties.class})
     static class Wiring {
+    }
+
+    @Test
+    void dailyChartLimitsMatchTheDocumentedValues() {
+        runner().run(context -> {
+            assertThat(context).hasNotFailed();
+            DailyProperties daily = context.getBean(DailyProperties.class);
+            assertThat(daily.openFlowMaxWindow()).isEqualTo(Duration.ofMinutes(30));
+            // 마감 후 판(한도 17:30)도 09:00부터 읽고, 정규장 391분이 다 들어가야 한다.
+            assertThat(daily.intradayMaxWindow()).isEqualTo(Duration.ofHours(9));
+            assertThat(daily.intradayMaxPoints()).isEqualTo(420);
+            assertThat(daily.dailyClosesMax()).isEqualTo(130);
+            assertThat(daily.dailyClosesLookback()).isEqualTo(Duration.ofDays(200));
+            // 원문 한 건이 약 6개월을 덮으므로 최근 몇 건만 읽는다.
+            assertThat(daily.dailyClosesMaxResponses()).isEqualTo(7);
+            // 급변동 배경의 국내 일봉은 최근 30일자만 남겨 원문 크기 상한 안에 둔다.
+            assertThat(context.getBean(ContextProperties.class).dailyPriceRecords()).isEqualTo(30);
+        });
     }
 
     private ApplicationContextRunner runner() {

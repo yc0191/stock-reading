@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.groups.Tuple.tuple;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -53,6 +54,7 @@ class DailyQueryTest {
     private OperationsReader operationsReader;
     private OpenFlowPort openFlowPort;
     private IntradayQuotePort intradayQuotes;
+    private IntradaySeriesPort intradaySeriesPort;
 
     @BeforeEach
     void setUp() {
@@ -63,6 +65,10 @@ class DailyQueryTest {
         operationsReader = mock(OperationsReader.class);
         openFlowPort = mock(OpenFlowPort.class);
         intradayQuotes = mock(IntradayQuotePort.class);
+        intradaySeriesPort = mock(IntradaySeriesPort.class);
+        when(intradaySeriesPort.minuteLasts(anyString(), any(), any(), anyInt()))
+                .thenReturn(List.of());
+        when(repository.dailyPriceHistory(anyString(), any(), any(), anyInt())).thenReturn(List.of());
         when(intradayQuotes.lastReceived(anyString(), any(), any())).thenReturn(Optional.empty());
         when(repository.latest(any(), any(), any(), any())).thenReturn(Optional.empty());
         when(repository.worldIndexRows(anyString(), any(), any())).thenReturn(List.of());
@@ -75,8 +81,9 @@ class DailyQueryTest {
 
     private DailyQuery listener(int maxTickers, int maxEtfs) {
         return new DailyQuery(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
-                memberChanges, new ContextProperties(Duration.ofDays(4), 32_768, maxTickers, List.of("C", "S"), Duration.ofDays(7)),
-                new DailyProperties(maxEtfs, null), operationsReader, mapper, openFlowPort, intradayQuotes,
+                memberChanges, new ContextProperties(Duration.ofDays(4), 32_768, maxTickers, List.of("C", "S"), Duration.ofDays(7), 30),
+                new DailyProperties(maxEtfs, null, null, 420, 130, null, null), operationsReader, mapper, openFlowPort,
+                intradayQuotes, intradaySeriesPort,
                 new MarketProperties(5, BigDecimal.ONE, List.of("f.a", "f.b", "f.c"), BigDecimal.ONE, List.of("f.open"),
                         1, BigDecimal.ONE, List.of(), 0, new BigDecimal("2.00")));
     }
@@ -621,5 +628,157 @@ class DailyQueryTest {
 
         assertThat(payload.etfs().get(0).openFlow()).isNull();
         assertThat(payload.etfs().get(1).openFlow().open()).isEqualTo("10200");
+    }
+
+    // ---- 그래프용 장중 흐름·기간 종가 ----
+
+    private static final String INTRADAY_SINCE = "2026-10-20T09:00:00+09:00";
+
+    private static String withField(String request, String field) {
+        return request.replace("\"maxTickers\": 100", "\"maxTickers\": 100,\n    " + field);
+    }
+
+    private static String withIntraday(String request, String since, Integer maxPoints) {
+        String withSince = withField(request, "\"intradaySince\": \"" + since + "\"");
+        return maxPoints == null ? withSince : withField(withSince, "\"maxIntradayPoints\": " + maxPoints);
+    }
+
+    private void minutes() {
+        when(intradaySeriesPort.minuteLasts(anyString(), any(), any(), anyInt())).thenReturn(List.of(
+                new IntradaySeriesPort.Point(OffsetDateTime.parse("2026-10-20T09:01:58+09:00"), 10_100),
+                new IntradaySeriesPort.Point(OffsetDateTime.parse("2026-10-20T09:00:59+09:00"), 10_000)));
+        when(openFlowPort.last(anyString(), any(), any())).thenReturn(Optional.of(new OpenFlowPort.Snapshot(
+                OffsetDateTime.parse("2026-10-20T09:01:58+09:00"), 10_100, "{\"f\":{\"a\":10000,\"b\":10000,\"c\":10000}}")));
+    }
+
+    @Test
+    void withoutTheChartFieldsNoEtfCarriesThemAndNothingExtraIsRead() throws IOException {
+        tracked("TEST01");
+
+        DailyPayload payload = answer(listener(), request());
+
+        assertThat(payload.etfs().get(0).intradaySeries()).isNull();
+        assertThat(payload.etfs().get(0).dailyCloses()).isNull();
+        verifyNoInteractions(intradaySeriesPort);
+        verify(repository, never()).dailyPriceHistory(anyString(), any(), any(), anyInt());
+    }
+
+    @Test
+    void intradaySinceAddsAMinuteSeriesToEveryEtfInTimeOrderWithRatesAgainstThePrevClose() throws IOException {
+        tracked("TEST01", "TEST02");
+        minutes();
+
+        DailyPayload payload = answer(listener(), withIntraday(request(), INTRADAY_SINCE, 400));
+
+        DailyPayload.IntradaySeries series = payload.etfs().get(0).intradaySeries();
+        assertThat(series.status()).isEqualTo(DailyPayload.INTRADAY_SERIES_PRESENT);
+        assertThat(series.prevClose()).isEqualTo("10000");
+        assertThat(series.points()).extracting(DailyPayload.IntradayPoint::at, DailyPayload.IntradayPoint::price,
+                        DailyPayload.IntradayPoint::rateVsPrevClose)
+                .containsExactly(tuple("2026-10-20T09:00:59+09:00", "10000", "0.00"),
+                        tuple("2026-10-20T09:01:58+09:00", "10100", "1.00"));
+        assertThat(payload.etfs().get(1).intradaySeries().points()).hasSize(2);
+        // 상한을 넘었는지 알려고 한 건 더 읽는다.
+        verify(intradaySeriesPort).minuteLasts("TEST01", OffsetDateTime.parse(INTRADAY_SINCE), AS_OF, 401);
+    }
+
+    @Test
+    void intradayPointsAreCappedByTheSafetyLimitAndTheWindowIsCutToTheSafetyWindow() throws IOException {
+        tracked("TEST01");
+        minutes();
+
+        answer(listener(), withIntraday(request(), "2026-10-20T07:00:00+09:00", 10_000));
+        answer(listener(), withIntraday(request(), INTRADAY_SINCE, null));
+
+        // 안전 상한 420, 안전 구간 9시간(17:00 기준 08:00부터).
+        verify(intradaySeriesPort).minuteLasts("TEST01", AS_OF.minusHours(9), AS_OF, 421);
+        verify(intradaySeriesPort).minuteLasts("TEST01", OffsetDateTime.parse(INTRADAY_SINCE), AS_OF, 421);
+    }
+
+    @Test
+    void anEtfWithoutQuotesGetsANoSnapshotSeriesAndAFailedReadLeavesOnlyThatEtfWithout() throws IOException {
+        tracked("TEST01", "TEST02");
+        when(intradaySeriesPort.minuteLasts(eq("TEST01"), any(), any(), anyInt()))
+                .thenThrow(new IllegalStateException("db down"));
+
+        DailyPayload payload = answer(listener(), withIntraday(request(), INTRADAY_SINCE, 400));
+
+        assertThat(payload.etfs().get(0).intradaySeries()).isNull();
+        assertThat(payload.etfs().get(1).intradaySeries()).isEqualTo(DailyPayload.IntradaySeries.none());
+    }
+
+    @Test
+    void intradaySinceAfterAsOfOrANonPositiveLimitIsInvalidAndNotAnswered() throws IOException {
+        tracked("TEST01");
+
+        assertThatThrownBy(() -> answer(listener(), withIntraday(request(), "2026-10-20T17:00:01+09:00", null)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> answer(listener(), withIntraday(request(), INTRADAY_SINCE, 0)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> answer(listener(), withField(request(), "\"maxDailyCloses\": 0")))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private static BackgroundRepository.StoredResponse dailyRow(OffsetDateTime fetched, String... records) {
+        return new BackgroundRepository.StoredResponse(DailyPriceReaderTest.body(records), fetched);
+    }
+
+    @Test
+    void maxDailyClosesAddsRecentClosesWhereTheLatestReceivedResponseWinsForTheSameDate() throws IOException {
+        tracked("TEST01");
+        OffsetDateTime newest = AS_OF.minusMinutes(30);
+        when(repository.dailyPriceHistory(eq("TEST01"), any(), any(), anyInt())).thenReturn(List.of(
+                dailyRow(newest,
+                        DailyPriceReaderTest.record("20261020", " 9850", "10000", " -1.50"),
+                        DailyPriceReaderTest.record("20261019", "10000", "9950", "0.50")),
+                dailyRow(AS_OF.minusDays(1),
+                        DailyPriceReaderTest.record("20261019", "9999", "9950", "0.49"),
+                        DailyPriceReaderTest.record("20261016", "9950", "9900", "0.51"))));
+
+        DailyPayload payload = answer(listener(), withField(request(), "\"maxDailyCloses\": 130"));
+
+        DailyPayload.DailyCloses closes = payload.etfs().get(0).dailyCloses();
+        assertThat(closes.status()).isEqualTo(DailyPayload.DAILY_CLOSES_PRESENT);
+        assertThat(closes.fetchedAt()).isEqualTo("2026-10-20T16:30:00+09:00");
+        assertThat(closes.truncated()).isFalse();
+        assertThat(closes.points()).extracting(DailyPayload.DailyClose::date, DailyPayload.DailyClose::close,
+                        DailyPayload.DailyClose::rate)
+                .containsExactly(tuple("20261016", "9950", "0.51"), tuple("20261019", "10000", "0.50"),
+                        tuple("20261020", "9850", "-1.50"));
+        // 판 범위(since)가 아니라 안전 기간(200일)만큼 거슬러 읽는다.
+        verify(repository).dailyPriceHistory("TEST01", AS_OF.minusDays(200), AS_OF, 7);
+    }
+
+    @Test
+    void dailyClosesKeepTheMostRecentDatesUpToTheLimitAndSkipRowsOrDatesPastAsOf() throws IOException {
+        tracked("TEST01", "TEST02");
+        when(repository.dailyPriceHistory(eq("TEST01"), any(), any(), anyInt())).thenReturn(List.of(
+                // 기준 시각 뒤에 받은 원문과 기준 날짜 뒤 일자는 쓰지 않는다.
+                dailyRow(AS_OF.plusSeconds(1), DailyPriceReaderTest.record("20261020", "1", "1", "0.00")),
+                dailyRow(AS_OF.minusHours(1),
+                        DailyPriceReaderTest.record("20261021", "1", "1", "0.00"),
+                        DailyPriceReaderTest.record("20261020", "9850", "10000", "-1.50"),
+                        DailyPriceReaderTest.record("20261019", "10000", "9950", "0.50"),
+                        DailyPriceReaderTest.record("20261016", "9950", "9900", "0.51"))));
+
+        DailyPayload payload = answer(listener(), withField(request(), "\"maxDailyCloses\": 2"));
+
+        DailyPayload.DailyCloses closes = payload.etfs().get(0).dailyCloses();
+        assertThat(closes.truncated()).isTrue();
+        assertThat(closes.points()).extracting(DailyPayload.DailyClose::date, DailyPayload.DailyClose::close)
+                .containsExactly(tuple("20261019", "10000"), tuple("20261020", "9850"));
+        assertThat(closes.fetchedAt()).isEqualTo("2026-10-20T16:00:00+09:00");
+        assertThat(payload.etfs().get(1).dailyCloses()).isEqualTo(DailyPayload.DailyCloses.none());
+    }
+
+    @Test
+    void aFailedDailyHistoryReadLeavesOnlyThatEtfWithoutCloses() throws IOException {
+        tracked("TEST01", "TEST02");
+        when(repository.dailyPriceHistory(eq("TEST01"), any(), any(), anyInt())).thenThrow(new IllegalStateException("db down"));
+
+        DailyPayload payload = answer(listener(), withField(request(), "\"maxDailyCloses\": 130"));
+
+        assertThat(payload.etfs().get(0).dailyCloses()).isNull();
+        assertThat(payload.etfs().get(1).dailyCloses().status()).isEqualTo(DailyPayload.DAILY_CLOSES_NO_DAILY_PRICE);
     }
 }

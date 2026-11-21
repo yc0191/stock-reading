@@ -48,6 +48,31 @@ class BackgroundRepository {
                 .list();
     }
 
+    /**
+     * 한 종목의 국내 일봉 원문 중 받은 시각이 [since, asOf] 안(양끝 포함)인 것을 받은 날(한국 날짜)마다 가장 늦게 받은 1건씩,
+     * 받은 시각이 늦은 순으로 읽는다. 원문 한 건에 여러 거래일이 들어 있어 같은 날 받은 원문은 더 읽을 필요가 없다.
+     */
+    List<StoredResponse> dailyPriceHistory(String target, OffsetDateTime since, OffsetDateTime asOf, int limit) {
+        return jdbc.sql("""
+                        SELECT CAST(d.response AS text) AS response, d.fetched_at FROM (
+                            SELECT DISTINCT ON ((fetched_at AT TIME ZONE 'Asia/Seoul')::date) id
+                            FROM daily_price
+                            WHERE target = :target AND fetched_at >= :since AND fetched_at <= :asOf
+                            ORDER BY (fetched_at AT TIME ZONE 'Asia/Seoul')::date, fetched_at DESC, id DESC
+                        ) per_day
+                        JOIN daily_price d ON d.id = per_day.id
+                        ORDER BY d.fetched_at DESC, d.id DESC
+                        LIMIT :limit
+                        """)
+                .param("target", target)
+                .param("limit", limit)
+                .param("since", since)
+                .param("asOf", asOf)
+                .query((rs, rowNum) -> new StoredResponse(
+                        rs.getString("response"), rs.getObject("fetched_at", OffsetDateTime.class)))
+                .list();
+    }
+
     private List<StoredResponse> select(
             BackgroundKind kind, String target, OffsetDateTime since, OffsetDateTime asOf, Integer limit) {
         String sql = "SELECT CAST(response AS text) AS response, fetched_at FROM " + kind.table()
