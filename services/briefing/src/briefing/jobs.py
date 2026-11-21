@@ -19,12 +19,14 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Protocol
 
+from briefing.compose import KST
 from briefing.config import DEFAULT_SETTINGS, CoreSettings
 from briefing.events import NEWS_STORED, format_timestamp, parse_timestamp, research_request_event, stored_payload
 from briefing.evidence import MARKET_WIDE, in_evidence_range
 from briefing.job_log import (
     LEVEL_MID,
     STAGE_ARTICLES,
+    STAGE_CHART_HISTORY,
     STAGE_COLLECTION,
     STAGE_CONTEXT,
     STAGE_FILINGS,
@@ -43,6 +45,7 @@ from briefing.job_log import (
     record_result,
 )
 from briefing.job_step import job_scope
+from briefing.move_flow import FlowMove, day_range, earlier_moves
 from briefing.ports import FailureReason, RequestPort
 from briefing.move_representative import pick_representative
 from briefing.queries import Query, QueryKind, QueryPort, QueryResult
@@ -106,6 +109,10 @@ class ReportInput:
     # 근거 부족으로 다시 검색해 받은 기사. 기존 기사와 따로 두고, 근거 번호·링크 규칙은 기사와 같다.
     research_articles: tuple[Article, ...] = ()
     research_articles_truncated: bool = False
+    # 같은 날 같은 종목의 앞선 급변동(작업 기록). '오늘 흐름'과 차트 표시, LLM 입력에 쓴다.
+    earlier_moves: tuple[FlowMove, ...] = ()
+    # 장중 차트용 1분 간격 시세(그날 chart_start부터 변동 delta 뒤까지). 받지 못했으면 비어 있고 차트만 빠진다.
+    chart_points: tuple[PricePoint, ...] = ()
 
 
 class ReadyPort(Protocol):
@@ -175,6 +182,9 @@ class _Job:
     market: Exchange = field(default_factory=Exchange)
     market_points: tuple[PricePoint, ...] | None = None
     market_truncated: bool = False
+    # 상의 장중 차트용 시세. 못 받아도 차트만 빠지고 리포트는 나간다.
+    chart: Exchange = field(default_factory=Exchange)
+    chart_points: tuple[PricePoint, ...] = ()
     context: Exchange = field(default_factory=Exchange)
     context_data: _Context | None = None
     filings: Exchange = field(default_factory=Exchange)
@@ -360,6 +370,25 @@ class BriefingCore:
         job.market_points, job.market_truncated = points, truncated
         self._complete_if_ready(job)
 
+    def _on_chart(self, result: QueryResult, now: datetime) -> None:
+        job = self._fetching_job(result)
+        if job is None:
+            return
+        points = None
+        if result.received:
+            try:
+                points = tuple(PricePoint(parse_timestamp(p["asOf"]), int(p["price"])) for p in result.payload["points"])
+            except (KeyError, TypeError, ValueError) as error:
+                _malformed(QueryKind.HISTORY, job.job_id, error)
+        if points is None:
+            # 차트는 덤이라 작업을 실패로 닫지 않고 그림만 뺀다. 이유는 작업 기록(job_step)에 남아 있다.
+            job.chart.given_up = True
+            log.warning("chart history not received for job %s; the mail goes without a chart", job.job_id)
+        else:
+            job.chart.received = True
+            job.chart_points = points
+        self._complete_if_ready(job)
+
     def _on_context(self, result: QueryResult, now: datetime) -> None:
         job = self._jobs.get(result.query.payload["jobId"])
         if job is None or job.phase is _Phase.DONE:
@@ -506,6 +535,7 @@ class BriefingCore:
             self._send_news(job, now)
             return
         self._send_market(job, now)
+        self._send_chart(job, now)
         if job.context_data is None:
             # T+5분 재검색을 하려고 먼저 맡긴 조회가 아직 끝나지 않았으면 그 결과를 이어 쓴다.
             if not job.context.awaiting():
@@ -530,6 +560,19 @@ class BriefingCore:
             "until": format_timestamp(job.as_of + s.delta),
             "maxPoints": s.max_history_points,
             "intervalSeconds": int(s.history_interval.total_seconds()),
+        })
+
+    def _send_chart(self, job: _Job, now: datetime) -> None:
+        """그날 chart_start부터 변동 delta 뒤까지 chart_interval 간격의 시세. 같은 시세 이력 조회를 구간과 간격만 바꿔 부른다."""
+        s = self.settings
+        start = job.as_of.astimezone(KST).replace(hour=s.chart_start.hour, minute=s.chart_start.minute, second=0,
+                                                   microsecond=0)
+        self._submit(job, QueryKind.HISTORY, STAGE_CHART_HISTORY, job.chart, now, self._on_chart, {
+            "symbol": job.symbol,
+            "since": format_timestamp(min(start, job.as_of)),
+            "until": format_timestamp(job.as_of + s.delta),
+            "maxPoints": s.max_chart_points,
+            "intervalSeconds": int(s.chart_interval.total_seconds()),
         })
 
     def _send_context(self, job: _Job, now: datetime) -> None:
@@ -567,6 +610,8 @@ class BriefingCore:
         if not job.market.received or not job.news.received or context is None:
             return
         if context.tickers and not job.filings.received:
+            return
+        if job.chart.awaiting():
             return
         s = self.settings
         # 응답 쪽이 이미 범위를 지켰어야 하므로, 여기서 걸리는 자료는 응답 쪽 결함 신호로 경고를 남긴다.
@@ -616,7 +661,8 @@ class BriefingCore:
             tickers_truncated=context.tickers_truncated, close_rates=tuple(close_rates),
             filings=tuple(filings), filings_truncated=job.filings_truncated, background=tuple(background),
             etf=context.etf, name=context.name, detected_at=job.detected_at, detection_type=job.detection_type,
-            today_change_percent=job.today_change_percent)
+            today_change_percent=job.today_change_percent,
+            earlier_moves=self._earlier_moves(job), chart_points=job.chart_points)
         _log_collection(report_input, _Excluded(
             articles=len(job.news_articles or ()) - len(articles),
             filings=len(job.filings_data) - len(filings),
@@ -626,6 +672,11 @@ class BriefingCore:
         # 리포트를 쓰는 LLM 호출을 이 작업의 job_step으로 남긴다.
         with job_scope(job.job_id):
             self.ready.on_ready(report_input)
+
+    def _earlier_moves(self, job: _Job) -> tuple[FlowMove, ...]:
+        """'오늘 흐름': 같은 날 같은 종목의 앞선 급변동. 작업 기록을 읽지 못하면 비워 두고 메일은 나간다."""
+        since, until = day_range(job.as_of)
+        return earlier_moves(self.job_log.moves_between(since, until), job.symbol, job.as_of, job.job_id)
 
     def _finish_mid(self, job: _Job, now: datetime) -> None:
         """중: 근거 시간 범위의 기사로 대표 기사를 골라 작업 기록에 남기고 성공으로 끝낸다. LLM·재검색·결과 이벤트는 없다."""

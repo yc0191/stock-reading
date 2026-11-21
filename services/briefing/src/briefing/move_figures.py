@@ -242,6 +242,10 @@ def display(value: Decimal | int | str | None, sign: bool = False) -> str:
 COMPARED_MOVE = "변동률"
 COMPARED_TODAY = "오늘 등락률"
 
+# 레벨 상의 기준가 종류(결과 이벤트의 baseKind). 첫 상은 전일 종가, 그날 앞선 상이 있으면 그 상의 가격이다.
+BASE_PREV_CLOSE = "prevClose"
+BASE_EARLIER_MOVE = "earlierMove"
+
 
 def compares_today(report_input: ReportInput) -> bool:
     """짧은 시간 변동의 변동률은 몇 분 사이의 값이고 레벨 상의 변동률은 기준가 대비 값이라, 그 종목의 오늘 등락률(전일 종가 대비)로
@@ -290,6 +294,18 @@ def window_minutes(report_input: ReportInput) -> int | None:
     if i.detection_type != "window" or i.detected_at is None:
         return None
     return max(1, int((i.detected_at - i.as_of).total_seconds() // 60))
+
+
+def high_today(report_input: ReportInput) -> tuple[float, bool] | None:
+    """레벨 상의 (오늘 등락률, 첫 상인지). 오늘 등락률을 모르면 None이다.
+
+    첫 상은 기준가가 전일 종가라 기준가 대비 변동률과 오늘 등락률이 같다. 두 번째 상부터는 기준가가 앞선 상의 가격(전일 종가에서
+    상 기준 이상 벗어난 값)이라 다르다.
+    """
+    i = report_input
+    if i.detection_type != DETECTION_PREV_CLOSE_HIGH or i.today_change_percent is None:
+        return None
+    return i.today_change_percent, abs(round(i.change_percent, 2) - round(i.today_change_percent, 2)) <= 0.01
 
 
 def today_first(report_input: ReportInput,

@@ -22,6 +22,12 @@ def test_committed_briefing_sample_matches_its_schema():
     assert validate("briefing.generated.v1.schema.json", sample("briefing.generated.sample.json")) == []
 
 
+def test_committed_high_briefing_sample_matches_its_schema_and_carries_the_second_high_fields():
+    high = sample("briefing.generated.high.sample.json")
+    assert validate("briefing.generated.v1.schema.json", high) == []
+    assert (high["payload"]["todayChangePercent"], high["payload"]["baseKind"]) == (-14.0, "earlierMove")
+
+
 def test_briefing_name_is_optional_and_an_empty_name_is_rejected():
     named = sample("briefing.generated.sample.json")
     assert named["payload"]["name"]

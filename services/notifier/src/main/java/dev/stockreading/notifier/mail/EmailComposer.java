@@ -54,6 +54,7 @@ public class EmailComposer {
     }
 
     /**
+     * 레벨 상(baseKind 있음)도 같은 방식으로 오늘 등락을 앞에 쓴다.
      * 짧은 시간 변동은 몇 분 사이의 변동률보다 그날 흐름이 먼저 보이게, 본문 첫 줄처럼 오늘 등락을 앞에 쓴다.
      * 오늘 등락률이 없는 이전 브리핑이면 null을 돌려 이전 제목을 쓰게 한다.
      * 분이 없으면 브리핑이 구간을 정확히 알 수 없다고 본 것(다시 보낸 변동)이라 '짧은 시간'으로 쓴다.
@@ -70,6 +71,14 @@ public class EmailComposer {
         }
         BigDecimal today = payload.todayChangePercent();
         BigDecimal change = payload.changePercent();
+        if (payload.baseKind() != null) {
+            // 레벨 상: 첫 상은 기준가가 전일 종가라 오늘 등락만, 그다음 상은 기준가 대비 변동률을 덧붙인다.
+            if ("prevClose".equals(payload.baseKind())) {
+                return "[%s] %s 기준 오늘 %+.2f%% %s 브리핑".formatted(label, time, today, direction(today));
+            }
+            return "[%s] %s 기준 오늘 %+.2f%% · 기준가 대비 %+.2f%% %s 브리핑".formatted(
+                    label, time, today, change, windowDirection(change, today));
+        }
         String span = payload.moveMinutes() == null ? "짧은 시간" : payload.moveMinutes() + "분 새";
         return "[%s] %s 기준 오늘 %+.2f%% · %s %+.2f%% %s 브리핑".formatted(
                 label, time, today, span, change, windowDirection(change, today));

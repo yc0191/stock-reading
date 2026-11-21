@@ -731,29 +731,32 @@ def test_rule_based_report_states_code_computed_comparisons_without_guessing_cau
     assert "오늘 등락률이 코스피종합 등락률보다 1.65%p 낮습니다 (차이 -1.65%p" in text
     assert "오늘 등락률이 코스닥종합 등락률보다 2.40%p 낮습니다" in text
     assert "담긴 미국 종목은 직전 정규장에서 0개 오르고 1개 내렸으며 0개는 보합이었고, 평균 등락률은 -1.25%" in text
-    assert "https://news.example.com/a1" in text and "확인하지 못한 것:" in text
+    assert "https://news.example.com/a1" in text and "확인하지 못한 것" not in text
     assert "1. " not in text.split("근거 후보:")[0]  # 원인 묶음 없음
 
 
 def test_unchecked_items_name_missing_truncated_and_too_large_data_without_tickers(core, rec):
     run_us(core, context_event=context(truncated=True), filings_event=filings(truncated=True),
            history_event=history(truncated=True))
-    stage, published, _ = report_stage(RuleBasedWriter())
+    stage, published, job_log = report_stage(RuleBasedWriter())
 
     stage.on_ready(rec.readied[0])
 
-    text = published.sent[0].value["payload"]["text"]
-    unchecked = text.split("확인하지 못한 것:")[1]
-    for line in ("- 시세 이력: 상한 때문에 일부만 받음", "- 미국 공시: 상한 때문에 일부만 받음",
-                 "- 미국 종목 목록: 상한 때문에 일부만 받음",
-                 "- 미국 종목 직전 정규장 등락률: 2개 가운데 1개 받지 못함",
-                 "- 시장종합: 원문이 커서 빠짐", "- 국내 일봉: 기간 안에 받은 자료 없음"):
+    # 메일 글자판·HTML에는 없고 작업 기록(missing-items)에만 남는다.
+    payload = published.sent[0].value["payload"]
+    assert "확인하지 못한 것" not in payload["text"] and "확인하지 못한 것" not in payload["html"]
+    (entry,) = job_log.of_reason("published")
+    unchecked = entry.data["missingItems"]
+    for line in ("시세 이력: 상한 때문에 일부만 받음", "미국 공시: 상한 때문에 일부만 받음",
+                 "미국 종목 목록: 상한 때문에 일부만 받음",
+                 "미국 종목 직전 정규장 등락률: 2개 가운데 1개 받지 못함",
+                 "시장종합: 원문이 커서 빠짐", "국내 일봉: 기간 안에 받은 자료 없음"):
         assert line in unchecked
     for ticker in TICKERS:
-        assert ticker not in unchecked
+        assert ticker not in " ".join(unchecked)
 
 
-def test_insufficient_evidence_keeps_the_headline_and_unchecked_items_in_the_recorded_text_but_sends_nothing(core, rec):
+def test_insufficient_evidence_keeps_the_headline_in_the_recorded_text_and_unchecked_items_in_the_log_but_sends_nothing(core, rec):
     run_us(core)
     stage, published, job_log = report_stage(LlmWriter(FakeLlm(output([], insufficient=True))))
 
@@ -763,8 +766,10 @@ def test_insufficient_evidence_keeps_the_headline_and_unchecked_items_in_the_rec
     assert published.sent == []
     text = job_log.finishes[0].final_text
     assert text.splitlines()[0].startswith("[TEST ETF ONE(TEST01)] ")
-    assert "추정하기 어렵습니다" in text and "- 시장종합: 원문이 커서 빠짐" in text
+    assert "추정하기 어렵습니다" in text and "확인하지 못한 것" not in text
     assert "근거 1" not in text
+    (entry,) = job_log.of_reason("no_evidence")
+    assert "시장종합: 원문이 커서 빠짐" in entry.data["missingItems"]
 
 
 # ---- 변동 T+5분 재검색: 정기 수집 없이 끝나는 변동, 근거가 없어 보내지 않는 변동 ----

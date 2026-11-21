@@ -315,13 +315,14 @@ def test_the_weak_note_is_one_line_the_same_for_every_kind():
     assert WEAK_NOTE_PREFIX == "근거 약함: "
 
 
-def test_move_and_daily_bodies_show_the_weak_note_in_the_same_shape(core, rec):
+def test_move_body_has_no_weak_note_while_daily_body_shows_it(core, rec):
     shortfall = "더 필요한 자료입니다."
     run_us(core)
     move_out = cause_output(weak=True, shortfall=shortfall)
     stage, sent, _ = report_stage(LlmWriter(FakeLlm(move_out)))
     stage.on_ready(rec.readied[0])
-    move_lines = sent.sent[0].value["payload"]["text"].splitlines()
+    move_payload = sent.sent[0].value["payload"]
+    assert "근거 약함" not in move_payload["text"] and shortfall not in move_payload["text"]
 
     i = daily_input()
     daily_out = morning_reply([{"statement": "미국 종목이 내렸을 수 있습니다.", "refs": ["U1"], "weak": True,
@@ -334,7 +335,5 @@ def test_move_and_daily_bodies_show_the_weak_note_in_the_same_shape(core, rec):
         assert not lines[index].lstrip().startswith("-")
         return index, lines[index - 1]
 
-    move_index, move_parent = note(move_lines)
-    daily_index, daily_parent = note(daily_lines)
+    _, daily_parent = note(daily_lines)
     assert "[근거" in daily_parent
-    assert move_lines[move_index].strip() == daily_lines[daily_index].strip()

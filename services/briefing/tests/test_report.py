@@ -115,10 +115,13 @@ def test_valid_llm_output_is_published_with_code_written_headline_and_disclaimer
     assert lines[2] == "1. 금리 결정"
     assert lines[3] == "- 금리 결정이 영향을 줬을 수 있습니다. [근거 1]"
     assert lines[4] == "- 같은 시기 금리 기사가 있었습니다. [근거 1]"
-    assert lines[5].startswith("  근거 1. Rate decision — sample, 발행 10-20 14:30")
-    assert lines[7] == "2. 자금 유출"
-    assert lines[8] == "- 자금 유출이 영향을 줬을 수 있습니다. [근거 2, 1]"
-    assert lines[9] == "- 유출 기사가 변동 30분 전에 나왔습니다. [근거 2]"
+    assert lines[6] == "2. 자금 유출"
+    assert lines[7] == "- 자금 유출이 영향을 줬을 수 있습니다. [근거 2, 1]"
+    assert lines[8] == "- 유출 기사가 변동 30분 전에 나왔습니다. [근거 2]"
+    # 근거 목록은 맨 아래에 한 번만 나온다.
+    assert lines[10] == "근거:"
+    assert lines[11].startswith("  1. Rate decision — sample, 발행 10-20 14:30")
+    assert lines[12].startswith("  2. Fund outflow")
     assert lines[-1] == LLM_DISCLAIMER
     assert payload["generatedBy"] == GENERATED_BY_LLM == "llm"
 
@@ -214,9 +217,8 @@ def test_insufficient_evidence_is_not_published_and_the_result_and_details_are_r
     assert published == []
     (result,) = job_log.finishes
     assert (result.status.value, result.failure_reason, result.result_event_id) == ("succeeded", REASON_NO_EVIDENCE, None)
-    assert result.final_text.splitlines()[1:] == [
-        "", LLM_INSUFFICIENT, "", "확인하지 못한 것:", "- 기사: 기간 안에 받은 자료 없음",
-        "- 미국 공시·미국 종목 등락률: 변동 종목에 미국 종목이 없어 조회하지 않음", LLM_DISCLAIMER]
+    # '확인하지 못한 것'은 메일 글자판에 없고 아래 작업 기록에만 남는다.
+    assert result.final_text.splitlines()[1:] == ["", LLM_INSUFFICIENT, "", LLM_DISCLAIMER]
     (entry,) = job_log.of_reason(REASON_NO_EVIDENCE)
     assert entry.entry_type.value == "missing-items"
     assert entry.data["receivedCounts"] == {"articles": 0, "researchArticles": 0, "filings": 0, "closeRates": 0,
@@ -387,27 +389,30 @@ def test_each_cause_shows_title_detail_meaning_and_the_cited_article_link():
 
     text = published[0].value["payload"]["text"]
     assert "https://news.example.com/articles/a1" in text and "https://news.example.com/articles/a2" in text
-    # 두 원인 모두 a1을 인용하므로 a1은 원인마다 다시 보이고, 번호는 리포트 전체에서 같다.
-    assert text.count("  근거 1. Rate decision") == 2
-    assert text.count("  근거 2. Fund outflow") == 1
+    # 두 원인 모두 a1을 인용해도 근거 목록은 맨 아래에 한 번뿐이고, 번호는 리포트 전체에서 같다.
+    assert text.count("  1. Rate decision") == 1
+    assert text.count("  2. Fund outflow") == 1
     # 숫자만 나열하는 칸은 없다.
     for heading in ("요약", "가격 흐름", "시장 상황", "직전 장"):
         assert f"{heading}:" not in text
 
 
-def test_report_ends_with_what_could_not_be_checked_then_the_disclaimer():
-    s, published, _ = stage(LlmWriter(FakeLlm(VALID)))
+def test_report_ends_with_the_evidence_list_then_the_disclaimer_and_leaves_out_what_could_not_be_checked():
+    s, published, job_log = stage_with_log(LlmWriter(FakeLlm(VALID)))
 
     s.on_ready(report_input_with(history_truncated=True, articles_truncated=True))
 
-    lines = published[0].value["payload"]["text"].splitlines()
-    unchecked = lines.index("확인하지 못한 것:")
-    assert lines[unchecked + 1:] == [
-        "- 시세 이력: 상한 때문에 일부만 받음",
-        "- 기사: 상한 때문에 일부만 받음",
-        "- 미국 공시·미국 종목 등락률: 변동 종목에 미국 종목이 없어 조회하지 않음",
-        LLM_DISCLAIMER,
-    ]
+    text = published[0].value["payload"]["text"]
+    lines = text.splitlines()
+    assert "확인하지 못한 것" not in text and "확인하지 못한 것" not in published[0].value["payload"]["html"]
+    assert lines[-3:-1] == ["  1. Rate decision — sample, 발행 10-20 14:30 https://news.example.com/articles/a1",
+                            "  2. Fund outflow — sample, 발행 10-20 15:30 https://news.example.com/articles/a2"]
+    assert lines[-1] == LLM_DISCLAIMER
+    # 빠진 자료는 작업 기록에 남는다.
+    (entry,) = job_log.of_reason("published")
+    assert entry.entry_type.value == "missing-items"
+    assert "시세 이력: 상한 때문에 일부만 받음" in entry.data["missingItems"]
+    assert "기사: 상한 때문에 일부만 받음" in entry.data["missingItems"]
 
 
 def test_unchecked_world_index_items_use_continent_names_and_keep_unknown_codes():
@@ -454,12 +459,13 @@ def test_empty_sentences_and_uncited_or_unknown_refs_are_rejected(field, value):
 
 def test_output_schema_asks_for_cause_bundles_with_refs_for_each_sentence():
     item = OUTPUT_SCHEMA["properties"]["causes"]["items"]
-    assert set(item["required"]) == {"title", "detail", "refs", "meaning", "meaningRefs", "weak", "shortfall"}
+    assert set(item["required"]) == {"title", "detail", "refs", "meaning", "meaningRefs", "conflict", "conflictRefs", "weak",
+                                  "shortfall"}
     assert OUTPUT_SCHEMA["properties"]["insufficientEvidence"] == {"type": "boolean"}
 
 
 def test_system_prompt_asks_for_concrete_details_from_the_material_and_meaning_of_given_numbers():
-    assert '"자료에 없음"' in SYSTEM_PROMPT
+    assert "원인 문장에 쓰지 말고 뺍니다" in SYSTEM_PROMPT and "{max_cause_chars}" not in SYSTEM_PROMPT
     assert "기사 제목·요약과 공시" in SYSTEM_PROMPT
     assert "figures" in SYSTEM_PROMPT and "differencePoint" in SYSTEM_PROMPT
     assert "숫자를 새로 계산하지 않습니다" in SYSTEM_PROMPT
@@ -473,7 +479,7 @@ def test_rule_based_report_has_the_same_shape_with_links_unchecked_items_and_dis
     assert lines[0] == "[TEST01] 16:00 기준 하락 -1.50% (10,000 → 9,850)"
     assert "원인은 추정하지 않고" in lines[2]
     assert "https://news.example.com/articles/a3" in report.text
-    assert "확인하지 못한 것:" in lines
+    assert "확인하지 못한 것:" not in lines
     assert lines[-1].startswith("※ 투자 조언이 아니며")
 
 
@@ -543,7 +549,9 @@ def test_a_published_report_leaves_one_result_line_with_text_evidence_missing_it
     # 빠진 자료와 근거 목록은 일 줄 하나로 남는다.
     (missing,) = job_log.of_type(EntryType.MISSING_ITEMS)
     assert missing.data["evidence"] == payload["evidence"]
-    assert missing.data["missingItems"] == ["미국 공시·미국 종목 등락률: 변동 종목에 미국 종목이 없어 조회하지 않음"]
+    # 시세 이력(차트용)이 없는 입력이라 차트 빠짐도 작업 기록에만 남는다.
+    assert missing.data["missingItems"] == ["미국 공시·미국 종목 등락률: 변동 종목에 미국 종목이 없어 조회하지 않음",
+                                            "장중 차트: 시세 이력이 없거나 그리지 못해 그림 없음"]
 
 
 def test_rule_based_report_also_leaves_a_result_line_but_no_llm_success_line():

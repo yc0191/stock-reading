@@ -252,7 +252,7 @@ class BriefingRunner:
         # 조회 시도마다 작업 기록 저장소의 job_step에 한 줄씩 남긴다.
         self.api = self._api_factory() if self._api_factory is not None else HttpQueries(
             base_urls(os.environ), self.job_log, self.clock)
-        stage = ReportStage(self.writer, publisher, self.job_log, clock=self.clock)
+        stage = ReportStage(self.writer, publisher, self.job_log, clock=self.clock, settings=self.settings)
         # 급변동과 데일리 판이 문장 단위 재검색 흐름 하나를 함께 쓴다.
         self.sentences = SentenceResearch(self.query_writer, publisher, self.api, self.job_log, self.settings)
         # LLM 본문은 발행 직전에 마지막 검사(코드 검사, 필요하면 LLM 검토와 고침)를 거친다.

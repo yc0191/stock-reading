@@ -130,6 +130,11 @@ MOVE_THREE_WEAK = move_output((WEAK_TEXT, ["a1"], SHORTFALL), (THIRD_TEXT, ["a1"
                               (STRONG_TEXT, ["a1"], "세 번째 부족한 점입니다."))
 
 
+def weak_items(flow):
+    """작업 기록(missing-items 줄)에 남은 근거 약함 부족한 점."""
+    return [x for e in flow.records.of_type(EntryType.MISSING_ITEMS) for x in e.data.get("weakItems", [])]
+
+
 def one_cause(text, refs, shortfall=None):
     """다시 쓰기 응답: 다시 쓴 원인 하나만 담는다."""
     return move_output((text, refs, shortfall))
@@ -259,7 +264,7 @@ def test_move_sentence_still_weak_after_two_searches_keeps_the_weak_note_and_is_
 
     (briefing,) = flow.briefings()
     text = briefing.value["payload"]["text"]
-    assert (WEAK_NOTE_PREFIX + SECOND_SHORTFALL) in text and (WEAK_NOTE_PREFIX + STILL_SHORTFALL) not in text
+    assert "근거 약함" not in text and weak_items(flow) == [SECOND_SHORTFALL]
     assert len(sentence_requests(flow)) == 2 and len(flow.query_llm.calls) == 2
     (limit,) = flow.records.of(ResearchReason.SENTENCE_LIMIT)
     assert (limit.stage, limit.sentence_no) == (ResearchStep.LIMIT, 2)
@@ -286,7 +291,7 @@ def test_move_sentences_over_the_request_limit_are_not_searched_and_keep_the_wea
 
     (briefing,) = flow.briefings()
     text = briefing.value["payload"]["text"]
-    assert "세 번째 부족한 점입니다." in text and (WEAK_NOTE_PREFIX + "세 번째 부족한 점입니다.") in text
+    assert "근거 약함" not in text and weak_items(flow) == ["세 번째 부족한 점입니다."]
     (result,) = flow.records.results()
     assert (result.weak_count, result.research_count) == (1, 2)
 
@@ -301,7 +306,7 @@ def test_the_request_limit_counts_second_searches_too():
 
     assert len(sentence_requests(flow)) == 1 and len(flow.query_llm.calls) == 1
     (briefing,) = flow.briefings()
-    assert (WEAK_NOTE_PREFIX + STILL_SHORTFALL) in briefing.value["payload"]["text"]
+    assert "근거 약함" not in briefing.value["payload"]["text"] and weak_items(flow) == [STILL_SHORTFALL]
     assert [e.reason for e in flow.records.entries if e.stage == ResearchStep.LIMIT.value] == [
         ResearchReason.REQUEST_LIMIT.value]
 
@@ -327,7 +332,7 @@ def test_move_total_time_limit_publishes_the_body_at_that_moment_and_ignores_lat
     (briefing,) = flow.briefings()
     text = briefing.value["payload"]["text"]
     # 끝난 문장은 다시 쓴 대로, 끝나지 못한 문장은 약하다는 표시와 함께 그때의 본문으로 나간다.
-    assert "첫 문장을 다시 썼습니다." in text and (WEAK_NOTE_PREFIX + SECOND_SHORTFALL) in text
+    assert "첫 문장을 다시 썼습니다." in text and "근거 약함" not in text and weak_items(flow) == [SECOND_SHORTFALL]
     (limit,) = flow.records.of(ResearchReason.TIME_LIMIT)
     assert (limit.sentence_no, limit.stage) == (3, ResearchStep.LIMIT)
     (result,) = flow.records.results()
@@ -371,7 +376,7 @@ def test_move_sentence_whose_articles_were_all_used_by_another_sentence_is_not_r
     (record,) = flow.records.of(ResearchReason.ALL_USED_BY_OTHERS)
     assert record.sentence_no == 3
     (briefing,) = flow.briefings()
-    assert (WEAK_NOTE_PREFIX + SECOND_SHORTFALL) in briefing.value["payload"]["text"]
+    assert "근거 약함" not in briefing.value["payload"]["text"] and weak_items(flow) == [SECOND_SHORTFALL]
 
 
 def test_move_sentence_rewrite_citing_a_ref_outside_the_list_is_rejected_and_the_old_sentence_stays():
@@ -384,7 +389,8 @@ def test_move_sentence_rewrite_citing_a_ref_outside_the_list_is_rejected_and_the
     assert len(flow.report_llm.calls) == 4
     (briefing,) = flow.briefings()
     text = briefing.value["payload"]["text"]
-    assert "지어낸 근거" not in text and WEAK_TEXT in text and (WEAK_NOTE_PREFIX + SHORTFALL) in text
+    assert "지어낸 근거" not in text and WEAK_TEXT in text and "근거 약함" not in text
+    assert weak_items(flow) == [SHORTFALL]
     rejected = [e for e in flow.records.of_type(EntryType.LLM_REJECTED) if e.sentence_no == 2]
     assert [e.attempts for e in rejected] == [1, 2, 3] and all(e.round == 1 for e in rejected)
     assert "not given" in rejected[0].data["rejection"]
@@ -421,7 +427,7 @@ def test_move_research_articles_outside_the_time_range_are_dropped_again_and_nev
     (record,) = flow.records.of(ResearchReason.NO_USABLE_ARTICLES)
     assert record.sentence_no == 2 and record.data["excluded"] == 1
     (briefing,) = flow.briefings()
-    assert (WEAK_NOTE_PREFIX + SHORTFALL) in briefing.value["payload"]["text"]
+    assert "근거 약함" not in briefing.value["payload"]["text"] and weak_items(flow) == [SHORTFALL]
     received = flow.records.of(ResearchReason.ARTICLES_RECEIVED)
     assert received[0].data["dropped"][0]["reason"] == "outside_range"
 
@@ -434,7 +440,7 @@ def test_move_research_that_never_answers_publishes_the_first_report_with_its_we
     flow.sentences.on_tick(flow.clock.now)
 
     (briefing,) = flow.briefings()
-    assert (WEAK_NOTE_PREFIX + SHORTFALL) in briefing.value["payload"]["text"]
+    assert "근거 약함" not in briefing.value["payload"]["text"] and weak_items(flow) == [SHORTFALL]
     assert [r.reason for r in flow.records.entries if r.entry_type == EntryType.STEP_FAILED] == [
         ResearchReason.COMPLETION_TIMEOUT.value]
     assert len(flow.report_llm.calls) == 1

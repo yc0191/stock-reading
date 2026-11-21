@@ -17,7 +17,7 @@ public record BriefingEnvelope(
         Payload payload) {
 
     /**
-     * todayChangePercent, moveMinutes는 짧은 시간 변동일 때만 오는 선택 칸이다. html·images는 꾸민 본문을 보낼 때만 오는
+     * todayChangePercent, moveMinutes는 짧은 시간 변동일 때만, todayChangePercent, baseKind는 레벨 상일 때만 오는 선택 칸이다. html·images는 꾸민 본문을 보낼 때만 오는
      * 선택 칸이다(없으면 null, 글자판만 보낸다). 없으면 모두 null이다.
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -32,17 +32,25 @@ public record BriefingEnvelope(
             BigDecimal todayChangePercent,
             Integer moveMinutes,
             String html,
-            List<Image> images) {
+            List<Image> images,
+            String baseKind) {
 
         public Payload(String symbol, String name, BigDecimal changePercent, String asOf, String text,
                 String generatedBy, List<Evidence> evidence) {
-            this(symbol, name, changePercent, asOf, text, generatedBy, evidence, null, null, null, null);
+            this(symbol, name, changePercent, asOf, text, generatedBy, evidence, null, null, null, null, null);
         }
 
         public Payload(String symbol, String name, BigDecimal changePercent, String asOf, String text,
                 String generatedBy, List<Evidence> evidence, BigDecimal todayChangePercent, Integer moveMinutes) {
             this(symbol, name, changePercent, asOf, text, generatedBy, evidence, todayChangePercent, moveMinutes,
-                    null, null);
+                    null, null, null);
+        }
+
+        public Payload(String symbol, String name, BigDecimal changePercent, String asOf, String text,
+                String generatedBy, List<Evidence> evidence, BigDecimal todayChangePercent, Integer moveMinutes,
+                String html, List<Image> images) {
+            this(symbol, name, changePercent, asOf, text, generatedBy, evidence, todayChangePercent, moveMinutes,
+                    html, images, null);
         }
     }
 

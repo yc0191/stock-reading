@@ -10,7 +10,7 @@ import pytest
 from briefing.config import CoreSettings
 from briefing.job_log import LEVEL_HIGH, LEVEL_MID, level_of, parse_move_run
 from briefing.jobs import parse_move
-from briefing.report import build_llm_input, comparison_facts
+from briefing.report import _today_first_entry, build_llm_input, comparison_facts
 from test_move_compare import comparison, move, rule_based_text, run
 
 
@@ -39,13 +39,33 @@ def test_the_job_run_row_reads_the_same_level_from_the_stored_input():
     assert parse_move_run("j2", "{}", target, "succeeded", None, None).level == LEVEL_MID
 
 
-def test_a_high_move_headline_says_the_change_is_against_the_base_price():
-    ready = run(move(change=7.1, previous=10_000, price=10_710, detection="prevCloseHigh", today=-2.0))
+def test_the_first_high_move_headline_starts_with_the_today_change_only():
+    # 첫 상은 기준가가 전일 종가라 기준가 대비 변동률과 오늘 등락률이 같다.
+    ready = run(move(change=-7.2, previous=10_000, price=9_280, detection="prevCloseHigh", today=-7.2))
 
     first = rule_based_text(ready)["text"].split("\n")[0]
 
-    # 변동률은 기준가(previousPrice) 대비다. '오늘 … 새 …'나 '전일 종가 대비'로 쓰지 않는다.
-    assert first == "[TEST01] 14:39 기준 상승 +7.10% (10,000 → 10,710), 기준가 대비"
+    assert first == "[TEST01] 14:39 기준 오늘 -7.20% 하락 (10,000 → 9,280)"
+    assert _today_first_entry(ready) == {"todayChangePercent": -7.2, "baseKind": "prevClose"}
+
+
+def test_a_later_high_move_headline_adds_the_change_against_the_base_price():
+    ready = run(move(change=-7.53, previous=9_300, price=8_600, detection="prevCloseHigh", today=-14.0))
+
+    first = rule_based_text(ready)["text"].split("\n")[0]
+
+    assert first == "[TEST01] 14:39 기준 오늘 -14.00% · 기준가 대비 -7.53% 하락 (9,300 → 8,600)"
+    assert _today_first_entry(ready) == {"todayChangePercent": -14.0, "baseKind": "earlierMove"}
+
+
+def test_a_high_move_that_turns_against_the_day_is_a_rebound_and_a_missing_today_change_keeps_the_old_headline():
+    rebound = run(move(change=7.1, previous=10_000, price=10_710, detection="prevCloseHigh", today=-2.0))
+    unknown = run(move(change=7.1, previous=10_000, price=10_710, detection="prevCloseHigh", today=None))
+
+    assert rule_based_text(rebound)["text"].split("\n")[0] == (
+        "[TEST01] 14:39 기준 오늘 -2.00% · 기준가 대비 +7.10% 반등 (10,000 → 10,710)")
+    assert rule_based_text(unknown)["text"].split("\n")[0] == "[TEST01] 14:39 기준 상승 +7.10% (10,000 → 10,710), 기준가 대비"
+    assert _today_first_entry(unknown) == {}
 
 
 def test_a_high_move_reports_the_base_price_move_but_compares_the_today_change_with_the_market():

@@ -584,7 +584,8 @@ def test_db_conninfo_uses_env_example_keys_and_defaults():
 # ---- 문장 여러 개 동시 재검색: 다시 쓰기 LLM이 느려도 이미 도착한 응답을 잃지 않는다 ----
 
 SLOW_REWRITE = timedelta(seconds=14)
-WEAK_SENTENCES = 5
+# 원인은 3개까지만 허용한다(report.MAX_CAUSES).
+WEAK_SENTENCES = 3
 
 
 def weak_report():
@@ -653,7 +654,7 @@ def test_slow_rewrites_do_not_lose_other_sentences_answers_already_waiting(setup
     assert len(sent(producer, "news.research.requested")) == WEAK_SENTENCES
 
     feed(runner, consumer, *[research_completed_for(n) for n in range(1, WEAK_SENTENCES + 1)])
-    # 다섯 문장의 답이 한꺼번에 쌓여 있어도, 다시 쓰기 하나가 오래 걸리는 동안 다른 답이 버려지지 않는다.
+    # 여러 문장의 답이 한꺼번에 쌓여 있어도, 다시 쓰기 하나가 오래 걸리는 동안 다른 답이 버려지지 않는다.
     fake_news_answers(runner)
     runner.run_once()
 

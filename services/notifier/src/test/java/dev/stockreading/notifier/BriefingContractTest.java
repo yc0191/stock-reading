@@ -29,6 +29,17 @@ class BriefingContractTest {
     }
 
     @Test
+    void secondHighSampleMatchesTheSchemaAndIsRead() throws IOException {
+        String high = ContractSchemas.sample("briefing.generated.high.sample.json");
+
+        assertThat(ContractSchemas.validate("briefing.generated.v1.schema.json", high)).isEmpty();
+        BriefingEnvelope.Payload payload = JsonMapper.builder().build().readValue(high, BriefingEnvelope.class).payload();
+        assertThat(payload.symbol()).isEqualTo("TEST01");
+        assertThat(payload.todayChangePercent()).isEqualByComparingTo("-14.0");
+        assertThat(payload.baseKind()).isEqualTo("earlierMove");
+    }
+
+    @Test
     void sampleWithoutTheOptionalNameStillMatchesTheSchemaAndIsRead() throws IOException {
         String withoutName = ContractSchemas.sample("briefing.generated.sample.json")
                 .replace("    \"name\": \"TEST 샘플 ETF\",\n", "");
@@ -54,6 +65,18 @@ class BriefingContractTest {
                 .readValue(ContractSchemas.sample("briefing.generated.sample.json"), BriefingEnvelope.class);
         assertThat(older.payload().todayChangePercent()).isNull();
         assertThat(older.payload().moveMinutes()).isNull();
+    }
+
+    @Test
+    void highBriefingWithBaseKindMatchesTheSchemaAndIsRead() throws IOException {
+        String high = ContractSchemas.sample("briefing.generated.sample.json")
+                .replace("\"payload\": {", "\"payload\": {\n    \"todayChangePercent\": -14.0,\n    \"baseKind\": \"earlierMove\",");
+
+        assertThat(ContractSchemas.validate("briefing.generated.v1.schema.json", high)).isEmpty();
+        assertThat(JsonMapper.builder().build().readValue(high, BriefingEnvelope.class).payload().baseKind())
+                .isEqualTo("earlierMove");
+        assertThat(ContractSchemas.validate("briefing.generated.v1.schema.json", high.replace("earlierMove", "other")))
+                .isNotEmpty();
     }
 
     @Test

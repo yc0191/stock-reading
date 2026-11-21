@@ -76,6 +76,19 @@ def _font_dir() -> Path:
     return Path(override) if override else DEFAULT_FONT_DIR
 
 
+def load_fonts():
+    """(보통, 굵게) 글꼴. 글꼴 파일이 없으면 경고를 남기고 기본 글꼴을 돌려준다. 급변동 차트도 같이 쓴다."""
+    from matplotlib import font_manager
+
+    font_dir = _font_dir()
+    regular, bold = font_dir / REGULAR_FONT, font_dir / BOLD_FONT
+    if regular.is_file() and bold.is_file():
+        return (font_manager.FontProperties(fname=str(regular)), font_manager.FontProperties(fname=str(bold)))
+    log.warning("chart font files not found in %s; run scripts/install_font.py (drawing with the default font, "
+                "Korean text may not show)", font_dir)
+    return font_manager.FontProperties(), font_manager.FontProperties(weight="bold")
+
+
 def render_day_chart(bars: tuple[Bar, ...]) -> bytes | None:
     """하루 등락 막대 그림을 PNG 바이트로 만든다. 그릴 막대가 없으면 None."""
     if not bars:
@@ -83,19 +96,9 @@ def render_day_chart(bars: tuple[Bar, ...]) -> bytes | None:
     import matplotlib
 
     matplotlib.use("Agg")
-    from matplotlib import font_manager
     from matplotlib.figure import Figure
 
-    font_dir = _font_dir()
-    regular, bold = font_dir / REGULAR_FONT, font_dir / BOLD_FONT
-    if regular.is_file() and bold.is_file():
-        regular_font = font_manager.FontProperties(fname=str(regular))
-        bold_font = font_manager.FontProperties(fname=str(bold))
-    else:
-        log.warning("chart font files not found in %s; run scripts/install_font.py (drawing with the default font, "
-                    "Korean text may not show)", font_dir)
-        regular_font = font_manager.FontProperties()
-        bold_font = font_manager.FontProperties(weight="bold")
+    regular_font, bold_font = load_fonts()
 
     with warnings.catch_warnings():
         # 글꼴이 없으면 한글 글자마다 경고가 나온다. 글꼴 경고는 위에서 한 번 남겼다.

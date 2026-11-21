@@ -112,6 +112,25 @@ class EmailComposerTest {
                 .isEqualTo("[시뮬레이션] [TEST01] 14:39 기준 오늘 +1.20% · 3분 새 -1.00% 반락 브리핑");
     }
 
+    /** 레벨 상 브리핑. baseKind가 있으면 제목에 오늘 등락을 먼저 쓰고, 두 번째 상부터 기준가 대비를 붙인다. */
+    private static BriefingEnvelope highBriefing(String change, String today, String baseKind) {
+        BriefingEnvelope base = windowBriefing("TEST 샘플 ETF", change, today, null);
+        Payload p = base.payload();
+        return new BriefingEnvelope(base.eventId(), base.eventType(), 1, base.occurredAt(), base.producedAt(),
+                base.correlationId(), new Payload(p.symbol(), p.name(), p.changePercent(), p.asOf(), p.text(),
+                        p.generatedBy(), p.evidence(), p.todayChangePercent(), null, null, null, baseKind));
+    }
+
+    @Test
+    void highSubjectShowsTodayChangeAndAddsTheBaseChangeOnlyFromTheSecondHighMove() {
+        assertThat(composer("").compose(highBriefing("-7.20", "-7.20", "prevClose")).subject())
+                .isEqualTo("[TEST 샘플 ETF(TEST01)] 14:39 기준 오늘 -7.20% 하락 브리핑");
+        assertThat(composer("").compose(highBriefing("-7.53", "-14.00", "earlierMove")).subject())
+                .isEqualTo("[TEST 샘플 ETF(TEST01)] 14:39 기준 오늘 -14.00% · 기준가 대비 -7.53% 하락 브리핑");
+        assertThat(composer("").compose(highBriefing("7.10", "-2.00", "earlierMove")).subject())
+                .isEqualTo("[TEST 샘플 ETF(TEST01)] 14:39 기준 오늘 -2.00% · 기준가 대비 +7.10% 반등 브리핑");
+    }
+
     @Test
     void windowSubjectSaysRiseOrFallWhenTodayChangeIsTheSameWayOrFlat() {
         assertThat(composer("").compose(windowBriefing(null, "-1.00", "-2.00", "1")).subject())

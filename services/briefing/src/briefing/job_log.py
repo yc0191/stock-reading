@@ -86,6 +86,8 @@ class EntryType(str, Enum):
 # 급변동 단계: 근거 조회의 어느 조회인지, 또는 LLM 작성. 조회 단계 이름은 job_step의 단계에도 쓴다.
 STAGE_COLLECTION = "collection-wait"
 STAGE_HISTORY = "market.history"
+# 레벨 상 메일의 장중 차트용 시세 조회(같은 시세 이력 조회를 다른 구간·간격으로 한 번 더 부른다)
+STAGE_CHART_HISTORY = "market.chart-history"
 STAGE_CONTEXT = "market.context"
 STAGE_FILINGS = "news.filings"
 STAGE_ARTICLES = "news.articles"
