@@ -18,6 +18,7 @@ from briefing.compose import DISCLAIMER, KST, NO_EVIDENCE, direction_of, headlin
 from briefing.events import BRIEFING_GENERATED_TOPIC, OutboundEvent, format_timestamp
 from briefing.jobs import ReportInput
 from briefing.job_log import (
+    DETECTION_PREV_CLOSE_HIGH,
     REASON_LLM_ACCEPTED,
     REASON_LLM_CALL_FAILED,
     REASON_LLM_REJECTED,
@@ -118,8 +119,8 @@ SYSTEM_PROMPT = """당신은 ETF 가격 변동과 같은 시기에 공개된 자
 - 해외 등락률은 변동 종목에 담긴 미국 종목의 직전 정규장 등락률(%)이며 hoursBeforeMove는 그 장 마감이 변동보다 몇 시간 전인지입니다.
 - 배경 자료(category가 "배경")는 환율·시장종합·세계지수·국내 일봉의 응답 원문(response)을 그대로 준 것이며, receivedAt은 받은 시각, minutesBeforeMove는 변동보다 몇 분 전에 받은 값인지입니다.
 - 세계지수 배경 자료의 indexRates는 코드가 지수마다 직전 영업일 종가와 비교해 계산한 등락률입니다. 원문의 전일대비·등락률은 장이 끝난 지수에서 0.00으로 오므로 0.00을 "변동 없음"으로 읽지 말고, 등락률은 indexRates의 계산된 rate를 씁니다. rate가 "없음"이면 그 지수의 등락률은 모르는 것입니다.
-- todayChangePercent(짧은 시간 변동일 때만 담깁니다)는 변동 종목의 오늘 등락률(%, 전일 종가 대비)입니다. 이때 changePercent는 몇 분 사이의 변동률이라 지수의 하루 등락률과 기간이 다르므로 둘을 직접 비교하지 않습니다.
-- figures는 코드가 배경 원문에서 꺼낸 숫자(원/달러 환율, 코스피종합, 코스닥종합)와 코드가 계산한 비교 숫자입니다. "변동률 - 코스피종합 등락률"의 differencePoint는 변동 종목의 변동률에서 지수 등락률을 뺀 값(%p)이고, "오늘 등락률 - 코스피종합 등락률"(짧은 시간 변동)은 todayChangePercent에서 지수 등락률을 뺀 값(%p)입니다. 음수면 시장 전체보다 더 내렸거나 덜 올랐다는 뜻이고 양수면 더 올랐거나 덜 내렸다는 뜻입니다. 비교 숫자에 indexReceivedAt이 있으면 지수 값을 변동 시각보다 한참 앞서 받은 것이므로, 그 숫자를 쓰는 문장에 "14:12에 받은 코스피종합 값과 비교하면"처럼 그 받은 시각을 함께 씁니다. "미국 종목 직전 정규장 등락 집계"는 담긴 미국 종목 가운데 오른 수·내린 수·보합 수와 평균 등락률(%)입니다. status가 "없음"인 항목에는 ref가 없어 인용할 수 없습니다.
+- todayChangePercent(짧은 시간 변동이나 기준가 대비 변동일 때만 담깁니다)는 변동 종목의 오늘 등락률(%, 전일 종가 대비)입니다. 이때 changePercent는 몇 분 사이 또는 기준가 대비 변동률이라 지수의 하루 등락률과 기간이 다르므로 둘을 직접 비교하지 않습니다.
+- figures는 코드가 배경 원문에서 꺼낸 숫자(원/달러 환율, 코스피종합, 코스닥종합)와 코드가 계산한 비교 숫자입니다. "변동률 - 코스피종합 등락률"의 differencePoint는 변동 종목의 변동률에서 지수 등락률을 뺀 값(%p)이고, "오늘 등락률 - 코스피종합 등락률"(짧은 시간·기준가 대비 변동)은 todayChangePercent에서 지수 등락률을 뺀 값(%p)입니다. 음수면 시장 전체보다 더 내렸거나 덜 올랐다는 뜻이고 양수면 더 올랐거나 덜 내렸다는 뜻입니다. 비교 숫자에 indexReceivedAt이 있으면 지수 값을 변동 시각보다 한참 앞서 받은 것이므로, 그 숫자를 쓰는 문장에 "14:12에 받은 코스피종합 값과 비교하면"처럼 그 받은 시각을 함께 씁니다. "미국 종목 직전 정규장 등락 집계"는 담긴 미국 종목 가운데 오른 수·내린 수·보합 수와 평균 등락률(%)입니다. status가 "없음"인 항목에는 ref가 없어 인용할 수 없습니다.
 - etf(변동 종목이 ETF이고 정보가 있을 때만 담깁니다)는 ETF의 이름(name)·추종 대상(tracks)·업종(sector)과 비중 순위(rank, 1이 가장 큼) 순의 구성 종목(members)입니다. ETF가 무엇을 따라가고 무엇이 담겨 있는지 이해하는 맥락으로만 쓰고, 이것을 변동의 원인으로 단정하지 않습니다. ref가 없어 인용할 수 없으며, 근거는 ref가 있는 자료에서 찾습니다.
 - 상태 표시: "잘림"은 상한 때문에 일부만 받았다는 뜻, "없음"은 기간 안에 자료가 없다는 뜻, "너무 큼"은 원문이 커서 빠졌다는 뜻, "해당 없음"은 변동 종목에 미국 종목이 없어 공시·해외 등락률을 조회하지 않았다는 뜻입니다.
 
@@ -301,6 +302,9 @@ def move_headline(report_input: ReportInput) -> str:
     line = headline(i.symbol, i.previous_price, i.price, i.change_percent, i.as_of, display_name(i))
     if i.detection_type == "prevClose":
         return f"{line}, 전일 종가 대비"
+    if i.detection_type == DETECTION_PREV_CLOSE_HIGH:
+        # 상은 변동률이 전일 종가가 아니라 기준가(그날 처음엔 전일 종가, 상을 낸 뒤엔 그때 가격) 대비 값이다.
+        return f"{line}, 기준가 대비"
     if i.detected_at is None or i.detection_type != "window":
         # 이전 형식은 움직인 구간을 알 수 없어 시간을 쓰지 않는다.
         return line
@@ -553,7 +557,7 @@ def build_llm_input(report_input: ReportInput, settings: CoreSettings = DEFAULT_
         # 배경 원문에서 꺼낸 숫자와 코드가 계산한 비교 숫자. LLM은 계산하지 않고 ref로 인용만 한다.
         "figures": [_figure_input(e, i.as_of) for e in figure_entries(i, settings)],
     }
-    # 오늘 등락률은 짧은 시간 변동일 때만 넣는다. 다른 유형의 입력 모양은 바꾸지 않는다.
+    # 오늘 등락률은 짧은 시간·기준가 대비 변동일 때만 넣는다. 다른 유형의 입력 모양은 바꾸지 않는다.
     if compares_today(i) and i.today_change_percent is not None:
         data["todayChangePercent"] = round(i.today_change_percent, 2)
     # ETF 정보는 응답에 있을 때만 넣는다. 정보가 없는 이전 형식 응답의 입력 모양은 바꾸지 않는다.

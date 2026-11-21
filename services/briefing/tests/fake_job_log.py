@@ -5,7 +5,7 @@ entries는 job_log 줄(일마다 한 줄), starts·finishes는 job_run의 시작
 import json
 
 from briefing.compose import KST
-from briefing.job_log import EntryType, parse_move_run
+from briefing.job_log import EntryType, parse_move_run, with_representative
 
 
 class FakeJobLog:
@@ -74,6 +74,7 @@ class FakeJobLog:
         if self.fail_reads:
             return None
         finishes = {f.job_id: f for f in self.finishes}
+        representatives = {e.job_id: e.data for e in self.of_type(EntryType.REPRESENTATIVE_ARTICLE)}
         runs = []
         for s in self.starts:
             if getattr(s.job_kind, "value", s.job_kind) != "move" or not since <= s.started_at <= until:
@@ -84,7 +85,7 @@ class FakeJobLog:
                                  f.generated_by.value if f and f.generated_by else None,
                                  f.failure_reason if f else None)
             if run is not None:
-                runs.append(run)
+                runs.append(with_representative(run, representatives[s.job_id]) if s.job_id in representatives else run)
         return runs
 
     def edition_started(self, kind, day):

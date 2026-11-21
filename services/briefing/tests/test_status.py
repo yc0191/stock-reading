@@ -48,8 +48,9 @@ def completed(n, job_type="collect-news", incomplete=(), published=3, research=N
                             tuple(incomplete), research, "{}")
 
 
-def run(n, kind="move", status="succeeded", reason=None, by="llm", started=None):
-    return JobRunRow(f"job-{n}", kind, status, reason, by, started or at(10, n % 60))
+# 기본은 상이다(성공 작업이 결과 이벤트를 낸 흐름). 중은 level="mid"로 만든다.
+def run(n, kind="move", status="succeeded", reason=None, by="llm", started=None, level="high"):
+    return JobRunRow(f"job-{n}", kind, status, reason, by, started or at(10, n % 60), level)
 
 
 def report(operations="default", collections="default", runs="default", rule_based=False, current_research=0):
@@ -137,7 +138,7 @@ def test_all_four_lines_and_a_clean_attention_line():
         "- 수집: 장 시작 전 08:30 · 1초 현재가 09:00~15:30 · 장중 09:00~15:30 · 장 마감 후 16:30",
         "- 시세: 받음 1,000 · 실패 639(38.99%) [빈 현재가 344 · 칸 불일치 295]",
         "- 뉴스: 정기 수집 2회 · 일부 종목 빠짐 1회 · 기사 8건 · 재검색 1회",
-        "- 브리핑: 급변동 4건(성공 2 · 실패 1[기사 무응답 1] · 진행 중 1 · 규칙 기반 0) · 근거 없어 보내지 않은 급변동 0건 · 아침 판 성공",
+        "- 브리핑: 급변동 4건(상 2(메일) · 중 0(기록) · 실패 1[기사 무응답 1] · 진행 중 1 · 규칙 기반 0) · 근거 없어 보내지 않은 급변동 0건 · 아침 판 성공",
         "- 주의: 급변동 리포트 실패 1[기사 무응답 1]",
     ]
 
@@ -209,7 +210,7 @@ def test_the_old_tick_skip_has_its_own_name_and_is_not_an_attention_item():
 
 def test_no_moves_and_the_current_job_itself_is_not_counted():
     r = report(runs=[run(0, "morning"), JobRunRow(CURRENT, "post-close", "running", None, None, at(17))])
-    assert lines(r)[4] == "- 브리핑: 급변동 0건(성공 0 · 실패 0 · 진행 중 0 · 규칙 기반 0) · 근거 없어 보내지 않은 급변동 0건 · 아침 판 성공"
+    assert lines(r)[4] == "- 브리핑: 급변동 0건(상 0(메일) · 중 0(기록) · 실패 0 · 진행 중 0 · 규칙 기반 0) · 근거 없어 보내지 않은 급변동 0건 · 아침 판 성공"
     assert lines(r)[5] == "- 주의: 없음"
 
 
@@ -278,7 +279,7 @@ def test_moves_not_sent_for_lack_of_evidence_are_counted_apart_from_successes_an
     runs = [run(0, "morning"), run(1), run(2, reason="no_evidence"), run(3, reason="no_evidence"),
             run(4, status="failed", reason="llm_error")]
     r = report(runs=runs)
-    assert lines(r)[4] == ("- 브리핑: 급변동 4건(성공 1 · 실패 1[LLM 오류 1] · 진행 중 0 · 규칙 기반 0)"
+    assert lines(r)[4] == ("- 브리핑: 급변동 4건(상 1(메일) · 중 0(기록) · 실패 1[LLM 오류 1] · 진행 중 0 · 규칙 기반 0)"
                            " · 근거 없어 보내지 않은 급변동 2건 · 아침 판 성공")
     assert "no_evidence" not in lines(r)[5] and "근거 없어" not in lines(r)[5]
 
@@ -286,7 +287,7 @@ def test_moves_not_sent_for_lack_of_evidence_are_counted_apart_from_successes_an
 def test_a_no_evidence_morning_run_or_other_reason_on_a_success_is_not_counted_as_not_sent():
     # 다른 사유가 붙은 성공(중간에 포기한 단계가 있었던 작업)과 아침 판은 세지 않는다.
     runs = [run(0, "morning", reason="no_evidence"), run(1, reason="news_no_response")]
-    assert "성공 1" in lines(report(runs=runs))[4] and "보내지 않은 급변동 0건" in lines(report(runs=runs))[4]
+    assert "상 1(메일)" in lines(report(runs=runs))[4] and "보내지 않은 급변동 0건" in lines(report(runs=runs))[4]
 
 
 def test_a_rule_based_move_not_sent_for_lack_of_evidence_is_not_counted_as_rule_based():
@@ -298,11 +299,20 @@ def test_a_rule_based_move_not_sent_for_lack_of_evidence_is_not_counted_as_rule_
     assert "규칙 기반 급변동" not in lines(r)[5]
 
 
-def test_moves_during_the_report_pause_are_counted_apart_from_successes():
-    runs = [run(0, "morning"), run(1), run(2, reason="move_report_paused", by=None),
-            run(3, reason="move_report_paused", by=None)]
+def test_succeeded_moves_are_split_by_level_into_mail_and_record_counts():
+    runs = [run(0, "morning"), run(1), run(2), run(3, level="mid"), run(4, level="mid"), run(5, level="mid")]
+    assert lines(report(runs=runs))[4].startswith("- 브리핑: 급변동 5건(상 2(메일) · 중 3(기록) · 실패 0")
+
+
+def test_other_results_are_counted_apart_from_the_levels_whatever_the_level():
+    runs = [run(0, "morning"), run(1, level="mid", reason="merged_into_morning"), run(2, level="mid", reason="no_evidence"),
+            run(3, level="mid", status="running"), run(4, level="mid", status="failed", reason="news_no_response")]
     line = lines(report(runs=runs))[4]
-    assert line == ("- 브리핑: 급변동 3건(성공 1 · 실패 0 · 진행 중 0 · 규칙 기반 0 · 리포트 멈춤 2)"
-                    " · 근거 없어 보내지 않은 급변동 0건 · 아침 판 성공")
-    assert "리포트 멈춤" not in lines(report(runs=runs[:2]))[4]
-    assert "멈춤" not in lines(report(runs=runs))[5]
+    assert "상 0(메일) · 중 0(기록) · 실패 1[기사 무응답 1] · 진행 중 1" in line
+    assert "아침 판에 합침 1" in line and "보내지 않은 급변동 1건" in line
+
+
+def test_old_records_from_the_removed_report_pause_are_read_but_counted_in_neither_level():
+    runs = [run(0, "morning"), run(1, reason="move_report_paused"), run(2, level="mid", reason="move_report_paused"), run(3)]
+    line = lines(report(runs=runs))[4]
+    assert "급변동 3건(상 1(메일) · 중 0(기록)" in line and "지난 리포트 멈춤 2" in line

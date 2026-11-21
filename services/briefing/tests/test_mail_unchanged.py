@@ -3,6 +3,8 @@
 기준 파일 golden/mail_before_direct_calls.json은 바꾸기 전 코드(Kafka 요청·응답, 기사 안정 확인 라운드)로 같은 가짜 응답과
 가짜 LLM을 넣어 만든 결과다. 메일 이벤트(본문, 근거와 번호, 자료 없음 목록, HTML)와 LLM이 받은 입력 전체가 같아야 한다.
 그림(차트)은 설치된 한글 글꼴과 그림 도구에 따라 바이트와 길이가 달라지므로 있는지·형식·cid만 비교한다(차트 자체는 차트 테스트가 본다). 기준을 다시 만들면 안 되며, 다르면 원인을 고친다.
+예외 하나: 급변동 두 건(moveUs, moveWeakResearch)의 머리말은 레벨 상(prevCloseHigh)이 리포트를 만들게 되면서 '기준가 대비'로
+바뀌어(짧은 시간 변동의 '오늘 … 새 …' 머리말과 제목용 칸 todayChangePercent·moveMinutes가 없어짐), 그 두 줄만 새 머리말로 고쳤다.
 """
 import json
 from pathlib import Path

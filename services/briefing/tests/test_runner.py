@@ -21,6 +21,8 @@ from contracts import sample, validate
 
 KST = timezone(timedelta(hours=9))
 MOVE = sample("market.move.sample.json")
+# 리포트를 만드는 레벨 상 변동. 감지 유형이 prevCloseHigh가 아닌 변동은 레벨 중이라 리포트가 없다.
+MOVE["payload"]["detectionType"] = "prevCloseHigh"
 JOB_ID = MOVE["eventId"]
 T = datetime(2026, 10, 20, 16, 0, 31, tzinfo=KST)
 
@@ -127,10 +129,11 @@ def envelope(event_type, payload, event_id="00000000-0000-4000-8000-000000000001
     })
 
 
-def move_message(as_of="2026-10-20T16:00:31+09:00", event_id=JOB_ID):
+def move_message(as_of="2026-10-20T16:00:31+09:00", event_id=JOB_ID, detection="prevCloseHigh"):
     move = json.loads(json.dumps(MOVE))
     move["eventId"] = event_id
     move["payload"]["asOf"] = as_of
+    move["payload"]["detectionType"] = detection
     return FakeMessage("market.move", json.dumps(move))
 
 
@@ -226,6 +229,27 @@ def sent(producer, topic):
 def asked(runner, kind):
     """맡긴 조회의 요청 본문"""
     return [q.payload for q in runner.api.of(kind)]
+
+
+def test_a_mid_move_leaves_a_representative_article_and_sends_nothing_to_kafka(setup):
+    make, clock, store, _ = setup
+
+    class NoLlm:
+        def write(self, *_args, **_kwargs):
+            raise AssertionError("a mid move must not reach the writer")
+
+    runner, consumer, producer = make(writer=NoLlm())
+
+    feed(runner, consumer, move_message(detection="window"), completed_message())
+    # 기사만 묻고, 시세 이력·배경 자료는 묻지 않으며 재검색 요청도 내지 않는다.
+    assert [q.kind for q in runner.api.submitted] == [QueryKind.ARTICLES]
+    feed(runner, consumer, articles_message(1, published_at="2026-10-20T06:55:00Z"))
+
+    assert producer.sent == []
+    [line] = store.of_type(EntryType.REPRESENTATIVE_ARTICLE)
+    assert (line.job_id, line.data["article"]["articleId"]) == (JOB_ID, "a1")
+    [result] = store.results()
+    assert (result.job_id, result.status.value, result.result_event_id) == (JOB_ID, "succeeded", None)
 
 
 def test_open_declares_topics_cleans_up_unfinished_jobs_and_subscribes_to_the_input_topics(setup):

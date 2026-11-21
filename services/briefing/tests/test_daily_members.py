@@ -275,10 +275,10 @@ def test_a_move_of_a_korean_stock_in_the_members_portfolio_is_listed_with_its_na
     events, _, _ = run_post_close(members, details=details)
     by_member = {e.value["payload"]["memberId"]: e.value["payload"] for e in events}
     one, two = moves_of(by_member[1]), moves_of(by_member[2])
-    assert "  - 10:15 TEST 주식 하나(TSTK01) +3.20% · 리포트 성공" in one
+    assert "  - 10:15 TEST 주식 하나(TSTK01) 오늘 +3.20% · 메일 보냄" in one
     assert "TSTK02" not in one and "TEST02" not in one and "  - 없음" not in one
     # 이름을 모르는 주식은 코드만 보인다.
-    assert "  - 11:00 TSTK02 −2.40% · 리포트 성공" in two and "  - 13:20 TEST 둘(TEST02) +1.90%" in two
+    assert "  - 11:00 TSTK02 오늘 −2.40% · 메일 보냄" in two and "  - 13:20 TEST 둘(TEST02) 오늘 +1.90%" in two
     assert "TSTK01" not in two
     assert "TEST 주식 하나(TSTK01)" in by_member[1]["html"] and "TSTK01" not in by_member[2]["html"]
 

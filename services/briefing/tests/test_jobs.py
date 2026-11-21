@@ -56,9 +56,11 @@ def core(rec):
     return BriefingCore(rec, rec.api, rec, job_log=rec.log)
 
 
-def move(event_id=JOB_ID, symbol="TEST01", as_of=T, legacy=False):
+def move(event_id=JOB_ID, symbol="TEST01", as_of=T, legacy=False, detection="prevCloseHigh"):
+    """기본은 레벨 상(리포트 흐름)이다. 그 밖의 감지 유형과 legacy(감지 유형 없는 이전 형식)는 레벨 중이다."""
     event = sample("market.move.sample.json")
     event["eventId"] = event_id
+    event["payload"]["detectionType"] = detection
     event["payload"]["symbol"] = symbol
     event["payload"]["asOf"] = as_of.isoformat()
     if legacy:
@@ -180,10 +182,12 @@ def test_completion_of_another_job_type_is_rejected(core, rec):
 
 
 def test_legacy_move_without_detection_type_uses_as_of_the_same_way(core, rec):
+    # 감지 유형이 없는 이전 형식은 레벨 중이라 기사만 조회하고, 변동 시각은 asOf 하나로 읽는다.
     core.on_move(move(legacy=True), T)
     core.on_news_stored(completed(), T)
 
-    assert len(rec.api.submitted) == 3
+    [query] = rec.api.submitted
+    assert query.kind is ARTICLES and query.payload["until"] == (T + DELTA).isoformat()
 
 
 def test_same_event_id_twice_is_processed_once(core, rec):
@@ -618,61 +622,131 @@ def test_a_malformed_or_other_stored_notice_raises_value_error(core, message):
         core.on_news_stored(message, T)
 
 
-# ---- 급변동 리포트 멈춤 기간(#84). 기본 설정의 기간은 2026-11-19부터 2026-12-01 전까지(한국 날짜)다.
+# ---- 레벨: 감지 유형이 prevCloseHigh면 상(리포트), 그 밖은 중(LLM 없이 대표 기사만 작업 기록에)
 
-PAUSED = datetime(2026, 11, 20, 10, 0, 31, tzinfo=KST)
+REPORT_PAUSE_FIELDS = ("move_report_pause_start", "move_report_pause_end")
 
 
-def test_a_move_during_the_report_pause_is_only_recorded(core, rec):
-    core.on_move(move(as_of=PAUSED), PAUSED)
-    core.on_news_stored(completed(started_at=PAUSED + DELTA), PAUSED + DELTA)
-    # T+5분 재검색 시각과 수집 기다림 한도가 지나도 아무것도 하지 않는다.
-    core.on_tick(PAUSED + S.collection_wait_limit + SEC)
+def titled(article_id, title, published_at, publisher="p"):
+    return {**article(article_id, published_at), "title": title, "publisher": publisher}
 
-    assert rec.api.submitted == []
-    assert rec.sent == [] and rec.readied == []
-    assert core.next_deadline() is None
-    assert [r.job_id for r in rec.log.starts] == [JOB_ID]
+
+def representative_lines(rec):
+    return rec.log.of_type(EntryType.REPRESENTATIVE_ARTICLE)
+
+
+@pytest.mark.parametrize("detection, legacy", [("window", False), ("prevClose", False), (None, True)])
+def test_a_move_without_the_high_detection_type_is_mid_and_asks_only_for_articles(core, rec, detection, legacy):
+    core.on_move(move(detection=detection, legacy=legacy), T)
+    # 중은 T+5분 재검색을 하지 않는다. 시각이 지나도 아무것도 맡기지 않는다.
+    core.on_tick(T + S.early_research_delay + SEC)
+    assert rec.api.submitted == [] and rec.sent == []
+    core.on_news_stored(completed(), T + DELTA)
+
+    # 시세 이력·배경 자료·공시는 맡기지 않고 저장이 끝난 기사만 한 번 조회한다.
+    assert [q.kind for q in rec.api.submitted] == [ARTICLES]
+    assert rec.api.submitted[0].payload["since"] == (T - S.evidence_window).isoformat()
+    assert rec.api.submitted[0].payload["until"] == (T + DELTA).isoformat()
+
+
+def test_a_high_move_takes_the_report_flow_with_history_context_and_articles(core, rec):
+    start(core)
+
+    assert sorted(q.kind.value for q in rec.api.submitted) == sorted(
+        k.value for k in (HISTORY, CONTEXT, ARTICLES))
+    assert representative_lines(rec) == [] and rec.log.finishes == []
+
+
+def test_the_representative_article_ends_a_mid_job_as_a_success_without_llm_research_or_result_event(core, rec):
+    core.on_move(move(detection="window"), T)
+    core.on_news_stored(completed(), T + DELTA)
+    rec.api.reply(news_response(1, articles=[article("a1", T - timedelta(minutes=3))]), T + DELTA + SEC)
+
+    [line] = representative_lines(rec)
+    assert (line.stage, line.reason, line.data["article"]["articleId"]) == ("representative-article", "latest-before", "a1")
+    assert line.data["article"]["publisher"] == "p" and line.data["article"]["publishedAt"] == \
+        (T - timedelta(minutes=3)).isoformat()
     [result] = rec.log.finishes
-    assert (result.status, result.failure_reason, result.result_event_id) == (
-        RunStatus.SUCCEEDED, "move_report_paused", None)
+    assert (result.job_id, result.status, result.failure_reason, result.generated_by, result.result_event_id) == (
+        JOB_ID, RunStatus.SUCCEEDED, None, None, None)
+    # 리포트 입력도, 재검색 요청도, 결과 이벤트도 없고 LLM을 부르는 단계도 거치지 않는다.
+    assert rec.readied == [] and rec.sent == [] and rec.failed == []
+    assert [q.kind for q in rec.api.submitted] == [ARTICLES]
+    assert core.next_deadline() is None
 
 
-def test_the_same_event_id_during_the_pause_is_recorded_once(core, rec):
-    core.on_move(move(as_of=PAUSED), PAUSED)
-    core.on_move(move(as_of=PAUSED), PAUSED + SEC)
+def test_a_mid_job_with_no_article_records_no_related_article_and_still_succeeds(core, rec):
+    core.on_move(move(detection="prevClose"), T)
+    core.on_news_stored(completed(), T + DELTA)
+    rec.api.reply(news_response(1, ids=()), T + DELTA + SEC)
 
-    assert len(rec.log.starts) == 1 and len(rec.log.finishes) == 1
-
-
-@pytest.mark.parametrize("now, paused", [
-    (datetime(2026, 11, 18, 23, 59, 59, tzinfo=KST), False),
-    (datetime(2026, 11, 19, 0, 0, 0, tzinfo=KST), True),
-    (datetime(2026, 11, 30, 23, 59, 59, tzinfo=KST), True),
-    (datetime(2026, 12, 1, 0, 0, 0, tzinfo=KST), False),
-    # 한국 날짜로 판단한다. UTC로는 11-30이지만 한국 시간으로는 12-01이다.
-    (datetime(2026, 11, 30, 15, 0, 0, tzinfo=timezone.utc), False),
-])
-def test_the_pause_covers_the_start_date_and_ends_on_the_end_date(core, rec, now, paused):
-    core.on_move(move(as_of=now), now)
-    core.on_news_stored(completed(started_at=now + DELTA), now + DELTA)
-
-    assert (rec.api.submitted == []) is paused
-    assert bool(rec.log.finishes) is paused
+    [line] = representative_lines(rec)
+    assert (line.reason, line.data["article"]) == ("no-article", None)
+    [result] = rec.log.finishes
+    assert result.status is RunStatus.SUCCEEDED and result.failure_reason is None
 
 
-def test_moves_are_reported_as_usual_from_the_end_date(rec):
-    core = BriefingCore(rec, rec.api, rec, job_log=rec.log)
-    resumed = datetime(2026, 12, 1, 10, 0, 31, tzinfo=KST)
-    core.on_move(move(as_of=resumed), resumed)
-    core.on_news_stored(completed(started_at=resumed + DELTA), resumed + DELTA)
+def test_a_mid_job_ignores_articles_outside_the_evidence_range(core, rec, caplog):
+    core.on_move(move(detection="window"), T)
+    core.on_news_stored(completed(), T + DELTA)
+    outside = [article("old", T - S.evidence_window - SEC), article("late", T + DELTA + SEC),
+               article("edge", T + DELTA)]
+    with caplog.at_level("WARNING", logger="briefing.jobs"):
+        rec.api.reply(news_response(1, articles=outside), T + DELTA + SEC)
 
-    assert len(rec.api.of(HISTORY)) == 1 and rec.log.finishes == []
+    # 범위 끝(T+Δ)의 기사는 쓰지만 변동 뒤에 발행돼 '변동 직전' 기사가 아니므로 고를 기사가 없다.
+    [line] = representative_lines(rec)
+    assert line.data["article"] is None and line.data["articleCount"] == 1
+    assert "dropping article old" in caplog.text and "dropping article late" in caplog.text
 
 
-def test_an_empty_pause_setting_never_pauses(rec):
-    core = BriefingCore(rec, rec.api, rec, CoreSettings(move_report_pause_start=None), job_log=rec.log)
-    core.on_move(move(as_of=PAUSED), PAUSED)
-    core.on_news_stored(completed(started_at=PAUSED + DELTA), PAUSED + DELTA)
+def test_a_mid_job_waits_for_the_stored_notice_and_fails_like_any_job_at_the_wait_limit(core, rec):
+    core.on_move(move(detection="window"), T)
+    assert core.next_deadline() == T + S.collection_wait_limit
+    core.on_tick(T + S.collection_wait_limit + SEC)
 
-    assert len(rec.api.of(HISTORY)) == 1 and rec.log.finishes == []
+    assert rec.api.submitted == [] and representative_lines(rec) == []
+    [failure] = rec.failed
+    assert failure.reason == FailureReason.COLLECTION_NOT_COVERED.value
+
+
+def test_a_mid_job_whose_articles_never_arrive_fails_without_a_representative_line(core, rec):
+    core.on_move(move(detection="window"), T)
+    core.on_news_stored(completed(), T + DELTA)
+    rec.api.fail(ARTICLES, T + timedelta(minutes=1), attempts=4, failure_kind="connect-failed")
+
+    [failure] = rec.failed
+    assert failure.reason == FailureReason.NEWS_NO_RESPONSE.value and representative_lines(rec) == []
+    [result] = rec.log.finishes
+    assert result.status is RunStatus.FAILED
+
+
+def test_the_same_mid_event_id_is_recorded_once(core, rec):
+    core.on_move(move(detection="window"), T)
+    core.on_move(move(detection="window"), T + SEC)
+    core.on_news_stored(completed(), T + DELTA)
+    rec.api.reply(news_response(1, ids=("a1",)), T + DELTA + SEC)
+
+    assert len(rec.log.starts) == 1 and len(rec.log.finishes) == 1 and len(representative_lines(rec)) == 1
+
+
+def test_a_mid_job_picks_from_the_largest_same_event_group_the_article_closest_to_the_move(core, rec):
+    core.on_move(move(detection="window"), T)
+    core.on_news_stored(completed(), T + DELTA)
+    articles = [
+        titled("g1", "테스트 반도체 공급 계약 체결 발표", T - timedelta(minutes=50)),
+        titled("g2", "테스트 반도체 공급 계약 체결 소식", T - timedelta(minutes=20)),
+        titled("g3", "테스트 반도체 공급 계약 체결 확대", T - timedelta(minutes=10)),
+        titled("h1", "다른 사건 신제품 출시 예정", T - timedelta(minutes=2)),
+        titled("h2", "다른 사건 신제품 출시 확정", T - timedelta(minutes=30)),
+        # 묶이지 않은 가장 최근 기사는 묶음이 있으면 고르지 않는다.
+        titled("solo", "전혀 무관한 단독 소식", T - timedelta(minutes=1)),
+    ]
+    rec.api.reply(news_response(1, articles=articles), T + DELTA + SEC)
+
+    [line] = representative_lines(rec)
+    assert (line.reason, line.data["article"]["articleId"], line.data["groupSize"]) == ("group", "g3", 3)
+
+
+def test_the_report_pause_setting_is_gone():
+    assert not any(hasattr(S, name) for name in REPORT_PAUSE_FIELDS)

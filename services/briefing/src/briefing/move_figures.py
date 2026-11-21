@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Sequence
 
 from briefing.compose import KST
 from briefing.config import DEFAULT_SETTINGS, CoreSettings
+from briefing.job_log import DETECTION_PREV_CLOSE_HIGH
 from briefing.sources import BACKGROUND_OK, MARK_MISSING, Background, CloseRate
 
 if TYPE_CHECKING:
@@ -243,8 +244,9 @@ COMPARED_TODAY = "오늘 등락률"
 
 
 def compares_today(report_input: ReportInput) -> bool:
-    """짧은 시간 변동의 변동률은 몇 분 사이의 값이라, 그 종목의 오늘 등락률(전일 종가 대비)로 시장과 비교한다."""
-    return report_input.detection_type == "window"
+    """짧은 시간 변동의 변동률은 몇 분 사이의 값이고 레벨 상의 변동률은 기준가 대비 값이라, 그 종목의 오늘 등락률(전일 종가 대비)로
+    시장과 비교한다."""
+    return report_input.detection_type in ("window", DETECTION_PREV_CLOSE_HIGH)
 
 
 def compared_label(report_input: ReportInput) -> str:
@@ -252,7 +254,7 @@ def compared_label(report_input: ReportInput) -> str:
 
 
 def report_figures(report_input: ReportInput, settings: CoreSettings = DEFAULT_SETTINGS) -> MoveFigures:
-    """비교 숫자. 짧은 시간 변동에 오늘 등락률이 없으면 비교 숫자를 만들지 않는다(짧은 변동률로 대신하지 않는다)."""
+    """비교 숫자. 짧은 시간·기준가 대비 변동에 오늘 등락률이 없으면 비교 숫자를 만들지 않는다(짧은 변동률로 대신하지 않는다)."""
     i = report_input
     compared = i.today_change_percent if compares_today(i) else i.change_percent
     return move_figures(compared, i.background, i.close_rates, as_of=i.as_of, stale_after=settings.market_stale_after)

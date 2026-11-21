@@ -1,6 +1,9 @@
 """변동 한 건의 근거 조회 작업. Kafka를 모르며 메시지와 시각을 인자로 받아 상태만 움직인다.
 
-흐름: market.move 수신 -> 쓸 수 있는 저장 끝 알림(news.stored) 대기(변동 T+5분이 되면 ETF 이름과 구성 종목 이름으로 먼저
+레벨은 감지 유형으로 정한다(job_log.level_of). 상은 아래 흐름 전체를 타고 리포트를 만든다. 중은 LLM·재검색·결과 이벤트 없이
+저장 끝 알림을 기다린 뒤 기사만 조회해 대표 기사를 고르고(move_representative) 작업 기록에 남긴 채 성공으로 끝낸다.
+
+상의 흐름: market.move 수신 -> 쓸 수 있는 저장 끝 알림(news.stored) 대기(변동 T+5분이 되면 ETF 이름과 구성 종목 이름으로 먼저
 재검색하고, 그 재검색의 저장 끝도 수집 완료로 본다. 둘 중 먼저 온 것으로 진행) -> 시세 이력·배경 자료·기사 조회(내부 조회 API) ->
 배경 자료에 미국 종목 티커가 있으면 그 티커로 공시 조회 -> 모든 결과 수신(기사는 저장이 끝난 뒤라 한 번만 조회)
 -> 받은 자료 재검사 -> 리포트 입력 완성, 또는 실패 기록(작업 기록 테이블).
@@ -16,17 +19,17 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Protocol
 
-from briefing.compose import KST
 from briefing.config import DEFAULT_SETTINGS, CoreSettings
 from briefing.events import NEWS_STORED, format_timestamp, parse_timestamp, research_request_event, stored_payload
 from briefing.evidence import MARKET_WIDE, in_evidence_range
 from briefing.job_log import (
-    REASON_MOVE_REPORT_PAUSED,
+    LEVEL_MID,
     STAGE_ARTICLES,
     STAGE_COLLECTION,
     STAGE_CONTEXT,
     STAGE_FILINGS,
     STAGE_HISTORY,
+    STAGE_REPRESENTATIVE,
     DiscardJobLog,
     EntryType,
     JobKind,
@@ -35,11 +38,13 @@ from briefing.job_log import (
     JobResult,
     JobStart,
     RunStatus,
+    level_of,
     move_target,
     record_result,
 )
 from briefing.job_step import job_scope
 from briefing.ports import FailureReason, RequestPort
+from briefing.move_representative import pick_representative
 from briefing.queries import Query, QueryKind, QueryPort, QueryResult
 from briefing.research import MAX_QUERY_LENGTH, ResearchReason, ResearchStep
 from briefing.sources import (
@@ -162,6 +167,8 @@ class _Job:
     detected_at: datetime | None = None
     detection_type: str | None = None
     today_change_percent: float | None = None
+    # 상이면 리포트를 만들고, 중이면 대표 기사만 고른다.
+    level: str = LEVEL_MID
     phase: _Phase = _Phase.WAITING_COLLECTION
     early: _Early = _Early.PENDING
     # 시세·배경 자료·공시·기사: 맡긴 조회의 순번과 시각, 받았는지
@@ -203,6 +210,7 @@ def parse_move(message: str | bytes, now: datetime) -> _Job:
             detected_at=parse_timestamp(move["occurredAt"]) if move.get("occurredAt") else None,
             detection_type=payload.get("detectionType"),
             today_change_percent=_optional_float(payload.get("todayChangePercent")),
+            level=level_of(payload.get("detectionType")),
         )
     except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ValueError(f"malformed market.move event: {error!r}") from error
@@ -248,25 +256,11 @@ class BriefingCore:
         raw = message.decode("utf-8") if isinstance(message, bytes) else message
         self.job_log.start(JobStart(job.job_id, JobKind.MOVE, raw, move_target(job.symbol, format_timestamp(job.as_of)),
                                     now))
-        if self._report_paused(now):
-            # 멈춘 작업도 기억해 두어 같은 eventId가 다시 와도 리포트를 만들지 않는다.
-            job.phase = _Phase.DONE
-            log.info("move report paused; job %s recorded without a report", job.job_id)
-            record_result(self.job_log, JobResult(job.job_id, RunStatus.SUCCEEDED, now,
-                                                  failure_reason=REASON_MOVE_REPORT_PAUSED))
-            return
-
         # 저장 끝 알림이 변동 알림보다 먼저 도착했을 수 있어 보관분부터 확인한다.
         if any(c.covers(job.symbol, job.as_of, self.settings) for c in self._completions):
             self._start_fetching(job, now)
         else:
             self._tick_early(job, now)
-
-    def _report_paused(self, now: datetime) -> bool:
-        start, end = self.settings.move_report_pause_start, self.settings.move_report_pause_end
-        if start is None or end is None:
-            return False
-        return start <= now.astimezone(KST).date() < end
 
     def on_research_stored(self, message: str | bytes, now: datetime) -> bool:
         """T+5분 재검색의 저장 끝 알림이면 정기 수집 완료와 같이 '수집 완료'로 보고 True. 그 밖의 알림은 False로 돌려준다."""
@@ -338,7 +332,7 @@ class BriefingCore:
         for job in self._jobs.values():
             if job.phase is _Phase.WAITING_COLLECTION:
                 deadlines.append(job.created_at + self.settings.collection_wait_limit)
-                if job.early is _Early.PENDING:
+                if job.early is _Early.PENDING and job.level != LEVEL_MID:
                     deadlines.append(job.as_of + self.settings.early_research_delay)
         return min(deadlines) if deadlines else None
 
@@ -455,6 +449,9 @@ class BriefingCore:
         job.responses[STAGE_ARTICLES] = result.payload
         job.news_articles = articles
         job.news_truncated = bool(result.payload.get("truncated", False))
+        if job.level == LEVEL_MID:
+            self._finish_mid(job, now)
+            return
         self._complete_if_ready(job)
 
     # ---- 내부 ----
@@ -469,6 +466,9 @@ class BriefingCore:
 
     def _tick_early(self, job: _Job, now: datetime) -> None:
         """정기 수집을 기다리는 작업의 T+5분 재검색을 시작한다. 배경 자료가 오면 _on_early_context가 이어 간다."""
+        if job.level == LEVEL_MID:
+            # 중은 재검색하지 않고 정기 수집의 저장 끝 알림만 기다린다.
+            return
         if job.early is _Early.PENDING and now >= job.as_of + self.settings.early_research_delay:
             job.early = _Early.CONTEXT_SENT
             self._send_context(job, now)
@@ -501,6 +501,10 @@ class BriefingCore:
 
     def _start_fetching(self, job: _Job, now: datetime) -> None:
         job.phase = _Phase.FETCHING
+        if job.level == LEVEL_MID:
+            # 중은 시세 이력·배경 자료·공시가 필요 없다. 저장이 끝난 기사만 한 번 조회한다.
+            self._send_news(job, now)
+            return
         self._send_market(job, now)
         if job.context_data is None:
             # T+5분 재검색을 하려고 먼저 맡긴 조회가 아직 끝나지 않았으면 그 결과를 이어 쓴다.
@@ -622,6 +626,26 @@ class BriefingCore:
         # 리포트를 쓰는 LLM 호출을 이 작업의 job_step으로 남긴다.
         with job_scope(job.job_id):
             self.ready.on_ready(report_input)
+
+    def _finish_mid(self, job: _Job, now: datetime) -> None:
+        """중: 근거 시간 범위의 기사로 대표 기사를 골라 작업 기록에 남기고 성공으로 끝낸다. LLM·재검색·결과 이벤트는 없다."""
+        s = self.settings
+        articles = []
+        for article in job.news_articles or ():
+            if in_evidence_range(article.published_at, job.as_of, s.evidence_window, s.delta):
+                articles.append(article)
+            else:
+                log.warning("dropping article %s outside the requested range (job=%s)",
+                            article.article_id, job.job_id)
+        picked = pick_representative(articles, job.as_of, s)
+        job.phase = _Phase.DONE
+        self.job_log.record(JobLogEntry(
+            job_id=job.job_id, entry_type=EntryType.REPRESENTATIVE_ARTICLE, stage=STAGE_REPRESENTATIVE,
+            reason=picked.basis, occurred_at=now, attempts=1,
+            data={**picked.record(), "requestRange": job.request_ranges.get(STAGE_ARTICLES, {}),
+                  "articlesTruncated": job.news_truncated}))
+        log.info("representative article picked job=%s basis=%s articles=%d", job.job_id, picked.basis, len(articles))
+        record_result(self.job_log, JobResult(job.job_id, RunStatus.SUCCEEDED, now))
 
     def _fail(self, job: _Job, reason: FailureReason, detail: str, attempts: int, now: datetime,
               error_type: str | None = None) -> None:

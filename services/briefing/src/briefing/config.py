@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, time, timedelta
+from datetime import time, timedelta
 
 
 @dataclass(frozen=True)
@@ -43,10 +43,6 @@ class CoreSettings:
     # 0이면 변동마다 바로 작업을 만든다(기본). 급변동 메일을 변동 뒤 약 10분 안에 보내려는 것이며, 같은 종목 중복은 시세처리기가 막는다.
     move_quiet_period: timedelta = timedelta(0)
     move_max_wait: timedelta = timedelta(minutes=30)
-    # 급변동 리포트 멈춤 기간(한국 날짜, 시작일 포함·끝 날짜 제외). 이 기간에 받은 market.move는 작업 기록(job_run)만 남기고
-    # 근거 조회·재검색 요청·LLM 호출·결과 발행을 하지 않는다. 끝 날짜부터는 배포 없이 원래대로 돈다. 비우면 멈추지 않는다(#84).
-    move_report_pause_start: date | None = date(2026, 11, 19)
-    move_report_pause_end: date | None = date(2026, 12, 1)
     # 같은 eventId 중복 처리를 위해 기억하는 작업 키 수. 메모리가 무한히 늘지 않게 한다.
     remembered_jobs: int = 10000
     # 근거 부족 시 재검색: 검색어 LLM이 낼 수 있는 검색어 수, 검색어 LLM 시도 횟수, 재검색 완료 알림을 기다리는 상한.

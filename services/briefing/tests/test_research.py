@@ -168,6 +168,7 @@ class Flow:
 
 def move():
     event = sample("market.move.sample.json")
+    event["payload"]["detectionType"] = "prevCloseHigh"  # 레벨 상: 리포트 흐름을 탄다
     event["eventId"] = JOB_ID
     event["payload"]["symbol"] = SYMBOL
     event["payload"]["asOf"] = T.isoformat()

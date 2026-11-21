@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import Enum
 from typing import Any, Mapping, Protocol
@@ -19,6 +19,25 @@ from briefing.events import parse_timestamp
 from briefing.job_step import JobStep
 
 log = logging.getLogger("briefing.job_log")
+
+
+# 급변동 레벨. 시세처리기가 정한 감지 유형(market.move의 detectionType)만 본다: prevCloseHigh면 상, 그 밖(window, prevClose,
+# 감지 유형이 없는 이전 형식)은 중이다. 상은 리포트·메일을 만들고, 중은 LLM 없이 대표 기사만 작업 기록에 남긴다.
+DETECTION_PREV_CLOSE_HIGH = "prevCloseHigh"
+LEVEL_HIGH = "high"
+LEVEL_MID = "mid"
+
+
+def level_of(detection_type: str | None) -> str:
+    return LEVEL_HIGH if detection_type == DETECTION_PREV_CLOSE_HIGH else LEVEL_MID
+
+
+def level_of_input(raw_input: str | None) -> str:
+    """job_run 입력(market.move 이벤트 JSON 글자)의 감지 유형으로 레벨을 정한다. 읽을 수 없으면 중이다."""
+    try:
+        return level_of(json.loads(raw_input)["payload"].get("detectionType"))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return LEVEL_MID
 
 
 class JobKind(str, Enum):
@@ -61,6 +80,7 @@ class EntryType(str, Enum):
     MEMBER_BRIEFING = "member-briefing"        # 이 작업의 판을 멤버 한 명 몫으로 발행함(data.memberId, 결과 이벤트 ID)
     FINAL_CHECK = "final-check"                # 발행 직전 마지막 검사(코드 검사, LLM 검토, 최종으로 고른 본문과 이유)
     SENTENCE_FIXED = "sentence-fixed"          # 마지막 검사의 검토로 문장 하나를 고침(before·after)
+    REPRESENTATIVE_ARTICLE = "representative-article"  # 레벨 중 급변동이 고른 대표 기사(없으면 관련 기사 없음)
 
 
 # 급변동 단계: 근거 조회의 어느 조회인지, 또는 LLM 작성. 조회 단계 이름은 job_step의 단계에도 쓴다.
@@ -72,6 +92,7 @@ STAGE_ARTICLES = "news.articles"
 STAGE_LLM = "llm-report"
 STAGE_PUBLISH = "publish"
 STAGE_MOVE_GROUP = "move-group"
+STAGE_REPRESENTATIVE = "representative-article"
 STAGE_RESTART = "restart"
 
 # 급변동 사유. 끝내 실패한 경우는 ports.FailureReason 값을 그대로 쓴다.
@@ -81,13 +102,15 @@ REASON_LLM_ACCEPTED = "llm-output-accepted"
 REASON_PUBLISHED = "published"
 REASON_NOT_SAVED = "log-not-saved"
 REASON_GROUPED = "grouped-by-symbol"
+# 레벨 중 급변동의 대표 기사를 고른 근거(data.basis): 같은 사건 묶음, 변동 직전 가장 최근 기사, 기사 없음
+REASON_REPRESENTATIVE_GROUP = "group"
+REASON_REPRESENTATIVE_LATEST = "latest-before"
+REASON_REPRESENTATIVE_NONE = "no-article"
 # 재시작으로 끝나지 못한 작업의 실패 사유(job_run.failure_reason). 코드의 단계 실패 사유(ports.FailureReason)와 달리
 # 작업이 아니라 프로세스가 원인이라 여기에 둔다.
 REASON_INTERRUPTED = "interrupted_by_restart"
 # 장 시작~아침 판 시작 사이 급변동을 따로 보내지 않고 아침 판에 합쳤다(성공으로 끝난 작업의 사유이며 리포트는 없다)
 REASON_MERGED_INTO_MORNING = "merged_into_morning"
-# 급변동 리포트 멈춤 기간(CoreSettings.move_report_pause_*)이라 리포트를 만들지 않았다(성공으로 끝난 작업의 사유이며 리포트는 없다)
-REASON_MOVE_REPORT_PAUSED = "move_report_paused"
 # 최종 본문에 인용한 근거가 하나도 없어 결과 이벤트를 발행하지 않았다. 작업 상태는 succeeded, 발행 이벤트는 없다.
 REASON_NO_EVIDENCE = "no_evidence"
 
@@ -145,8 +168,19 @@ class JobLogEntry:
 
 
 @dataclass(frozen=True)
+class RepresentativeArticle:
+    title: str
+    publisher: str
+    published_at: datetime
+
+
+@dataclass(frozen=True)
 class MoveRun:
-    """급변동 작업 한 건(job_run 한 줄)에서 그날 요약에 필요한 값. change_percent는 변동 이벤트의 변동률(%)이다."""
+    """급변동 작업 한 건(job_run 한 줄)에서 그날 요약에 필요한 값. change_percent는 변동 이벤트의 변동률(%)이다.
+
+    today_change_percent는 전일 종가 대비 오늘 등락(%)이다. 이벤트의 todayChangePercent를 쓰고, 없을 때는 변동률이 전일 종가 대비인
+    prevClose 유형만 그 변동률을 쓰며, 그 밖에는 None이다. level은 이벤트의 감지 유형으로 정한다.
+    recorded가 True이면 레벨 중이 대표 기사 줄을 남긴 것이고, 그때 article이 None이면 '관련 기사 없음'이다."""
 
     job_id: str
     symbol: str
@@ -155,6 +189,10 @@ class MoveRun:
     status: str
     generated_by: str | None
     failure_reason: str | None
+    today_change_percent: float | None = None
+    level: str = LEVEL_MID
+    recorded: bool = False
+    article: RepresentativeArticle | None = None
 
 
 def parse_move_run(job_id: str, raw_input: str, target: str, status: str, generated_by: str | None,
@@ -165,11 +203,32 @@ def parse_move_run(job_id: str, raw_input: str, target: str, status: str, genera
         symbol, move_at = target_data["symbol"], parse_timestamp(target_data["moveAt"])
     except (KeyError, TypeError, ValueError):
         return None
+    percent = today = None
+    detection_type = None
     try:
-        percent = float(json.loads(raw_input)["payload"]["changePercent"])
+        payload = json.loads(raw_input)["payload"]
+        percent = float(payload["changePercent"])
+        detection_type = payload.get("detectionType")
+        if payload.get("todayChangePercent") is not None:
+            today = float(payload["todayChangePercent"])
+        elif detection_type == "prevClose":
+            today = percent
+    except (KeyError, TypeError, ValueError, AttributeError):
+        pass
+    return MoveRun(job_id, symbol, move_at, percent, status, generated_by, failure_reason, today,
+                   level_of(detection_type))
+
+
+def with_representative(run: MoveRun, data: Mapping[str, Any]) -> MoveRun:
+    """대표 기사 줄(representative-article)의 data를 읽어 run에 붙인다. 깨진 data는 '기록 없음'으로 둔다."""
+    try:
+        raw = data["article"]
+        if raw is None:
+            return replace(run, recorded=True, article=None)
+        article = RepresentativeArticle(str(raw["title"]), str(raw["publisher"]), parse_timestamp(raw["publishedAt"]))
     except (KeyError, TypeError, ValueError):
-        percent = None
-    return MoveRun(job_id, symbol, move_at, percent, status, generated_by, failure_reason)
+        return run
+    return replace(run, recorded=True, article=article)
 
 
 class JobLogPort(Protocol):

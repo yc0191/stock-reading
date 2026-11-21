@@ -1,4 +1,4 @@
-"""Flyway V1~V5 파일(services/briefing/db/migration)이 코드가 기대하는 테이블 모양과 같은지 글자로 확인한다. DB는 부르지 않는다.
+"""Flyway V1~V6 파일(services/briefing/db/migration)이 코드가 기대하는 테이블 모양과 같은지 글자로 확인한다. DB는 부르지 않는다.
 
 값 제한(CHECK)은 코드 enum과 SQL 파일 양쪽에 있으므로 어긋나면 여기서 실패한다.
 실제 Postgres에 적용한 모양은 test_job_log_store_db.py가 확인한다.
@@ -15,6 +15,7 @@ V2 = (MIGRATIONS / "V2__add_member_briefing_entry_type.sql").read_text(encoding=
 V3 = (MIGRATIONS / "V3__add_final_check_entry_types.sql").read_text(encoding="utf-8")
 V4 = (MIGRATIONS / "V4__create_market_closed_edition.sql").read_text(encoding="utf-8")
 V5 = (MIGRATIONS / "V5__create_job_step.sql").read_text(encoding="utf-8")
+V6 = (MIGRATIONS / "V6__add_representative_article_entry_type.sql").read_text(encoding="utf-8")
 
 
 def table_sql(name):
@@ -37,7 +38,8 @@ def test_the_migration_creates_the_three_tables_without_if_not_exists():
                                                 MIGRATIONS / "V2__add_member_briefing_entry_type.sql",
                                                 MIGRATIONS / "V3__add_final_check_entry_types.sql",
                                                 MIGRATIONS / "V4__create_market_closed_edition.sql",
-                                                MIGRATIONS / "V5__create_job_step.sql"]
+                                                MIGRATIONS / "V5__create_job_step.sql",
+                                                MIGRATIONS / "V6__add_representative_article_entry_type.sql"]
 
 
 def test_run_and_log_columns_follow_the_plan_and_keep_json_as_json():
@@ -59,13 +61,15 @@ def test_value_checks_match_the_code_enums():
     assert checked_values("job_run", "job_kind") == {m.value for m in JobKind}
     assert checked_values("job_run", "status") == {m.value for m in RunStatus}
     assert checked_values("job_run", "generated_by") == {m.value for m in GeneratedBy}
-    # 기록 종류의 값 제한은 V3이 다시 걸어(V4는 휴장 기록 표만 만듦) 코드 enum 전체와 같다. V1에는 member-briefing이, V2에는
-    # 마지막 검사의 두 값이 아직 없다.
+    # 기록 종류의 값 제한은 V6이 다시 걸어(V4·V5는 표만 만듦) 코드 enum 전체와 같다. V1에는 member-briefing이, V2에는
+    # 마지막 검사의 두 값이, V3에는 대표 기사 값이 아직 없다.
     final_check = {EntryType.FINAL_CHECK.value, EntryType.SENTENCE_FIXED.value}
-    assert entry_type_values(V3) == {m.value for m in EntryType}
-    assert entry_type_values(V2) == {m.value for m in EntryType} - final_check
+    representative = {EntryType.REPRESENTATIVE_ARTICLE.value}
+    assert entry_type_values(V6) == {m.value for m in EntryType}
+    assert entry_type_values(V3) == {m.value for m in EntryType} - representative
+    assert entry_type_values(V2) == {m.value for m in EntryType} - final_check - representative
     assert checked_values("job_log", "entry_type") == \
-        {m.value for m in EntryType} - {EntryType.MEMBER_BRIEFING.value} - final_check
+        {m.value for m in EntryType} - {EntryType.MEMBER_BRIEFING.value} - final_check - representative
 
 
 def entry_type_values(sql):
@@ -74,6 +78,16 @@ def entry_type_values(sql):
 
 def test_v3_only_widens_the_entry_type_check_like_v2_and_changes_no_data():
     code = re.sub(r"--[^\n]*", "", V3)
+    statements = [s.strip() for s in code.split(";") if s.strip()]
+    assert len(statements) == 2
+    assert statements[0] == "ALTER TABLE job_log DROP CONSTRAINT job_log_entry_type_check"
+    assert statements[1].startswith("ALTER TABLE job_log ADD CONSTRAINT job_log_entry_type_check CHECK (entry_type IN (")
+    for word in ("INSERT", "UPDATE", "DELETE"):
+        assert word not in code.upper()
+
+
+def test_v6_only_widens_the_entry_type_check_like_v3_and_changes_no_data():
+    code = re.sub(r"--[^\n]*", "", V6)
     statements = [s.strip() for s in code.split(";") if s.strip()]
     assert len(statements) == 2
     assert statements[0] == "ALTER TABLE job_log DROP CONSTRAINT job_log_entry_type_check"

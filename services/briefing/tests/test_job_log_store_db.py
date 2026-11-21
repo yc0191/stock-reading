@@ -61,7 +61,7 @@ def entry(job_id, entry_type=EntryType.RESENT, data=None, **changes):
     return JobLogEntry(**values)
 
 
-def test_flyway_created_the_briefing_tables_and_recorded_versions_1_to_5(store, connect):
+def test_flyway_created_the_briefing_tables_and_recorded_versions_1_to_6(store, connect):
     rows = fetch(connect, "SELECT table_name FROM information_schema.tables WHERE table_schema = 'briefing' "
                           "AND table_name IN ('job_run', 'job_log', 'collection_completed', 'failed_jobs', "
                           "'market_closed_edition', 'job_step') ORDER BY table_name")
@@ -69,7 +69,7 @@ def test_flyway_created_the_briefing_tables_and_recorded_versions_1_to_5(store, 
                              "ORDER BY installed_rank")
 
     assert rows == [("collection_completed",), ("job_log",), ("job_run",), ("job_step",), ("market_closed_edition",)]
-    assert applied == [("1", True), ("2", True), ("3", True), ("4", True), ("5", True)]
+    assert applied == [("1", True), ("2", True), ("3", True), ("4", True), ("5", True), ("6", True)]
 
 
 def test_job_run_line_is_made_running_and_updated_when_the_job_ends(store, connect):
@@ -302,6 +302,35 @@ def test_the_moves_started_in_the_range_are_read_back_with_their_results(store):
             for r in runs] == [
         ("it-review-move-1", "ITR001", first, 2.1, "succeeded", "llm", None),
         ("it-review-move-2", "ITR001", second, -1.8, "failed", None, "test-failure")]
+
+
+def test_a_representative_article_line_is_accepted_and_joined_to_its_move_when_read_back(store):
+    # V6이 기록 종류에 representative-article를 더했다. 같은 급변동 작업의 줄이 급변동 목록에 붙어 나온다.
+    day = REVIEW_DAY + timedelta(days=20)
+    at = day.replace(hour=10, minute=15)
+    event = json.dumps({"payload": {"symbol": "ITR001", "changePercent": -2.0, "detectionType": "window",
+                                    "todayChangePercent": -5.4}})
+    start_at(store, "it-repr-1", JobKind.MOVE, at, event)
+    start_at(store, "it-repr-2", JobKind.MOVE, at + timedelta(minutes=5), event)
+    start_at(store, "it-repr-3", JobKind.MOVE, at + timedelta(minutes=10), event)
+    article = {"article": {"articleId": "a1", "title": "TEST 기사 한글", "publisher": "test.example.com",
+                           "publishedAt": (at - timedelta(minutes=13)).isoformat()}, "basis": "latest-before"}
+    assert store.record(entry("it-repr-1", EntryType.REPRESENTATIVE_ARTICLE, stage="representative-article",
+                              reason="latest-before", error_type=None, attempts=1, data=article)) is True
+    assert store.record(entry("it-repr-2", EntryType.REPRESENTATIVE_ARTICLE, stage="representative-article",
+                              reason="no-article", error_type=None, attempts=1,
+                              data={"article": None, "basis": "no-article"})) is True
+    for job in ("it-repr-1", "it-repr-2", "it-repr-3"):
+        store.finish(JobResult(job, RunStatus.SUCCEEDED, at + timedelta(minutes=15)))
+
+    runs = {r.job_id: r for r in store.moves_between(day, day.replace(hour=17))}
+
+    assert (runs["it-repr-1"].level, runs["it-repr-1"].today_change_percent, runs["it-repr-1"].recorded) == (
+        "mid", -5.4, True)
+    assert (runs["it-repr-1"].article.title, runs["it-repr-1"].article.publisher) == ("TEST 기사 한글", "test.example.com")
+    assert (runs["it-repr-2"].recorded, runs["it-repr-2"].article) == (True, None)
+    # 줄이 없는 작업은 기록 없음이다.
+    assert (runs["it-repr-3"].recorded, runs["it-repr-3"].article) == (False, None)
 
 
 # 다른 테스트가 쓰지 않는 날짜(it-edition- 접두 작업만 이 날짜에 둔다).

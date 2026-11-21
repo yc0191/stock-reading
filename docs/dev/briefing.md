@@ -52,7 +52,6 @@ PYTHONPATH=services/briefing/src services/briefing/.venv/bin/python -m briefing.
 아래 값은 모두 `services/briefing/src/briefing/config.py`의 기본값이며 환경변수로 바꿀 수 없습니다. 값과 뜻, 그 값을 고른 이유는 그 파일의 주석에 있습니다.
 
 - `CoreSettings`: 급변동 근거의 Δ·시간 범위·건수 상한, 저장 끝 알림 대기 상한, 같은 종목 변동 묶음, 재검색 상한, 같은 사건 기사 묶기(`article_group_*`, 데일리 판도 같은 값), 아침 판 개장 흐름 범위(`open_flow_*`)
-- 급변동 리포트 멈춤 기간(#84): `CoreSettings.move_report_pause_start`·`move_report_pause_end`
 - `QuerySettings`: 내부 조회 API를 다시 부르는 규칙(응답 제한, 최대 시도, 시도 사이 간격, 동시 호출 수). 급변동·데일리 판·재검색이 함께 씁니다.
 - `DailySettings`: 데일리 판의 범위, 상한, 장 시작 시각과 아침 판 합침 구간, 한도 시각, 보합 폭, 차트·이벤트 크기 상한, 멈춘 작업 기준
 - `StoreSettings`: 작업 기록 저장을 다시 시도하는 횟수와 간격
@@ -67,6 +66,7 @@ PYTHONPATH=services/briefing/src services/briefing/.venv/bin/python -m briefing.
 | 같은 종목 변동 묶음 | `move_group.py` |
 | 장 시작~아침 판 사이 급변동의 아침 판 합침 | `move_merge.py` |
 | 급변동 근거 조회와 다시 부르기 | `jobs.py`, `http_queries.py` |
+| 급변동 레벨 판단(상·중), 중의 대표 기사 고르기 | `job_log.py`의 `level_of`, `move_representative.py` |
 | 비교 숫자, 머리말 | `move_figures.py`, `report.py` |
 | 같은 사건 기사 묶기 | `article_groups.py` |
 | LLM 출력 검사(인용 번호, 미국 티커 거부, 근거 약함 줄) | `llm_output.py` |
@@ -79,6 +79,12 @@ PYTHONPATH=services/briefing/src services/briefing/.venv/bin/python -m briefing.
 | 서버 상태 절 | `status.py` |
 | 본문(글자판·HTML·차트)과 프롬프트 | `daily_report.py`, `daily_html.py`, `daily_chart.py`, `daily_prompts.py` |
 
+- 급변동은 시세처리기가 정한 감지 유형(`detectionType`)으로 레벨을 나눕니다. `prevCloseHigh`면 상, 그 밖(`window`, `prevClose`, 감지 유형이 없는 이전 형식)은 중입니다.
+  - 상은 근거 조회, 재검색, LLM, 메일 발행까지 지금의 리포트 흐름을 그대로 탑니다. 머리말의 변동률은 기준가 대비이고, 시장과 비교하는 숫자는 오늘 등락(전일 종가 대비)입니다.
+  - 중은 LLM·재검색 요청·결과 이벤트·메일이 없습니다. 저장 끝 알림(`news.stored`) 뒤에 근거 시간 범위의 기사만 한 번 조회해 대표 기사 하나를 고르고, `job_log`에 `representative-article` 줄로 남긴 채 `succeeded`로 끝납니다. 대표 기사는 원인이 아니라 그 변동 때 가장 눈에 띈 기사입니다.
+  - 대표 기사 규칙(`move_representative.py`): 같은 사건 묶음이 있으면 기사가 가장 많은 묶음에서 변동 시각에 가장 가까운 기사, 묶음이 없으면 변동 직전에 발행된 가장 최근 기사, 고를 기사가 없으면 관련 기사 없음(`data.article`이 `null`)입니다. `data.basis`에 `group`, `latest-before`, `no-article`로 근거를 남깁니다.
+  - 마감 후 판의 '그날 급변동' 줄은 `시각 종목 오늘 등락 · 결과`입니다. 상은 `메일 보냄`(리포트가 실패했거나 근거가 없으면 `리포트 실패`, `근거 없어 보내지 않음`), 중은 `대표 기사: 제목 (언론사, 월-일 시:분)` 또는 `관련 기사 없음`입니다. 장 시작 직후 아침 판에 합친 변동은 레벨과 무관하게 `아침 판에 합침`입니다.
+- 서버 상태의 급변동 줄은 성공으로 끝난 작업을 레벨로 나눠 `상 N(메일) · 중 M(기록)`으로 보입니다. 상은 결과 이벤트를 낸 작업, 중은 대표 기사만 기록한 작업이며, 레벨은 `job_run` 입력의 감지 유형으로 정합니다(`job_log.py`의 `level_of_input`). 실패, 진행 중, 아침 판에 합침, 근거 없어 보내지 않음은 레벨과 무관하게 따로 셉니다. 멈춤 설정이 있던 때의 지난 기록(`failure_reason=move_report_paused`)은 상·중에 넣지 않고 `지난 리포트 멈춤 N`으로 따로 보입니다.
 - 인용한 근거가 없는 급변동 리포트는 발행하지 않습니다(`job_run`은 `succeeded`, 사유 `no_evidence`).
 - 데일리 판은 자료나 LLM이 끝내 실패해도 있는 자료로 나갑니다. 받을 멤버를 읽지 못하면 `members_unreadable` 실패입니다.
 - 작업 끝 기록(`job_run` 고침)이 끝내 실패하면 결과 이벤트를 발행하지 않습니다.
@@ -140,7 +146,8 @@ SELECT * FROM briefing.job_step WHERE correlation_id = '<추적 ID>' ORDER BY id
 - 끝내 실패한 작업은 `job_run.status = 'failed'`, 사유는 `failure_reason`, 단계가 실패한 줄은 `entry_type = 'step-failed'`입니다.
 - 급변동 실패 사유는 `ports.py`의 `FailureReason`입니다. `collection_not_covered`는 저장 끝 알림을 대기 상한 안에 받지 못한 것, `*_no_response`는 그 자료를 최대 시도 안에 받지 못한 것, `llm_error`는 LLM 출력이 시도 상한까지 검사를 통과하지 못했거나 호출이 실패한 것입니다.
 - `interrupted_by_restart`는 모든 작업 종류에(`job_log.py`), `members_unreadable`은 데일리 판에(`daily_jobs.py`) 붙습니다.
-- 성공으로 끝났지만 리포트가 없으면 `failure_reason`에 `no_evidence`, `merged_into_morning`, `move_report_paused`가 남습니다(`job_log.py`의 `REASON_*`).
+- 성공으로 끝났지만 리포트가 없으면 `failure_reason`에 `no_evidence`, `merged_into_morning`이 남습니다(`job_log.py`의 `REASON_*`). 레벨 중은 사유 없이 성공으로 끝나고 `representative-article` 줄이 남습니다.
+- `representative-article` 줄을 쓰려면 Flyway `V6__add_representative_article_entry_type.sql`이 먼저 적용돼 있어야 합니다(`job_log`의 기록 종류 값 제한).
 
 ## 재시작과 종료
 

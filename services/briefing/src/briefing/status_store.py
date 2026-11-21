@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from briefing.config import DEFAULT_STORE_SETTINGS, StoreSettings
+from briefing.job_log import level_of_input
 from briefing.job_log_store import RUN_TABLE, Connection, _dumps
 from briefing.status import CollectionRecord, JobRunRow
 
@@ -36,7 +37,7 @@ ORDER BY finished_at, event_id
 """
 
 SELECT_RUNS_SQL = f"""
-SELECT job_id, job_kind, status, failure_reason, generated_by, started_at
+SELECT job_id, job_kind, status, failure_reason, generated_by, started_at, input::text
 FROM {RUN_TABLE}
 WHERE started_at >= %s AND started_at <= %s
 ORDER BY started_at, job_id
@@ -78,7 +79,7 @@ class PostgresStatusStore:
         rows = self._query(SELECT_RUNS_SQL, (since, until))
         if rows is None:
             return None
-        return [JobRunRow(r[0], r[1], r[2], r[3], r[4], r[5]) for r in rows]
+        return [JobRunRow(r[0], r[1], r[2], r[3], r[4], r[5], level_of_input(r[6])) for r in rows]
 
     def _query(self, sql: str, params: tuple) -> list[tuple] | None:
         try:

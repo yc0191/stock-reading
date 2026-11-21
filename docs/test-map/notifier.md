@@ -5,7 +5,7 @@
 | 기능 | 대상 | 단위 | 가상 | 실제 |
 |---|---|---|---|---|
 | 앱 시작, 설정 기본값, 토픽 선언 | NotifierApplication, NotifierProperties, Topics | ConfigDefaultsTest, TopicsConfigTest | 해당 없음 - 설정을 읽고 토픽을 선언할 뿐 외부 의존을 부르지 않음 | 해당 없음 - 외부 의존을 부르지 않음 |
-| 브리핑 수신과 발송 | BriefingListener, BriefingEnvelope | BriefingContractTest | BriefingListenerTest | scripts/test_briefing_flow_live.py [서비스 흐름, 켜는 조건: test-all.sh --live, 급변동 리포트 멈춤 기간에는 건너뜀] |
+| 브리핑 수신과 발송 | BriefingListener, BriefingEnvelope | BriefingContractTest | BriefingListenerTest | scripts/test_briefing_flow_live.py [서비스 흐름, 켜는 조건: test-all.sh --live] |
 | 메일 제목, 보낸 사람 이름, 본문 | EmailComposer, EmailMessage, MailAddresses | EmailComposerTest, DailyEmailComposerTest, MailAddressesTest, SmtpMailSenderTest | 해당 없음 - 문장과 주소만 만들며 외부 의존을 부르지 않음 | 해당 없음 - 외부 의존을 부르지 않음 |
 | 메일 발송기(드라이런 기본, 묶음 메일) | LoggingMailSender, MailDeliveryException, MailSenderPort, SmtpMailSender | MailSenderWiringTest | SmtpMailSenderTest | scripts/test_briefing_flow_live.py [외부 API, 켜는 조건: test-all.sh --live] |
 | 데일리 브리핑 수신과 메일 | DailyBriefingEnvelope, DailyBriefingListener, DailyEmailComposer | DailyBriefingContractTest, DailyEmailComposerTest, DailyBriefingDryRunTest | DailyBriefingListenerTest, SmtpMailSenderTest | 없음 - 데일리 브리핑의 실제 메일 발송은 아직 test-all.sh --live 에 넣지 않음 [외부 API] |
