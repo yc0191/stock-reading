@@ -82,6 +82,7 @@ class ChartSlot:
     content_id: str | None = None
     oversized: bool = False
     no_data: tuple[str, ...] = ()
+    alt: str = CHART_ALT
 
 
 def _rate_spans(escaped: str) -> str:
@@ -123,7 +124,7 @@ def _section(s: Section) -> str:
 def _chart(slot: ChartSlot) -> str:
     parts = []
     if slot.content_id is not None:
-        parts.append(f'<img src="cid:{escape(slot.content_id)}" alt="{escape(CHART_ALT)}" style="{IMAGE_STYLE}">')
+        parts.append(f'<img src="cid:{escape(slot.content_id)}" alt="{escape(slot.alt)}" style="{IMAGE_STYLE}">')
     elif slot.oversized:
         parts.append(_p(NOTE_STYLE, NO_CHART_TOO_LARGE))
     if slot.no_data and (slot.content_id is not None or slot.oversized):
@@ -257,7 +258,7 @@ def _items(rows: list[str], tag: str = "ul") -> str:
     return f'<{tag} style="{LIST_STYLE}">{items}</{tag}>'
 
 
-def _morning_body(v: MorningView) -> list[str]:
+def _morning_body(v: MorningView, charts: tuple[ChartSlot, ...] = ()) -> list[str]:
     """밤사이 이슈·환율·금리·그 밖의 이슈·ETF 예상·근거 약함 모음 HTML. Claude 본문이 있을 때만 부른다."""
     overnight = (_items([_sentence(s.statement, s.numbers, s.shortfall) for s in v.points], "ol") if v.points
                  else _p(ITEM_STYLE, escape(NO_OVERNIGHT)))
@@ -269,6 +270,8 @@ def _morning_body(v: MorningView) -> list[str]:
         parts.append(_items([_sentence(s.statement, s.numbers, s.shortfall) for s in v.others]))
     if v.groups:
         parts.append(_p(HEADING_STYLE, f"■ {escape(OUTLOOK_TITLE)}"))
+        # 개장 흐름 그림은 ETF 예상 바로 위에 둔다.
+        parts.extend(_chart(slot) for slot in charts)
         for title, rows in v.groups:
             if title:
                 parts.append(_p(GROUP_STYLE, escape(title)))
@@ -290,13 +293,15 @@ def _rule_based_morning(sections: tuple[Section, ...], v: MorningView) -> list[s
 
 
 def render_html(i: DailyInput, sections: tuple[Section, ...], output: DailyOutput | None,
-                status_text: str | None = None, chart: ChartSlot | None = None) -> str:
+                status_text: str | None = None, chart: ChartSlot | None = None,
+                charts: tuple[ChartSlot, ...] = ()) -> str:
+    """chart는 마감 후 판의 하루 등락 그림, charts는 선 그래프(아침 판 개장 흐름, 마감 후 판 장중·기간 흐름)다."""
     title, scope = headline(i)
     if i.edition == EDITION_POST_CLOSE:
-        return _render_post_close(i, sections, output, status_text, chart)
+        return _render_post_close(i, sections, output, status_text, chart, charts)
     parts = [f'<h1 style="{TITLE_STYLE}">{escape(title)}</h1>', _p(RANGE_STYLE, escape(scope))]
     v = morning_view(i, sections, output)
-    parts.extend(_morning_body(v) if v.has_output and not v.insufficient else _rule_based_morning(sections, v))
+    parts.extend(_morning_body(v, charts) if v.has_output and not v.insufficient else _rule_based_morning(sections, v))
     parts.append(_p(DISCLAIMER_STYLE, escape(DAILY_DISCLAIMER)))
     if v.groups:
         parts.append(_p(SMALL_STYLE, escape(OUTLOOK_NOTE)))
@@ -310,7 +315,7 @@ def render_html(i: DailyInput, sections: tuple[Section, ...], output: DailyOutpu
 
 
 def _render_post_close(i: DailyInput, sections: tuple[Section, ...], output: DailyOutput | None,
-                       status_text: str | None, chart: ChartSlot | None) -> str:
+                       status_text: str | None, chart: ChartSlot | None, charts: tuple[ChartSlot, ...] = ()) -> str:
     v = post_close_view(i, sections, output)
     title, scope = headline(i)
     parts = [f'<h1 style="{TITLE_STYLE}">{escape(title)}</h1>', _p(RANGE_STYLE, escape(scope)),
@@ -318,6 +323,8 @@ def _render_post_close(i: DailyInput, sections: tuple[Section, ...], output: Dai
              *_post_close_summary(v), *_post_close_issues(v)]
     if chart is not None:
         parts.append(_chart(chart))
+    # 하루 등락 다음에 장중 흐름, 1개월, 6개월 차례로 둔다.
+    parts.extend(_chart(slot) for slot in charts)
     parts.append(_post_close_etfs(v))
     parts.append(_post_close_review(v))
     parts.append(_p(DISCLAIMER_STYLE, escape(DAILY_DISCLAIMER)))

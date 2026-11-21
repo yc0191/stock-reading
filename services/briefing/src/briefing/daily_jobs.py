@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DEFAULT_SETTINGS, CoreSettings, DailySettings
-from briefing.daily_chart import chart_bars, no_data_names, render_day_chart
+from briefing.daily_chart import LineChart, chart_bars, line_charts, no_data_names, render_day_chart
 from briefing.daily_html import ChartSlot, render_html
 from briefing.daily_members import (
     MemberPort,
@@ -113,6 +113,10 @@ log = logging.getLogger("briefing.daily_jobs")
 # 차트를 싣지 못했을 때 자료 없음 목록(missingItems)에 남기는 줄.
 CHART_OVERSIZED_ITEM = "하루 등락 차트: 크기 초과"
 CHART_FAILED_ITEM = "하루 등락 차트: 그리지 못함"
+LINE_CHARTS_OVERSIZED_ITEM = "흐름 그래프: 크기 초과"
+LINE_CHARTS_FAILED_ITEM = "흐름 그래프: 그리지 못함"
+# 그림이 있는 메일의 글자판 끝에 붙인다. 글자판에는 그림을 넣지 못한다.
+CHARTS_IN_HTML_NOTE = "(그래프는 HTML 메일에 있습니다)"
 # 서버 상태 절을 만들다 실패했을 때 본문 끝에 대신 붙이는 절.
 NO_STATUS_TEXT = "──────── 서버 상태 ────────\n- 자료 없음"
 
@@ -746,29 +750,55 @@ class DailyCore:
             return None, True, CHART_OVERSIZED_ITEM
         return png, False, None
 
+    def _line_charts(self, daily_input: DailyInput, post_close: bool,
+                     room: int) -> tuple[tuple[LineChart, ...], str | None]:
+        """선 그래프(아침 판 개장 흐름, 마감 후 판 장중·기간 흐름). room은 남은 그림 장 수다. (그림들, 자료 없음 목록에 더할 줄)."""
+        try:
+            charts = line_charts(daily_input, post_close)
+        except Exception as error:  # noqa: BLE001 - 그래프는 덤이라 실패해도 메일은 나간다
+            log.warning("daily line charts failed for job %s: %s", daily_input.job_id, type(error).__name__)
+            return (), LINE_CHARTS_FAILED_ITEM
+        kept = tuple(c for c in charts if len(c.png) <= self.settings.max_chart_image_bytes)[:max(room, 0)]
+        return kept, LINE_CHARTS_OVERSIZED_ITEM if len(kept) < len(charts) else None
+
     def _daily_event(self, job: _DailyJob, now: datetime, member_id: int, daily_input: DailyInput,
                      sections: tuple[Section, ...], draft: _Draft, text: str, status_text: str | None,
                      missing: list[str]) -> tuple[OutboundEvent, list[str]]:
         """멤버 한 명의 글자판·HTML·차트를 담은 메일 본문 이벤트. 이벤트가 상한을 넘으면 그림만 빼고 다시 만든다."""
         post_close = job.edition == EDITION_POST_CLOSE
         png, oversized, chart_missing = self._chart_image(daily_input) if post_close else (None, False, None)
+        room = self.settings.max_chart_images - (1 if png is not None else 0)
+        lines, lines_missing = self._line_charts(daily_input, post_close, room)
 
-        def build(image: bytes | None, too_large: bool, items: list[str]) -> OutboundEvent:
+        def build(image: bytes | None, too_large: bool, charts: tuple[LineChart, ...], items: list[str]) -> OutboundEvent:
             slot = None
             if post_close:
                 slot = ChartSlot("chart-day" if image is not None else None, too_large, no_data_names(daily_input))
-            html = render_html(daily_input, sections, draft.output, status_text, slot)
-            images = [{"contentId": "chart-day", "contentType": "image/png",
-                       "data": base64.b64encode(image).decode("ascii")}] if image is not None else None
+            slots = tuple(ChartSlot(c.content_id, alt=c.alt) for c in charts)
+            html = render_html(daily_input, sections, draft.output, status_text, slot, slots)
+            # 본문에 자리가 없는 그림(예: 예상 절이 없는 아침 판의 개장 흐름)은 붙이지 않는다. 붙이면 본문에 안 보이는 첨부만 남는다.
+            charts = tuple(c for c in charts if f"cid:{c.content_id}" in html)
+            images = ([{"contentId": "chart-day", "contentType": "image/png",
+                        "data": base64.b64encode(image).decode("ascii")}] if image is not None else []) \
+                + [{"contentId": c.content_id, "contentType": "image/png", "data": base64.b64encode(c.png).decode("ascii")}
+                   for c in charts]
+            body = f"{text}\n\n{CHARTS_IN_HTML_NOTE}" if images else text
             return daily_briefing_event(job.job_id, job.correlation_id, job.scheduled_for, now, job.edition,
-                                        job.range_start, job.scheduled_for, text, items, draft.generated_by,
-                                        member_id, html, images)
+                                        job.range_start, job.scheduled_for, body, items, draft.generated_by,
+                                        member_id, html, images or None)
 
-        items = [*missing, chart_missing] if chart_missing else missing
-        event = build(png, oversized, items)
-        if png is not None and len(json.dumps(event.value, ensure_ascii=False).encode("utf-8")) > self.settings.max_event_bytes:
-            items = [*missing, CHART_OVERSIZED_ITEM]
-            event = build(None, True, items)
+        def too_big(event: OutboundEvent) -> bool:
+            return len(json.dumps(event.value, ensure_ascii=False).encode("utf-8")) > self.settings.max_event_bytes
+
+        items = [*missing, *(m for m in (chart_missing, lines_missing) if m)]
+        event = build(png, oversized, lines, items)
+        # 이벤트가 상한을 넘으면 흐름 그래프부터 빼고, 그래도 넘으면 하루 등락 그림까지 뺀다.
+        if lines and too_big(event):
+            items = [*missing, *(m for m in (chart_missing, LINE_CHARTS_OVERSIZED_ITEM) if m)]
+            event = build(png, oversized, (), items)
+        if png is not None and too_big(event):
+            items = [*missing, CHART_OVERSIZED_ITEM, *([LINE_CHARTS_OVERSIZED_ITEM] if lines else [])]
+            event = build(None, True, (), items)
         return event, items
 
     def _member_events(self, job: _DailyJob, now: datetime, daily_input: DailyInput, sections: tuple[Section, ...],

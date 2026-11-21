@@ -363,3 +363,14 @@ def morning_input():
                    (Background("exchange-rate-summary", None, "ok", "{}", MORNING_AT),), (), False)
     return i, build_sections(i)
 
+
+def test_the_open_flow_chart_sits_right_under_the_etf_heading_in_html():
+    from briefing.daily_html import ChartSlot
+    i, sections = morning_input()
+    out = DailyOutput((Point("밤사이 이슈입니다.", ("B1",)),), False,
+                      outlooks=(Point("오를 수 있습니다.", ("B1",), None, "outlook", "TEST01", "상승"),))
+    html = render_html(i, sections, out, charts=(ChartSlot("chart-open", alt="개장 흐름"),))
+    heading = html.index("내 ETF: 개장 흐름과 예상")
+    assert heading < html.index("cid:chart-open") < html.index("오를 수 있습니다.")
+    assert 'alt="개장 흐름"' in html
+
