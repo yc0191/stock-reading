@@ -7,6 +7,7 @@
 그 아래 안내 문구와 출처 목록은 잘라 낸다.
 """
 import json
+import math
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -30,9 +31,22 @@ AT = datetime(2026, 10, 20, 17, 0, tzinfo=KST)
 FETCHED = "2026-10-20T16:30:02+09:00"
 
 
-def etf(symbol, name, rate, close, members=()):
+def intraday_series(rate, phase):
+    """09:00부터 15:20까지 10분마다의 가짜 장중 흐름. 그날 등락률(rate)로 끝나게 출렁인다(마감 후 판 장중 흐름 그래프)."""
+    final, points = float(rate), []
+    for n in range(39):
+        share = n / 38
+        value = final * share + 0.35 * (math.sin(share * 6 + phase) - math.sin(phase)) * (1 - share)
+        at = datetime(2026, 10, 20, 9, 0, 58, tzinfo=KST) + timedelta(minutes=10 * n)
+        points.append({"at": at.isoformat(), "price": f"{10000 * (1 + value / 100):.0f}",
+                       "rateVsPrevClose": f"{value:.2f}"})
+    return {"status": "present", "prevClose": "10000", "truncated": False, "points": points}
+
+
+def etf(symbol, name, rate, close, members=(), phase=0.0):
     item = etf_v2(symbol, name, fetched=FETCHED, rate=rate)
-    item.update(date="20261020", close=close, prevClose="10000")
+    # 기간 종가(dailyCloses)는 넣지 않는다. 1개월·6개월 흐름 그래프까지 담으면 README 그림이 너무 길어진다.
+    item.update(date="20261020", close=close, prevClose="10000", intradaySeries=intraday_series(rate, phase))
     item["etf"]["members"] = [{"market": m[0], "symbol": m[1], "rank": i + 1, "name": m[2], "weight": m[3]}
                               for i, m in enumerate(members)]
     return item
@@ -46,12 +60,12 @@ def fallback(symbol, name, rate, price):
 
 
 # 반도체·기술 ETF 셋이 함께 2% 넘게 올라 '눈에 띄는 점'(같은 방향 묶음)이 되고, 미국 기술 ETF는 비중 상위 미국 종목의
-# 직전 장 등락이 커서 구성 종목 줄이 붙는다. 채권 ETF는 일봉을 받지 못한 경우다.
+# 직전 장 등락이 커서 구성 종목 줄이 붙는다. 채권 ETF는 일봉을 받지 못한 경우라 흐름 그래프에도 선이 없다.
 ETFS = [etf("TEST01", "TEST 반도체", "2.40", "10240", [("KR", "TEST900", "가짜반도체", "25.0"),
-                                                        ("KR", "TEST901", "가짜메모리", "18.0")]),
-        etf("TEST04", "TEST 반도체장비", "2.10", "10210", [("KR", "TEST902", "가짜장비", "21.0")]),
+                                                        ("KR", "TEST901", "가짜메모리", "18.0")], phase=0.0),
+        etf("TEST04", "TEST 반도체장비", "2.10", "10210", [("KR", "TEST902", "가짜장비", "21.0")], phase=1.7),
         etf("TEST02", "TEST 미국기술", "2.05", "10205", [("US", "FAKEA", "FAKE CHIP CORP", "12.0"),
-                                                         ("US", "FAKEB", "FAKE CLOUD INC", "9.5")]),
+                                                         ("US", "FAKEB", "FAKE CLOUD INC", "9.5")], phase=3.1),
         fallback("TEST03", "TEST 채권", "-0.80", "9920")]
 
 POST_CLOSE_OUT = json.dumps({
