@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -68,7 +69,9 @@ class MoveReplayScenarioTest {
                 .withUserConfiguration(Wiring.class)
                 .run(context -> {
                     MoveReplayTest.Result result = MoveReplayTest.replay(context.getBean(MarketProperties.class), input, Set.of());
-                    total[0] = result.published().values().stream().mapToInt(Integer::intValue).sum();
+                    // 이 시험들은 중(5분 비교·전일 종가 대비)의 건수를 본다. 상은 MoveHighLevelTest가 따로 본다.
+                    total[0] = result.published().entrySet().stream()
+                            .filter(e -> e.getKey() != DetectionType.PREV_CLOSE_HIGH).mapToInt(Map.Entry::getValue).sum();
                 });
         return total[0];
     }

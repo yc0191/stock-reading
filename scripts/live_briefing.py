@@ -31,9 +31,10 @@ COMPLETION_TOPIC = "collection.completed"
 BRIEFING_TOPIC = "briefing.generated"
 COLLECT_NEWS = "collect-news"
 GENERATED_BY_LLM = "llm"
-# 브리핑 임계값(1%)을 넘는 가짜 변동. 실제 가격을 이 비율만큼 오른 것으로 둔다.
-MOVE_RATIO = 1.015
-THRESHOLD_PERCENT = 1.0
+# 레벨 상(전일 종가 등 기준가 대비 7% 이상)인 가짜 변동. 실제 가격을 이 비율만큼 오른 것으로 둔다.
+# 레벨 중은 LLM·메일 없이 끝나므로 리포트와 메일을 확인하는 이 시험에는 쓸 수 없다.
+MOVE_RATIO = 1.08
+THRESHOLD_PERCENT = 7.0
 # 브리핑은 startedAt 이 변동 시각 + Δ(5분) 이후인 수집 완료만 쓴다. 여유를 두어 6분 뒤로 둔다.
 COMPLETION_AFTER = timedelta(minutes=6)
 # 근거 범위(변동 24시간 전 ~ 변동 + Δ) 안쪽.
@@ -77,13 +78,16 @@ class FakeArticle:
 
 
 def move_event(snapshot: Snapshot, run_id: str, now: datetime, event_id: str | None = None) -> dict:
-    """실제 스냅샷 가격을 지금 가격으로, 그보다 1.5% 낮은 값을 이전 가격으로 둔 가짜 변동."""
+    """실제 스냅샷 가격을 지금 가격으로, 그보다 8% 낮은 기준가를 이전 가격으로 둔 가짜 변동(레벨 상).
+
+    기준가는 그날 처음엔 전일 종가이므로 오늘 등락(todayChangePercent)도 같은 값이다."""
     if snapshot.price <= 0:
         raise ValueError("스냅샷 가격이 0 이하라 변동을 만들 수 없습니다")
     previous = round(snapshot.price / MOVE_RATIO)
     if previous <= 0 or previous == snapshot.price:
         raise ValueError("스냅샷 가격이 너무 작아 변동을 만들 수 없습니다")
     as_of = _ts(snapshot.as_of)
+    change_percent = round((snapshot.price - previous) / previous * 100, 2)
     return {
         "eventId": event_id or str(uuid.uuid4()),
         "eventType": "market.move",
@@ -95,10 +99,11 @@ def move_event(snapshot: Snapshot, run_id: str, now: datetime, event_id: str | N
             "symbol": snapshot.symbol,
             "previousPrice": previous,
             "price": snapshot.price,
-            "changePercent": round((snapshot.price - previous) / previous * 100, 2),
+            "changePercent": change_percent,
+            "todayChangePercent": change_percent,
             "thresholdPercent": THRESHOLD_PERCENT,
             "asOf": as_of,
-            "detectionType": "window",
+            "detectionType": "prevCloseHigh",
             "moveStartedAt": as_of,
         },
     }

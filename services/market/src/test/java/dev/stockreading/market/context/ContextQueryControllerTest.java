@@ -85,14 +85,15 @@ class ContextQueryControllerTest {
         givenStoredData();
 
         ContextProperties properties =
-                new ContextProperties(Duration.ofDays(4), 32_768, 100, List.of("C", "S"), Duration.ofDays(7));
+                new ContextProperties(Duration.ofDays(4), 32_768, 100, List.of("C", "S"), Duration.ofDays(7), 30);
         contextListener = new ContextQuery(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
                 properties);
         dailyListener = new DailyQuery(repository, new WorldIndexRates(mapper), closeRateQuery, holdings,
-                memberChanges, properties, new DailyProperties(50, Duration.ofMinutes(30)), operationsReader,
-                mapper, openFlowPort, (symbol, since, asOf) -> Optional.empty(),
+                memberChanges, properties, new DailyProperties(50, Duration.ofMinutes(30), null, 420, 130, null, null),
+                operationsReader, mapper, openFlowPort, (symbol, since, asOf) -> Optional.empty(),
+                (symbol, since, asOf, limit) -> List.of(),
                 new MarketProperties(5, BigDecimal.ONE, List.of("f.a", "f.b", "f.c"), BigDecimal.ONE,
-                        List.of("f.open"), 1, BigDecimal.ONE, List.of(), 0, new BigDecimal("2.00")));
+                        List.of("f.open"), 1, BigDecimal.ONE, List.of(), 0, new BigDecimal("2.00"), BigDecimal.TEN));
         mvc = MockMvcBuilders.standaloneSetup(new ContextQueryController(contextListener, dailyListener))
                 .setControllerAdvice(new InvalidRequestHandler())
                 .addFilters(new CorrelationIdHttpFilter())
@@ -209,6 +210,20 @@ class ContextQueryControllerTest {
                 .andExpect(status().isBadRequest());
         mvc.perform(post("/internal/market/daily").contentType(MediaType.APPLICATION_JSON).content(unreadableTime))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void invalidChartFieldsAreABadRequest() throws Exception {
+        String payload = mapper.readTree(sample("market.daily.requested.sample.json")).get("payload").toString();
+        for (String bad : List.of(
+                payload.replace("\"maxTickers\":100", "\"maxTickers\":100,\"intradaySince\":\"2026-10-20T17:00:01+09:00\""),
+                payload.replace("\"maxTickers\":100", "\"maxTickers\":100,\"intradaySince\":\"nine\""),
+                payload.replace("\"maxTickers\":100", "\"maxTickers\":100,\"maxIntradayPoints\":0"),
+                payload.replace("\"maxTickers\":100", "\"maxTickers\":100,\"maxDailyCloses\":0"))) {
+            assertThat(bad).isNotEqualTo(payload);
+            mvc.perform(post("/internal/market/daily").contentType(MediaType.APPLICATION_JSON).content(bad))
+                    .andExpect(status().isBadRequest());
+        }
     }
 
     private String payloadWithout(String file, String field) throws IOException {

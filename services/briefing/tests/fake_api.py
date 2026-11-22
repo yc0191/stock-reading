@@ -4,7 +4,9 @@
 이벤트의 payload와 같다(docs/conventions.md "내부 조회 API"). 실제 HTTP는 쓰지 않는다.
 """
 import json
+from datetime import datetime, timezone
 
+from briefing.job_log import STAGE_CHART_HISTORY
 from briefing.queries import QueryKind, QueryResult
 
 # 옛 응답 이벤트 종류 -> 조회 종류. 테스트의 응답 도우미가 만든 JSON을 그대로 답으로 쓰려고 둔다.
@@ -25,10 +27,16 @@ class FakeApi:
         # 실행부(BriefingRunner)가 꺼내 갈 끝난 결과
         self.done = []
         self.closed = False
+        # 장중 차트용 시세 조회(레벨 상)는 기본으로 점 없이 바로 답하고 submitted에 넣지 않는다. 대부분의 테스트가 차트를 보지 않아
+        # 조회 순서·개수 확인을 건드리지 않게 하려는 것이다. 차트를 시험하는 테스트는 auto_chart를 False로 두고 직접 답한다.
+        self.auto_chart = True
 
     # ---- QueryPort ----
 
     def submit(self, query, on_result):
+        if self.auto_chart and query.stage == STAGE_CHART_HISTORY:
+            on_result(QueryResult(query, {"points": [], "truncated": False}, 1), datetime.now(timezone.utc))
+            return
         self.submitted.append(query)
         self.pending.append((query, on_result))
 

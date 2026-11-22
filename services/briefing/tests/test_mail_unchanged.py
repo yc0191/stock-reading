@@ -2,7 +2,11 @@
 
 기준 파일 golden/mail_before_direct_calls.json은 바꾸기 전 코드(Kafka 요청·응답, 기사 안정 확인 라운드)로 같은 가짜 응답과
 가짜 LLM을 넣어 만든 결과다. 메일 이벤트(본문, 근거와 번호, 자료 없음 목록, HTML)와 LLM이 받은 입력 전체가 같아야 한다.
-그림(차트)은 설치된 한글 글꼴과 그림 도구에 따라 바이트와 길이가 달라지므로 있는지·형식·cid만 비교한다(차트 자체는 차트 테스트가 본다). 기준을 다시 만들면 안 되며, 다르면 원인을 고친다.
+그림(차트)은 설치된 한글 글꼴과 그림 도구에 따라 바이트와 길이가 달라지므로 있는지·형식·cid만 비교한다(차트 자체는 차트 테스트가 본다). 기준이 다르면 원인을 고친다.
+메일 모양을 일부러 바꾼 경우에만 작업자 승인을 받아 그 메일 종류의 기준만 다시 만든다.
+예외 둘: 레벨 상 메일이 짧아지고(근거 목록 맨 아래, '확인하지 못한 것' 없음) HTML을 함께 싣게 되어 급변동 두 건의 본문·html·근거
+번호 칸은 새 모양으로 다시 뽑았다(LLM 입력은 그대로다). 그리고 급변동 두 건(moveUs, moveWeakResearch)의 머리말은 레벨 상(prevCloseHigh)이 리포트를 만들게 되면서 '오늘 … · 기준가 대비 …'
+머리말로 바뀌어(제목용 칸은 todayChangePercent·baseKind), 그 두 건의 머리말과 칸만 새 모양으로 고쳤다.
 """
 import json
 from pathlib import Path
@@ -56,7 +60,7 @@ def move_us():
     stage, published, _ = sc.report_stage(LlmWriter(llm))
     stage.on_ready(rec.readied[0])
     (event,) = published.sent
-    return {"event": event.value, "llmInputs": [u for _, u in llm.calls]}
+    return {"event": strip_images(event.value), "llmInputs": [u for _, u in llm.calls]}
 
 
 def move_weak_research():
@@ -67,7 +71,7 @@ def move_weak_research():
     flow.complete_research(research_id=wr.rid(2))
     flow.answer_research([rs.R1, rs.A1], research_id=wr.rid(2))
     (briefing,) = flow.briefings()
-    return {"event": briefing.value, "llmInputs": [c[1] for c in flow.report_llm.calls],
+    return {"event": strip_images(briefing.value), "llmInputs": [c[1] for c in flow.report_llm.calls],
             "queryInputs": [c[1] for c in flow.query_llm.calls]}
 
 

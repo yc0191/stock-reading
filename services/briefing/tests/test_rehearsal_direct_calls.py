@@ -171,7 +171,7 @@ def rehearsal():
             consumer_factory=consumer_factory, producer_factory=producer_factory, declare_topics=lambda _: None,
             query_writer=QueryWriter(StepRecordingLlm(SequenceLlm(json.dumps({"queries": ["업종 소식"]})), store,
                                                       clock)),
-            daily_writer=DailyLlmWriter(StepRecordingLlm(SequenceLlm(good_output("B1")), store, clock), 3),
+            daily_writer=DailyLlmWriter(StepRecordingLlm(SequenceLlm(sourced_morning()), store, clock), 3),
             daily_settings=DailySettings(), member_store=FakeMembers(),
             api_factory=lambda: HttpQueries({"market": services.url, "news": services.url}, store, clock, FAST))
         runner.open()
@@ -195,6 +195,15 @@ def run_until(runner, condition, timeout=10.0):
     raise AssertionError("rehearsal did not reach the expected state in time")
 
 
+def sourced_morning():
+    """근거 약한 칸이 없는 아침 판 출력. 약한 칸이 있으면 문장 단위 재검색이 시작되는데, 이 리허설은 재검색에 답하지 않는다.
+    다른 리허설이 good_output을 바꿔 끼울 수 있어 부를 때 만든다."""
+    output = json.loads(good_output("B1"))
+    if "rateIssue" in output:
+        output["rateIssue"] = {"statement": "금리가 영향을 줄 수 있습니다.", "refs": ["B1"], "weak": False, "shortfall": ""}
+    return json.dumps(output, ensure_ascii=False)
+
+
 def research_stored():
     return FakeMessage("news.stored", stored_envelope("00000000-0000-4000-8000-000000000501", {
         "jobType": "research-news", "scheduledFor": "2026-10-20T16:15:43+09:00",
@@ -208,9 +217,11 @@ def test_a_move_with_a_weak_sentence_flows_through_http_queries_research_and_rew
 
     consumer.queue.extend([move_message(), completed_message()])
     run_until(runner, lambda: sent(producer, "news.research.requested"))
-    # 근거 조회 세 가지(시세 이력, 배경 자료, 기사)는 Kafka가 아니라 HTTP로 갔고 기사는 한 번만 조회했다.
+    # 근거 조회 세 가지(시세 이력, 배경 자료, 기사)와 장중 차트용 시세 이력은 Kafka가 아니라 HTTP로 갔고 기사는 한 번만
+    # 조회했다. 시세 이력은 실패한 한 번을 합쳐 세 번(근거용, 차트용, 다시 부른 한 번) 불렸다.
     assert sorted(services.paths()) == ["/internal/market/context", "/internal/market/history",
-                                        "/internal/market/history", "/internal/news/articles"]
+                                        "/internal/market/history", "/internal/market/history",
+                                        "/internal/news/articles"]
     (_, research), = sent(producer, "news.research.requested")
     assert validate("news.research.requested.v1.schema.json", research) == []
 
@@ -221,6 +232,10 @@ def test_a_move_with_a_weak_sentence_flows_through_http_queries_research_and_rew
     assert validate("briefing.generated.v1.schema.json", briefing) == []
     text = briefing["payload"]["text"]
     assert REWRITTEN in text and WEAK not in text
+    # 글자판과 함께 HTML과 장중 차트 그림(cid로 가리킴)이 실렸다.
+    html, images = briefing["payload"]["html"], briefing["payload"]["images"]
+    assert REWRITTEN in html and 'src="cid:chart-move"' in html
+    assert [(x["contentId"], x["contentType"]) for x in images] == [("chart-move", "image/png")]
     assert [e["articleId"] for e in briefing["payload"]["evidence"]] == ["a1", "r1"]
     assert move_llm.calls == ["report", "rewrite", "review"]
     # 재검색 기사도 저장 끝을 받은 뒤 한 번만 조회했다.
@@ -232,7 +247,9 @@ def test_a_move_with_a_weak_sentence_flows_through_http_queries_research_and_rew
     steps = store.steps
     assert {s.job_id for s in steps} == {JOB_ID} and {s.correlation_id for s in steps} == {MOVE["correlationId"]}
     history = [(s.attempt, s.result, s.failure_kind) for s in steps if s.target == "market/history"]
-    assert history == [(1, StepResult.FAILED, "http-5xx"), (2, StepResult.SUCCEEDED, None)]
+    # 시세 이력은 근거용과 차트용 두 번 불렸고, 503을 받은 쪽 하나가 한 번 더 불려 성공했다.
+    assert sorted(history, key=str) == sorted([(1, StepResult.FAILED, "http-5xx"), (2, StepResult.SUCCEEDED, None),
+                                               (1, StepResult.SUCCEEDED, None)], key=str)
     assert sorted(s.target for s in steps if s.target.startswith("news/")) == ["news/articles", "news/articles"]
     assert [s.step for s in steps if s.target.startswith("llm/")] == ["llm"] * 4  # 보고서·검색어·다시 쓰기·검토
     assert store.failures == []
@@ -276,6 +293,6 @@ def test_a_service_that_stays_down_leaves_four_failed_attempts_and_the_job_fails
 
     (failure,) = store.failures
     assert (failure.reason, failure.attempts, failure.error_type) == ("market_no_response", 4, "http-5xx")
-    history = [s for s in store.steps if s.target == "market/history"]
+    history = [s for s in store.steps if s.step == "market.history"]
     assert [(s.attempt, s.result) for s in history] == [(n, StepResult.FAILED) for n in (1, 2, 3, 4)]
     assert sent(producer, "briefing.generated") == []

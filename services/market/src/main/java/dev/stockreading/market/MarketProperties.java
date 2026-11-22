@@ -19,6 +19,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *        그 스냅샷을 유형 1의 기준값에서 뺀다. 비우면 거르지 않는다.
  * @param republishIntervalMinutes 한 종목의 market.move를 발행한 뒤 유형과 상관없이 같은 종목을 다시 발행하지 않는 시간(분). 0이면 끈다.
  * @param republishExceptionPercent 재발행 간격 안이라도 마지막 발행 가격 대비 이 값(%) 이상 더 움직이면 발행한다.
+ * @param highThresholdPercent 레벨 상(prevCloseHigh)의 기준 비율. 상 기준가(그날 처음엔 전일 종가, 상을 발행하면 그 가격) 대비
+ *        이 값(%) 이상 위아래로 움직이면(절댓값) 상으로 본다. 종목별 재발행 간격은 적용하지 않는다.
  */
 @ConfigurationProperties("market")
 public record MarketProperties(
@@ -31,5 +33,6 @@ public record MarketProperties(
         BigDecimal confirmSpreadPercent,
         List<String> firstTradeFields,
         int republishIntervalMinutes,
-        BigDecimal republishExceptionPercent) {
+        BigDecimal republishExceptionPercent,
+        BigDecimal highThresholdPercent) {
 }

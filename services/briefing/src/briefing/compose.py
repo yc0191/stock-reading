@@ -48,6 +48,18 @@ def window_headline(symbol: str, previous_price: int, price: int, change_percent
             f"({previous_price:,} → {price:,})")
 
 
+def high_headline(symbol: str, previous_price: int, price: int, change_percent: float, today_change_percent: float,
+                  first: bool, as_of: datetime, name: str | None = None) -> str:
+    """레벨 상의 머리말. 오늘 등락(전일 종가 대비)을 먼저 쓴다. 첫 상은 기준가가 전일 종가라 오늘 등락만, 두 번째 상부터는
+    기준가(앞선 상의 가격) 대비 변동률을 덧붙인다."""
+    prefix = f"[{label_of(symbol, name)}] {as_of.astimezone(KST):%H:%M} 기준 오늘 {today_change_percent:+.2f}%"
+    prices = f"({previous_price:,} → {price:,})"
+    if first:
+        return f"{prefix} {direction_of(today_change_percent)} {prices}"
+    return (f"{prefix} · 기준가 대비 {change_percent:+.2f}% "
+            f"{window_direction(change_percent, today_change_percent)} {prices}")
+
+
 def compose(
     symbol: str,
     previous_price: int,

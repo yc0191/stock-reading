@@ -66,7 +66,7 @@ class ContextQueryTest {
     }
 
     private ContextQuery listener() {
-        return listener(new ContextProperties(Duration.ofDays(4), 32_768, 100, List.of("C", "S"), Duration.ofDays(7)));
+        return listener(new ContextProperties(Duration.ofDays(4), 32_768, 100, List.of("C", "S"), Duration.ofDays(7), 30));
     }
 
     private static String request() throws IOException {
@@ -198,7 +198,7 @@ class ContextQueryTest {
         when(holdings.topTickers("TEST01")).thenReturn(List.of("FAKEA", "FAKEB", "FAKEC"));
 
         ContextPayload capped = answer(listener(
-                new ContextProperties(Duration.ofDays(4), 32_768, 3, List.of(), Duration.ofDays(7))), request());
+                new ContextProperties(Duration.ofDays(4), 32_768, 3, List.of(), Duration.ofDays(7), 30)), request());
 
         assertThat(capped.tickers()).hasSize(3);
         assertThat(capped.truncated()).isFalse();
@@ -258,10 +258,40 @@ class ContextQueryTest {
                 .thenReturn(Optional.of(stored(raw, "2026-10-20T15:55:01+09:00")));
 
         ContextPayload payload = answer(listener(
-                new ContextProperties(Duration.ofDays(4), 100, 100, List.of(), Duration.ofDays(7))), request());
+                new ContextProperties(Duration.ofDays(4), 100, 100, List.of(), Duration.ofDays(7), 30)), request());
 
         assertThat(payload.background().get(2).status()).isEqualTo("too-large");
         assertThat(payload.background().get(2).responseBytes()).isEqualTo(raw.length());
+    }
+
+    @Test
+    void aLongDailyPriceResponseIsCutToTheNewestDatesKeepingTheirOrderBeforeTheSizeCheck() throws IOException {
+        // 기간 그래프용으로 길게 받은 일봉 원문(5일자)을 배경에는 최근 3일자만, 원문의 순서대로 준다. 저장 원문은 그대로다.
+        String raw = "{\"dataHeader\":{\"resultCode\":\"200\"},\"dataBody\":{\"is_cd\":\"TEST01\",\"out2\":["
+                + "{\"dt\":\"20261020\"},{\"dt\":\"20261016\"},{\"dt\":\"20261019\"},{\"dt\":\"20261014\"},"
+                + "{\"dt\":\"20261015\"}]}}";
+        when(repository.latest(eq(BackgroundKind.DAILY_PRICE), any(), any(), any()))
+                .thenReturn(Optional.of(stored(raw, "2026-10-20T15:55:01+09:00")));
+
+        ContextPayload payload = answer(listener(
+                new ContextProperties(Duration.ofDays(4), 32_768, 100, List.of(), Duration.ofDays(7), 3)), request());
+
+        ContextPayload.Background daily = payload.background().get(2);
+        assertThat(daily.status()).isEqualTo("ok");
+        assertThat(daily.response()).contains("\"is_cd\":\"TEST01\"", "\"resultCode\":\"200\"")
+                .contains("{\"dt\":\"20261020\"},{\"dt\":\"20261016\"},{\"dt\":\"20261019\"}")
+                .doesNotContain("20261014", "20261015");
+    }
+
+    @Test
+    void aShortOrUnreadableDailyPriceResponseIsGivenAsItIs() throws IOException {
+        for (String raw : List.of("{\"dataBody\":{\"out2\":[{\"dt\":\"20261020\"}]}}", "not json")) {
+            when(repository.latest(eq(BackgroundKind.DAILY_PRICE), any(), any(), any()))
+                    .thenReturn(Optional.of(stored(raw, "2026-10-20T15:55:01+09:00")));
+            ContextPayload payload = answer(listener(
+                    new ContextProperties(Duration.ofDays(4), 32_768, 100, List.of(), Duration.ofDays(7), 3)), request());
+            assertThat(payload.background().get(2).response()).isEqualTo(raw);
+        }
     }
 
     @Test

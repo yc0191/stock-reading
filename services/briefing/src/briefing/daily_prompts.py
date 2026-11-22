@@ -38,30 +38,35 @@ MORNING_GUIDE_EXTRA = """
 - 항목 "ETF별 기사"는 ETF마다 모아 둔 기사이며 etf 칸은 그 기사가 붙은 ETF 종목코드입니다. 항목의 missing에 있는 ETF는 기사 응답을 받지 못한 것이라 기사가 없는 것이 아니라 모르는 것입니다.
 - 항목 "ETF별 개장 흐름"은 장이 열린 뒤 판 기준 시각까지 코드가 저장된 시세로 계산한 값이며 ETF마다 한 건입니다. openRatePercent는 전일 종가 대비 시가 등락률(%), flowRatePercent는 장 시작 뒤 첫 시세(startAt)부터 마지막 시세(endAt)까지의 등락률(%), rateVsPrevClosePercent는 전일 종가 대비 마지막 시세의 등락률(%)이며 minutesBeforeAsOf는 마지막 시세가 판 기준 시각보다 몇 분 전인지입니다. openSource가 "first-snapshot"이면 시세 원문에 시가 칸이 없어 장 시작 뒤 첫 시세를 시가로 쓴 것입니다. 값이 null이면 그 숫자는 모르는 것입니다. 항목의 missing에 있는 ETF는 개장 흐름 자료가 없는 것입니다.
 - outlookEtfs는 오늘 방향을 예상할 ETF 목록입니다.
-- 항목 "환율"의 usdKrw(있을 때만 담깁니다)는 코드가 원문의 원/달러 행에서 꺼낸 값이며 value는 원/달러 환율, change는 전일대비, ratePercent는 등락률(%)입니다. 환율 숫자는 usdKrw의 값을 씁니다."""
+- 항목 "환율"의 usdKrw(있을 때만 담깁니다)는 코드가 원문의 원/달러 행에서 꺼낸 값이며 value는 원/달러 환율, change는 전일대비, ratePercent는 등락률(%)입니다. 환율 숫자는 usdKrw의 값을 씁니다.
+- 항목 "시장종합"의 overseas(있을 때만 담깁니다)는 코드가 원문에서 꺼낸 해외 시세(해외 지수, 지수 선물, 원유 등)이며 name은 이름, price는 값, ratePercent는 등락률(%), at은 원문의 시각 표기입니다. investorNetBuy는 투자자별 순매수(kospi는 코스피, kosdaq은 코스닥)이며 단위가 확인되지 않았으므로 숫자를 쓰지 않고 어느 투자자가 순매수(양수)·순매도(음수)했는지만 씁니다.
+- 공시의 companyNames(있을 때만 담깁니다)는 공시한 회사 이름, itemNames는 공시 항목의 뜻입니다."""
 
 MORNING_RULES = """규칙:
-- 아침 판은 장이 막 열린 뒤에 나갑니다. 목적은 밤사이 자료(미국 지수, 환율, 기사, 공시, 담긴 미국 종목의 직전 장 등락)와 개장 흐름을 근거로 오늘 장에서 어떤 변화가 예상되는지 알리는 것입니다. etfs에 outlookEtfs의 ETF마다 오늘의 방향 예상을 씁니다.
+- 아침 판은 장이 막 열린 뒤에 나갑니다. 읽는 사람이 ① 밤사이 어떤 이슈가 있었는지 ② 미국 증시에 어떤 변화가 있었는지 ③ 자기 ETF가 어떤 영향을 받을지를 알게 하는 것이 목적입니다. etfs에 outlookEtfs의 ETF마다 오늘의 방향 예상을 씁니다.
+- points는 "밤사이 이슈"입니다. 밤사이 일어난 일(기사, 공시, 미국 지수, 해외 시세)을 이슈마다 한 문장으로 3~5개 씁니다. 지수를 나열하지 말고, 그 이슈와 관련된 지수·시세의 등락률만 문장에 붙입니다(예: "반도체 실적 기대가 커지며 기술주가 올랐습니다. 나스닥 +1.42%, 필라델피아 반도체 +2.85%"). 등락률은 indexRates의 rate나 overseas의 ratePercent 값을 그대로 쓰고, 종가·직전 종가 같은 값은 쓰지 않습니다.
+- otherIssues는 "그 밖의 이슈"이며 0~3개 씁니다. 밤사이 이슈·환율·금리에 넣지 않은 것 중 ETF들에 의미 있는 것(원유 등 해외 시세, 개장 직후 투자자별 순매수, 담긴 종목의 공시)을 한 문장씩 씁니다. 공시는 양식 이름이나 항목 번호가 아니라 회사 이름과 공시 내용(itemNames)으로 씁니다. 근거 번호는 refs에 하나 이상 넣고, 쓸 것이 없으면 빈 목록입니다.
+- points, fxIssue, rateIssue, otherIssues는 받는 사람마다 같은 글로 나가므로 ETF 이름이나 ETF 종목코드를 쓰지 않습니다. ETF 이야기는 etfs의 reason에 씁니다.
+- 미국 종목은 티커 대신 회사 이름(etfInfo 구성 종목의 name, 공시의 companyNames, 기사에 적힌 이름)으로 씁니다.
 - 방향의 뜻: 오늘 하루 등락이 ±__FLAT_BAND__% 안일 것 같으면 "보합", +__FLAT_BAND__%를 넘을 것 같으면 "상승", -__FLAT_BAND__% 아래일 것 같으면 "하락"입니다. 마감 후 판이 이 기준으로 맞고 틀림을 채점합니다.
 - 예상과 원인은 단정하지 않습니다. "~가 영향을 줄 수 있어 오를 수 있다"처럼 씁니다.
 - 각 문장은 근거가 된 자료의 ref를 refs에 하나 이상 넣습니다. 입력에 없는 ref는 쓰지 않습니다.
 - 상태가 "없음"인 항목을 추측으로 채우지 않습니다.
 - etfs는 outlookEtfs에 있는 ETF마다 정확히 하나씩 씁니다(보유와 관심 모두). symbol은 그 ETF의 종목코드입니다. direction은 "상승", "하락", "보합", "예상 어려움" 중 하나이고, reason은 그 방향을 예상한 이유 한 문장입니다.
-- 방향의 근거는 그 ETF의 이름·추종 대상·담긴 종목과 관련된 기사(ETF별 기사), 담긴 미국 종목의 직전 장 등락, 미국 지수, 환율, 공시, 그 ETF의 개장 흐름입니다. 개장 흐름은 이미 일어난 움직임이므로 밤사이 자료와 함께 읽고, 개장 흐름의 숫자는 입력 값 그대로 인용하며(새로 계산하지 않습니다) 그 ETF의 개장 흐름 번호를 refs에 넣습니다. etfInfo는 맥락일 뿐 ref가 없어 인용하지 않습니다.
+- 방향의 근거는 그 ETF의 이름·추종 대상·담긴 종목과 관련된 기사(ETF별 기사), 담긴 미국 종목의 직전 장 등락, 미국 지수, 해외 시세, 환율, 공시, 그 ETF의 개장 흐름입니다. reason은 밤사이 이슈 중 어떤 것이 그 ETF의 개장 직후 움직임으로 이어졌는지를 씁니다(밤사이 이슈의 번호는 쓰지 않고 내용을 짧게 씁니다). 개장 흐름의 숫자는 본문에 코드가 따로 보이므로 reason에 되풀이하지 않고, 개장 흐름을 근거로 썼으면 그 ETF의 개장 흐름 번호를 refs에 넣습니다. etfInfo는 맥락일 뿐 ref가 없어 인용하지 않습니다.
 - 방향이 "상승", "하락", "보합"이면 reason의 refs에 근거 번호를 하나 이상 넣습니다. 근거가 약해 방향을 정하기 어려우면 direction을 "예상 어려움"으로 쓰고, reason에 근거가 부족한 점을 쓰고, refs는 빈 목록으로 두고 weak를 true로 합니다.
 - 환율이나 금리가 어떤 ETF 예상의 단서이면 reason 문장 안에 끼워 넣지 말고 문장 끝에 "(환율 이슈 참고)", "(금리 이슈 참고)"처럼 괄호로 짧게 붙입니다. 숫자는 되풀이하지 않습니다.
-- fxIssue는 환율 이슈 칸입니다. 환율은 모든 ETF에 영향을 주므로 ETF와 따로 씁니다. 항목 "환율"의 usdKrw(원/달러 값, 전일대비, 등락률)와 환율을 다룬 기사를 근거로 환율이 오늘 ETF들에 영향을 줄 수 있는 점을 한 문장으로 씁니다. 근거 번호는 refs에 넣고 weak·shortfall을 냅니다.
+- fxIssue는 환율 이슈 칸입니다. 환율은 모든 ETF에 영향을 주므로 ETF와 따로 씁니다. 항목 "환율"의 usdKrw(원/달러 값, 전일대비)를 짧게 들고, 환율을 다룬 기사로 환율이 왜 움직였는지와 오늘 ETF들에 줄 수 있는 영향을 한 문장으로 씁니다. 근거 번호는 refs에 넣고 weak·shortfall을 냅니다.
 - rateIssue는 금리 이슈 칸입니다. 금리는 모든 ETF에 영향을 주므로 ETF와 따로 씁니다. 입력의 기사 중 금리(기준금리, 국채금리, 시장금리 등)를 다룬 기사를 근거로 한 문장을 쓰고, 금리 숫자는 그 기사에 적힌 것만 씁니다. 금리를 다룬 기사가 없으면 "받은 자료에 금리 관련 기사가 없습니다."로 쓰고 refs는 빈 목록, weak는 true로 합니다.
 - ETF·담긴 종목·추종 대상과 관련 없는 기사는 인용하지 않습니다.
-- 문장마다 weak(근거 약함 여부)와 shortfall(부족한 점)을 냅니다. 그 문장을 뒷받침하는 자료가 약하면(범위가 맞지 않거나, 간접 정보뿐이거나, 세부가 자료에 없으면) weak를 true로 하고 shortfall에 어떤 자료가 더 있어야 하는지 한 문장으로 씁니다. 근거가 충분하면 weak를 false로, shortfall을 빈 문자열로 둡니다. shortfall은 찾아야 할 자료를 말할 뿐 원인을 단정하지 않으며 미국 종목의 티커를 쓰지 않습니다.
+- 문장마다 weak(근거 약함 여부)와 shortfall(부족한 점)을 냅니다. 그 문장을 뒷받침하는 자료가 약하면(범위가 맞지 않거나, 간접 정보뿐이거나, 세부가 자료에 없으면) weak를 true로 하고 shortfall에 어떤 자료가 더 있어야 하는지 한 문장으로 씁니다. 근거가 충분하면 weak를 false로, shortfall을 빈 문자열로 둡니다. shortfall은 찾아야 할 자료를 말할 뿐 원인을 단정하지 않습니다.
 - 요약할 근거가 부족하면 insufficientEvidence를 true로 하고 points와 etfs는 빈 목록으로 둡니다.
-- 투자 조언(매수·매도·보유 권유)을 하지 않습니다. 가격 전망은 etfs의 방향 예상에 한해 허용하며, 목표 가격이나 등락률 숫자를 예측하지 않습니다. points와 fxIssue·rateIssue에는 방향 예상을 쓰지 않습니다.
+- 투자 조언(매수·매도·보유 권유)을 하지 않습니다. 가격 전망은 etfs의 방향 예상에 한해 허용하며, 목표 가격이나 등락률 숫자를 예측하지 않습니다. points와 fxIssue·rateIssue·otherIssues에는 방향 예상을 쓰지 않습니다.
 - 숫자를 새로 계산하지 않습니다. 입력에 있는 값만 씁니다.
-- 문장에 미국 종목의 티커(ticker, tickers 칸의 값)를 쓰지 않습니다. 개별 종목을 말해야 하면 "미국 종목"이라고 씁니다.
-- points는 오늘 시장 흐름을 한국어 문장 3~6개 정도로 씁니다.
+- 모든 문장은 "~습니다"로 끝맺습니다.
 
 출력은 다음 JSON 하나만 냅니다:
-{"points":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"etfs":[{"symbol":"...","direction":"상승","reason":"...","refs":["..."],"weak":false,"shortfall":""}],"fxIssue":{"statement":"...","refs":["..."],"weak":false,"shortfall":""},"rateIssue":{"statement":"...","refs":["..."],"weak":false,"shortfall":""},"insufficientEvidence":false}"""
+{"points":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"etfs":[{"symbol":"...","direction":"상승","reason":"...","refs":["..."],"weak":false,"shortfall":""}],"fxIssue":{"statement":"...","refs":["..."],"weak":false,"shortfall":""},"rateIssue":{"statement":"...","refs":["..."],"weak":false,"shortfall":""},"otherIssues":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"insufficientEvidence":false}"""
 
 # 두 판이 함께 쓰는 같은 사건 기사 묶음 읽는 법과 기사끼리 말이 다를 때 쓰는 법. 판마다 항목 설명 뒤에 붙는다.
 SAME_EVENT_GUIDE = """
@@ -195,9 +200,10 @@ OUTPUT_SCHEMA_MORNING: dict[str, Any] = {
         },
         "fxIssue": _STATEMENT_ITEM,
         "rateIssue": _STATEMENT_ITEM,
+        "otherIssues": {"type": "array", "items": _STATEMENT_ITEM},
         "insufficientEvidence": {"type": "boolean"},
     },
-    "required": ["points", "etfs", "fxIssue", "rateIssue", "insufficientEvidence"],
+    "required": ["points", "etfs", "fxIssue", "rateIssue", "otherIssues", "insufficientEvidence"],
     "additionalProperties": False,
 }
 
@@ -213,12 +219,42 @@ REWRITE_ADDENDUM_POST_CLOSE = """
 - 새 기사가 같은 사건 묶음(sameEventArticles)에 들었으면 묶음의 다른 기사와 함께 읽어 종합하고, 기사끼리 수치·해석이 다르면 위의 규칙대로 양쪽을 쓰고 단정하지 않습니다.
 - 근거 번호·단정 금지·티커 금지·구성 종목 이슈 되풀이 금지 같은 위의 규칙은 그대로 지킵니다."""
 
+# 아침 판 ETF별 예상 하나를 다시 쓸 때의 출력 형식. 새 근거로 방향이 바뀔 수 있어 방향을 함께 받는다.
+OUTPUT_SCHEMA_OUTLOOK_REWRITE: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "points": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"direction": {"type": "string", "enum": list(DIRECTIONS)}, "statement": {"type": "string"},
+                               **_REASONED_ITEM},
+                "required": ["direction", "statement", "refs", "weak", "shortfall"],
+                "additionalProperties": False,
+            },
+        },
+        "insufficientEvidence": {"type": "boolean"},
+    },
+    "required": ["points", "insufficientEvidence"],
+    "additionalProperties": False,
+}
+
+REWRITE_ADDENDUM_OUTLOOK = """
+
+다시 쓰기 요청:
+- 입력의 rewrite 칸은 근거가 약하다고 한 ETF별 예상 하나(symbol은 그 ETF 종목코드, direction은 원래 방향, sentence는 그 이유)와 그 부족한 점(shortfall)입니다. newRefs는 그 부족한 점을 채우려고 새로 찾아 항목 "재검색 기사"에 담은 기사의 ref입니다.
+- 위의 출력 형식 대신 다음 JSON 하나만 냅니다. points에는 다시 쓴 예상 하나만 담고, insufficientEvidence는 false로 둡니다.
+{"points":[{"direction":"상승","statement":"...","refs":["..."],"weak":false,"shortfall":""}],"insufficientEvidence":false}
+- direction과 statement는 위의 etfs 규칙(방향의 뜻, 근거 번호, '예상 어려움'일 때 refs 빈 목록과 weak true)을 그대로 따릅니다. 새 기사로 근거가 채워졌으면 방향을 새로 정할 수 있습니다.
+- 새 기사에 없는 내용은 지어내지 않습니다."""
+
 REWRITE_ADDENDUM = """
 
 다시 쓰기 요청:
 - 입력의 rewrite 칸은 근거가 약하다고 한 문장 하나(sentence)와 그 부족한 점(shortfall)입니다. newRefs는 그 부족한 점을 채우려고 새로 찾아 항목 "재검색 기사"에 담은 기사의 ref입니다.
-- 위의 출력 형식 대신 다음 JSON 하나만 냅니다. points에는 다시 쓴 문장 하나만 담고 다른 문장은 쓰지 않으며, insufficientEvidence는 false로 둡니다. etfs·fxIssue·rateIssue는 쓰지 않습니다.
+- rewrite의 kind가 "fx"면 환율 이슈 칸, "rate"면 금리 이슈 칸의 문장이며 위의 fxIssue·rateIssue 규칙을 따릅니다(금리 기사가 여전히 없으면 정해진 문장을 쓰고 refs는 빈 목록, weak는 true입니다). kind가 없으면 밤사이 이슈 문장입니다.
+- 위의 출력 형식 대신 다음 JSON 하나만 냅니다. points에는 다시 쓴 문장 하나만 담고 다른 문장은 쓰지 않으며, insufficientEvidence는 false로 둡니다. etfs·fxIssue·rateIssue·otherIssues는 쓰지 않습니다.
 {"points":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"insufficientEvidence":false}
 - 새 기사로 부족한 점이 채워지면 weak를 false로, 그래도 약하면 weak를 true로 하고 shortfall에 아직 부족한 점을 씁니다. 새 기사에 없는 내용은 지어내지 않습니다.
 - 새 기사가 같은 사건 묶음(sameEventArticles)에 들었으면 묶음의 다른 기사와 함께 읽어 종합하고, 기사끼리 수치·해석이 다르면 위의 규칙대로 양쪽을 쓰고 단정하지 않습니다.
-- 근거 번호·단정 금지·티커 금지 같은 위의 규칙은 그대로 지킵니다."""
+- 근거 번호·단정 금지·ETF 이름 금지 같은 위의 규칙은 그대로 지킵니다."""

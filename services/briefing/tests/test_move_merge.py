@@ -406,13 +406,13 @@ def test_the_post_close_move_line_says_the_move_was_merged_into_the_morning_edit
     from briefing.daily_post_close import move_line
     from briefing.job_log import MoveRun
 
-    merged = MoveRun("m1", "TEST01", at(9, 3), 3.2, "succeeded", None, REASON_MERGED_INTO_MORNING)
-    reported = MoveRun("m2", "TEST01", at(10, 3), 3.2, "succeeded", "llm", None)
-    # 같은 성공이라도 사유가 합침이 아니면 리포트 성공으로 보인다.
-    failed = MoveRun("m3", "TEST01", at(11, 3), 3.2, "failed", None, "llm_error")
+    merged = MoveRun("m1", "TEST01", at(9, 3), 3.2, "succeeded", None, REASON_MERGED_INTO_MORNING, 3.2, "high")
+    reported = MoveRun("m2", "TEST01", at(10, 3), 3.2, "succeeded", "llm", None, 3.2, "high")
+    # 같은 성공이라도 사유가 합침이 아니면 메일을 보낸 것으로 보인다.
+    failed = MoveRun("m3", "TEST01", at(11, 3), 3.2, "failed", None, "llm_error", 3.2, "high")
 
-    assert move_line(merged, {"TEST01": "테스트ETF"}) == "09:03 테스트ETF +3.20% · 아침 판에 합침"
-    assert move_line(reported, {"TEST01": "테스트ETF"}).endswith("리포트 성공")
+    assert move_line(merged, {"TEST01": "테스트ETF"}) == "09:03 테스트ETF 오늘 +3.20% · 아침 판에 합침"
+    assert move_line(reported, {"TEST01": "테스트ETF"}).endswith("메일 보냄")
     assert move_line(failed, {"TEST01": "테스트ETF"}).endswith("리포트 실패")
 
 
@@ -426,5 +426,5 @@ def test_the_server_status_counts_merged_moves_apart_from_reported_ones():
 
     line = _briefing_line(runs)
 
-    assert "급변동 2건(성공 1 · " in line and "아침 판에 합침 1" in line
+    assert "급변동 2건(상 0(메일) · 중 1(기록) · " in line and "아침 판에 합침 1" in line
     assert "아침 판에 합침" not in _briefing_line(runs[1:])

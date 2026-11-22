@@ -25,6 +25,7 @@ from briefing.job_log_store import (
     SELECT_EDITION_STARTED_SQL,
     SELECT_MARKET_CLOSED_SQL,
     SELECT_MOVES_SQL,
+    SELECT_REPRESENTATIVES_SQL,
     SELECT_OUTLOOKS_SQL,
     START_RUN_SQL,
     PostgresJobLog,
@@ -42,9 +43,11 @@ class FakeDb:
     returning은 UPDATE ... RETURNING이 돌려줄 줄이다.
     """
 
-    def __init__(self, fail_times=0, returning=(), answer=None):
+    def __init__(self, fail_times=0, returning=(), answer=None, answers=None):
         # answer는 읽기 질문(SELECT)에 돌려줄 줄들이다. 없으면 UPDATE ... RETURNING의 줄(returning)을 돌려준다.
+        # answers는 질문(SQL)마다 따로 돌려줄 줄들이고, 거기 없는 질문에는 answer를 돌려준다.
         self.answer = answer
+        self.answers = answers or {}
         self.rows = []
         self.statements = []
         self.fail_times = fail_times
@@ -86,10 +89,13 @@ class FakeCursor:
 
     def execute(self, sql, params):
         self.db.statements.append((sql, params))
+        self.sql = sql
         if sql is INSERT_SQL:
             self.db.rows.append(params)
 
     def fetchall(self):
+        if self.sql in self.db.answers:
+            return list(self.db.answers[self.sql])
         return list(self.db.answer) if self.db.answer is not None else self.db.returning
 
 
@@ -284,7 +290,51 @@ def test_moves_between_returns_parsed_rows_and_skips_a_row_that_cannot_be_read(s
     [run] = store_for(db, sleeps).moves_between(since, until)
     assert (run.job_id, run.symbol, run.change_percent, run.status, run.generated_by) == (
         "m1", "TEST01", 2.1, "succeeded", "llm")
-    assert db.statements == [(SELECT_MOVES_SQL, ("move", since, until))]
+    assert db.statements[0] == (SELECT_MOVES_SQL, ("move", since, until))
+    # 대표 기사 줄은 따로 읽는다. 줄이 없으면 급변동은 기사 기록 없이 돌아온다.
+    assert db.statements[1] == (SELECT_REPRESENTATIVES_SQL, ("representative-article", "move", since, until))
+    assert (run.recorded, run.article) == (False, None)
+
+
+def test_moves_between_attaches_each_jobs_representative_article_and_the_level(sleeps):
+    target = json.dumps({"symbol": "TEST01", "moveAt": "2026-10-20T10:15:00+09:00"})
+    mid = json.dumps({"payload": {"changePercent": -2.0, "detectionType": "window", "todayChangePercent": -5.4}})
+    high = json.dumps({"payload": {"changePercent": 7.1, "detectionType": "prevCloseHigh"}})
+    article = {"article": {"title": "TEST 기사", "publisher": "test.example.com",
+                           "publishedAt": "2026-10-20T10:02:00+09:00"}}
+    db = FakeDb(answers={
+        SELECT_MOVES_SQL: [("m1", mid, target, "succeeded", None, None), ("m2", high, target, "succeeded", "llm", None),
+                           ("m3", mid, target, "succeeded", None, None)],
+        SELECT_REPRESENTATIVES_SQL: [("m1", json.dumps(article)), ("m3", json.dumps({"article": None}))]})
+    runs = {r.job_id: r for r in store_for(db, sleeps).moves_between(AT.replace(hour=0, minute=0), AT)}
+
+    assert (runs["m1"].level, runs["m1"].today_change_percent, runs["m1"].recorded) == ("mid", -5.4, True)
+    assert (runs["m1"].article.title, runs["m1"].article.publisher, runs["m1"].article.published_at) == (
+        "TEST 기사", "test.example.com", datetime(2026, 10, 20, 10, 2, tzinfo=AT.tzinfo))
+    assert (runs["m2"].level, runs["m2"].recorded) == ("high", False)
+    assert (runs["m3"].recorded, runs["m3"].article) == (True, None)
+
+
+def test_moves_between_keeps_the_moves_when_the_representative_lines_cannot_be_read(sleeps):
+    class FailingRead(FakeDb):
+        def connect(self):
+            self.connects += 1
+            if self.connects > 1:
+                raise ConnectionError("down")
+            return FakeConnection(self)
+
+    target = json.dumps({"symbol": "TEST01", "moveAt": "2026-10-20T10:15:00+09:00"})
+    db = FailingRead(answer=[("m1", "{}", target, "succeeded", None, None)])
+    [run] = store_for(db, sleeps).moves_between(AT.replace(hour=0, minute=0), AT)
+    assert (run.job_id, run.recorded) == ("m1", False)
+
+
+def test_a_representative_line_with_a_broken_article_counts_as_no_record(sleeps):
+    target = json.dumps({"symbol": "TEST01", "moveAt": "2026-10-20T10:15:00+09:00"})
+    db = FakeDb(answers={SELECT_MOVES_SQL: [("m1", "{}", target, "succeeded", None, None)],
+                         SELECT_REPRESENTATIVES_SQL: [("m1", json.dumps({"article": {"title": "t"}}))]})
+    [run] = store_for(db, sleeps).moves_between(AT.replace(hour=0, minute=0), AT)
+    assert (run.recorded, run.article) == (False, None)
 
 
 def test_edition_started_asks_for_that_kind_on_the_korean_day(sleeps):

@@ -106,10 +106,19 @@ def test_collections_are_read_by_the_finished_time_range():
 
 def test_job_runs_are_read_by_the_started_time_range():
     row = ("job-1", "move", "failed", "llm_error", "rule-based", AT)
-    db = FakeDb(rows=[row])
+    db = FakeDb(rows=[(*row, '{"payload": {"detectionType": "prevCloseHigh"}}')])
     [run] = make(db).job_runs_between(AT - timedelta(hours=1), AT)
     assert db.statements[0][0] == SELECT_RUNS_SQL and "started_at >= %s AND started_at <= %s" in SELECT_RUNS_SQL
     assert (run.job_id, run.job_kind, run.status, run.failure_reason, run.generated_by, run.started_at) == row
+    assert run.level == "high"
+
+
+def test_a_job_run_level_comes_from_the_input_detection_type_and_defaults_to_mid():
+    from briefing.job_log import level_of_input
+
+    assert level_of_input('{"payload": {"detectionType": "prevCloseHigh"}}') == "high"
+    for raw in ('{"payload": {"detectionType": "window"}}', '{"payload": {}}', "not json", None, "[]"):
+        assert level_of_input(raw) == "mid"
 
 
 def test_a_failed_read_returns_none_without_leaking_the_error_text(caplog):

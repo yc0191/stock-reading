@@ -10,7 +10,8 @@ from datetime import timedelta
 import pytest
 
 from briefing.daily_final_check import FIX_ADDENDUM as DAILY_FIX_ADDENDUM
-from briefing.daily_final_check import DailyFinalCheck
+from briefing.daily_final_check import DailyFinalCheck, _units
+from briefing.daily_report import POINT_OTHER, DailyOutput, Point
 from briefing.daily_prompts import SYSTEM_PROMPT as MORNING_PROMPT
 from briefing.daily_prompts import SYSTEM_PROMPT_POST_CLOSE
 from briefing.final_check import CHOSE_AFTER, CHOSE_BEFORE, REVIEW_SYSTEM_PROMPT, FinalCheck
@@ -96,11 +97,11 @@ def test_move_without_rewrite_or_problem_is_code_checked_and_published_without_a
 
 
 def test_move_with_only_a_weak_mark_left_records_it_and_calls_no_review():
-    # 검색어가 없어 재검색을 못 해 근거 약함 표시가 남는다. 고칠 수 없는 문제라 검토를 부르지 않는다.
+    # 검색어가 없어 재검색을 못 해 근거 약함이 남는다(메일 본문에는 싣지 않는다). 고칠 수 없는 문제라 검토를 부르지 않는다.
     flow = move_flow([move_output((STRONG_TEXT, ["a1"], SHORTFALL))], [queries()], [])
     flow.to_report()
 
-    assert flow.check_llm.calls == [] and "근거 약함" in published_text(flow)
+    assert flow.check_llm.calls == [] and "근거 약함" not in published_text(flow)
     (checked,) = final_entries(flow.records, "code-checked")
     assert [p["kind"] for p in checked.data["problems"]] == ["weak-mark-left"]
 
@@ -296,3 +297,34 @@ def test_daily_review_failing_every_attempt_publishes_the_current_body(edition):
     assert REWRITTEN in daily_text(flow)
     assert len(final_entries(flow.records, "review-failed")) == 1
     assert chosen(flow.records)["why"] == "검토 호출이 끝내 실패해 지금 본문을 냄"
+
+
+def test_a_morning_fix_naming_an_etf_in_a_shared_sentence_is_rejected_and_the_body_before_the_fix_stays():
+    # 아침 판 밤사이 이슈는 멤버 모두에게 같은 글이라 고친 문장도 ETF 종목코드를 쓰면 받지 않는다.
+    bad = json.dumps({"statement": "TEST01이 오를 수 있습니다.", "refs": ["B1"]}, ensure_ascii=False)
+    flow = daily_flow("morning", [review(1), bad, bad, bad])
+
+    assert "TEST01이 오를 수 있습니다." not in daily_text(flow)
+    assert chosen(flow.records)["chosen"] == CHOSE_BEFORE
+
+
+def test_the_final_check_reads_and_fixes_the_other_issues_too():
+    other = Point("해외 원유가 내렸습니다.", ("B1",), None, POINT_OTHER)
+    output = DailyOutput((Point("밤사이 이슈입니다.", ("B1",)),), False, others=(other,))
+    units = _units(output)
+    assert [(u.field, u.kind, u.statement) for u in units] == [("points", "summary", "밤사이 이슈입니다."),
+                                                               ("others", "other", "해외 원유가 내렸습니다.")]
+
+
+def test_the_final_check_marks_a_rewritten_outlook_by_its_research_sentence_number():
+    from types import SimpleNamespace
+    from briefing.daily_jobs import DailyDraft, _Draft
+    from briefing.daily_report import POINT_OUTLOOK, DailyInput
+    output = DailyOutput((Point("밤사이 이슈입니다.", ("B1",)),), False,
+                         outlooks=(Point("예상입니다.", ("B1",), None, POINT_OUTLOOK, "TEST01", "상승"),))
+    i = DailyInput("job", "morning", T, T, (), False, (), (), (), False)
+    # 재검색 문장 번호: 밤사이 이슈 1, ETF 예상 2. 2번을 다시 썼다.
+    draft = DailyDraft(SimpleNamespace(job_id="job"), i, (), _Draft("", "llm", (), False, (), output, (2,)))
+    sentences = DailyFinalCheck(None).sentences(draft)
+    assert [(s.kind, s.rewritten) for s in sentences] == [("summary", False), ("outlook", True)]
+

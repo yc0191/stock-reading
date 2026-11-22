@@ -170,7 +170,7 @@ class MoveReplayTest {
             return null;
         }).when(publisher).publish(anyString(), any(Detection.class), any(OffsetDateTime.class), any(OffsetDateTime.class), any());
 
-        MoveDetector detector = new MoveDetector(snapshots, properties, JsonMapper.builder().build());
+        MoveDetector detector = new MoveDetector(snapshots, states, properties, JsonMapper.builder().build());
         MoveTracker tracker = new MoveTracker(detector, states, publisher, properties);
 
         int rows = 0;

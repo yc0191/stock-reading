@@ -130,6 +130,11 @@ MOVE_THREE_WEAK = move_output((WEAK_TEXT, ["a1"], SHORTFALL), (THIRD_TEXT, ["a1"
                               (STRONG_TEXT, ["a1"], "세 번째 부족한 점입니다."))
 
 
+def weak_items(flow):
+    """작업 기록(missing-items 줄)에 남은 근거 약함 부족한 점."""
+    return [x for e in flow.records.of_type(EntryType.MISSING_ITEMS) for x in e.data.get("weakItems", [])]
+
+
 def one_cause(text, refs, shortfall=None):
     """다시 쓰기 응답: 다시 쓴 원인 하나만 담는다."""
     return move_output((text, refs, shortfall))
@@ -247,6 +252,36 @@ def test_move_sentence_that_becomes_strong_on_the_second_search_is_searched_twic
     assert (result.research_count, result.weak_count) == (2, 0)
 
 
+def test_a_second_search_is_told_the_used_search_terms_and_does_not_repeat_them():
+    first = one_cause("다시 찾았지만 아직 약합니다.", ["r1"], STILL_SHORTFALL)
+    second = one_cause("한 번 더 찾은 기사로 확인했습니다.", ["r2"])
+    # 둘째 회차의 검색어 LLM이 첫 회차 검색어를 띄어쓰기만 바꿔 다시 낸다.
+    flow = Flow([MOVE_ONE_WEAK, first, second], [queries("검색어 하나"), queries("검색어  하나", "검색어 둘")])
+    flow.to_report()
+    first_context = json.loads(flow.query_llm.calls[0][1])
+    flow.complete_research(research_id=rid(2, 1))
+    flow.answer_research([R1], research_id=rid(2, 1))
+
+    # 처음 찾을 때의 입력 모양은 그대로이고, 둘째 회차에만 이미 쓴 검색어를 알려 준다.
+    assert "usedQueries" not in first_context
+    assert json.loads(flow.query_llm.calls[1][1])["usedQueries"] == ["검색어 하나"]
+    # 이미 쓴 검색어는 빼고 새 검색어로만 찾는다.
+    assert sentence_requests(flow)[1].value["payload"]["queries"] == ["검색어 둘"]
+
+
+def test_a_second_search_whose_terms_were_all_used_is_not_sent():
+    first = one_cause("다시 찾았지만 아직 약합니다.", ["r1"], STILL_SHORTFALL)
+    flow = Flow([MOVE_ONE_WEAK, first], [queries("검색어 하나"), queries("검색어 하나")])
+    flow.to_report()
+    flow.complete_research(research_id=rid(2, 1))
+    flow.answer_research([R1], research_id=rid(2, 1))
+
+    assert [r.value["payload"]["jobId"] for r in sentence_requests(flow)] == [rid(2, 1)]
+    (briefing,) = flow.briefings()
+    # 레벨 상 메일 본문에는 근거 약함을 쓰지 않고 작업 기록에만 남긴다.
+    assert "근거 약함" not in briefing.value["payload"]["text"] and weak_items(flow) == [STILL_SHORTFALL]
+
+
 def test_move_sentence_still_weak_after_two_searches_keeps_the_weak_note_and_is_not_searched_a_third_time():
     first = one_cause("다시 찾았지만 아직 약합니다.", ["r1"], STILL_SHORTFALL)
     second = one_cause("한 번 더 찾았지만 여전히 약합니다.", ["r2"], SECOND_SHORTFALL)
@@ -259,7 +294,7 @@ def test_move_sentence_still_weak_after_two_searches_keeps_the_weak_note_and_is_
 
     (briefing,) = flow.briefings()
     text = briefing.value["payload"]["text"]
-    assert (WEAK_NOTE_PREFIX + SECOND_SHORTFALL) in text and (WEAK_NOTE_PREFIX + STILL_SHORTFALL) not in text
+    assert "근거 약함" not in text and weak_items(flow) == [SECOND_SHORTFALL]
     assert len(sentence_requests(flow)) == 2 and len(flow.query_llm.calls) == 2
     (limit,) = flow.records.of(ResearchReason.SENTENCE_LIMIT)
     assert (limit.stage, limit.sentence_no) == (ResearchStep.LIMIT, 2)
@@ -286,7 +321,7 @@ def test_move_sentences_over_the_request_limit_are_not_searched_and_keep_the_wea
 
     (briefing,) = flow.briefings()
     text = briefing.value["payload"]["text"]
-    assert "세 번째 부족한 점입니다." in text and (WEAK_NOTE_PREFIX + "세 번째 부족한 점입니다.") in text
+    assert "근거 약함" not in text and weak_items(flow) == ["세 번째 부족한 점입니다."]
     (result,) = flow.records.results()
     assert (result.weak_count, result.research_count) == (1, 2)
 
@@ -301,7 +336,7 @@ def test_the_request_limit_counts_second_searches_too():
 
     assert len(sentence_requests(flow)) == 1 and len(flow.query_llm.calls) == 1
     (briefing,) = flow.briefings()
-    assert (WEAK_NOTE_PREFIX + STILL_SHORTFALL) in briefing.value["payload"]["text"]
+    assert "근거 약함" not in briefing.value["payload"]["text"] and weak_items(flow) == [STILL_SHORTFALL]
     assert [e.reason for e in flow.records.entries if e.stage == ResearchStep.LIMIT.value] == [
         ResearchReason.REQUEST_LIMIT.value]
 
@@ -327,7 +362,7 @@ def test_move_total_time_limit_publishes_the_body_at_that_moment_and_ignores_lat
     (briefing,) = flow.briefings()
     text = briefing.value["payload"]["text"]
     # 끝난 문장은 다시 쓴 대로, 끝나지 못한 문장은 약하다는 표시와 함께 그때의 본문으로 나간다.
-    assert "첫 문장을 다시 썼습니다." in text and (WEAK_NOTE_PREFIX + SECOND_SHORTFALL) in text
+    assert "첫 문장을 다시 썼습니다." in text and "근거 약함" not in text and weak_items(flow) == [SECOND_SHORTFALL]
     (limit,) = flow.records.of(ResearchReason.TIME_LIMIT)
     assert (limit.sentence_no, limit.stage) == (3, ResearchStep.LIMIT)
     (result,) = flow.records.results()
@@ -371,7 +406,7 @@ def test_move_sentence_whose_articles_were_all_used_by_another_sentence_is_not_r
     (record,) = flow.records.of(ResearchReason.ALL_USED_BY_OTHERS)
     assert record.sentence_no == 3
     (briefing,) = flow.briefings()
-    assert (WEAK_NOTE_PREFIX + SECOND_SHORTFALL) in briefing.value["payload"]["text"]
+    assert "근거 약함" not in briefing.value["payload"]["text"] and weak_items(flow) == [SECOND_SHORTFALL]
 
 
 def test_move_sentence_rewrite_citing_a_ref_outside_the_list_is_rejected_and_the_old_sentence_stays():
@@ -384,7 +419,8 @@ def test_move_sentence_rewrite_citing_a_ref_outside_the_list_is_rejected_and_the
     assert len(flow.report_llm.calls) == 4
     (briefing,) = flow.briefings()
     text = briefing.value["payload"]["text"]
-    assert "지어낸 근거" not in text and WEAK_TEXT in text and (WEAK_NOTE_PREFIX + SHORTFALL) in text
+    assert "지어낸 근거" not in text and WEAK_TEXT in text and "근거 약함" not in text
+    assert weak_items(flow) == [SHORTFALL]
     rejected = [e for e in flow.records.of_type(EntryType.LLM_REJECTED) if e.sentence_no == 2]
     assert [e.attempts for e in rejected] == [1, 2, 3] and all(e.round == 1 for e in rejected)
     assert "not given" in rejected[0].data["rejection"]
@@ -421,7 +457,7 @@ def test_move_research_articles_outside_the_time_range_are_dropped_again_and_nev
     (record,) = flow.records.of(ResearchReason.NO_USABLE_ARTICLES)
     assert record.sentence_no == 2 and record.data["excluded"] == 1
     (briefing,) = flow.briefings()
-    assert (WEAK_NOTE_PREFIX + SHORTFALL) in briefing.value["payload"]["text"]
+    assert "근거 약함" not in briefing.value["payload"]["text"] and weak_items(flow) == [SHORTFALL]
     received = flow.records.of(ResearchReason.ARTICLES_RECEIVED)
     assert received[0].data["dropped"][0]["reason"] == "outside_range"
 
@@ -434,7 +470,7 @@ def test_move_research_that_never_answers_publishes_the_first_report_with_its_we
     flow.sentences.on_tick(flow.clock.now)
 
     (briefing,) = flow.briefings()
-    assert (WEAK_NOTE_PREFIX + SHORTFALL) in briefing.value["payload"]["text"]
+    assert "근거 약함" not in briefing.value["payload"]["text"] and weak_items(flow) == [SHORTFALL]
     assert [r.reason for r in flow.records.entries if r.entry_type == EntryType.STEP_FAILED] == [
         ResearchReason.COMPLETION_TIMEOUT.value]
     assert len(flow.report_llm.calls) == 1
@@ -513,8 +549,12 @@ class DailyLlm(FakeLlm):
         if data["insufficientEvidence"]:
             return json.dumps({"points": [], "etfs": [], "insufficientEvidence": True})
         issue = {"statement": "환율이 영향을 줄 수 있습니다.", "refs": ["B1"], "weak": False, "shortfall": ""}
-        etfs = [{"symbol": e["symbol"], "direction": "상승", "reason": "미국 지수가 영향을 줄 수 있습니다.",
-                 "refs": ["B1"], "weak": False, "shortfall": ""} for e in user["outlookEtfs"]]
+        strong = {"direction": "상승", "reason": "미국 지수가 영향을 줄 수 있습니다.", "refs": ["B1"], "weak": False,
+                  "shortfall": ""}
+        # etfs를 준 응답은 그 예상을 앞 ETF부터 차례로 쓰고, 남는 ETF는 튼튼한 예상으로 채운다.
+        given = data.pop("etfs", [])
+        etfs = [{**(given[n] if n < len(given) else strong), "symbol": e["symbol"]}
+                for n, e in enumerate(user["outlookEtfs"])]
         return json.dumps({**data, "etfs": etfs, "fxIssue": issue, "rateIssue": issue}, ensure_ascii=False)
 
     @staticmethod
@@ -538,12 +578,12 @@ class DailyLlm(FakeLlm):
 class DailyFlow:
     """판 하나를 자료 수집 -> 요약 -> 문장 단위 재검색 -> 다시 쓰기까지 돌리는 도우미."""
 
-    def __init__(self, edition, report_outputs, query_outputs, etfs=None, settings=S, status=None):
+    def __init__(self, edition, report_outputs, query_outputs, etfs=None, settings=S, status=None, daily_settings=None):
         self.edition = edition
         self.job_type, self.at, self.ref = EDITIONS[edition]
         self.requests, self.records = Requests(), FakeJobLog()
         self.report_llm, self.query_llm = DailyLlm(edition, *report_outputs), FakeLlm(*query_outputs)
-        daily_settings = DailySettings()
+        daily_settings = daily_settings or DailySettings()
         self.sentences = SentenceResearch(
             QueryWriter(self.query_llm, settings.max_research_queries, settings.research_query_attempts),
             self.requests, self.requests.api, self.records, settings)
@@ -625,6 +665,11 @@ def in_range(flow, article_id="r1"):
 
 def out_of_range(flow):
     return news_article("r2", flow.at - timedelta(days=5))
+
+
+def weak_shown(text, shortfall):
+    """본문에 부족한 점이 보이는가. 마감 후 판은 약한 줄 바로 아래에, 아침 판은 면책 위 근거 약함 모음에 쓴다."""
+    return (WEAK_NOTE_PREFIX + shortfall) in text or f": {shortfall}" in text
 
 
 def two_weak(flow):
@@ -722,6 +767,28 @@ def test_morning_rewrite_leaves_exactly_one_outlook_record_that_matches_the_fina
     assert "다시 찾은 기사가 영향을 줬을 수 있습니다." in text
 
 
+def test_a_rewritten_morning_outlook_leaves_its_new_direction_in_the_outlook_record():
+    flow = DailyFlow("morning", [], [])
+    unsure = {"direction": "예상 어려움", "reason": "근거가 부족합니다.", "refs": [], "weak": True, "shortfall": SHORTFALL}
+    rewritten = json.dumps({"points": [{"direction": "하락", "statement": "새 기사로 내릴 수 있습니다.", "refs": ["r1"],
+                                        "weak": False, "shortfall": ""}], "insufficientEvidence": False},
+                           ensure_ascii=False)
+    flow.report_llm.outputs = [json.dumps({**json.loads(daily_output(point(STRONG_TEXT, flow.ref))), "etfs": [unsure]},
+                                          ensure_ascii=False), rewritten]
+    flow.query_llm.outputs = [queries(*QUERIES)]
+    flow.to_first_report()
+    # 문장 번호: 밤사이 이슈 1, 환율 2, 금리 3, 첫 ETF 예상 4.
+    flow.complete(flow.rid(4))
+    flow.stable([in_range(flow)], flow.rid(4))
+
+    (event,) = flow.published()
+    (entry,) = flow.records.of_type(EntryType.ETF_OUTLOOK)
+    first = entry.data["outlooks"][0]
+    # 마감 후 판이 다시 읽어 대조하는 기록에 다시 쓴 방향과 이유가 남는다.
+    assert (first["direction"], first["reason"], first["weak"]) == ("하락", "새 기사로 내릴 수 있습니다.", False)
+    assert "하락 예상" in event.value["payload"]["text"]
+
+
 def test_daily_with_several_weak_sentences_sends_one_separate_research_job_per_sentence(edition):
     flow = DailyFlow(edition, [], [])
     flow.report_llm.outputs = [two_weak(flow), daily_output(point("둘째 문장을 다시 썼습니다.", "r1")),
@@ -782,7 +849,7 @@ def test_daily_sentence_still_weak_after_two_searches_carries_the_shortfall_and_
 
     (event,) = flow.published()
     text = event.value["payload"]["text"]
-    assert (WEAK_NOTE_PREFIX + SECOND_SHORTFALL) in text and (WEAK_NOTE_PREFIX + STILL_SHORTFALL) not in text
+    assert weak_shown(text, SECOND_SHORTFALL) and not weak_shown(text, STILL_SHORTFALL)
     assert len(flow.research_requests()) == 2 and len(flow.query_llm.calls) == 2
     (limit,) = flow.records.of_reason(ResearchReason.SENTENCE_LIMIT)
     assert (limit.stage, limit.sentence_no) == (ResearchStep.LIMIT.value, 1)
@@ -791,7 +858,9 @@ def test_daily_sentence_still_weak_after_two_searches_carries_the_shortfall_and_
 
 
 def test_daily_sentences_over_the_request_limit_are_not_searched_and_keep_the_weak_note(edition):
-    flow = DailyFlow(edition, [], [], settings=CoreSettings(max_research_requests=1))
+    # 판의 요청 합계 상한은 급변동(CoreSettings)이 아니라 판 설정(DailySettings)을 따른다.
+    flow = DailyFlow(edition, [], [], settings=CoreSettings(max_research_requests=99),
+                     daily_settings=DailySettings(max_research_requests=1))
     flow.report_llm.outputs = [two_weak(flow), daily_output(point("둘째 문장을 다시 썼습니다.", "r1"))]
     flow.query_llm.outputs = [queries("검색어 하나")]
     flow.to_first_report()
@@ -805,7 +874,7 @@ def test_daily_sentences_over_the_request_limit_are_not_searched_and_keep_the_we
 
     (event,) = flow.published()
     text = event.value["payload"]["text"]
-    assert (WEAK_NOTE_PREFIX + SECOND_SHORTFALL) in text and "둘째 문장을 다시 썼습니다." in text
+    assert weak_shown(text, SECOND_SHORTFALL) and "둘째 문장을 다시 썼습니다." in text
     (result,) = flow.records.results()
     assert (result.weak_count, result.research_count) == (1, 1)
 
@@ -830,7 +899,7 @@ def test_daily_total_time_limit_publishes_the_body_at_that_moment(edition):
 
     (event,) = flow.published()
     text = event.value["payload"]["text"]
-    assert "둘째 문장을 다시 썼습니다." in text and (WEAK_NOTE_PREFIX + SECOND_SHORTFALL) in text
+    assert "둘째 문장을 다시 썼습니다." in text and weak_shown(text, SECOND_SHORTFALL)
     (limit,) = flow.records.of_reason(ResearchReason.TIME_LIMIT)
     assert limit.sentence_no == 3
     flow.complete(flow.rid(3))
@@ -867,7 +936,7 @@ def test_daily_sentence_rewrite_citing_a_ref_outside_the_list_is_rejected_and_th
     (event,) = flow.published()
     text = event.value["payload"]["text"]
     assert "지어낸 근거" not in text and "업종 소식이 영향을 줬을 수 있습니다." in text
-    assert (WEAK_NOTE_PREFIX + SHORTFALL) in text
+    assert weak_shown(text, SHORTFALL)
     rejected = [e for e in flow.records.of_type(EntryType.LLM_REJECTED) if e.sentence_no == 1]
     assert [e.attempts for e in rejected] == [1, 2, 3]
     assert "were not given" in rejected[0].data["llm"]["rejectReason"]
@@ -900,7 +969,7 @@ def test_daily_research_that_never_answers_publishes_the_first_result_with_its_w
     flow.sentences.on_tick(flow.now)
 
     (event,) = flow.published()
-    assert (WEAK_NOTE_PREFIX + SHORTFALL) in event.value["payload"]["text"]
+    assert weak_shown(event.value["payload"]["text"], SHORTFALL)
     assert [r.reason for r in flow.records.failures() if r.stage == ResearchStep.COMPLETION.value] == [
         ResearchReason.COMPLETION_TIMEOUT.value]
     assert len(flow.report_llm.calls) == 1

@@ -11,7 +11,7 @@ import briefing.daily_jobs as daily_jobs
 from briefing.config import DailySettings
 from briefing.daily_inputs import EtfArticles, MemberIssue, NotableCandidate
 from briefing.daily_jobs import DailyCore
-from briefing.daily_members import MemberPortfolio, member_input, member_output, member_sections
+from briefing.daily_members import MemberPortfolio, foreign_us_names, member_input, member_output, member_sections
 from briefing.daily_report import (
     POINT_ETF,
     POINT_FX,
@@ -22,10 +22,11 @@ from briefing.daily_report import (
     EtfDay,
     Point,
     build_sections,
+    daily_text,
 )
 from briefing.job_log import EntryType, RunStatus
 from briefing.member_store import SELECT_SQL, PostgresMemberStore
-from briefing.sources import CloseRate, Filing
+from briefing.sources import CloseRate, EtfInfo, EtfMember, Filing
 from fake_members import FakeMembers, member
 from fake_news import answer_news
 from test_daily_review import seed_move
@@ -117,6 +118,38 @@ def test_member_output_drops_sentences_about_other_members_etfs_but_keeps_the_ma
     assert [p.statement for p in out.points] == ["하나 이유"]
     assert out.summary == ("요약 첫째", "요약 둘째") and [p.statement for p in out.issues] == ["환율 문장"]
     assert member_output(None, mine, ()) is None
+
+
+def test_a_member_does_not_get_an_issue_cell_citing_another_members_evidence_and_sees_the_code_line_instead():
+    full = full_input(edition="morning")
+    sections = build_sections(full)
+    # 다른 멤버(TEST02)의 공시를 인용한 환율 이슈. 이 멤버의 근거 목록에는 그 번호가 없다.
+    output = DailyOutput((), False, issues=(Point("환율 문장", ("0000000001-26-000002",), None, POINT_FX),))
+    mine = member_input(full, member(1, held=("TEST01",)))
+    mine_sections = member_sections(mine, sections)
+    out = member_output(output, mine, mine_sections)
+    assert out.issues == ()
+    # 빠진 칸은 코드가 쓴 대체 줄로 채워져 메일이 오류 없이 만들어진다.
+    assert "  - 환율: 자료 없음" in daily_text(mine, mine_sections, out)
+
+
+def test_a_shared_sentence_naming_a_us_stock_held_only_through_another_members_etf_is_dropped_for_this_member():
+    def with_members(day, *names):
+        return replace(day, etf=EtfInfo(tuple(EtfMember("US", t, 1, n) for t, n in names), False))
+    full = full_input(edition="morning", etfs=(
+        with_members(etf_day("TEST01", tickers=("TESTA",)), ("TESTA", "TEST CORP A"), ("SHARED", "TEST SHARED")),
+        with_members(etf_day("TEST02", tickers=("FAKEB",)), ("FAKEB", "FAKE CORP B"), ("SHARED", "TEST SHARED"))))
+    output = DailyOutput(
+        points=(Point("FAKE CORP B 실적이 나왔습니다.", (), None), Point("FAKEB가 올랐습니다.", (), None),
+                Point("TEST SHARED와 TEST CORP A가 올랐습니다.", (), None),
+                Point("지수가 올랐습니다.", (), "FAKE CORP B 기사가 더 필요합니다.")),
+        insufficient_evidence=False)
+    mine = member_input(full, member(1, held=("TEST01",)))
+    foreign = foreign_us_names(full, mine)
+    assert foreign == (frozenset({"FAKEB"}), frozenset({"FAKE CORP B"}))
+    out = member_output(output, mine, member_sections(mine, build_sections(full)), foreign)
+    # 자기 ETF에도 담긴 종목과 자기 종목은 남고, 남의 ETF에만 담긴 종목을 쓴 문장(부족한 점 포함)은 빠진다.
+    assert [p.statement for p in out.points] == ["TEST SHARED와 TEST CORP A가 올랐습니다."]
 
 
 # ---- 저장소: SQL과 묶기 ----
@@ -275,10 +308,10 @@ def test_a_move_of_a_korean_stock_in_the_members_portfolio_is_listed_with_its_na
     events, _, _ = run_post_close(members, details=details)
     by_member = {e.value["payload"]["memberId"]: e.value["payload"] for e in events}
     one, two = moves_of(by_member[1]), moves_of(by_member[2])
-    assert "  - 10:15 TEST 주식 하나(TSTK01) +3.20% · 리포트 성공" in one
+    assert "  - 10:15 TEST 주식 하나(TSTK01) 오늘 +3.20% · 메일 보냄" in one
     assert "TSTK02" not in one and "TEST02" not in one and "  - 없음" not in one
     # 이름을 모르는 주식은 코드만 보인다.
-    assert "  - 11:00 TSTK02 −2.40% · 리포트 성공" in two and "  - 13:20 TEST 둘(TEST02) +1.90%" in two
+    assert "  - 11:00 TSTK02 오늘 −2.40% · 메일 보냄" in two and "  - 13:20 TEST 둘(TEST02) 오늘 +1.90%" in two
     assert "TSTK01" not in two
     assert "TEST 주식 하나(TSTK01)" in by_member[1]["html"] and "TSTK01" not in by_member[2]["html"]
 

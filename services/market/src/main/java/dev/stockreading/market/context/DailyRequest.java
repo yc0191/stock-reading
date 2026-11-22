@@ -9,7 +9,8 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 @JsonIgnoreProperties(ignoreUnknown = true)
 record DailyRequest(
         String jobId, int seq, String asOf, String since, int maxResponseBytes, int maxEtfs, int maxTickers,
-        Boolean includeOperations, String openFlowSince, Boolean includeIntradayFallback) {
+        Boolean includeOperations, String openFlowSince, Boolean includeIntradayFallback, String intradaySince,
+        Integer maxIntradayPoints, Integer maxDailyCloses) {
 
     boolean wantsOperations() {
         return Boolean.TRUE.equals(includeOperations);
@@ -17,5 +18,10 @@ record DailyRequest(
 
     boolean wantsIntradayFallback() {
         return Boolean.TRUE.equals(includeIntradayFallback);
+    }
+
+    /** 기간 종가는 요청이 거래일 수를 보냈을 때만 싣는다. */
+    boolean wantsDailyCloses() {
+        return maxDailyCloses != null;
     }
 }

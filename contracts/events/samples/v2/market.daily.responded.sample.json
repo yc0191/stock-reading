@@ -71,6 +71,50 @@
               }
             ]
           }
+        },
+        "intradaySeries": {
+          "status": "present",
+          "prevClose": "10000",
+          "truncated": false,
+          "points": [
+            {
+              "at": "2026-10-20T09:00:59+09:00",
+              "price": "10050",
+              "rateVsPrevClose": "0.50"
+            },
+            {
+              "at": "2026-10-20T09:01:58+09:00",
+              "price": "9990",
+              "rateVsPrevClose": "-0.10"
+            },
+            {
+              "at": "2026-10-20T15:30:00+09:00",
+              "price": "9850",
+              "rateVsPrevClose": "-1.50"
+            }
+          ]
+        },
+        "dailyCloses": {
+          "status": "present",
+          "fetchedAt": "2026-10-20T16:30:02+09:00",
+          "truncated": false,
+          "points": [
+            {
+              "date": "20261016",
+              "close": "9950",
+              "rate": "0.51"
+            },
+            {
+              "date": "20261019",
+              "close": "10000",
+              "rate": "0.50"
+            },
+            {
+              "date": "20261020",
+              "close": "9850",
+              "rate": "-1.50"
+            }
+          ]
         }
       },
       {
@@ -95,7 +139,19 @@
         "tickers": [
           "TESTA"
         ],
-        "tickersTruncated": false
+        "tickersTruncated": false,
+        "intradaySeries": {
+          "status": "no-snapshot",
+          "prevClose": null,
+          "truncated": false,
+          "points": []
+        },
+        "dailyCloses": {
+          "status": "no-daily-price",
+          "fetchedAt": null,
+          "truncated": false,
+          "points": []
+        }
       },
       {
         "symbol": "TEST04",

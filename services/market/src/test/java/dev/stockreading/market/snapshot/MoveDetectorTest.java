@@ -32,16 +32,18 @@ class MoveDetectorTest {
     private static final List<String> FIRST_TRADE_FIELDS = List.of("fake.volume", "fake.open");
 
     private PriceSnapshotRepository repository;
+    private MoveStateRepository states;
     private MoveDetector detector;
 
     @BeforeEach
     void setUp() {
         repository = mock(PriceSnapshotRepository.class);
+        states = mock(MoveStateRepository.class);
         // 가짜 필드 이름이다. 실제 응답 필드는 사용자가 원문을 보고 정한다.
         MarketProperties properties = new MarketProperties(
                 5, new BigDecimal("1.00"), List.of("fake.a", "fake.b", "fake.c"), new BigDecimal("3.00"), List.of(),
-                3, new BigDecimal("1.00"), FIRST_TRADE_FIELDS, 30, new BigDecimal("2.00"));
-        detector = new MoveDetector(repository, properties, JsonMapper.builder().build());
+                3, new BigDecimal("1.00"), FIRST_TRADE_FIELDS, 30, new BigDecimal("2.00"), new BigDecimal("7.00"));
+        detector = new MoveDetector(repository, states, properties, JsonMapper.builder().build());
     }
 
     private static PricePoint point(String time, long price) {
@@ -240,8 +242,8 @@ class MoveDetectorTest {
     void prevCloseIsOffWhenNoFieldIsSet(List<String> fields) {
         MarketProperties properties = new MarketProperties(
                 5, new BigDecimal("1.00"), fields, new BigDecimal("3.00"), List.of(),
-                3, new BigDecimal("1.00"), FIRST_TRADE_FIELDS, 30, new BigDecimal("2.00"));
-        MoveDetector off = new MoveDetector(repository, properties, JsonMapper.builder().build());
+                3, new BigDecimal("1.00"), FIRST_TRADE_FIELDS, 30, new BigDecimal("2.00"), new BigDecimal("7.00"));
+        MoveDetector off = new MoveDetector(repository, states, properties, JsonMapper.builder().build());
         when(repository.findBetween(anyString(), any(), any(), anyList())).thenReturn(List.of(point("16:00:00", 10_000)));
 
         List<Evaluation> evaluations = off.evaluate("TEST01", NOW, 10_400, raw("10000"));

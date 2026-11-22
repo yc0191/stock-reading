@@ -40,7 +40,7 @@ class PrevCloseDefaultsTest {
     private static final String OTHER_RESPONSE = "{\"fake\":{\"x\":\"10000\",\"y\":\"10000\"}}";
 
     private static Evaluation prevClose(MarketProperties properties, String raw) {
-        MoveDetector detector = new MoveDetector(mock(PriceSnapshotRepository.class), properties, JsonMapper.builder().build());
+        MoveDetector detector = new MoveDetector(mock(PriceSnapshotRepository.class), mock(MoveStateRepository.class), properties, JsonMapper.builder().build());
         return detector.evaluate("TEST01", AS_OF, 10_600, raw).stream()
                 .filter(e -> e.type() == DetectionType.PREV_CLOSE).findFirst().orElseThrow();
     }

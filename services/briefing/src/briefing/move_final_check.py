@@ -10,7 +10,6 @@ from briefing.job_log import JobLogPort
 from briefing.report import (
     KIND_ARTICLE,
     OUTPUT_SCHEMA,
-    SYSTEM_PROMPT,
     Cause,
     InvalidOutput,
     LlmOutput,
@@ -21,6 +20,7 @@ from briefing.report import (
     llm_report,
     move_headline,
     parse_output,
+    system_prompt,
     us_symbols_in_input,
 )
 from briefing.sentence_research import WHOLE_REPORT, MoveDraft, cause_text
@@ -65,11 +65,11 @@ class MoveFinalCheck:
 
     def fix_call(self, draft: MoveDraft, sentence: MailSentence) -> FixCall:
         # 처음 작성과 같은 지시문 블록을 써서 그 캐시를 읽고, 고치기 요청은 덧붙임 블록으로 보낸다.
-        return FixCall(SYSTEM_PROMPT, FIX_ADDENDUM, OUTPUT_SCHEMA, build_llm_input(draft.input, self.writer.settings))
+        return FixCall(system_prompt(self.writer.settings), FIX_ADDENDUM, OUTPUT_SCHEMA, build_llm_input(draft.input, self.writer.settings))
 
     def parse_fix(self, draft: MoveDraft, sentence: MailSentence, text: str) -> Cause:
         i = draft.input
-        output = parse_output(text, frozenset(evidence_catalog(i)), us_symbols_in_input(i))
+        output = parse_output(text, frozenset(evidence_catalog(i)), us_symbols_in_input(i), self.writer.settings)
         if output.insufficient_evidence or len(output.causes) != 1:
             raise InvalidOutput("fix must return exactly one cause")
         current = draft.report.output.causes[sentence.no - 1]

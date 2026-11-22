@@ -153,3 +153,59 @@ def test_a_chart_failure_still_sends_the_mail_and_logs_no_detail(monkeypatch, ca
     assert "images" not in payload and CHART_FAILED_ITEM in payload["missingItems"] and payload["html"]
     assert "daily chart failed" in caplog.text and "RuntimeError" in caplog.text
     assert "secret detail" not in caplog.text and "TEST01" not in caplog.text
+
+
+# ---- 흐름 그래프(장중, 1개월, 6개월) ----
+
+def charted_etfs():
+    """TEST01에 장중 흐름(09:00부터 1분마다)과 약 6개월치 기간 종가를 붙인 응답."""
+    from datetime import date, timedelta
+    items = etfs()
+    points = [{"at": f"2026-10-20T{9 + m // 60:02d}:{m % 60:02d}:58+09:00", "price": "10000",
+               "rateVsPrevClose": f"{(m % 7 - 3) / 10:.2f}"} for m in range(0, 390, 30)]
+    days, day = [], date(2026, 10, 20)
+    while len(days) < 130:
+        if day.weekday() < 5:
+            days.append({"date": day.strftime("%Y%m%d"), "close": str(10000 + len(days)), "rate": None})
+        day -= timedelta(days=1)
+    items[0] = {**items[0], "intradaySeries": {"status": "present", "prevClose": "10000", "truncated": False,
+                                               "points": points},
+                "dailyCloses": {"status": "present", "fetchedAt": FETCHED, "truncated": False,
+                                "points": list(reversed(days))}}
+    return items
+
+
+def test_the_post_close_mail_carries_the_day_intraday_and_period_charts_in_order_before_the_etf_reasons():
+    payload, _ = run(answer_etfs=charted_etfs())
+    assert [i["contentId"] for i in payload["images"]] == ["chart-day", "chart-intraday", "chart-1m", "chart-6m"]
+    html = payload["html"]
+    spots = [html.index(f"cid:{cid}") for cid in ("chart-day", "chart-intraday", "chart-1m", "chart-6m")]
+    assert spots == sorted(spots) and spots[-1] < html.index("이유:")
+    assert payload["text"].endswith("(그래프는 HTML 메일에 있습니다)")
+
+
+def test_the_line_charts_are_dropped_before_the_day_chart_when_the_event_is_too_big():
+    full, _ = run(answer_etfs=charted_etfs(), whole_event=True)
+    day_only, _ = run(whole_event=True)
+    size = lambda event: len(json.dumps(event, ensure_ascii=False).encode("utf-8"))
+    payload, _ = run(answer_etfs=charted_etfs(), settings=DailySettings(max_event_bytes=(size(full) + size(day_only)) // 2))
+    assert [i["contentId"] for i in payload["images"]] == ["chart-day"]
+    assert "흐름 그래프: 크기 초과" in payload["missingItems"] and "cid:chart-intraday" not in payload["html"]
+
+
+def test_a_morning_without_forecasts_attaches_no_open_flow_chart_and_no_note():
+    from test_daily_jobs import OPEN_AT
+    requests, details = Requests(), Details()
+    # Claude 없이(규칙 기반) 나가는 아침 판에는 예상 절이 없어 개장 흐름 그림의 자리가 없다.
+    core = DailyCore(requests, requests.api, None, details, DailySettings(), members=FakeMembers(ONE_MEMBER))
+    core.on_collection_ready(tick(MORNING_JOB, OPEN_AT), OPEN_AT)
+    points = [{"at": f"2026-10-20T09:0{m}:58+09:00", "price": "10000", "rateVsPrevClose": f"0.{m}0"} for m in range(5)]
+    item = {**etf_v2("TEST01", "TEST 하나"), "intradaySeries": {"status": "present", "prevClose": "10000",
+                                                              "truncated": False, "points": points}}
+    core.api.reply(daily_response(etfs=[item]), OPEN_AT)
+    answer_news(core, requests, OPEN_AT)
+    [event] = requests.topic("briefing.daily.generated")
+    payload = event.value["payload"]
+    assert "images" not in payload and "cid:" not in payload["html"]
+    assert "(그래프는 HTML 메일에 있습니다)" not in payload["text"]
+

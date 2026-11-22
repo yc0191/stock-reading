@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from briefing.config import CoreSettings
+from briefing.job_log import LEVEL_HIGH
 from briefing.jobs import BriefingCore, parse_move
 from briefing.report import ReportStage, RuleBasedWriter, build_llm_input, comparison_facts, figure_entries
 from contracts import sample, validate
@@ -52,8 +53,17 @@ def move(change=1.0, previous=12_000, price=12_120, detection="window", today=-2
         payload.pop("moveStartedAt")
     else:
         payload["detectionType"] = detection
-    assert validate("market.move.v1.schema.json", event) == []
+    # prevCloseHigh의 허용 값은 시세처리기 구간이 market.move 계약에 더한다. 두 구간을 합친 뒤에는 이 예외를 없앤다.
+    if detection != "prevCloseHigh":
+        assert validate("market.move.v1.schema.json", event) == []
     return json.dumps(event)
+
+
+@pytest.fixture(autouse=True)
+def every_move_gets_a_report(monkeypatch):
+    """이 파일은 감지 유형별 머리말·비교 숫자를 시험한다. 지금 리포트를 만드는 것은 상(prevCloseHigh)뿐이므로, 유형별 입력이
+    리포트 흐름을 타도록 레벨 판단만 상으로 고정한다(레벨 판단은 test_move_level.py가 시험한다)."""
+    monkeypatch.setattr("briefing.jobs.level_of", lambda detection_type: LEVEL_HIGH)
 
 
 def market_raw(kospi="  -1.45", kospi_direction="5", kosdaq="   0.30", kosdaq_direction="2"):

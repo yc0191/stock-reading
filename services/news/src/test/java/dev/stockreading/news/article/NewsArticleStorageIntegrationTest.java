@@ -84,6 +84,7 @@ class NewsArticleStorageIntegrationTest {
                 "[\"ITN003\"]", RESEARCH_JOB));
 
         assertThat(researchMark("1003")).containsEntry("from_research", true).containsEntry("job", RESEARCH_JOB);
+        assertThat(researchLinks("1003")).isEqualTo(RESEARCH_JOB);
     }
 
     @Test
@@ -97,20 +98,45 @@ class NewsArticleStorageIntegrationTest {
 
         assertThat(articles("https://news.example.com/it/1004")).isEqualTo(1);
         assertThat(researchMark("1004")).containsEntry("from_research", true).containsEntry("job", RESEARCH_JOB);
+        assertThat(researchLinks("1004")).isEqualTo(RESEARCH_JOB);
         assertThat(symbolsOf("1004")).isEqualTo("ITN004,ITN005");
     }
 
     @Test
-    void secondResearchJobFindingTheSameArticleDoesNotReplaceTheFirstJobId() {
+    void secondResearchJobFindingTheSameArticleIsLinkedWithoutReplacingTheFirstJobId() {
         listener.onNews(researchEvent("d5000000-0000-4000-8000-000000000001", "https://news.example.com/it/1005",
                 "[\"ITN006\"]", RESEARCH_JOB));
 
         listener.onNews(researchEvent("d5000000-0000-4000-8000-000000000002", "https://news.example.com/it/1005",
                 "[\"*\"]", OTHER_RESEARCH_JOB));
 
-        // 한 기사에 작업 id 하나만 두므로 두 번째 작업과의 연결은 남지 않는다. 종목 태그는 합친다.
+        // 예전 칸(research_job_id)은 처음 작업을 지키고, 두 작업과의 연결은 모두 남는다. 종목 태그는 합친다.
         assertThat(researchMark("1005")).containsEntry("from_research", true).containsEntry("job", RESEARCH_JOB);
+        assertThat(researchLinks("1005")).isEqualTo(RESEARCH_JOB + "," + OTHER_RESEARCH_JOB);
         assertThat(symbolsOf("1005")).isEqualTo("*,ITN006");
+    }
+
+    @Test
+    void sameResearchJobSendingTheSameArticleAgainLeavesOneLink() {
+        String message = researchEvent("d9000000-0000-4000-8000-000000000001", "https://news.example.com/it/1009",
+                "[\"ITN010\"]", RESEARCH_JOB);
+
+        listener.onNews(message);
+        listener.onNews(message);
+        // URL 만 다른 같은 기사를 같은 작업이 다른 이벤트로 보내도 연결은 하나다.
+        listener.onNews(researchEvent("d9000000-0000-4000-8000-000000000002", "https://www.news.example.com/it/1009/",
+                "[\"ITN010\"]", RESEARCH_JOB));
+
+        assertThat(articles("https://news.example.com/it/1009")).isEqualTo(1);
+        assertThat(researchLinks("1009")).isEqualTo(RESEARCH_JOB);
+    }
+
+    @Test
+    void regularCollectionLeavesNoResearchLink() {
+        listener.onNews(event("da000000-0000-4000-8000-000000000001", "https://news.example.com/it/1010",
+                "[\"ITN011\"]", "[\"검색어A\"]"));
+
+        assertThat(researchLinks("1010")).isEmpty();
     }
 
     @Test
@@ -162,6 +188,16 @@ class NewsArticleStorageIntegrationTest {
                         SELECT from_research, CAST(research_job_id AS text) AS job FROM news_article
                         WHERE url LIKE :pattern
                         """).param("pattern", "%/it/" + urlPart).query().singleRow();
+    }
+
+    // 그 기사와 이어진 재검색 작업 id 들. 연결이 없으면 빈 문자열이다.
+    private static String researchLinks(String urlPart) {
+        return jdbc.sql("""
+                        SELECT coalesce(string_agg(CAST(r.research_job_id AS text), ','
+                                                   ORDER BY CAST(r.research_job_id AS text)), '')
+                        FROM news_article_research r JOIN news_article a ON a.id = r.article_id
+                        WHERE a.url LIKE :pattern
+                        """).param("pattern", "%/it/" + urlPart).query(String.class).single();
     }
 
     private static String researchEvent(String eventId, String url, String symbolsJson, String researchJobId) {

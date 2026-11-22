@@ -32,12 +32,23 @@ SAMPLES=$OUT/memory-samples.csv
 ENV_DIR=$OUT/env
 DATA_COMPOSE="docker compose -f /repo/infra/deploy/compose/data.yml --env-file /etc/rehearsal/data.env"
 SVC_COMPOSE="docker compose -f /repo/infra/deploy/compose/services.yml --env-file /etc/rehearsal/services.env"
-SERVICE_IMAGES="collector market news notifier briefing migrate"
+SERVICE_IMAGES="collector market news notifier briefing ops-checker migrate"
+SERVICES="collector market news notifier briefing ops-checker"
 
 mkdir -p "$OUT"
 
 in_data() { docker exec "$DATA" "$@"; }
 in_svc() { docker exec "$SVC" "$@"; }
+
+# 운영 apply-deploy.sh 와 같은 순서로 적용한다: DB 표 만들기를 먼저 따로 돌리고, 성공했을 때만 서비스를 바꾼다.
+# 표 만들기 컨테이너는 --rm 이라 남지 않으므로 종료 코드를 $OUT/migrate-<버전>.exit 에 적어 둔다.
+deploy_version() { # <버전 태그>
+  local rc=0
+  in_svc sh -c "DEPLOY_VERSION=$1 $SVC_COMPOSE run --rm -T --no-deps flyway-migrate" || rc=$?
+  echo "$rc" >"$OUT/migrate-$1.exit"
+  [ "$rc" -eq 0 ] || { echo "실패: DB 표 만들기(버전 $1), 서비스는 바꾸지 않음" >&2; return 1; }
+  in_svc sh -c "DEPLOY_VERSION=$1 $SVC_COMPOSE up -d --no-deps --remove-orphans $SERVICES"
+}
 
 start_server() { # <이름> <사설 주소>
   docker rm -f "$1" >/dev/null 2>&1 || true
@@ -162,8 +173,8 @@ cmd_up() {
   fi
   echo "데이터 서버 127.0.0.1: 닫힘(포트는 사설 주소에만 바인딩)"
 
-  echo "== 서비스 서버 띄우기(DB 표 만들기 -> 서비스 5개) =="
-  in_svc sh -c "DEPLOY_VERSION=dev $SVC_COMPOSE up -d"
+  echo "== 서비스 서버 띄우기(DB 표 만들기 -> 서비스 6개) =="
+  deploy_version dev
   in_svc sh -c "DEPLOY_VERSION=dev $SVC_COMPOSE ps -a --format '{{.Service}} {{.State}} {{.ExitCode}}'" | tee "$OUT/services-state.txt"
 }
 
@@ -216,7 +227,7 @@ cmd_wait_and_check() {
     echo "[서비스 상태]"
     in_svc sh -c "DEPLOY_VERSION=dev $SVC_COMPOSE ps -a --format '{{.Service}} {{.State}} exit={{.ExitCode}}'"
     echo "[서비스 재시작 횟수(0 이어야 함)]"
-    for name in collector market news notifier briefing; do
+    for name in $SERVICES; do
       echo "$name $(in_svc docker inspect -f '{{.RestartCount}} oom={{.State.OOMKilled}}' "stock-services-$name-1")"
     done
     echo "[브리핑 결과 토픽 briefing.daily.generated 의 메시지 수(파티션:끝 오프셋)]"
@@ -230,8 +241,8 @@ cmd_wait_and_check() {
   } | tee "$OUT/checks.txt"
 }
 
-# 운영 배포와 같은 상황: 서비스 5개가 도는 중에 새 버전 태그로 `up -d` 를 하면 DB 표 만들기 단계가 다시 돌고 서비스가 새로 만들어진다.
-# 이 순간 옛 서비스와 새 서비스, 마이그레이션 컨테이너가 잠깐 겹쳐 서버 메모리가 가장 크다.
+# 운영 배포와 같은 상황: 서비스가 도는 중에 새 버전 태그로 apply-deploy.sh 와 같은 순서(DB 표 만들기 먼저, 그다음 서비스 교체)로 적용한다.
+# 표 만들기는 옛 서비스가 도는 동안 돌고, 서비스 교체 때 옛 서비스와 새 서비스가 잠깐 겹쳐 서버 메모리가 가장 크다.
 cmd_redeploy() {
   echo "== 서비스가 도는 중 두 번째 배포(새 버전 태그 dev2) =="
   local name file="$OUT/redeploy-samples.csv" pid
@@ -247,7 +258,7 @@ cmd_redeploy() {
     done
   ) >/dev/null 2>&1 &
   pid=$!
-  in_svc sh -c "DEPLOY_VERSION=dev2 $SVC_COMPOSE up -d"
+  deploy_version dev2 || true
   sleep 60
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
@@ -255,11 +266,12 @@ cmd_redeploy() {
     echo "[두 번째 배포 뒤 서비스 상태]"
     in_svc sh -c "DEPLOY_VERSION=dev2 $SVC_COMPOSE ps -a --format '{{.Service}} {{.State}} exit={{.ExitCode}}'"
     echo "[재시작 횟수와 OOM 종료(둘 다 0·false 여야 함)]"
-    for name in collector market news notifier briefing; do
+    for name in $SERVICES; do
       echo "$name $(in_svc docker inspect -f '{{.RestartCount}} oom={{.State.OOMKilled}}' "stock-services-$name-1")"
     done
-    echo "[DB 표 만들기 단계: 실행 사용자(root 가 아니어야 함)와 종료 코드]"
-    in_svc docker inspect -f 'user={{.Config.User}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' stock-services-flyway-migrate-1
+    echo "[DB 표 만들기 단계: 실행 사용자(root 가 아니어야 함)와 종료 코드(0 이어야 함), 남은 컨테이너(없어야 함)]"
+    echo "user=$(in_svc docker image inspect -f '{{.Config.User}}' local/stock-reading-migrate:dev2) exit=$(cat "$OUT/migrate-dev2.exit")"
+    in_svc docker ps -a --filter name=flyway-migrate --format '{{.Names}} {{.Status}}' 
     echo "[두 번째 배포 동안 서비스 서버 전체 메모리]"
     python3 - "$file" <<'PY'
 import csv, sys

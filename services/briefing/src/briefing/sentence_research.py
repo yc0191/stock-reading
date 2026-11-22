@@ -58,6 +58,9 @@ class SentenceAdapter(Protocol):
 
     def can_research(self, draft: Any) -> bool: ...
 
+    def request_limit(self) -> int | None:
+        """작업 하나가 보낼 수 있는 재검색 요청 합계. None이면 CoreSettings.max_research_requests를 쓴다."""
+
     def weak_sentences(self, draft: Any) -> tuple[WeakSentence, ...]: ...
 
     def whole_insufficient(self, draft: Any) -> bool: ...
@@ -80,6 +83,11 @@ class SentenceAdapter(Protocol):
     def sentence_text(self, draft: Any, sentence_no: int) -> str | None: ...
 
     def publish(self, draft: Any, now: datetime, research_count: int) -> None: ...
+
+
+def _query_key(query: str) -> str:
+    """같은 검색어인지 볼 때 띄어쓰기 차이는 무시한다."""
+    return " ".join(query.split())
 
 
 def research_job_id(job_id: str, sentence_no: int, round: int) -> str:
@@ -106,6 +114,8 @@ class _Run:
     # 문장을 다시 쓰는 데 이미 쓴 기사. 같은 articleId는 다른 문장에 다시 쓰지 않는다.
     used_ids: set[str] = field(default_factory=set)
     research_articles: list[Article] = field(default_factory=list)
+    # 이 작업에서 이미 검색한 검색어. 같은 검색어로 다시 찾으면 새 기사 없이 하루 호출 수만 쓴다.
+    used_queries: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -162,7 +172,7 @@ class SentenceResearch:
             limit = ResearchReason.SENTENCE_LIMIT
         elif now >= run.deadline:
             limit = ResearchReason.TIME_LIMIT
-        elif run.requests >= self.settings.max_research_requests:
+        elif run.requests >= self._request_limit(run):
             limit = ResearchReason.REQUEST_LIMIT
         if limit is not None:
             self._note(run, no, state.rounds + 1, ResearchStep.LIMIT, limit, now)
@@ -170,9 +180,19 @@ class SentenceResearch:
         state.rounds += 1
         research_id = research_job_id(run.job_id, no, state.rounds)
         target = run.adapter.target(run.draft, research_id, no, state.rounds)
-        found = ask_queries(self.queries, self.job_log, target, run.adapter.query_context(run.draft, sentence), now)
+        context = run.adapter.query_context(run.draft, sentence)
+        if run.used_queries:
+            # 처음 찾는 입력 모양은 그대로 두고, 앞서 쓴 검색어가 있을 때만 알려 준다.
+            context = {**context, "usedQueries": sorted(run.used_queries)}
+        asked = ask_queries(self.queries, self.job_log, target, context, now)
+        used = {_query_key(u) for u in run.used_queries}
+        found = tuple(q for q in asked if _query_key(q) not in used)
         if not found:
+            if asked:
+                # 검색어 LLM이 낸 검색어가 모두 이미 쓴 것이라 찾지 않는다(못 낸 경우는 ask_queries가 남겼다).
+                self._note(run, no, state.rounds, ResearchStep.QUERY, ResearchReason.NO_QUERIES, now)
             return
+        run.used_queries.update(found)
         if self.research.start(target, found, now):
             run.requests += 1
             run.inflight[research_id] = no
@@ -275,12 +295,16 @@ class SentenceResearch:
         self._runs.pop(run.job_id, None)
         run.adapter.publish(run.draft, now, run.requests)
 
+    def _request_limit(self, run: _Run) -> int:
+        limit = run.adapter.request_limit()
+        return self.settings.max_research_requests if limit is None else limit
+
     def _note(self, run: _Run, no: int, round: int, step: ResearchStep, reason: ResearchReason,
               now: datetime) -> None:
         target = run.adapter.target(run.draft, research_job_id(run.job_id, no, round), no, round)
         self.job_log.record(research_entry(
             target, step, reason, now, 0,
-            extra={"requests": run.requests, "requestLimit": self.settings.max_research_requests,
+            extra={"requests": run.requests, "requestLimit": self._request_limit(run),
                    "roundLimit": self.settings.research_rounds_per_sentence,
                    "totalLimitSeconds": int(self.settings.research_total_limit.total_seconds())}))
 
@@ -318,6 +342,9 @@ class MoveSentences:
 
     def can_research(self, draft: MoveDraft) -> bool:
         return True
+
+    def request_limit(self) -> int | None:
+        return None
 
     def weak_sentences(self, draft: MoveDraft) -> tuple[WeakSentence, ...]:
         output = draft.report.output

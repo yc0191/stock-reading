@@ -76,6 +76,29 @@ class DailyIntegrationTest {
         assertThat(count()).isEqualTo(before);
     }
 
+    @Test
+    void historyGivesOneRowPerKoreanDayTheLatestOfThatDayNewestFirstInsideTheRange() {
+        // 다른 테스트의 시각대와 겹치지 않게 2023년을 쓴다. 15:00Z는 한국 날짜로 다음 날 00:00이다.
+        OffsetDateTime asOf = OffsetDateTime.parse("2023-07-20T08:00:00Z");
+        insert("DT0007", "{\"v\": \"day1-early\"}", OffsetDateTime.parse("2023-07-17T23:30:00Z"));
+        insert("DT0007", "{\"v\": \"day1-late\"}", OffsetDateTime.parse("2023-07-18T07:30:00Z"));
+        insert("DT0007", "{\"v\": \"day2\"}", OffsetDateTime.parse("2023-07-18T15:00:00Z"));
+        insert("DT0007", "{\"v\": \"at\"}", asOf);
+        insert("DT0007", "{\"v\": \"after\"}", asOf.plusSeconds(1));
+        insert("DT0007", "{\"v\": \"too-old\"}", asOf.minusDays(10));
+        insert("DT0008", "{\"v\": \"other\"}", asOf.minusHours(1));
+
+        List<BackgroundRepository.StoredResponse> rows = repository.dailyPriceHistory("DT0007", asOf.minusDays(5), asOf, 7);
+
+        assertThat(rows).extracting(BackgroundRepository.StoredResponse::response)
+                .containsExactly("{\"v\": \"at\"}", "{\"v\": \"day2\"}", "{\"v\": \"day1-late\"}");
+        assertThat(rows.get(0).fetchedAt()).isEqualTo(asOf);
+        // 건수 상한이 있으면 최근 것부터 그만큼만 읽는다.
+        assertThat(repository.dailyPriceHistory("DT0007", asOf.minusDays(5), asOf, 2))
+                .extracting(BackgroundRepository.StoredResponse::response)
+                .containsExactly("{\"v\": \"at\"}", "{\"v\": \"day2\"}");
+    }
+
     private static long count() {
         return jdbc.sql("SELECT count(*) FROM daily_price").query(Long.class).single();
     }

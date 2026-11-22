@@ -22,12 +22,21 @@ def schema_errors(name: str, instance: dict) -> list:
     return [e.message for e in Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(instance)]
 
 
+def test_move_is_a_high_level_move_against_the_base_price():
+    # 레벨 중(window 등)이면 브리핑이 LLM·메일 없이 끝내 실서버 시험이 항상 실패한다.
+    move = lb.move_event(SNAPSHOT, "RUN1", NOW)
+    payload = move["payload"]
+    assert payload["detectionType"] == "prevCloseHigh"
+    assert payload["changePercent"] >= 7.0 and payload["todayChangePercent"] == payload["changePercent"]
+    assert schema_errors("market.move", move) == []
+
+
 def test_move_uses_the_snapshot_price_and_a_lower_previous_price():
     move = lb.move_event(SNAPSHOT, "RUN1", NOW)
     payload = move["payload"]
     assert payload["price"] == 10150
-    assert payload["previousPrice"] == 10000
-    assert payload["changePercent"] == 1.5
+    assert payload["previousPrice"] == 9398
+    assert payload["changePercent"] == 8.0
     assert payload["changePercent"] >= payload["thresholdPercent"]
     assert payload["asOf"] == "2026-10-20T16:00:31+09:00"
     assert move["correlationId"] == "test-all-RUN1"
@@ -38,7 +47,7 @@ def test_change_percent_is_computed_from_the_rounded_previous_price():
     payload = lb.move_event(lb.Snapshot("TEST01", 12345, SNAPSHOT.as_of), "RUN1", NOW)["payload"]
     expected = round((12345 - payload["previousPrice"]) / payload["previousPrice"] * 100, 2)
     assert payload["changePercent"] == expected
-    assert 1.0 <= payload["changePercent"] <= 2.0
+    assert 7.0 <= payload["changePercent"] <= 9.0
 
 
 @pytest.mark.parametrize("price", [0, 1, 2])

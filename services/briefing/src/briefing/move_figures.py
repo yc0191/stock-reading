@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Sequence
 
 from briefing.compose import KST
 from briefing.config import DEFAULT_SETTINGS, CoreSettings
+from briefing.job_log import DETECTION_PREV_CLOSE_HIGH
 from briefing.sources import BACKGROUND_OK, MARK_MISSING, Background, CloseRate
 
 if TYPE_CHECKING:
@@ -57,6 +58,26 @@ class IndexFigure:
 
 
 @dataclass(frozen=True)
+class OverseasQuote:
+    """시장종합 원문의 해외 시세 행(해외 지수·선물·원유 등). 등락률은 원문에 부호가 붙어 온다."""
+
+    name: str
+    price: Decimal | None
+    rate: Decimal | None
+    # 원문 시각 칸 그대로(yyyyMMdd 또는 yyyyMMddHHmmss). 현지 시각인지는 원문이 밝히지 않는다.
+    at: str | None
+
+
+@dataclass(frozen=True)
+class InvestorFlow:
+    """시장종합 원문의 투자자별 순매수 행. 단위는 원문이 밝히지 않아 숫자만 옮긴다."""
+
+    investor: str
+    kospi: Decimal | None
+    kosdaq: Decimal | None
+
+
+@dataclass(frozen=True)
 class UsCloseSummary:
     """담긴 미국 종목의 직전 정규장 등락률 집계. 숫자로 읽은 등락률만 센다."""
 
@@ -98,8 +119,8 @@ def round_cent(value: Decimal) -> Decimal:
     return value.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
-def _rows(item: Background | None) -> list[dict]:
-    """배경 원문의 본문 목록(out2). 원문이 없거나 모양이 다르면 빈 목록."""
+def _rows(item: Background | None, block: str = "out2") -> list[dict]:
+    """배경 원문의 본문 목록(기본 out2). 원문이 없거나 모양이 다르면 빈 목록."""
     if item is None or item.status != BACKGROUND_OK or item.response is None:
         return []
     try:
@@ -107,7 +128,7 @@ def _rows(item: Background | None) -> list[dict]:
     except (json.JSONDecodeError, TypeError):
         return []
     body = data.get("dataBody") if isinstance(data, dict) else None
-    rows = body.get("out2") if isinstance(body, dict) else None
+    rows = body.get(block) if isinstance(body, dict) else None
     return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
 
 
@@ -169,6 +190,27 @@ def index_figure(background: Sequence[Background], name: str) -> IndexFigure | N
         rate=to_decimal(row.get("up_dwn_r_p2")),
         fetched_at=item.fetched_at,
     )
+
+
+def _text(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()
+
+
+def overseas_quotes(background: Sequence[Background]) -> tuple[OverseasQuote, ...]:
+    """시장종합 원문의 해외 시세 행(out4). 이름이 빈 행은 원문의 빈자리라 뺀다."""
+    rows = _rows(_background(background, MARKET_SUMMARY_API), "out4")
+    return tuple(OverseasQuote(name, to_decimal(row.get("now_prc")), to_decimal(row.get("up_dwn_r_p2")),
+                               _text(row.get("dt_tm")))
+                 for row in rows for name in [_text(row.get("symbl_nm"))] if name is not None)
+
+
+def investor_flows(background: Sequence[Background]) -> tuple[InvestorFlow, ...]:
+    """시장종합 원문의 투자자별 순매수 행(out5). 투자자 이름이 빈 행은 뺀다."""
+    rows = _rows(_background(background, MARKET_SUMMARY_API), "out5")
+    return tuple(InvestorFlow(name, to_decimal(row.get("kspi_nt_b")), to_decimal(row.get("ksdq_nt_b")))
+                 for row in rows for name in [_text(row.get("invstr_clsf_nm"))] if name is not None)
 
 
 def versus(change_percent: float | None, index: IndexFigure | None) -> Decimal | None:
@@ -241,10 +283,15 @@ def display(value: Decimal | int | str | None, sign: bool = False) -> str:
 COMPARED_MOVE = "변동률"
 COMPARED_TODAY = "오늘 등락률"
 
+# 레벨 상의 기준가 종류(결과 이벤트의 baseKind). 첫 상은 전일 종가, 그날 앞선 상이 있으면 그 상의 가격이다.
+BASE_PREV_CLOSE = "prevClose"
+BASE_EARLIER_MOVE = "earlierMove"
+
 
 def compares_today(report_input: ReportInput) -> bool:
-    """짧은 시간 변동의 변동률은 몇 분 사이의 값이라, 그 종목의 오늘 등락률(전일 종가 대비)로 시장과 비교한다."""
-    return report_input.detection_type == "window"
+    """짧은 시간 변동의 변동률은 몇 분 사이의 값이고 레벨 상의 변동률은 기준가 대비 값이라, 그 종목의 오늘 등락률(전일 종가 대비)로
+    시장과 비교한다."""
+    return report_input.detection_type in ("window", DETECTION_PREV_CLOSE_HIGH)
 
 
 def compared_label(report_input: ReportInput) -> str:
@@ -252,7 +299,7 @@ def compared_label(report_input: ReportInput) -> str:
 
 
 def report_figures(report_input: ReportInput, settings: CoreSettings = DEFAULT_SETTINGS) -> MoveFigures:
-    """비교 숫자. 짧은 시간 변동에 오늘 등락률이 없으면 비교 숫자를 만들지 않는다(짧은 변동률로 대신하지 않는다)."""
+    """비교 숫자. 짧은 시간·기준가 대비 변동에 오늘 등락률이 없으면 비교 숫자를 만들지 않는다(짧은 변동률로 대신하지 않는다)."""
     i = report_input
     compared = i.today_change_percent if compares_today(i) else i.change_percent
     return move_figures(compared, i.background, i.close_rates, as_of=i.as_of, stale_after=settings.market_stale_after)
@@ -288,6 +335,18 @@ def window_minutes(report_input: ReportInput) -> int | None:
     if i.detection_type != "window" or i.detected_at is None:
         return None
     return max(1, int((i.detected_at - i.as_of).total_seconds() // 60))
+
+
+def high_today(report_input: ReportInput) -> tuple[float, bool] | None:
+    """레벨 상의 (오늘 등락률, 첫 상인지). 오늘 등락률을 모르면 None이다.
+
+    첫 상은 기준가가 전일 종가라 기준가 대비 변동률과 오늘 등락률이 같다. 두 번째 상부터는 기준가가 앞선 상의 가격(전일 종가에서
+    상 기준 이상 벗어난 값)이라 다르다.
+    """
+    i = report_input
+    if i.detection_type != DETECTION_PREV_CLOSE_HIGH or i.today_change_percent is None:
+        return None
+    return i.today_change_percent, abs(round(i.change_percent, 2) - round(i.today_change_percent, 2)) <= 0.01
 
 
 def today_first(report_input: ReportInput,

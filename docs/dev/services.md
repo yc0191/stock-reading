@@ -10,18 +10,18 @@
 
 ### 급변동 감지 (`market.move`)
 
-스냅샷마다 두 유형을 평가합니다. 유형 1(`window`)은 최근 이력의 가장 오래된 스냅샷과, 유형 2(`prevClose`)는 원문의 전일 종가(후보 칸 다수결)와 비교하며, 조건이 연속으로 확인될 때만 발행합니다. 한 번 발행한 뒤에는 마지막 발행 가격에서 더 움직여야 다시 발행하고, 종목 단위 재발행 간격이 있습니다. 상태는 그날(한국 날짜) 것만 쓰며 `move_state` 테이블에 둡니다. 오늘 등락률(`todayChangePercent`)은 응답 칸을 옮기지 않고 코드가 계산합니다.
+스냅샷마다 세 유형을 평가합니다. 유형 1(`window`)은 최근 이력의 가장 오래된 스냅샷과, 유형 2(`prevClose`)는 원문의 전일 종가(후보 칸 다수결)와 비교하며, 조건이 연속으로 확인될 때만 발행합니다. 레벨 상(`prevCloseHigh`)은 상 기준가와 비교합니다. 기준가는 그날 처음엔 전일 종가이고 상을 발행하면 그 발행 가격으로 바뀌며, 기준가 대비 위아래로 7%(`high-threshold-percent`) 이상이면 상입니다. 연속 확인과 가격 모임 규칙은 같고 종목 단위 재발행 간격은 적용하지 않고 종목별 마지막 발행 가격도 바꾸지 않으며(상은 window·prevClose의 재발행 판단에 영향이 없습니다), 한국 날짜가 바뀌면 전일 종가부터 다시 시작합니다. 상 이벤트의 `previousPrice`는 그때의 기준가, `changePercent`는 기준가 대비, `todayChangePercent`는 전일 종가 대비입니다. 중(`window`·`prevClose`)은 한 번 발행한 뒤에는 마지막 발행 가격에서 더 움직여야 다시 발행하고, 종목 단위 재발행 간격이 있습니다. 상태는 그날(한국 날짜) 것만 쓰며 `move_state` 테이블에 둡니다. 오늘 등락률(`todayChangePercent`)은 응답 칸을 옮기지 않고 코드가 계산합니다.
 
 - 규칙과 이유: `services/market/src/main/java/dev/stockreading/market/snapshot/`의 `MoveTracker`(발행 관문, 날짜 경계), `MoveDetector`(기준값, 튄 점, 첫 체결 전 응답, 전일 종가 다수결) 주석
-- 설정과 기본값: `services/market/src/main/resources/application.yml`의 `market.*`(`window-minutes`, `window-threshold-percent`, `prev-close-fields`, `prev-close-threshold-percent`, `open-price-fields`, `confirm-count`, `confirm-spread-percent`, `first-trade-fields`, `republish-interval-minutes`, `republish-exception-percent`). 칸 경로 설정은 같은 파일 주석에 적힌 환경변수(`MARKET_PREV_CLOSE_FIELDS` 등)로 덮어쓸 수 있고, 빈 값일 때의 동작도 그 주석에 있습니다.
+- 설정과 기본값: `services/market/src/main/resources/application.yml`의 `market.*`(`window-minutes`, `window-threshold-percent`, `prev-close-fields`, `prev-close-threshold-percent`, `open-price-fields`, `confirm-count`, `confirm-spread-percent`, `first-trade-fields`, `republish-interval-minutes`, `republish-exception-percent`, `high-threshold-percent`). 칸 경로 설정은 같은 파일 주석에 적힌 환경변수(`MARKET_PREV_CLOSE_FIELDS` 등)로 덮어쓸 수 있고, 빈 값일 때의 동작도 그 주석에 있습니다.
 - 메시지 모양: `contracts/events/market.move.v1.schema.json`
 
 ### 내부 조회 API
 
 브리핑이 부르는 API입니다. 요청값의 원본은 브리핑 `config.py`이고, 시세처리기는 요청이 자기 안전 상한보다 크면 상한까지만 답합니다. 시세 이력(`/internal/market/history`)은 `history/HistoryQuery`가 답합니다.
 
-- **배경 자료** `/internal/market/context`: `context/ContextQuery`가 답합니다. 종류별 최신 원문, ETF에 담긴 미국 종목과 직전 정규장 등락률(`insight/OverseasCloseRateQuery`, 고르는 규칙은 그 주석), 세계지수 등락률(`indexRates`, 계산은 `context/WorldIndexRates`)을 줍니다. 안전 상한은 `application.yml`의 `market.context.*`입니다.
-- **데일리 판 자료** `/internal/market/daily`: `context/DailyQuery`가 답합니다. 요청·응답 모양과 선택 칸 `includeIntradayFallback`(장중 대체값), `includeOperations`(운영 상태, `context/OperationsRepository`), `openFlowSince`(개장 흐름, `context/OpenFlowCalculator`)의 뜻은 `contracts/events/market.daily.requested.v1.schema.json`, `market.daily.responded.v2.schema.json`이 원본입니다. ETF 목록은 사용 중인 멤버 포트폴리오(`personal.active_portfolio`)의 국내 ETF이며, 보유·관심 구분은 응답에 싣지 않고 브리핑이 멤버마다 `personal`에서 읽습니다. 안전 상한은 `market.context.*`를 함께 쓰고, 따로 두는 것은 `market.daily.*`(`max-etfs`, `open-flow-max-window`)입니다.
+- **배경 자료** `/internal/market/context`: `context/ContextQuery`가 답합니다. 종류별 최신 원문, ETF에 담긴 미국 종목과 직전 정규장 등락률(`insight/OverseasCloseRateQuery`, 고르는 규칙은 그 주석), 세계지수 등락률(`indexRates`, 계산은 `context/WorldIndexRates`)을 줍니다. 국내 일봉 원문은 저장본을 바꾸지 않고 최근 일자 레코드만 남긴 사본을 줍니다(`context/RecentDailyRecords`, 건수는 `daily-price-records`). 안전 상한은 `application.yml`의 `market.context.*`입니다.
+- **데일리 판 자료** `/internal/market/daily`: `context/DailyQuery`가 답합니다. 요청·응답 모양과 선택 칸 `includeIntradayFallback`(장중 대체값), `includeOperations`(운영 상태, `context/OperationsRepository`), `openFlowSince`(개장 흐름, `context/OpenFlowCalculator`), `intradaySince`·`maxIntradayPoints`(그래프용 1분 간격 장중 흐름, `context/IntradaySeriesCalculator`), `maxDailyCloses`(그래프용 기간 종가, `context/DailyCloseHistory`)의 뜻은 `contracts/events/market.daily.requested.v1.schema.json`, `market.daily.responded.v2.schema.json`이 원본입니다. ETF 목록은 사용 중인 멤버 포트폴리오(`personal.active_portfolio`)의 국내 ETF이며, 보유·관심 구분은 응답에 싣지 않고 브리핑이 멤버마다 `personal`에서 읽습니다. 안전 상한은 `market.context.*`를 함께 쓰고, 따로 두는 것은 `market.daily.*`(`max-etfs`, `open-flow-max-window`, `intraday-max-window`, `intraday-max-points`, `daily-closes-max`, `daily-closes-lookback`, `daily-closes-max-responses`)입니다.
 
 ## 뉴스처리기 (`news`)
 

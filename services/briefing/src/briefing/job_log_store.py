@@ -29,6 +29,7 @@ from briefing.job_log import (
     MoveRun,
     RunStatus,
     parse_move_run,
+    with_representative,
 )
 
 log = logging.getLogger("briefing.job_log_store")
@@ -83,6 +84,14 @@ SELECT job_id, input::text, target::text, status, generated_by, failure_reason
 FROM {RUN_TABLE}
 WHERE job_kind = %s AND started_at >= %s AND started_at <= %s
 ORDER BY started_at, job_id
+"""
+
+# 범위 안에서 시작한 급변동 작업이 남긴 대표 기사 줄. 같은 작업에 둘이면 늦은 줄이 이긴다.
+SELECT_REPRESENTATIVES_SQL = f"""
+SELECT l.job_id, l.data::text
+FROM {LOG_TABLE} l JOIN {RUN_TABLE} r ON r.job_id = l.job_id
+WHERE l.entry_type = %s AND r.job_kind = %s AND r.started_at >= %s AND r.started_at <= %s
+ORDER BY l.occurred_at, l.id
 """
 
 # 그날(한국 시간 하루) 이 종류의 작업이 시작됐는가. 데일리 판을 하루 한 번만 만드는 데 쓴다.
@@ -191,7 +200,14 @@ class PostgresJobLog:
         if rows is None:
             return None
         parsed = (parse_move_run(r[0], r[1], r[2], r[3], r[4], r[5]) for r in rows)
-        return [m for m in parsed if m is not None]
+        runs = [m for m in parsed if m is not None]
+        # 대표 기사 줄을 읽지 못해도 급변동 목록은 돌려준다(그 줄들은 기사 없이 보인다).
+        written = self._read(SELECT_REPRESENTATIVES_SQL,
+                             (EntryType.REPRESENTATIVE_ARTICLE.value, JobKind.MOVE.value, since, until))
+        if not written:
+            return runs
+        data = {r[0]: json.loads(r[1]) for r in written}
+        return [with_representative(m, data[m.job_id]) if m.job_id in data else m for m in runs]
 
     def edition_started(self, kind: JobKind, day: date) -> bool | None:
         start = datetime.combine(day, day_time.min, tzinfo=KST)

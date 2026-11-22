@@ -7,6 +7,7 @@
 | [001](001-quote-calls-stall-together.md) | 시세 조회가 한꺼번에 10초씩 멈춤 | 해결됨 |
 | [002](002-briefing-prompt-cache.md) | 브리핑이 같은 지시문을 매번 정가로 보냄 | 해결됨 |
 | [003](003-quote-provider-blocks-overseas-ip.md) | 운영 서버에서 시세 제공자에 연결이 전부 안 됨 | 해결됨 |
+| [004](004-deploy-migration-stops-services.md) | 배포 중 마이그레이션 실패로 서비스가 모두 멈춤 | 해결됨 |
 
 ## 기록하는 것
 
