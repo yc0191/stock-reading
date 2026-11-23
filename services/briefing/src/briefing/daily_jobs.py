@@ -2,6 +2,7 @@
 
 흐름: 수집기의 판 시작 알림(daily.collection.completed) 또는 한도 시각(알림이 끝내 오지 않을 때) -> 같은 날 같은 판을
 이미 만들었으면 그만둠 -> 범위 계산 -> 데일리 자료 조회(시세처리기 내부 조회 API)
+(아침 판은 전 거래일 마감 시장종합도 같은 조회로 따로 받음)
 -> ETF마다 기사 조회, 미국 종목이 있으면 그 티커로 공시 조회(뉴스처리기) -> 받은 자료 재검사 -> 본문(LLM 또는 규칙 기반)
 -> (LLM이 약한 문장을 냈으면 문장마다 뉴스 재검색 -> 그 문장만 다시 쓰기, 근거 부족이면 보고서 전체를 한 번 재검색)
 -> 멤버마다 그 멤버의 포트폴리오 ETF만 담은 판을 짜서 briefing.daily.generated 발행(LLM 본문은 판 하나에 한 번만 쓴다).
@@ -30,7 +31,8 @@ from briefing.daily_members import (
     member_sections,
 )
 from briefing.daily_morning import outlook_records
-from briefing.daily_inputs import EtfArticles, member_issues, moves_with_market, notable_candidates
+from briefing.daily_inputs import (EtfArticles, is_prev_close, member_issues, moves_with_market, notable_candidates,
+                                   prev_close_range)
 from briefing.daily_relevance import split_related
 from briefing.daily_start import DailyStart
 from briefing.daily_review import MORNING_READ_FAILED, NO_ACTUAL_RATES, NO_MORNING_CALLS, ReviewInput, parse_calls
@@ -83,6 +85,7 @@ from briefing.job_log import (
 )
 from briefing.evidence import MARKET_WIDE
 from briefing.final_check import FinalCheck
+from briefing.move_figures import MARKET_SUMMARY_API
 from briefing.open_flow import in_range, open_flow_start, parse_open_flow
 from briefing.price_series import (closes_in_range, intraday_in_range, intraday_series_start, parse_daily_closes,
                                    parse_intraday_series)
@@ -122,6 +125,8 @@ NO_STATUS_TEXT = "──────── 서버 상태 ───────�
 
 # 작업 기록(requests, received, notReceived)에 남기는 조회 이름
 DAILY_DATA = QueryKind.DAILY.value
+# 아침 판이 같은 데일리 자료 조회로 받는 전 거래일 마감 시장종합. 판 자료 조회와 구분하려고 이름을 따로 둔다.
+PREV_MARKET = "prevMarketSummary"
 FILINGS = QueryKind.FILINGS.value
 ARTICLES = QueryKind.ARTICLES.value
 # 조회 결과가 왔지만 해석하지 못해 받지 못한 것으로 본 경우의 실패 종류
@@ -129,6 +134,7 @@ FAILURE_MALFORMED = "MalformedResponse"
 
 # 작업 기록의 단계와 사유. 끝내 실패한 사유는 FailureReason 값을 그대로 쓴다.
 STAGE_DAILY_DATA = "daily-data-request"
+STAGE_PREV_MARKET = "prev-market-request"
 STAGE_FILINGS = "filings-request"
 STAGE_ETF_ARTICLES = "etf-articles-request"
 STAGE_LLM = "llm"
@@ -225,9 +231,15 @@ class _DailyJob:
     intraday_since: datetime | None = None
     # 판을 시작시킨 쪽이 알린 빠진 자료(못 받은 수집 자료, 알림 없이 시작함). 판의 자료 없음 목록 맨 앞에 붙는다.
     notes: tuple[str, ...] = ()
+    # 아침 판만: 전 거래일 마감 시장종합 조회와 그 받은 시각 구간, 받은 응답의 시장종합(작업 기록용), 마감 값으로 쓸 수 있는 것.
+    prev_market: Exchange = field(default_factory=Exchange)
+    prev_market_range: tuple[datetime, datetime] | None = None
+    prev_market_payload: dict | None = None
+    prev_market_data: Background | None = None
 
     def waiting(self) -> bool:
-        return self.data.awaiting() or self.filings.awaiting() or any(n.awaiting() for n in self.news.values())
+        return self.data.awaiting() or self.filings.awaiting() or self.prev_market.awaiting() \
+            or any(n.awaiting() for n in self.news.values())
 
 
 @dataclass
@@ -277,6 +289,7 @@ class DailyCore:
                         notes=notes)
         if edition == EDITION_MORNING:
             job.open_flow_since = open_flow_start(scheduled_for, self.core_settings)
+            job.prev_market_range = prev_close_range(scheduled_for, self.core_settings.background_window)
         job.intraday_since = intraday_series_start(scheduled_for, self.core_settings)
         self._jobs[job_id] = job
         # 작업 한 줄은 시작 때 만들고 끝날 때 고친다. 입력은 시작시킨 알림 원문(한도 시각이면 그 사실)이다.
@@ -286,6 +299,8 @@ class DailyCore:
         log.info("daily %s started: job=%s range=%s~%s notes=%d", edition, job_id,
                  format_timestamp(job.range_start), format_timestamp(scheduled_for), len(notes))
         self._send_data(job, now)
+        if job.prev_market_range is not None:
+            self._send_prev_market(job, now)
 
     # ---- 조회 결과 (수신 루프 스레드에서 불린다) ----
 
@@ -321,6 +336,35 @@ class DailyCore:
         if job.edition in EDITIONS_WITH_FILINGS and tickers:
             self._send_filings(job, now)
         # 맡긴 조회의 결과가 남아 있으면 _finish가 기다린다.
+        self._finish(job, now)
+
+    def _on_prev_market(self, result: QueryResult, now: datetime) -> None:
+        """전 거래일 마감 시장종합. 끝내 받지 못하거나 마감 뒤 받은 값이 없으면 그 칸은 자료 없음으로 판을 낸다."""
+        job = self._jobs.get(result.query.payload["jobId"])
+        if job is None or not job.prev_market.awaiting():
+            return
+        raw, item = None, None
+        if result.received:
+            try:
+                raw = next((b for b in result.payload["background"] if b["apiType"] == MARKET_SUMMARY_API), {})
+                item = parse_background(raw) if raw else None
+            except (KeyError, TypeError, ValueError) as error:
+                _malformed(QueryKind.DAILY, job.job_id, error)
+                raw = None
+        if raw is None:
+            self._give_up(job, job.prev_market, STAGE_PREV_MARKET, FailureReason.CONTEXT_NO_RESPONSE, PREV_MARKET,
+                          result, now)
+            self._finish(job, now)
+            return
+        job.prev_market.received = True
+        job.prev_market_payload = raw
+        if item is not None:
+            since, until = job.prev_market_range
+            if is_prev_close(item, since, until, self.settings):
+                job.prev_market_data = item
+            elif item.fetched_at is not None and not since <= item.fetched_at < until:
+                # 구간 밖에 받은 값은 응답 쪽 결함이다. 장 마감 전에 받은 값은 정상이라 세지 않는다.
+                self._note_excluded(job, PREV_MARKET, 1)
         self._finish(job, now)
 
     def _on_articles(self, result: QueryResult, now: datetime) -> None:
@@ -414,6 +458,23 @@ class DailyCore:
         payload["maxDailyCloses"] = s.max_daily_closes
         self._submit(job, QueryKind.DAILY, STAGE_DAILY_DATA, payload, now, self._on_daily_data)
 
+    def _send_prev_market(self, job: _DailyJob, now: datetime) -> None:
+        """판 자료와 같은 데일리 자료 조회를 판 날짜 0시 기준으로 한 번 더 불러 그 응답의 시장종합만 쓴다. 시장 배경은 범위 안
+        최신 1건이라 판 시각 기준 조회로는 그날 아침 장중 값만 온다."""
+        seq = next_seq(job.prev_market, now)
+        since, until = job.prev_market_range
+        payload = {
+            "jobId": job.job_id,
+            "seq": seq,
+            "asOf": format_timestamp(until),
+            "since": format_timestamp(since),
+            "maxResponseBytes": self.settings.max_response_bytes,
+            # ETF 자료는 쓰지 않으므로 계약상 가장 작은 값으로 받는다.
+            "maxEtfs": 1,
+            "maxTickers": 1,
+        }
+        self._submit(job, QueryKind.DAILY, STAGE_PREV_MARKET, payload, now, self._on_prev_market, PREV_MARKET)
+
     def _send_articles(self, job: _DailyJob, symbol: str, now: datetime) -> None:
         state = job.news.setdefault(symbol, _EtfNews())
         job.news_seq += 1
@@ -444,8 +505,8 @@ class DailyCore:
         self._submit(job, QueryKind.FILINGS, STAGE_FILINGS, payload, now, self._on_filings)
 
     def _submit(self, job: _DailyJob, kind: QueryKind, stage: str, payload: dict[str, Any], now: datetime,
-                on_result) -> None:
-        job.sent.append(_Sent(kind.value, payload["seq"], now, payload))
+                on_result, name: str | None = None) -> None:
+        job.sent.append(_Sent(name or kind.value, payload["seq"], now, payload))
         self.api.submit(Query(kind, job.job_id, stage, job.correlation_id, payload), on_result)
 
     # ---- 재검사 ----
@@ -508,10 +569,12 @@ class DailyCore:
             "requests": [{"request": s.request, "seq": s.seq, "sentAt": format_timestamp(s.sent_at),
                           "payload": s.payload} for s in job.sent],
             "received": {**{name: payload for name, payload in ((DAILY_DATA, job.data_payload),
+                                                                (PREV_MARKET, job.prev_market_payload),
                                                                 (FILINGS, job.filings_payload))
                             if payload is not None},
                          **({ARTICLES: job.news_payloads} if job.news_payloads else {})},
-            "notReceived": [*(name for name, exchange in ((DAILY_DATA, job.data), (FILINGS, job.filings))
+            "notReceived": [*(name for name, exchange in ((DAILY_DATA, job.data), (PREV_MARKET, job.prev_market),
+                                                          (FILINGS, job.filings))
                               if exchange.seq and not exchange.received),
                             *([ARTICLES] if any(not n.received for n in job.news.values()) else [])],
             "excluded": dict(job.excluded),
@@ -563,6 +626,7 @@ class DailyCore:
             filings=job.filings_data,
             filings_truncated=job.filings_truncated,
             open_flow_start=job.open_flow_since,
+            prev_market=job.prev_market_data,
             settings=self.settings,
         )
         if job.edition in EDITIONS_WITH_ETF_ARTICLES:

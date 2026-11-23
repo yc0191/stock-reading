@@ -1,9 +1,9 @@
 """아침 판 본문의 내용과 글자판. HTML(daily_html)도 같은 값(MorningView)을 같은 순서로 쓴다. Kafka를 모른다.
 
-Claude 본문이 있으면: 제목 → 밤사이 이슈 → 환율·금리 → 그 밖의 이슈 → 내 ETF(개장 흐름과 예상) → 근거 약함 모음 → 면책 →
+Claude 본문이 있으면: 제목 → 전 거래일 한국 증시 → 밤사이 이슈 → 환율·금리 → 그 밖의 이슈 → 내 ETF(개장 흐름과 예상) → 근거 약함 모음 → 면책 →
 서버 상태 → 근거 목록. 항목별 숫자 목록은 본문에 싣지 않고, 숫자는 문장과 근거 목록에만 나온다.
 Claude 본문이 없으면(규칙 기반): 제목 → 항목별 숫자 → 환율 이슈 → 금리 이슈 → 면책 → 서버 상태.
-근거 번호는 본문에 나온 순서(밤사이 이슈 → 환율·금리 → 그 밖의 이슈 → ETF 예상)로 붙는다.
+근거 번호는 본문에 나온 순서(전 거래일 한국 증시 → 밤사이 이슈 → 환율·금리 → 그 밖의 이슈 → ETF 예상)로 붙는다.
 """
 from __future__ import annotations
 
@@ -15,6 +15,9 @@ from briefing.daily_prompts import DIRECTION_UNSURE, DIRECTIONS
 from briefing.daily_report import (
     DAILY_DISCLAIMER,
     DAILY_INSUFFICIENT,
+    ITEM_KR_PREV,
+    NO_DATA,
+    POINT_KR_PREV,
     POINT_OUTLOOK,
     DailyInput,
     DailyOutput,
@@ -27,6 +30,7 @@ from briefing.daily_report import (
 )
 from briefing.open_flow import signed
 
+KR_PREV_TITLE = ITEM_KR_PREV
 OVERNIGHT_TITLE = "밤사이 이슈"
 FX_RATE_TITLE = "환율·금리"
 OTHERS_TITLE = "그 밖의 이슈"
@@ -81,6 +85,9 @@ class MorningView:
 
     has_output: bool
     insufficient: bool
+    # 전 거래일 한국 증시: 코드가 쓴 마감 등락률 줄과 그 아래 Claude가 쓴 이유 문장(없으면 None).
+    kr_prev_line: str
+    kr_prev: Sentence | None
     points: tuple[Sentence, ...]
     issues: tuple[IssueRow, ...]
     others: tuple[Sentence, ...]
@@ -112,6 +119,8 @@ def morning_view(i: DailyInput, sections: tuple[Section, ...], output: DailyOutp
     def number(refs: tuple[str, ...]) -> tuple[int, ...]:
         return tuple(numbers.setdefault(ref, len(numbers) + 1) for ref in refs)
 
+    kr_point = next((p for p in output.issues if p.kind == POINT_KR_PREV), None) if usable else None
+    kr_prev = Sentence(kr_point.statement, number(kr_point.refs), kr_point.shortfall) if kr_point else None
     points = tuple(Sentence(p.statement, number(p.refs), p.shortfall) for p in output.points) if usable else ()
     issues = issue_rows(i, output if usable else None, number)
     others = tuple(Sentence(p.statement, number(p.refs), p.shortfall) for p in output.others) if usable else ()
@@ -123,13 +132,20 @@ def morning_view(i: DailyInput, sections: tuple[Section, ...], output: DailyOutp
                      for e in members for p in [outlooks.get(e.symbol)] if p is not None)
         if rows:
             groups.append((title, rows))
-    weak = [*((f"{OVERNIGHT_TITLE} {n}", s.shortfall) for n, s in enumerate(points, start=1) if s.shortfall),
+    weak = [*([(KR_PREV_TITLE, kr_prev.shortfall)] if kr_prev is not None and kr_prev.shortfall else []),
+            *((f"{OVERNIGHT_TITLE} {n}", s.shortfall) for n, s in enumerate(points, start=1) if s.shortfall),
             *((issue_label(r), r.shortfall) for r in issues if r.shortfall),
             *((OTHERS_TITLE, s.shortfall) for s in others if s.shortfall),
             *((row.name, row.shortfall) for _, rows in groups for row in rows if row.shortfall)]
     evidence: tuple[tuple[int, str], ...] = tuple((n, by_ref[ref].describe) for ref, n in numbers.items())
-    return MorningView(output is not None, bool(output is not None and output.insufficient_evidence), points, issues,
-                       others, tuple(groups), tuple(weak), evidence)
+    return MorningView(output is not None, bool(output is not None and output.insufficient_evidence),
+                       kr_prev_text(sections), kr_prev, points, issues, others, tuple(groups), tuple(weak), evidence)
+
+
+def kr_prev_text(sections: tuple[Section, ...]) -> str:
+    """전 거래일 한국 증시 칸의 숫자 줄. 항목의 줄(마감 등락률 또는 자료 없음과 그 이유)을 그대로 쓴다."""
+    section = next((s for s in sections if s.name == ITEM_KR_PREV), None)
+    return section.lines[0] if section is not None and section.lines else NO_DATA
 
 
 def cite(numbers: tuple[int, ...]) -> str:
@@ -158,7 +174,10 @@ def morning_text(i: DailyInput, sections: tuple[Section, ...], output: DailyOutp
     if not v.has_output or v.insufficient:
         lines = _rule_based_lines(i, sections, v)
     else:
-        lines = [*headline(i), "", f"■ {OVERNIGHT_TITLE}"]
+        lines = [*headline(i), "", f"■ {KR_PREV_TITLE}", f"  {v.kr_prev_line}"]
+        if v.kr_prev is not None:
+            lines.append(f"  {_with_cite(v.kr_prev.statement, v.kr_prev.numbers, v.kr_prev.shortfall)}")
+        lines.extend(["", f"■ {OVERNIGHT_TITLE}"])
         lines.extend(f"  {n}. {_with_cite(s.statement, s.numbers, s.shortfall)}"
                      for n, s in enumerate(v.points, start=1))
         if not v.points:

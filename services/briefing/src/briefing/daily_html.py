@@ -28,6 +28,7 @@ from briefing.daily_report import (
 )
 from briefing.daily_morning import (
     FX_RATE_TITLE,
+    KR_PREV_TITLE,
     NO_OVERNIGHT,
     OTHERS_TITLE,
     OUTLOOK_NOTE,
@@ -262,10 +263,14 @@ def _items(rows: list[str], tag: str = "ul") -> str:
 
 
 def _morning_body(v: MorningView, charts: tuple[ChartSlot, ...] = ()) -> list[str]:
-    """밤사이 이슈·환율·금리·그 밖의 이슈·ETF 예상·근거 약함 모음 HTML. Claude 본문이 있을 때만 부른다."""
+    """전 거래일 한국 증시·밤사이 이슈·환율·금리·그 밖의 이슈·ETF 예상·근거 약함 모음 HTML. Claude 본문이 있을 때만 부른다."""
     overnight = (_items([_sentence(s.statement, s.numbers, s.shortfall) for s in v.points], "ol") if v.points
                  else _p(ITEM_STYLE, escape(NO_OVERNIGHT)))
-    parts = [_p(HEADING_STYLE, f"■ {escape(OVERNIGHT_TITLE)}"), overnight,
+    kr_prev = [_p(ITEM_STYLE, _rate_spans(escape(v.kr_prev_line)))]
+    if v.kr_prev is not None:
+        kr_prev.append(_p(ITEM_STYLE, _sentence(v.kr_prev.statement, v.kr_prev.numbers, v.kr_prev.shortfall)))
+    parts = [_p(HEADING_STYLE, f"■ {escape(KR_PREV_TITLE)}"), *kr_prev,
+             _p(HEADING_STYLE, f"■ {escape(OVERNIGHT_TITLE)}"), overnight,
              _p(HEADING_STYLE, f"■ {escape(FX_RATE_TITLE)}"),
              _items([f"{escape(issue_label(r))}: {_sentence(r.statement, r.numbers, r.shortfall)}" for r in v.issues])]
     if v.others:
