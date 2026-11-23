@@ -1,0 +1,68 @@
+# #62 마감 후 판을 그날을 설명하는 구성으로, 시도 2. 지표와 통과값은 이슈의 "시도 2 · 판정 기준" 댓글을 옮긴 것이다.
+# 시도 1은 첫 운영 마감 후 판(11-23)이 시세처리기 데일리 조회 시간 초과(브리핑 10초 한도)로 규칙 글로 나가 실패할 것이다.
+# 시도 2의 조치는 데일리 조회만 60초 기다리기(a6b4f74)이고 지표·통과선은 시도 1과 같다.
+# 확인기는 마감 후 판 시작 알림 때 돌아 그날 마감 후 판은 아직 없다. 그래서 바로 앞 장날의 마감 후 판을 잰다.
+# 앞 장날 판이 조치 코드로 만들어졌는지는 확인기 장부(ops.check_run)로 본다. 확인기는 지표를 계산한 뒤에 그날 장부 줄을 넣으므로
+# 오늘 줄과는 비교할 수 없다. 그래서 앞 장날이 배포(11-24) 이후이고 그날 운영 버전이 조치 전 버전(5d875d6)이 아닐 때만 재고,
+# 아니면(배포 첫날, 배포 실패) 모두 비워 판정 보류한다.
+# 그래프를 넣지 못한 판은 멤버 판 기록(member-briefing)의 missingItems에 '하루 등락 차트:'·'흐름 그래프:'로 시작하는 줄이 남는다.
+issue: 62
+attempt: 2
+fix_commit: "a6b4f74"
+days: 2
+metrics:
+  - key: post_close_failed
+    # 앞 장날 마감 후 판 작업이 실패했거나 LLM 없이 규칙 글로 나갔으면 1, 아니면 0.
+    sql: >-
+      WITH prev AS (SELECT day, deploy_version FROM ops.check_run
+        WHERE day < (now() AT TIME ZONE 'Asia/Seoul')::date AND edition = 'post-close' AND market_status = 'collected'
+        ORDER BY day DESC, started_at DESC LIMIT 1),
+      win AS (SELECT prev.day::timestamp AT TIME ZONE 'Asia/Seoul' AS start, (prev.day + 1)::timestamp AT TIME ZONE 'Asia/Seoul' AS stop
+        FROM prev WHERE prev.day >= DATE '2026-11-24' AND prev.deploy_version NOT LIKE '5d875d6%'),
+      job AS (SELECT status, generated_by FROM briefing.job_run, win
+        WHERE job_kind = 'post-close' AND started_at >= win.start AND started_at < win.stop ORDER BY started_at DESC LIMIT 1)
+      SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM job) THEN NULL
+        WHEN (SELECT status = 'failed' OR generated_by IS DISTINCT FROM 'llm' FROM job) THEN 1 ELSE 0 END
+    pass: "== 0"
+  - key: post_close_chart_missing_ratio
+    # 앞 장날 마감 후 판의 멤버 판 중 하루 등락 차트나 흐름 그래프를 넣지 못한 판의 비율.
+    sql: >-
+      WITH prev AS (SELECT day, deploy_version FROM ops.check_run
+        WHERE day < (now() AT TIME ZONE 'Asia/Seoul')::date AND edition = 'post-close' AND market_status = 'collected'
+        ORDER BY day DESC, started_at DESC LIMIT 1),
+      win AS (SELECT prev.day::timestamp AT TIME ZONE 'Asia/Seoul' AS start, (prev.day + 1)::timestamp AT TIME ZONE 'Asia/Seoul' AS stop
+        FROM prev WHERE prev.day >= DATE '2026-11-24' AND prev.deploy_version NOT LIKE '5d875d6%'),
+      job AS (SELECT job_id FROM briefing.job_run, win
+        WHERE job_kind = 'post-close' AND started_at >= win.start AND started_at < win.stop ORDER BY started_at DESC LIMIT 1),
+      members AS (SELECT l.data -> 'missingItems' AS items FROM briefing.job_log l JOIN job ON l.job_id = job.job_id
+        WHERE l.entry_type = 'member-briefing')
+      SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM members) THEN NULL
+        ELSE (SELECT count(*) FROM members WHERE CASE WHEN json_typeof(items) = 'array' THEN EXISTS (
+          SELECT 1 FROM json_array_elements_text(items) AS item
+          WHERE item LIKE '하루 등락 차트:%' OR item LIKE '흐름 그래프:%') ELSE false END)::numeric
+          / (SELECT count(*) FROM members) END
+    pass: "== 0"
+  - key: research_rewrite_ratio
+    # 앞 장날 마감 후 판에서 재검색을 요청한 문장 중 다시 쓴 문장의 비율(재검색이 근거를 찾아 '근거 약함'을 고친 비율).
+    # 재검색 요청이 없던 판은 비워 판정 보류한다. 통과선 0.7은 작업자가 정했다(배포 전 기준선은 재지 않음).
+    sql: >-
+      WITH prev AS (SELECT day, deploy_version FROM ops.check_run
+        WHERE day < (now() AT TIME ZONE 'Asia/Seoul')::date AND edition = 'post-close' AND market_status = 'collected'
+        ORDER BY day DESC, started_at DESC LIMIT 1),
+      win AS (SELECT prev.day::timestamp AT TIME ZONE 'Asia/Seoul' AS start, (prev.day + 1)::timestamp AT TIME ZONE 'Asia/Seoul' AS stop
+        FROM prev WHERE prev.day >= DATE '2026-11-24' AND prev.deploy_version NOT LIKE '5d875d6%'),
+      job AS (SELECT job_id FROM briefing.job_run, win
+        WHERE job_kind = 'post-close' AND started_at >= win.start AND started_at < win.stop ORDER BY started_at DESC LIMIT 1),
+      asked AS (SELECT DISTINCT l.sentence_no FROM briefing.job_log l JOIN job ON l.job_id = job.job_id
+        WHERE l.entry_type = 'research-requested' AND l.sentence_no IS NOT NULL),
+      rewritten AS (SELECT DISTINCT l.sentence_no FROM briefing.job_log l JOIN job ON l.job_id = job.job_id
+        WHERE l.entry_type = 'sentence-rewritten' AND l.sentence_no IS NOT NULL)
+      SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM asked) THEN NULL
+        ELSE (SELECT count(*) FROM asked WHERE sentence_no IN (SELECT sentence_no FROM rewritten))::numeric
+          / (SELECT count(*) FROM asked) END
+    pass: ">= 0.7"
+human:
+  - 요약에 그날 큰 뉴스와 지수 등락의 이유가 들어갔는지
+  - 환율·금리 칸이 '기사 없음'·'근거 약함'만으로 끝나지 않았는지
+  - 꼬리말의 '자료 없음' 반복이 정리됐는지
+  - 하루 등락 차트와 장중·기간 흐름 그래프가 보이는지(기간 그래프는 일봉이 쌓인 뒤부터)
