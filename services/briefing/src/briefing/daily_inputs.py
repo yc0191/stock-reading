@@ -6,13 +6,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING, Iterable
 
 from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DailySettings
 from briefing.move_figures import KOSPI_NAME, index_figure
-from briefing.sources import US_MARKET, Article, Background, CloseRate, Filing
+from briefing.sources import BACKGROUND_OK, US_MARKET, Article, Background, CloseRate, Filing
 
 if TYPE_CHECKING:
     from briefing.daily_report import EtfDay
@@ -73,6 +73,22 @@ def is_before_open(etfs: Iterable[EtfDay], as_of: datetime,
     today = local.strftime("%Y%m%d")
     with_day = [e for e in etfs if e.has_day()]
     return bool(with_day) and all(e.date == today and decimal_rate(e.rate) == 0 for e in with_day)
+
+
+def prev_close_range(scheduled_for: datetime, window: timedelta) -> tuple[datetime, datetime]:
+    """아침 판이 전 거래일 마감 시장종합을 읽는 받은 시각 구간(since, asOf). 끝은 판 날짜 0시(한국 시간)라 그날 장중에 받은
+    값은 들지 않고, 시작은 배경 자료 기준 기간(window)만큼 앞이다. 월요일 판은 금요일 마감 값이 이 안에 든다."""
+    until = datetime.combine(scheduled_for.astimezone(KST).date(), time.min, KST)
+    return until - window, until
+
+
+def is_prev_close(item: Background, since: datetime, until: datetime,
+                  settings: DailySettings = DEFAULT_DAILY_SETTINGS) -> bool:
+    """전 거래일 마감 등락률로 쓸 수 있는 시장종합인가. 구간 안(끝은 빼고)에 받은 원문이고, 받은 시각이 prev_close_after
+    이상이어야 한다. 그보다 이르면 장중 값이라 마감 등락률로 보지 않는다."""
+    if item.status != BACKGROUND_OK or item.fetched_at is None or not since <= item.fetched_at < until:
+        return False
+    return item.fetched_at.astimezone(KST).time() >= settings.prev_close_after
 
 
 def moves_with_market(etf_rate: str | None, background: Iterable[Background],

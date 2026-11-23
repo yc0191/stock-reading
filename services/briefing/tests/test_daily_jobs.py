@@ -438,7 +438,8 @@ def test_daily_data_that_finally_fails_is_given_up_and_the_edition_still_goes_ou
     assert details.of_type(EntryType.RESENT) == []
     [final] = details.by_reason("context_no_response")
     assert final.attempts == 4 and final.error_type == "connect-failed"
-    assert [r["seq"] for r in final.data["requests"]] == [1]
+    # 아침 판은 전 거래일 시장종합을 같은 조회로 한 번 더 받는다(가짜 API가 바로 답함).
+    assert [(r["request"], r["seq"]) for r in final.data["requests"]] == [("market/daily", 1), ("prevMarketSummary", 1)]
     assert final.data["notReceived"] == ["market/daily"]
     assert final.data["failed"] == {"query": "market/daily", "seq": 1, "failureKind": "connect-failed"}
     assert final.data["requestRange"] == {"since": "2026-10-19T08:45:00+09:00", "asOf": "2026-10-20T08:45:00+09:00"}
@@ -551,7 +552,10 @@ def test_insufficient_evidence_is_marked_in_the_body(core):
 def test_llm_is_not_called_when_there_is_no_evidence_at_all(core):
     llm = FakeLlm()
     c, requests, _, _ = core(llm)
+    c.api.auto_prev_market = False
     c.on_collection_ready(tick(), MORNING_AT)
+    # 판 자료와 전 거래일 시장종합은 같은 시세처리기 조회라 함께 실패한다.
+    c.api.fail(QueryKind.DAILY, MORNING_AT + timedelta(minutes=1))
     c.api.fail(QueryKind.DAILY, MORNING_AT + timedelta(minutes=1))
     assert llm.calls == []
     [event] = published(requests)

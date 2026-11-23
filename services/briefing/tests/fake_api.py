@@ -4,8 +4,9 @@
 이벤트의 payload와 같다(docs/conventions.md "내부 조회 API"). 실제 HTTP는 쓰지 않는다.
 """
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+from briefing.daily_jobs import STAGE_PREV_MARKET
 from briefing.job_log import STAGE_CHART_HISTORY
 from briefing.queries import QueryKind, QueryResult
 
@@ -19,6 +20,17 @@ RESPONSE_KINDS = {
 }
 
 
+def prev_market_background(as_of, kospi="-1.23", kosdaq="0.45", fetched_at=None):
+    """전 거래일 시장종합 조회에 답할 시장종합 배경 한 건. 받은 시각은 기본으로 asOf(판 날짜 0시) 7시간 30분 전, 곧 전날 16:30이다."""
+    at = fetched_at or (datetime.fromisoformat(as_of) - timedelta(hours=7, minutes=30)).isoformat(timespec="seconds")
+    rows = [{"indx_nm": "KOSPI종합", "now_indx_p2": "2500.00", "bdy_cmpr_p2": "30.00",
+             "bdy_cmpr_ccd": "5" if kospi.startswith("-") else "2", "up_dwn_r_p2": kospi},
+            {"indx_nm": "KOSDAQ종합", "now_indx_p2": "800.00", "bdy_cmpr_p2": "3.50",
+             "bdy_cmpr_ccd": "5" if kosdaq.startswith("-") else "2", "up_dwn_r_p2": kosdaq}]
+    return {"apiType": "market-summary", "target": None, "status": "ok",
+            "response": json.dumps({"dataBody": {"out2": rows}}, ensure_ascii=False), "fetchedAt": at}
+
+
 class FakeApi:
     def __init__(self):
         # 맡긴 순서대로의 모든 조회와, 아직 답하지 않은 (조회, 콜백)
@@ -30,12 +42,23 @@ class FakeApi:
         # 장중 차트용 시세 조회(레벨 상)는 기본으로 점 없이 바로 답하고 submitted에 넣지 않는다. 대부분의 테스트가 차트를 보지 않아
         # 조회 순서·개수 확인을 건드리지 않게 하려는 것이다. 차트를 시험하는 테스트는 auto_chart를 False로 두고 직접 답한다.
         self.auto_chart = True
+        # 아침 판의 전 거래일 시장종합 조회도 같은 까닭으로 기본은 바로 답한다. 기본 답은 운영에서 보통 그렇듯 전날 16:30에 받은
+        # 정상 시장종합이다(prev_market_background). 그 칸을 시험하는 테스트는 prev_market에 답할 배경 한 건(dict)을 넣거나,
+        # auto_prev_market을 False로 두고 직접 답한다.
+        self.auto_prev_market = True
+        self.prev_market = None
 
     # ---- QueryPort ----
 
     def submit(self, query, on_result):
         if self.auto_chart and query.stage == STAGE_CHART_HISTORY:
             on_result(QueryResult(query, {"points": [], "truncated": False}, 1), datetime.now(timezone.utc))
+            return
+        if self.auto_prev_market and query.stage == STAGE_PREV_MARKET:
+            background = self.prev_market or prev_market_background(query.payload["asOf"])
+            on_result(QueryResult(query, {"jobId": query.payload["jobId"], "seq": query.payload["seq"], "etfs": [],
+                                          "closeRates": [], "background": [background], "truncated": False}, 1),
+                      datetime.now(timezone.utc))
             return
         self.submitted.append(query)
         self.pending.append((query, on_result))
