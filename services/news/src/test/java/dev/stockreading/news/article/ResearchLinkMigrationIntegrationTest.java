@@ -50,14 +50,18 @@ class ResearchLinkMigrationIntegrationTest {
                 + "'https://news.example.com/m/2', 'news.example.com', TIMESTAMPTZ '2026-10-20 07:00+09', "
                 + "TIMESTAMPTZ '2026-10-20 08:00+09', false, NULL)").update();
 
-        flyway(schema, "latest").migrate();
+        flyway(schema, "9").migrate();
 
         // 옛 칸에 있던 처음 작업만 연결되고, 찾은 시각은 그 기사를 받은 시각이다.
         assertThat(jdbc.sql("SELECT article_id || ':' || research_job_id || ':' || (found_at = TIMESTAMPTZ "
                 + "'2026-10-20 08:00+09') FROM " + s + "news_article_research ORDER BY article_id")
                 .query(String.class).list()).containsExactly("1:" + JOB + ":true");
-        // 옛 칸은 지우지 않는다.
-        assertThat(jdbc.sql("SELECT research_job_id::text FROM " + s + "news_article WHERE id = 1")
-                .query(String.class).single()).isEqualTo(JOB);
+        // 옮긴 뒤(V10) 옛 칸은 지워지고 연결은 그대로 남는다.
+        flyway(schema, "latest").migrate();
+        assertThat(jdbc.sql("SELECT count(*) FROM information_schema.columns WHERE table_schema = :schema "
+                + "AND table_name = 'news_article' AND column_name = 'research_job_id'")
+                .param("schema", schema).query(Long.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT count(*) FROM " + s + "news_article_research").query(Long.class).single())
+                .isEqualTo(1L);
     }
 }
