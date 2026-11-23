@@ -18,7 +18,7 @@ from typing import Any, Callable, Mapping
 
 from briefing.config import DEFAULT_QUERY_SETTINGS, QuerySettings
 from briefing.job_step import JobStep, StepPort, StepResult
-from briefing.queries import OnResult, Query, QueryResult
+from briefing.queries import OnResult, Query, QueryKind, QueryResult
 from briefing.trace import HTTP_HEADER, correlation_context
 
 log = logging.getLogger("briefing.http_queries")
@@ -168,11 +168,12 @@ class HttpQueries:
         url = self._urls[query.kind.service] + query.kind.path
         body = json.dumps(query.payload, ensure_ascii=False).encode("utf-8")
         headers = {HTTP_HEADER: query.correlation_id}
+        timeout = (s.daily_call_timeout if query.kind is QueryKind.DAILY else s.call_timeout).total_seconds()
         failure = None
         for attempt in range(1, s.max_attempts + 1):
             started = self._clock()
             try:
-                answer = self._post(url, body, headers, s.call_timeout.total_seconds())
+                answer = self._post(url, body, headers, timeout)
                 if not isinstance(answer, dict):
                     raise CallFailed(FAILURE_BAD_RESPONSE, False)
             except CallFailed as error:

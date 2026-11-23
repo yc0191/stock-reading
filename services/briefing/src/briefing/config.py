@@ -97,8 +97,12 @@ class QuerySettings:
     # 한 번 호출의 응답 제한. 연결 실패·시간 초과·5xx만 다시 부르고, 4xx(잘못된 요청)는 다시 불러도 같으므로 그만둔다.
     # 연결부터 응답을 다 읽기까지 시도 전체의 마감이다(http_queries.post_json).
     call_timeout: timedelta = timedelta(seconds=10)
+    # 시세처리기 데일리 자료 조회(QueryKind.DAILY, 데일리 판만 씀)의 응답 제한. 마감 후 판은 ETF마다 하루 전체 장중 흐름을 함께
+    # 받아 10초를 넘기므로 따로 길게 둔다. 판 메일은 늦어도 되고 급변동 메일은 빨라야 해서 나머지 조회는 call_timeout을 쓴다.
+    daily_call_timeout: timedelta = timedelta(seconds=60)
     max_attempts: int = 4
     # 시도 사이 간격. n번째 실패 뒤 n번째 값을 쉰다(최대 시도 4번이라 3개). 최악은 4×10초 + 22초 = 62초다.
+    # 데일리 자료 조회는 4×60초 + 22초 = 4분 22초로, 판 한도 시각(DailySettings)과 멈춤 기준(stuck_after)보다 짧다.
     retry_intervals: tuple[timedelta, ...] = (timedelta(seconds=2), timedelta(seconds=5), timedelta(seconds=15))
     # 동시에 기다리는 호출 수. 호출은 이 수의 작업 스레드에서 돌고 수신 루프는 기다리지 않는다. 시세처리기·뉴스처리기
     # 요청 스레드(각 8개)보다 크지 않게 둔다.
