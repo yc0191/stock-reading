@@ -153,6 +153,14 @@ def test_listed_test_that_does_not_exist_fails(tmp_path):
                for e in errors)
 
 
+def test_words_in_parentheses_are_not_read_as_test_names():
+    cell = "test_report.py (가짜 LLM, 칸 상한(설정, test_gone.py 와 같음)) [DB]"
+    errors = []
+    linked = ctm.check_cell(cell, "x.md:1", "단위", {"test_report.py": "t/test_report.py"}, False, errors)
+    assert (linked, errors) == ({"test_report.py"}, [])
+    assert ctm.test_tokens(cell) == ["test_report.py"]
+
+
 def test_listed_helper_that_does_not_exist_fails(tmp_path):
     root = make_repo(tmp_path)
     replace(root / "docs/test-map/market.md", "테스트 도우미: MarketFakeServer", "테스트 도우미: MarketFakeServer, Gone")
