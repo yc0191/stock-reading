@@ -120,7 +120,7 @@ def test_index_without_a_previous_close_shows_no_data_for_that_index_only():
     sections = build_sections(daily_input(background=(world(("2.04", None)),)))
     us = sections[0]
     assert us.status == "있음"
-    assert any("TEST INDEX 0" in line and "2.04%" in line for line in us.lines)
+    assert any("TEST INDEX 0" in line and "+2.04%" in line for line in us.lines)
     assert any("TEST INDEX 1" in line and NO_DATA in line for line in us.lines)
     assert ITEM_US_INDEX in missing_items(build_sections(daily_input(background=(world((None,)),))))
 
@@ -231,7 +231,7 @@ def test_llm_body_numbers_the_cited_refs_and_leaves_the_raw_figures_to_the_evide
     assert result.rejected == ()
     text = result.body.text
     # 지수 종가·직전 종가 같은 숫자 목록은 본문에 싣지 않고, 인용한 자료만 근거 목록에 나온다.
-    assert "TEST INDEX 0(TESTIX0) 2.04%" not in text
+    assert "TEST INDEX 0(TESTIX0) +2.04%" not in text
     assert "  1. 미국 지수가 올랐을 수 있습니다. [근거 1, 2]" in text
     assert "1. 세계지수 — 시세 자료(배경)" in text and "2. 미국 종목 직전 정규장 등락률 -1.25%" in text
     # 면책 문구가 밤사이 이슈 뒤에, 근거 목록이 맨 끝에 온다.

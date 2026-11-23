@@ -178,6 +178,9 @@ LABEL_GAP = 0.06
 PERIOD_START_SLACK = timedelta(days=10)
 # 한 그림에 그리는 선 수의 상한. 넘으면 보유 먼저, 그다음 관심 순으로 자른다.
 MAX_LINES = 12
+# 기간 그래프가 이 일수 이하면 매주 월요일, 넘으면 매달 1일에 눈금을 둔다. matplotlib 자동 눈금은 며칠 간격을 매달 1일부터
+# 다시 세어 1개월 그래프에서 달 경계 앞뒤 눈금(09-29, 10-01)이 붙는다.
+WEEKLY_TICK_MAX_DAYS = 62
 
 
 @dataclass(frozen=True)
@@ -280,6 +283,15 @@ def line_charts(i: DailyInput, post_close: bool) -> tuple[LineChart, ...]:
     return tuple(charts)
 
 
+def period_locator(first: date, last: date) -> Any:
+    """기간 그래프의 x축 눈금 위치. 짧은 기간은 매주 월요일, 긴 기간은 매달 1일이라 눈금 간격이 고르다."""
+    from matplotlib import dates as mdates
+
+    if (last - first).days <= WEEKLY_TICK_MAX_DAYS:
+        return mdates.WeekdayLocator(byweekday=mdates.MO)
+    return mdates.MonthLocator()
+
+
 def render_line_chart(lines: tuple[Line, ...], title: str, by_time: bool) -> bytes | None:
     """선 그래프를 PNG 바이트로 만든다. 선은 보유가 진하고 관심이 옅으며, 범례 대신 선 끝에 이름과 마지막 값을 쓴다.
     by_time이면 x축이 시각(HH:MM), 아니면 날짜(MM-DD)다. 그릴 선이 없으면 None."""
@@ -304,6 +316,9 @@ def render_line_chart(lines: tuple[Line, ...], title: str, by_time: bool) -> byt
         axes.axhline(0, color="#616161", linewidth=0.8)
         axes.set_title(title, fontproperties=bold_font, fontsize=12, loc="left")
         axes.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M" if by_time else "%m-%d", tz=KST if by_time else None))
+        if not by_time:
+            days = [x for line in lines for x, _ in line.points]
+            axes.xaxis.set_major_locator(period_locator(min(days), max(days)))
         for tick in (*axes.get_xticklabels(), *axes.get_yticklabels()):
             tick.set_fontproperties(regular_font)
         for spine in ("top", "right"):

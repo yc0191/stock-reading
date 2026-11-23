@@ -487,7 +487,7 @@ def _us_index_section(i: DailyInput, settings: DailySettings, refs: Callable[[],
         if r.rate is None:
             lines.append(f"{r.name}({r.code}) 등락률 {NO_DATA} ({r.business_day} 종가 {r.close}, 직전 영업일 종가 없음)")
         else:
-            lines.append(f"{r.name}({r.code}) {r.rate}% ({r.business_day} 종가 {r.close}, "
+            lines.append(f"{r.name}({r.code}) {_signed_rate(r.rate)}% ({r.business_day} 종가 {r.close}, "
                          f"직전 {r.prev_business_day} {r.prev_close})")
     if all(r.rate is None for r in item.index_rates):
         return Section(ITEM_US_INDEX, MARK_MISSING, tuple(lines))

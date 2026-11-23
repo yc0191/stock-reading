@@ -357,7 +357,7 @@ def test_morning_edition_uses_us_markets_filings_and_the_previous_korean_session
     for item in (ITEM_US_INDEX, "환율", "미국 종목 직전 장 등락", ITEM_FILINGS, ITEM_MARKET_SUMMARY):
         assert item in text
     assert ITEM_ETFS not in text
-    assert "TEST INDEX(TESTIX) 2.04%" in text
+    assert "TEST INDEX(TESTIX) +2.04%" in text
     # 공시는 양식 이름 대신 항목의 뜻으로 보인다(회사 이름을 모르면 '미국 종목').
     assert "미국 종목 8-K 공시(실적 발표)" in text
     assert payload["rangeStart"] == "2026-10-19T08:45:00+09:00"
@@ -527,7 +527,7 @@ def test_llm_failing_every_time_falls_back_to_the_rule_based_body_and_records_ll
     [event] = published(requests)
     payload = event.value["payload"]
     assert payload["generatedBy"] == GENERATED_BY_RULE
-    assert "요약:" not in payload["text"] and "TEST INDEX(TESTIX) 2.04%" in payload["text"]
+    assert "요약:" not in payload["text"] and "TEST INDEX(TESTIX) +2.04%" in payload["text"]
     [failure] = failures.records
     assert failure.reason == FailureReason.LLM_ERROR and failure.attempts == 3 and failure.job_id == TICK_ID
     assert [r.attempts for r in details.by_reason(REASON_LLM_REJECTED)] == [1, 2, 3]

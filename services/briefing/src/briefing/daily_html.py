@@ -73,8 +73,10 @@ DISCLAIMER_STYLE = f"margin:18px 0 6px;font-size:12px;color:{MUTED_COLOR}"
 STATUS_BOX_STYLE = "margin:6px 0 0"
 IMAGE_STYLE = "display:block;max-width:100%;height:auto;margin:0 0 6px;border:0"
 
-# %p(퍼센트포인트 차이값)는 등락률이 아니라 색을 칠하지 않는다. 한 덩어리로 맞춰 두고 칠할 때 건너뛴다.
-RATE = re.compile(r"(?<![\w.])([+\-−]?\d+(?:\.\d+)?)%(p?)")
+# %p·%포인트(퍼센트포인트 차이값)는 등락률이 아니라 색을 칠하지 않는다. 한 덩어리로 맞춰 두고 칠할 때 건너뛴다.
+# 부호 없는 %("3%대 하락", "연 3.642%")는 방향을 알 수 없어 칠하지 않는다. 등락률은 코드와 LLM 모두 부호를 붙여 쓴다.
+# 부호 앞이 숫자면 범위 표기(10-5%)라 칠하지 않고, 글자면("코스피+1.2%") 칠한다.
+RATE = re.compile(r"(?<![\d.])([+\-−]\d+(?:\.\d+)?)%(p|포인트)?")
 
 
 @dataclass(frozen=True)
@@ -88,7 +90,7 @@ class ChartSlot:
 
 
 def _rate_spans(escaped: str) -> str:
-    """이스케이프한 글 안의 등락률(+2.1%, -1.5%, 2.04%)에 오름·내림 색을 칠한다."""
+    """이스케이프한 글 안의 부호 붙은 등락률(+2.1%, -1.5%, −0.3%)에 오름·내림 색을 칠한다."""
 
     def paint(match: re.Match[str]) -> str:
         if match.group(2):
