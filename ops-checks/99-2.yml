@@ -1,0 +1,41 @@
+# #99 급변동 레벨 중·상 나누기, 시도 2. 지표와 통과값은 이슈의 "시도 2 · 판정 기준" 댓글을 옮긴 것이다.
+# 시도 1은 아침 판에 합친 중 급변동(failure_reason = 'merged_into_morning', move_merge.py)까지 대표 기사 지표의 분모에 넣었다.
+# 합친 변동은 설계상 대표 기사를 고르지 않고 마감 후 판에 '아침 판에 합침'으로 나오므로 시도 2는 분모에서 뺀다. 나머지는 시도 1과 같다.
+# 급변동 작업은 브리핑 작업 기록(job_kind = 'move')이고, 레벨은 입력인 market.move 원문의 감지 유형으로 정한다(prevCloseHigh만 상).
+# LLM 호출은 단계별 실행 기록(job_step)의 llm 단계로 센다. 실패한 호출도 한 줄 남으므로 부른 적이 있으면 빠지지 않는다.
+# 중 급변동이 없던 날은 두 지표 모두 비워 판정 보류한다.
+issue: 99
+attempt: 2
+fix_commit: "bf5e5a5"
+days: 2
+metrics:
+  - key: mid_move_llm_or_mail_ratio
+    # 오늘(한국 날짜) 중 급변동 작업 중 LLM을 부르거나 결과 이벤트(메일)를 낸 작업의 비율. 중은 둘 다 없어야 한다.
+    sql: >-
+      WITH day AS (SELECT (now() AT TIME ZONE 'Asia/Seoul')::date::timestamp AT TIME ZONE 'Asia/Seoul' AS start),
+      mids AS (SELECT job_id, result_event_id FROM briefing.job_run, day
+        WHERE job_kind = 'move' AND started_at >= day.start
+          AND coalesce(input -> 'payload' ->> 'detectionType', '') <> 'prevCloseHigh')
+      SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM mids) THEN NULL
+        ELSE (SELECT count(*) FROM mids WHERE result_event_id IS NOT NULL
+          OR EXISTS (SELECT 1 FROM briefing.job_step s WHERE s.job_id = mids.job_id AND s.step = 'llm'))::numeric
+          / (SELECT count(*) FROM mids) END
+    pass: "== 0"
+  - key: mid_move_representative_ratio
+    # 오늘 끝난 중 급변동 작업(아침 판에 합친 것은 뺌) 중 대표 기사 기록(representative-article, 관련 기사 없음도 한 줄)이 있는 비율. 모두 있어야 한다.
+    # 작업 중인 것은 뺀다(마감 직후 변동은 확인기가 돌 때 아직 기사를 기다릴 수 있다). 실패로 끝난 작업은 대표 기사 없이 끝난 중이라 분모에 둔다.
+    sql: >-
+      WITH day AS (SELECT (now() AT TIME ZONE 'Asia/Seoul')::date::timestamp AT TIME ZONE 'Asia/Seoul' AS start),
+      mids AS (SELECT job_id FROM briefing.job_run, day
+        WHERE job_kind = 'move' AND started_at >= day.start AND status <> 'running'
+          AND coalesce(failure_reason, '') <> 'merged_into_morning'
+          AND coalesce(input -> 'payload' ->> 'detectionType', '') <> 'prevCloseHigh')
+      SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM mids) THEN NULL
+        ELSE (SELECT count(*) FROM mids WHERE EXISTS (SELECT 1 FROM briefing.job_log l
+          WHERE l.job_id = mids.job_id AND l.entry_type = 'representative-article'))::numeric
+          / (SELECT count(*) FROM mids) END
+    pass: "== 1"
+human:
+  - 마감 후 판 '그날 급변동'에 그날 급변동이 모두 대표 기사(또는 관련 기사 없음)와 함께 나왔는지
+  - 상 급변동 줄에 '메일 보냄'이 붙고 중 급변동에는 메일이 오지 않았는지
+  - 마감 후 판 서버 상태에 급변동이 상(메일)·중(기록)으로 나뉘어 세어졌는지
