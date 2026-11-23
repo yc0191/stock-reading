@@ -10,8 +10,9 @@ name: ops-verdict
 
 on:
   schedule:
-    # UTC 09:00 = 한국 시간 18:00. schedule 은 기본 브랜치의 워크플로로 돈다.
-    - cron: "0 9 * * 1-5"
+    # UTC 09:17 = 한국 시간 18:17. schedule 은 기본 브랜치의 워크플로로 돈다.
+    # 정각은 GitHub 예약 실행이 몰려 늦게 시작하거나 빠질 수 있어 피한다(정각 예약은 11-19·11-20에 8시간 넘게 늦게 돎).
+    - cron: "17 9 * * 1-5"
   workflow_dispatch:
 
 permissions:
