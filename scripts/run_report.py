@@ -75,7 +75,7 @@ def parse_item(text: str) -> list:
     if text.startswith("없음"):
         return [Item("none", (), "", "")]
     items = []
-    for part in NAME_WITH_BRACKET.finditer(text):
+    for part in NAME_WITH_BRACKET.finditer(ctm.without_parens(text)):
         label, condition = _bracket(part.group(2)) if part.group(2) else ("", "")
         group, _, name = part.group(1).rpartition("/")
         items.append(Item("tests", (name,), label, condition, group))

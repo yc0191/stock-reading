@@ -20,7 +20,6 @@ class NewsArticleRepository {
      * 멱등 저장: 같은 이벤트를 몇 번 받아도, 같은 기사가 다른 이벤트로 와도 기사는 한 행이다.
      * 기존 기사면 종목과 검색어를 합집합으로 늘린다. 한 트랜잭션이라 중간 상태가 남지 않는다.
      * 재검색에서 온 기사면 재검색 여부를 참으로 두고, 그 작업과의 연결(news_article_research)을 작업마다 남긴다.
-     * 예전 칸인 research_job_id 는 비어 있을 때만 채운다(처음 찾은 작업만 남는다).
      *
      * @return 이 이벤트로 기사 행이 만들어졌으면 true. 같은 이벤트를 다시 받아도 true 라서, 처리 결과 기록이 다시
      *         받은 횟수와 상관없이 같다.
@@ -46,7 +45,7 @@ class NewsArticleRepository {
         if (inserted.isEmpty()) {
             mergeMatchedQueries(articleId, matchedQueries);
             if (article.researchJobId() != null) {
-                markFoundByResearch(articleId, article.researchJobId());
+                markFoundByResearch(articleId);
             }
         }
         // 새 기사든 이미 있던 기사든 이 재검색 작업과 잇는다. 조회는 이 연결로 하므로 뒤의 작업이 다시 찾은 기사도 빠지지 않는다.
@@ -64,10 +63,10 @@ class NewsArticleRepository {
         return jdbc.sql("""
                         INSERT INTO news_article
                             (event_id, article_key, title, summary, url, publisher, published_at, matched_queries,
-                             from_research, research_job_id)
+                             from_research)
                         VALUES
                             (:eventId, :articleKey, :title, :summary, :url, :publisher, :publishedAt,
-                             CAST(:matchedQueries AS text[]), :fromResearch, :researchJobId)
+                             CAST(:matchedQueries AS text[]), :fromResearch)
                         ON CONFLICT DO NOTHING
                         RETURNING id
                         """)
@@ -80,7 +79,6 @@ class NewsArticleRepository {
                 .param("publishedAt", article.publishedAt())
                 .param("matchedQueries", matchedQueries)
                 .param("fromResearch", article.researchJobId() != null)
-                .param("researchJobId", article.researchJobId())
                 .query(Long.class)
                 .optional();
     }
@@ -94,17 +92,11 @@ class NewsArticleRepository {
                         "article conflicted on event_id but not article_key, key=" + articleKey));
     }
 
-    // 정기 수집으로 먼저 저장된 기사도 재검색이 찾았으면 재검색 기사로 표시한다. research_job_id 칸은 처음 찾은 작업만
-    // 남기는 예전 기록이라 그대로 두고, 작업마다의 연결은 news_article_research 에 남긴다(linkResearchJob).
-    private void markFoundByResearch(long articleId, UUID researchJobId) {
-        jdbc.sql("""
-                        UPDATE news_article
-                        SET from_research = true,
-                            research_job_id = COALESCE(research_job_id, :researchJobId)
-                        WHERE id = :articleId
-                        """)
+    // 정기 수집으로 먼저 저장된 기사도 재검색이 찾았으면 재검색 기사로 표시한다. 작업마다의 연결은
+    // news_article_research 에 남긴다(linkResearchJob).
+    private void markFoundByResearch(long articleId) {
+        jdbc.sql("UPDATE news_article SET from_research = true WHERE id = :articleId")
                 .param("articleId", articleId)
-                .param("researchJobId", researchJobId)
                 .update();
     }
 

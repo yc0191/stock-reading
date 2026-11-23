@@ -36,6 +36,7 @@ JAVA_TOP_LEVEL = re.compile(
 )
 TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.\-/]*")
 BRACKET = re.compile(r"\[[^\]]*\]")
+PAREN = re.compile(r"\([^()]*\)")
 PY_TEST_FILE = re.compile(r"test_\w+(?:\.py)?")
 
 
@@ -49,6 +50,15 @@ class Row:
 class Inventory:
     main: dict  # 이름 -> 저장소 기준 경로
     tests: dict
+
+
+def without_parens(text: str) -> str:
+    """칸의 괄호 설명을 지운다. 설명 속 영문 낱말(LLM 등)을 테스트 이름으로 읽지 않게 하며, 겹친 괄호는 안쪽부터 지운다."""
+    while True:
+        stripped = PAREN.sub("", text)
+        if stripped == text:
+            return text
+        text = stripped
 
 
 def _rel(path: Path, root: Path) -> str:
@@ -174,7 +184,7 @@ def check_cell(cell: str, where: str, col: str, tests: dict, java: bool, errors:
                 errors.append(f"{where}: '{col}' 칸의 '{item}' 에 이유가 없습니다. ' - ' 뒤에 왜 없는지 쓰세요")
             continue
         refs = []
-        for token in TOKEN.findall(BRACKET.sub("", item)):
+        for token in TOKEN.findall(BRACKET.sub("", without_parens(item))):
             if "/" in token and root is not None:
                 check_other_map_test(token, where, col, root, errors)
                 refs.append(token)
@@ -324,7 +334,7 @@ def test_tokens(cell: str) -> list:
     tokens = []
     for item in (part.strip() for part in cell.split(";")):
         if item and not item.startswith(("없음", "해당 없음")):
-            tokens += TOKEN.findall(BRACKET.sub("", item))
+            tokens += TOKEN.findall(BRACKET.sub("", without_parens(item)))
     return tokens
 
 

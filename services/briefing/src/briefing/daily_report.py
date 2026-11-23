@@ -59,7 +59,8 @@ from briefing.llm import (API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCall
                           llm_config)
 from briefing.open_flow import OPEN_SOURCE_TEXT, OpenFlow, signed
 from briefing.price_series import DailyCloses, IntradaySeries
-from briefing.move_figures import USD_KRW_NAME, display, exchange_rate_figure, investor_flows, overseas_quotes
+from briefing.move_figures import (KOSDAQ_NAME, KOSPI_NAME, USD_KRW_NAME, IndexFigure, display, exchange_rate_figure,
+                                   index_figure, investor_flows, overseas_quotes, round_cent)
 from briefing.sources import (
     BACKGROUND_LABEL,
     BACKGROUND_MISSING,
@@ -109,6 +110,9 @@ ITEM_FILINGS = "범위 안 미국 공시"
 # 아침 판의 시장종합(해외 시세·투자자별 순매수). Claude 입력에만 담고, 인용되면 근거 목록에 나온다.
 ITEM_MARKET_SUMMARY = "시장종합"
 ITEM_KR_TODAY = "그날 한국 증시"
+# 아침 판의 전 거래일 한국 증시: 전 거래일 장 마감 뒤 받은 시장종합에서 코드가 꺼낸 코스피·코스닥 마감 등락률. 그날 아침에 받은
+# 시장종합(ITEM_MARKET_SUMMARY)의 지수 등락률은 개장 직후 값이라 섞지 않는다.
+ITEM_KR_PREV = "전 거래일 한국 증시"
 ITEM_OPEN_FLOW = "ETF별 개장 흐름"
 ITEM_ETFS = "보유 ETF별 하루 등락"
 # 보유/관심으로 나뉠 때 글자판·HTML에 보이는 절 제목. LLM 입력과 자료 없음 목록은 ITEM_ETFS 이름을 그대로 쓴다.
@@ -120,8 +124,8 @@ ITEM_MEMBER_ISSUES = "미국 구성 종목 이슈"
 ITEM_RESEARCH = "재검색 기사"
 
 EDITION_ITEMS = {
-    EDITION_MORNING: (ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_MARKET_SUMMARY, ITEM_OPEN_FLOW,
-                      ITEM_ETF_ARTICLES),
+    EDITION_MORNING: (ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_US_STOCKS, ITEM_FILINGS, ITEM_MARKET_SUMMARY, ITEM_KR_PREV,
+                      ITEM_OPEN_FLOW, ITEM_ETF_ARTICLES),
     EDITION_POST_CLOSE: (ITEM_KR_TODAY, ITEM_US_INDEX, ITEM_EXCHANGE, ITEM_ETFS, ITEM_ETF_ARTICLES, ITEM_FILINGS,
                          ITEM_MEMBER_ISSUES),
 }
@@ -151,6 +155,9 @@ POINT_REVIEW = "review"
 POINT_FX = "fx"
 POINT_RATE = "rate"
 ISSUE_KEYS = (("fxIssue", POINT_FX), ("rateIssue", POINT_RATE))
+# 아침 판만의 전 거래일 한국 증시 칸. 숫자는 코드가 붙이고 Claude는 그 이유 한 문장을 쓴다. 다른 이슈 칸처럼 issues에 담는다.
+POINT_KR_PREV = "krPrev"
+MORNING_ISSUE_KEYS = (("krPrevIssue", POINT_KR_PREV), *ISSUE_KEYS)
 # 아침 판 '그 밖의 이슈' 문장 종류와 Claude 출력 칸 이름(해외 시세·투자자별 순매수·구성 종목 공시 등). 문장 수 상한이 있다.
 POINT_OTHER = "other"
 OTHERS_KEY = "otherIssues"
@@ -242,6 +249,8 @@ class DailyInput:
     review: ReviewInput | None = None
     # 아침 판만: 개장 시세를 읽은 구간의 시작. 판 시각이 장 시작 전이라 읽지 않았으면 None.
     open_flow_start: datetime | None = None
+    # 아침 판만: 전 거래일 장 마감 뒤 받은 시장종합. 조회를 끝내 받지 못했거나 구간 안에 마감 뒤 받은 값이 없으면 None.
+    prev_market: Background | None = None
     # 판을 만든 설정. 글자판을 다시 만드는 곳까지 설정을 넘기지 않아도 같은 장 시작 시각으로 판정하게 한다.
     settings: DailySettings = DEFAULT_DAILY_SETTINGS
 
@@ -419,6 +428,54 @@ def _with_usd_krw(entry: Entry, item: Background) -> Entry:
     return replace(entry, llm={**entry.llm, "usdKrw": values}, describe=describe)
 
 
+def kr_prev_line(item: Background) -> str:
+    """전 거래일 한국 증시 줄: '코스피 −2.14% · 코스닥 +0.35% (11-20(금) 마감)'. 원문에서 못 꺼낸 지수는 자료 없음이다."""
+    def part(label: str, figure: IndexFigure | None) -> str:
+        if figure is None or figure.rate is None:
+            return f"{label} {NO_DATA}"
+        rate = round_cent(figure.rate)
+        return f"{label} {'+' if rate >= 0 else MINUS}{abs(rate)}%"
+
+    local = item.fetched_at.astimezone(KST)
+    return (f"{part('코스피', index_figure((item,), KOSPI_NAME))} · {part('코스닥', index_figure((item,), KOSDAQ_NAME))} "
+            f"({local:%m-%d}({WEEKDAYS[local.weekday()]}) 마감)")
+
+
+def _index_llm(figure: IndexFigure | None) -> dict[str, str] | str:
+    if figure is None:
+        return MARK_MISSING
+    return {"value": display(figure.value), "change": display(figure.change, sign=True),
+            "ratePercent": display(figure.rate, sign=True)}
+
+
+def _kr_prev_section(i: DailyInput, refs: Callable[[], str]) -> Section:
+    """아침 판의 전 거래일 한국 증시. 원문 대신 코드가 꺼낸 지수와 투자자별 순매수만 Claude에 준다(그날 아침 시장종합 원문이
+    이미 들어가므로 같은 모양의 원문을 두 번 넣지 않는다)."""
+    item = i.prev_market
+    if item is None:
+        return _missing(ITEM_KR_PREV, "전 거래일 장 마감 뒤 받은 값이 없음")
+    kospi, kosdaq = index_figure((item,), KOSPI_NAME), index_figure((item,), KOSDAQ_NAME)
+    if all(f is None or f.rate is None for f in (kospi, kosdaq)):
+        return _missing(ITEM_KR_PREV, "시장종합 원문에서 지수를 찾지 못함")
+    line = kr_prev_line(item)
+    data: dict[str, Any] = {
+        "ref": refs(),
+        "category": BACKGROUND_LABEL,
+        "kind": BACKGROUND_NAMES[item.api_type],
+        "closeDate": f"{item.fetched_at.astimezone(KST):%Y-%m-%d}",
+        "receivedAt": _at(item.fetched_at),
+        "minutesBeforeAsOf": _minutes_before(item.fetched_at, i.as_of),
+        "kospi": _index_llm(kospi),
+        "kosdaq": _index_llm(kosdaq),
+    }
+    flows = investor_flows((item,))
+    if flows:
+        data["investorNetBuy"] = [{"investor": f.investor, "kospi": _plain(f.kospi), "kosdaq": _plain(f.kosdaq)}
+                                  for f in flows]
+    describe = f"{BACKGROUND_NAMES[item.api_type]}(전 거래일 마감) {line} — {BACKGROUND_SOURCE}, {_short(item.fetched_at)} 받음"
+    return Section(ITEM_KR_PREV, MARK_PRESENT, (line,), (Entry(data["ref"], data, describe, KIND_BACKGROUND),))
+
+
 def _us_index_section(i: DailyInput, settings: DailySettings, refs: Callable[[], str]) -> Section:
     if i.background is None:
         return _missing(ITEM_US_INDEX)
@@ -430,7 +487,7 @@ def _us_index_section(i: DailyInput, settings: DailySettings, refs: Callable[[],
         if r.rate is None:
             lines.append(f"{r.name}({r.code}) 등락률 {NO_DATA} ({r.business_day} 종가 {r.close}, 직전 영업일 종가 없음)")
         else:
-            lines.append(f"{r.name}({r.code}) {r.rate}% ({r.business_day} 종가 {r.close}, "
+            lines.append(f"{r.name}({r.code}) {_signed_rate(r.rate)}% ({r.business_day} 종가 {r.close}, "
                          f"직전 {r.prev_business_day} {r.prev_close})")
     if all(r.rate is None for r in item.index_rates):
         return Section(ITEM_US_INDEX, MARK_MISSING, tuple(lines))
@@ -742,6 +799,7 @@ def build_sections(i: DailyInput, settings: DailySettings = DEFAULT_DAILY_SETTIN
         ITEM_MARKET_SUMMARY: lambda: _raw_background_section(ITEM_MARKET_SUMMARY, i, "market-summary", background_ref,
                                                              with_market_figures=True),
         ITEM_KR_TODAY: lambda: _raw_background_section(ITEM_KR_TODAY, i, "market-summary", background_ref),
+        ITEM_KR_PREV: lambda: _kr_prev_section(i, background_ref),
         ITEM_ETFS: lambda: _etfs_section(i, next_ref(ETF_REF_PREFIX)),
         ITEM_OPEN_FLOW: lambda: _open_flow_section(i, next_ref(OPEN_FLOW_REF_PREFIX)),
         ITEM_ETF_ARTICLES: lambda: _etf_articles_section(i),
@@ -878,7 +936,7 @@ class DailyOutput:
     insufficient_evidence: bool
     # 마감 후 판의 요약 2줄. 아침 판은 비어 있다.
     summary: tuple[str, ...] = ()
-    # 환율 이슈·금리 이슈 문장(kind가 POINT_FX, POINT_RATE). Claude가 내지 않았으면 없다.
+    # 환율 이슈·금리 이슈 문장(kind가 POINT_FX, POINT_RATE)과 아침 판의 전 거래일 한국 증시 문장(POINT_KR_PREV). Claude가 내지 않았으면 없다.
     issues: tuple[Point, ...] = ()
     # 아침 판의 ETF별 방향 예상(kind가 POINT_OUTLOOK). 문장 단위 재검색의 대상이 아니라 points와 따로 둔다.
     outlooks: tuple[Point, ...] = ()
@@ -1000,7 +1058,7 @@ def parse_morning_output(text: str, allowed_refs: frozenset[str], forbidden_tick
     if required_etfs - seen:
         raise InvalidDailyOutput(f"{len(required_etfs - seen)} etf(s) have no outlook")
     issues = [_parse_issue(data[key], key, kind, allowed_refs, tickers)
-              for key, kind in ISSUE_KEYS if data.get(key) is not None]
+              for key, kind in MORNING_ISSUE_KEYS if data.get(key) is not None]
     others = _parse_others(data.get(OTHERS_KEY), allowed_refs, tickers)
     for p in (*points, *issues, *others):
         # 부족한 점도 근거 약함 모음으로 모두에게 나가므로 같이 본다.
@@ -1429,8 +1487,8 @@ class DailyLlmWriter:
                            "shortfall": current.shortfall, "newRefs": list(new_refs)}
         if current.symbol is not None:
             data["rewrite"]["symbol"] = current.symbol
-        # 밤사이 이슈·ETF 이유의 입력 모양은 그대로 두고, 환율·금리 칸과 ETF별 예상에만 종류(와 방향)를 알린다.
-        if current.kind in (POINT_FX, POINT_RATE, POINT_OUTLOOK):
+        # 밤사이 이슈·ETF 이유의 입력 모양은 그대로 두고, 환율·금리·전 거래일 칸과 ETF별 예상에만 종류(와 방향)를 알린다.
+        if current.kind in (POINT_FX, POINT_RATE, POINT_KR_PREV, POINT_OUTLOOK):
             data["rewrite"]["kind"] = current.kind
         if current.direction is not None:
             data["rewrite"]["direction"] = current.direction
@@ -1446,9 +1504,10 @@ class DailyLlmWriter:
             addendum, schema = REWRITE_ADDENDUM_POST_CLOSE, OUTPUT_SCHEMA
         else:
             addendum, schema = REWRITE_ADDENDUM, OUTPUT_SCHEMA
-        # 이유를 찾지 못한 ETF 이유, 금리 기사가 없다는 칸, 예상 어려움만 근거 번호 없이 둘 수 있다(근거 약함이어야 함).
-        no_refs_ok = current.kind in (POINT_ETF, POINT_FX, POINT_RATE, POINT_OUTLOOK)
-        shared = not post_close and current.kind in ("", POINT_FX, POINT_RATE)
+        # 이유를 찾지 못한 ETF 이유, 금리 기사가 없다는 칸, 전 거래일 이유를 찾지 못한 칸, 예상 어려움만 근거 번호 없이 둘 수 있다
+        # (근거 약함이어야 함).
+        no_refs_ok = current.kind in (POINT_ETF, POINT_FX, POINT_RATE, POINT_KR_PREV, POINT_OUTLOOK)
+        shared = not post_close and current.kind in ("", POINT_FX, POINT_RATE, POINT_KR_PREV)
         rejected: list[LlmAttempt] = []
         for attempt in range(1, self.max_attempts + 1):
             raw: str | None = None

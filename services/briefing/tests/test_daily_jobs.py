@@ -357,7 +357,7 @@ def test_morning_edition_uses_us_markets_filings_and_the_previous_korean_session
     for item in (ITEM_US_INDEX, "환율", "미국 종목 직전 장 등락", ITEM_FILINGS, ITEM_MARKET_SUMMARY):
         assert item in text
     assert ITEM_ETFS not in text
-    assert "TEST INDEX(TESTIX) 2.04%" in text
+    assert "TEST INDEX(TESTIX) +2.04%" in text
     # 공시는 양식 이름 대신 항목의 뜻으로 보인다(회사 이름을 모르면 '미국 종목').
     assert "미국 종목 8-K 공시(실적 발표)" in text
     assert payload["rangeStart"] == "2026-10-19T08:45:00+09:00"
@@ -438,7 +438,8 @@ def test_daily_data_that_finally_fails_is_given_up_and_the_edition_still_goes_ou
     assert details.of_type(EntryType.RESENT) == []
     [final] = details.by_reason("context_no_response")
     assert final.attempts == 4 and final.error_type == "connect-failed"
-    assert [r["seq"] for r in final.data["requests"]] == [1]
+    # 아침 판은 전 거래일 시장종합을 같은 조회로 한 번 더 받는다(가짜 API가 바로 답함).
+    assert [(r["request"], r["seq"]) for r in final.data["requests"]] == [("market/daily", 1), ("prevMarketSummary", 1)]
     assert final.data["notReceived"] == ["market/daily"]
     assert final.data["failed"] == {"query": "market/daily", "seq": 1, "failureKind": "connect-failed"}
     assert final.data["requestRange"] == {"since": "2026-10-19T08:45:00+09:00", "asOf": "2026-10-20T08:45:00+09:00"}
@@ -526,7 +527,7 @@ def test_llm_failing_every_time_falls_back_to_the_rule_based_body_and_records_ll
     [event] = published(requests)
     payload = event.value["payload"]
     assert payload["generatedBy"] == GENERATED_BY_RULE
-    assert "요약:" not in payload["text"] and "TEST INDEX(TESTIX) 2.04%" in payload["text"]
+    assert "요약:" not in payload["text"] and "TEST INDEX(TESTIX) +2.04%" in payload["text"]
     [failure] = failures.records
     assert failure.reason == FailureReason.LLM_ERROR and failure.attempts == 3 and failure.job_id == TICK_ID
     assert [r.attempts for r in details.by_reason(REASON_LLM_REJECTED)] == [1, 2, 3]
@@ -551,7 +552,10 @@ def test_insufficient_evidence_is_marked_in_the_body(core):
 def test_llm_is_not_called_when_there_is_no_evidence_at_all(core):
     llm = FakeLlm()
     c, requests, _, _ = core(llm)
+    c.api.auto_prev_market = False
     c.on_collection_ready(tick(), MORNING_AT)
+    # 판 자료와 전 거래일 시장종합은 같은 시세처리기 조회라 함께 실패한다.
+    c.api.fail(QueryKind.DAILY, MORNING_AT + timedelta(minutes=1))
     c.api.fail(QueryKind.DAILY, MORNING_AT + timedelta(minutes=1))
     assert llm.calls == []
     [event] = published(requests)

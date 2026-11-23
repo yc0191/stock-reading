@@ -161,6 +161,11 @@ def test_bracket_belongs_only_to_the_name_right_before_it():
     assert (load.tests, load.label, load.condition) == (("LoadTest",), "부하", "QUOTE_LOAD=1")
 
 
+def test_words_in_parentheses_are_not_read_as_test_names():
+    items = rr.parse_cell("test_move_mail.py (가짜 LLM 응답, 칸 상한(설정, HTML 포함)), LoadTest [부하, 켜는 조건: X=1]")
+    assert [(i.tests, i.label) for i in items] == [(("test_move_mail.py",), ""), (("LoadTest",), "부하")]
+
+
 def test_db_tests_are_chosen_from_the_map(tmp_path):
     make_maps(tmp_path, market_rows=MARKET_ROWS, scripts_rows=SCRIPTS_ROWS)
     write(tmp_path / "docs/test-map/briefing.md", map_text([

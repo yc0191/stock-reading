@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from dataclasses import replace
 
 from briefing.config import CoreSettings
-from briefing.daily_chart import chart_bars, intraday_lines, line_charts, period_lines
+from briefing.daily_chart import chart_bars, intraday_lines, line_charts, period_lines, period_locator
 from briefing.daily_report import DailyInput, EtfDay
 from briefing.sources import EtfInfo
 from briefing.price_series import (
@@ -288,6 +288,36 @@ def test_each_edition_gets_its_own_line_charts_and_a_chart_without_lines_is_left
     assert [c.content_id for c in charts] == ["chart-intraday", "chart-1m", "chart-6m"]
     assert all(c.png.startswith(b"\x89PNG") for c in charts)
     assert line_charts(board(chart_etf("TEST02")), post_close=True) == ()
+
+
+def test_period_ticks_are_every_monday_for_a_month_and_every_first_day_for_six_months():
+    from datetime import date
+    from matplotlib import dates as mdates
+
+    def ticks(first, last):
+        start, end = (datetime(d.year, d.month, d.day, tzinfo=timezone.utc) for d in (first, last))
+        return [mdates.num2date(t).date() for t in period_locator(first, last).tick_values(start, end)]
+
+    # 1개월 그래프는 달이 바뀌어도(10-01) 눈금이 붙지 않고 7일 간격이다.
+    month = [d for d in ticks(date(2026, 9, 21), date(2026, 10, 21)) if date(2026, 9, 21) <= d <= date(2026, 10, 21)]
+    assert month[0] == date(2026, 9, 21) and all(d.weekday() == 0 for d in month)
+    assert {(b - a).days for a, b in zip(month, month[1:])} == {7}
+    six = [d for d in ticks(date(2026, 5, 21), date(2026, 11, 23)) if date(2026, 5, 21) <= d <= date(2026, 11, 23)]
+    assert six == [date(2026, m, 1) for m in range(6, 12)]
+
+
+def test_only_the_date_charts_use_the_period_ticks(monkeypatch):
+    from datetime import date
+    import briefing.daily_chart as daily_chart
+    calls = []
+    real = daily_chart.period_locator
+    monkeypatch.setattr(daily_chart, "period_locator", lambda first, last: calls.append((first, last)) or real(first, last))
+    days = daily_chart.Line("TEST01", True, ((date(2026, 9, 21), 0.0), (date(2026, 10, 21), 1.0)))
+    daily_chart.render_line_chart((days,), "1개월", False)
+    assert calls == [(date(2026, 9, 21), date(2026, 10, 21))]
+    times = daily_chart.Line("TEST01", True, ((at(9, 0), 0.0), (at(10, 0), 1.0)))
+    daily_chart.render_line_chart((times,), "장중", True)
+    assert len(calls) == 1
 
 
 def test_a_long_holiday_at_the_start_of_the_period_still_draws_the_line():

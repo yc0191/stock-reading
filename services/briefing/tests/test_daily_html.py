@@ -13,7 +13,7 @@ from briefing.daily_chart import (
     no_data_names,
     render_day_chart,
 )
-from briefing.daily_html import ChartSlot, render_html
+from briefing.daily_html import ChartSlot, _rate_spans, render_html
 from briefing.daily_report import (
     DAILY_DISCLAIMER,
     DailyInput,
@@ -211,9 +211,24 @@ def test_rates_are_painted_by_direction_in_the_facts_and_the_conclusion():
     assert '<span style="color:#d32f2f;font-weight:700">+2.1%</span>' in html
     assert '<span style="color:#1565c0;font-weight:700">−1.5%</span>' in html
     assert '<span style="color:#1565c0;font-weight:700">-1.50%</span>' in html
-    assert '<span style="color:#757575;font-weight:700">0.00%</span>' in render_html(
-        post_close((etf("TEST01", "TEST 하나", "0.00"),)), build_sections(post_close((etf("TEST01", "TEST 하나", "0.00"),))),
-        None)
+    flat = post_close((etf("TEST01", "TEST 하나", "0.00"),))
+    assert "TEST 하나(TEST01) 0.00%" in render_html(flat, build_sections(flat), None)
+
+
+@pytest.mark.parametrize("line", ["코스피가 장 초반 3%대 하락", "국고채 금리는 연 3.642%", "금리를 0.25%포인트 올렸습니다",
+                                  "WTI가 0.93% 올랐습니다", "금리를 +0.25%포인트 올렸습니다", "차이 -1.05%p", "10-5% 범위"])
+def test_a_percent_without_a_sign_is_not_painted_because_its_direction_is_unknown(line):
+    assert _rate_spans(line) == line
+
+
+def test_a_signed_percent_is_painted_by_its_sign():
+    painted = _rate_spans("코스피 -3.12%, 나스닥 +1.42%, 환율 −0.30%, 보합 +0.00%")
+    assert '<span style="color:#1565c0;font-weight:700">-3.12%</span>' in painted
+    assert '<span style="color:#d32f2f;font-weight:700">+1.42%</span>' in painted
+    assert '<span style="color:#1565c0;font-weight:700">−0.30%</span>' in painted
+    assert '<span style="color:#757575;font-weight:700">+0.00%</span>' in painted
+    # 부호 앞에 띄어쓰기가 없어도 칠한다.
+    assert _rate_spans("코스피+1.2%") == '코스피<span style="color:#d32f2f;font-weight:700">+1.2%</span>'
 
 
 def test_every_value_from_the_event_is_escaped():

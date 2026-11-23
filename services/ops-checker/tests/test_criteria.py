@@ -67,6 +67,15 @@ def test_files_that_are_not_criteria_names_are_skipped(tmp_path):
     assert load_all(tmp_path / "missing") == []
 
 
+def test_yaml_extension_is_a_format_error(tmp_path):
+    (tmp_path / "911-a.yaml").write_text(
+        "issue: 911\nattempt: a\nfix_commit: \"abc1234\"\ndays: 2\nmetrics:\n"
+        "  - key: m\n    sql: \"SELECT 0.1\"\n    pass: \"< 0.5\"\n", encoding="utf-8")
+    c = load_file(tmp_path / "911-a.yaml")
+    assert (c.issue, c.attempt, c.error) == (911, "a", "bad-extension")
+    assert [c.error for c in load_all(tmp_path)] == ["bad-extension"]
+
+
 def test_pass_expression_needs_a_zero_to_one_number():
     assert parse_pass(">= 0.05")[0] == ">="
     with pytest.raises(ValueError):

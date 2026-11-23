@@ -192,8 +192,8 @@ class ArticleQueryIntegrationTest {
 
     private static void insertResearch(String title, OffsetDateTime publishedAt, UUID jobId, String symbol) {
         insert(title, publishedAt, symbol);
-        jdbc.sql("UPDATE news_article SET from_research = true, research_job_id = :jobId WHERE title = :title")
-                .param("jobId", jobId).param("title", title).update();
+        jdbc.sql("UPDATE news_article SET from_research = true WHERE title = :title")
+                .param("title", title).update();
         linkResearch(title, jobId);
     }
 

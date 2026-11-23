@@ -7,6 +7,7 @@
 예외 둘: 레벨 상 메일이 짧아지고(근거 목록 맨 아래, '확인하지 못한 것' 없음) HTML을 함께 싣게 되어 급변동 두 건의 본문·html·근거
 번호 칸은 새 모양으로 다시 뽑았다(LLM 입력은 그대로다). 그리고 급변동 두 건(moveUs, moveWeakResearch)의 머리말은 레벨 상(prevCloseHigh)이 리포트를 만들게 되면서 '오늘 … · 기준가 대비 …'
 머리말로 바뀌어(제목용 칸은 todayChangePercent·baseKind), 그 두 건의 머리말과 칸만 새 모양으로 고쳤다.
+아침 판(dailyMorning)은 맨 위에 '전 거래일 한국 증시' 칸과 LLM 입력 항목이 생겨(#104) 그 판의 기준 전체를 새 모양으로 다시 뽑았다.
 """
 import json
 from pathlib import Path

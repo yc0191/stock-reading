@@ -97,8 +97,12 @@ class QuerySettings:
     # 한 번 호출의 응답 제한. 연결 실패·시간 초과·5xx만 다시 부르고, 4xx(잘못된 요청)는 다시 불러도 같으므로 그만둔다.
     # 연결부터 응답을 다 읽기까지 시도 전체의 마감이다(http_queries.post_json).
     call_timeout: timedelta = timedelta(seconds=10)
+    # 시세처리기 데일리 자료 조회(QueryKind.DAILY, 데일리 판만 씀)의 응답 제한. 마감 후 판은 ETF마다 하루 전체 장중 흐름을 함께
+    # 받아 10초를 넘기므로 따로 길게 둔다. 판 메일은 늦어도 되고 급변동 메일은 빨라야 해서 나머지 조회는 call_timeout을 쓴다.
+    daily_call_timeout: timedelta = timedelta(seconds=60)
     max_attempts: int = 4
     # 시도 사이 간격. n번째 실패 뒤 n번째 값을 쉰다(최대 시도 4번이라 3개). 최악은 4×10초 + 22초 = 62초다.
+    # 데일리 자료 조회는 4×60초 + 22초 = 4분 22초로, 판 한도 시각(DailySettings)과 멈춤 기준(stuck_after)보다 짧다.
     retry_intervals: tuple[timedelta, ...] = (timedelta(seconds=2), timedelta(seconds=5), timedelta(seconds=15))
     # 동시에 기다리는 호출 수. 호출은 이 수의 작업 스레드에서 돌고 수신 루프는 기다리지 않는다. 시세처리기·뉴스처리기
     # 요청 스레드(각 8개)보다 크지 않게 둔다.
@@ -145,6 +149,10 @@ class DailySettings:
     us_index_target: str = "C"
     # 마감 후 판 기준 시각(한국 시간)이 이보다 이르면 그날 장이 아직 열리지 않은 것으로 본다(일봉이 모두 등락 0.00일 때만).
     market_open: time = time(9, 0)
+    # 아침 판의 전 거래일 한국 증시: 판 날짜 0시(한국 시간) 전에 받은 마지막 시장종합을 쓰되, 받은 시각이 이보다 이르면 마감 등락률이
+    # 아니라고 보고 자료 없음으로 둔다. 장중 수집의 마지막 회차(15:30)는 장이 끝나는 순간의 값이라 종가가 반영됐는지 알 수 없어,
+    # 마감 후 수집(16:30, 재시도 16:48까지) 값만 통과하도록 그 사이 시각으로 둔다. 범위는 배경 자료와 같은 CoreSettings.background_window다.
+    prev_close_after: time = time(16, 0)
     # 장 시작부터 이 시각 전까지의 급변동은 급변동 리포트를 따로 만들지 않고 아침 판에 합친다. 수집기가 아침 판 시작 알림을 내는
     # 시각(collector.daily-briefing.morning-cron 기본 평일 09:10)과 같아야 한다. 합침 구간이 끝난 뒤 이 시간이 지나도 아침 판
     # 결과가 없으면 모아 둔 변동을 급변동 리포트로 넘긴다.

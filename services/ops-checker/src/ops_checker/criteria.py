@@ -9,7 +9,8 @@ from pathlib import Path
 
 import yaml
 
-FILE_NAME = re.compile(r"^(\d+)-([^/]+)\.ya?ml$")
+# 판정 쪽(scripts/ops_verdict.py, ops-verdict 워크플로)은 .yml 만 읽는다. .yaml 은 재더라도 판정 댓글이 붙지 않으므로 형식 오류로 둔다.
+FILE_NAME = re.compile(r"^(\d+)-([^/]+)\.(ya?ml)$")
 PASS_EXPR = re.compile(r"^\s*(<=|>=|<|>|==)\s*(\d+(?:\.\d+)?)\s*$")
 SQL_START = re.compile(r"^\s*(select|with)\b", re.IGNORECASE)
 PERSONAL_SCHEMA = re.compile(r"\bpersonal\s*\.", re.IGNORECASE)
@@ -105,6 +106,8 @@ def load_file(path: Path) -> Criteria | None:
     issue, attempt = int(match.group(1)), match.group(2)
     data = path.read_bytes()
     digest = fingerprint(data)
+    if match.group(3) != "yml":
+        return Criteria(issue, attempt, digest, error="bad-extension")
     try:
         doc = yaml.safe_load(data)
     except yaml.YAMLError:

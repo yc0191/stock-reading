@@ -28,6 +28,7 @@ from briefing.daily_report import (
 )
 from briefing.daily_morning import (
     FX_RATE_TITLE,
+    KR_PREV_TITLE,
     NO_OVERNIGHT,
     OTHERS_TITLE,
     OUTLOOK_NOTE,
@@ -72,8 +73,10 @@ DISCLAIMER_STYLE = f"margin:18px 0 6px;font-size:12px;color:{MUTED_COLOR}"
 STATUS_BOX_STYLE = "margin:6px 0 0"
 IMAGE_STYLE = "display:block;max-width:100%;height:auto;margin:0 0 6px;border:0"
 
-# %p(퍼센트포인트 차이값)는 등락률이 아니라 색을 칠하지 않는다. 한 덩어리로 맞춰 두고 칠할 때 건너뛴다.
-RATE = re.compile(r"(?<![\w.])([+\-−]?\d+(?:\.\d+)?)%(p?)")
+# %p·%포인트(퍼센트포인트 차이값)는 등락률이 아니라 색을 칠하지 않는다. 한 덩어리로 맞춰 두고 칠할 때 건너뛴다.
+# 부호 없는 %("3%대 하락", "연 3.642%")는 방향을 알 수 없어 칠하지 않는다. 등락률은 코드와 LLM 모두 부호를 붙여 쓴다.
+# 부호 앞이 숫자면 범위 표기(10-5%)라 칠하지 않고, 글자면("코스피+1.2%") 칠한다.
+RATE = re.compile(r"(?<![\d.])([+\-−]\d+(?:\.\d+)?)%(p|포인트)?")
 
 
 @dataclass(frozen=True)
@@ -87,7 +90,7 @@ class ChartSlot:
 
 
 def _rate_spans(escaped: str) -> str:
-    """이스케이프한 글 안의 등락률(+2.1%, -1.5%, 2.04%)에 오름·내림 색을 칠한다."""
+    """이스케이프한 글 안의 부호 붙은 등락률(+2.1%, -1.5%, −0.3%)에 오름·내림 색을 칠한다."""
 
     def paint(match: re.Match[str]) -> str:
         if match.group(2):
@@ -262,10 +265,14 @@ def _items(rows: list[str], tag: str = "ul") -> str:
 
 
 def _morning_body(v: MorningView, charts: tuple[ChartSlot, ...] = ()) -> list[str]:
-    """밤사이 이슈·환율·금리·그 밖의 이슈·ETF 예상·근거 약함 모음 HTML. Claude 본문이 있을 때만 부른다."""
+    """전 거래일 한국 증시·밤사이 이슈·환율·금리·그 밖의 이슈·ETF 예상·근거 약함 모음 HTML. Claude 본문이 있을 때만 부른다."""
     overnight = (_items([_sentence(s.statement, s.numbers, s.shortfall) for s in v.points], "ol") if v.points
                  else _p(ITEM_STYLE, escape(NO_OVERNIGHT)))
-    parts = [_p(HEADING_STYLE, f"■ {escape(OVERNIGHT_TITLE)}"), overnight,
+    kr_prev = [_p(ITEM_STYLE, _rate_spans(escape(v.kr_prev_line)))]
+    if v.kr_prev is not None:
+        kr_prev.append(_p(ITEM_STYLE, _sentence(v.kr_prev.statement, v.kr_prev.numbers, v.kr_prev.shortfall)))
+    parts = [_p(HEADING_STYLE, f"■ {escape(KR_PREV_TITLE)}"), *kr_prev,
+             _p(HEADING_STYLE, f"■ {escape(OVERNIGHT_TITLE)}"), overnight,
              _p(HEADING_STYLE, f"■ {escape(FX_RATE_TITLE)}"),
              _items([f"{escape(issue_label(r))}: {_sentence(r.statement, r.numbers, r.shortfall)}" for r in v.issues])]
     if v.others:
