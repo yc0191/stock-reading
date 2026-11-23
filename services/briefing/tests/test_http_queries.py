@@ -118,8 +118,25 @@ def run(api, kind=QueryKind.HISTORY, body=BODY, timeout=10.0):
 def test_the_retry_settings_are_the_agreed_values():
     s = QuerySettings()
     assert s.call_timeout == timedelta(seconds=10)
+    assert s.daily_call_timeout == timedelta(seconds=60)
     assert s.max_attempts == 4
     assert s.retry_intervals == (timedelta(seconds=2), timedelta(seconds=5), timedelta(seconds=15))
+
+
+def test_only_the_daily_data_query_waits_longer():
+    # 마감 후 판의 데일리 자료는 10초를 넘겨 답하므로 그 조회만 길게 기다리고, 급변동이 쓰는 조회는 10초 그대로다.
+    timeouts = {}
+
+    def post(url, body, headers, timeout):
+        timeouts[url.rsplit("/internal/", 1)[1]] = timeout
+        return {}
+
+    api = HttpQueries({"market": "http://unused", "news": "http://unused"}, FakeJobLog(), lambda: T, post=post)
+    for kind in QueryKind:
+        run(api, kind)
+
+    assert timeouts == {"market/daily": 60.0, "market/context": 10.0, "market/history": 10.0,
+                        "news/articles": 10.0, "news/filings": 10.0}
 
 
 def test_service_addresses_come_from_the_environment_with_local_defaults():
