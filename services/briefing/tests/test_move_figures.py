@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fake_anthropic import as_reply
+from briefing.config import DEFAULT_SETTINGS
 from briefing.jobs import ReportInput
 from briefing.move_figures import (
     KOSDAQ_NAME,
@@ -292,7 +293,7 @@ def test_a_cited_figure_reaches_the_event_and_passes_the_schema():
 
     i = report_input()
     report = LlmWriter(OneAnswer()).write(i)
-    event = briefing_event(i, report, AS_OF + timedelta(minutes=1)).value
+    event = briefing_event(i, report, AS_OF + timedelta(minutes=1), settings=DEFAULT_SETTINGS).value
 
     assert validate("briefing.generated.v1.schema.json", event) == []
     entries = event["payload"]["evidence"]
