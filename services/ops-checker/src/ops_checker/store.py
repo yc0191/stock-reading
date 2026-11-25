@@ -96,11 +96,18 @@ class PostgresRunStore:
         return True
 
 
-class PostgresScalarQuery:
-    """지표 SQL 을 읽기 전용 트랜잭션에서 SQL 하나당 SQL_TIMEOUT_SECONDS 상한으로 돌린다. 끝나면 언제나 되돌린다."""
+# 지표 SQL 이 그날 운영 버전을 current_setting 으로 읽는 설정 이름. 확인기는 지표를 계산한 뒤에 장부(ops.check_run)에
+# 그날 줄을 넣으므로, 이 값이 없으면 기준 파일이 오늘 버전을 알 수 없어 버전 문자열을 박아 둬야 한다.
+DEPLOY_VERSION_SETTING = "ops_checker.deploy_version"
 
-    def __init__(self, connect) -> None:
+
+class PostgresScalarQuery:
+    """지표 SQL 을 읽기 전용 트랜잭션에서 SQL 하나당 SQL_TIMEOUT_SECONDS 상한으로 돌린다. 끝나면 언제나 되돌린다.
+    트랜잭션마다 DEPLOY_VERSION_SETTING 에 운영 버전을 넣는다(트랜잭션 안에서만 유효)."""
+
+    def __init__(self, connect, deploy_version: str) -> None:
         self._connect = connect
+        self._deploy_version = deploy_version
         self._conn: psycopg.Connection | None = None
 
     def scalar(self, sql: str) -> list[tuple]:
@@ -110,6 +117,8 @@ class PostgresScalarQuery:
                 self._conn.read_only = True
             with self._conn.cursor() as cur:
                 cur.execute(f"SET LOCAL statement_timeout = {SQL_TIMEOUT_SECONDS * 1000}")
+                # SET LOCAL 은 값을 바인딩할 수 없어 같은 일을 하는 set_config(이름, 값, 트랜잭션 한정)를 쓴다.
+                cur.execute("SELECT set_config(%s, %s, true)", (DEPLOY_VERSION_SETTING, self._deploy_version))
                 cur.execute(sql)
                 return cur.fetchmany(2)
         except errors.QueryCanceled as error:
