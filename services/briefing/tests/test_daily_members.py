@@ -11,7 +11,9 @@ import briefing.daily_jobs as daily_jobs
 from briefing.config import DailySettings
 from briefing.daily_inputs import EtfArticles, MemberIssue, NotableCandidate
 from briefing.daily_jobs import DailyCore
-from briefing.daily_members import MemberPortfolio, foreign_us_names, member_input, member_output, member_sections
+from briefing.daily_members import (MemberPortfolio, foreign_us_names, member_input, member_output, member_sections,
+                                     whole_input)
+from briefing.daily_review import ReviewInput
 from briefing.daily_report import (
     POINT_ETF,
     POINT_FX,
@@ -315,6 +317,30 @@ def test_a_move_of_a_korean_stock_in_the_members_portfolio_is_listed_with_its_na
     assert "TSTK01" not in two
     assert "TEST 주식 하나(TSTK01)" in by_member[1]["html"] and "TSTK01" not in by_member[2]["html"]
 
+
+def test_the_job_wide_text_names_the_korean_stocks_from_every_members_portfolio():
+    # 작업 기록의 판 전체 글은 멤버를 가르지 않으므로 모든 멤버의 국내 주식 이름을 붙인다. 이름이 없으면 다른 멤버가 아는 이름을 쓴다.
+    details = Details()
+    seed_move(details, "TSTK01", datetime(2026, 10, 20, 10, 15, tzinfo=KST), 3.2, True, "TEST-MOVE-S1")
+    seed_move(details, "TSTK02", datetime(2026, 10, 20, 11, 0, tzinfo=KST), -2.4, True, "TEST-MOVE-S2")
+    members = (member(1, held=("TEST01",), stocks=(("TSTK01", None), ("TSTK02", "TEST 주식 둘"))),
+               member(2, held=("TEST02",), stocks=(("TSTK01", "TEST 주식 하나"),)))
+    _, details, _ = run_post_close(members, details=details)
+    [result] = [r for r in details.results() if not r.job_id.startswith("TEST-MOVE-")]
+    whole = moves_of({"text": result.final_text})
+    assert "  - 10:15 TEST 주식 하나(TSTK01) 오늘 +3.20% · 메일 보냄" in whole
+    assert "  - 11:00 TEST 주식 둘(TSTK02) 오늘 −2.40% · 메일 보냄" in whole
+
+
+
+def test_the_job_wide_input_is_unchanged_without_members_or_a_review():
+    # 멤버를 못 읽었거나(None) 멤버가 없거나 아침 판(대조 없음)이면 이름을 붙일 곳이 없어 자료를 그대로 쓴다.
+    reviewed = full_input(review=ReviewInput((), None, ()))
+    assert whole_input(reviewed, None) is reviewed
+    assert whole_input(reviewed, ()) is reviewed
+    morning = full_input()
+    assert morning.review is None
+    assert whole_input(morning, (member(1, held=("TEST01",), stocks=(("TSTK01", "TEST 주식 하나"),)),)) is morning
 
 def test_a_member_whose_etfs_are_not_in_the_response_still_gets_a_board_saying_so():
     events, _, _ = run_post_close(MEMBERS[2:])

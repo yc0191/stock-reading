@@ -29,6 +29,7 @@ from briefing.daily_members import (
     member_input,
     member_output,
     member_sections,
+    whole_input,
 )
 from briefing.daily_morning import outlook_records
 from briefing.daily_inputs import (EtfArticles, is_prev_close, member_issues, moves_with_market, notable_candidates,
@@ -898,9 +899,9 @@ class DailyCore:
         status_text = report.text if report is not None else None
         if report is not None:
             missing = [*missing, *report.missing]
-        # 작업 기록에 남기는 본문은 멤버를 가르지 않은 판 전체 글이다(멤버마다 다른 글자판은 메일로만 나간다).
-        text = daily_text(daily_input, sections, draft.output, status_text)
         members = self.members.daily_members(job.edition) if self.members is not None else None
+        # 작업 기록에 남기는 본문은 멤버를 가르지 않은 판 전체 글이다(멤버마다 다른 글자판은 메일로만 나간다).
+        text = daily_text(whole_input(daily_input, members), sections, draft.output, status_text)
         if members is None:
             # 받을 멤버를 모르면 누구에게 보낼지 알 수 없다. 틀린 사람에게 보내지 않도록 발행하지 않고 실패로 남긴다.
             self._detail(job, STAGE_COMPOSE, EntryType.STEP_FAILED, REASON_MEMBERS_UNREADABLE, "ReadFailed", 0, now)
