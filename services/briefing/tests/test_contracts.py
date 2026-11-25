@@ -80,13 +80,19 @@ def test_move_sample_carries_today_change_and_moves_without_it_are_still_read():
     assert parse_move(json.dumps(older), NOW).today_change_percent is None
 
 
-def test_move_with_a_non_numeric_today_change_is_rejected():
+@pytest.mark.parametrize("value", ["-2.10", True, [1.0], {"v": 1.0}])
+def test_move_with_a_non_numeric_today_change_is_read_without_it(value, caplog):
+    # 계약을 어긴 값이지만 선택 칸 하나 때문에 급변동 리포트 전체를 버리지 않는다. 그 칸만 없는 것으로 읽고 경고를 남긴다.
     broken = sample("market.move.sample.json")
-    broken["payload"]["todayChangePercent"] = "-2.10"
+    broken["payload"]["todayChangePercent"] = value
 
     assert validate("market.move.v1.schema.json", broken) != []
-    with pytest.raises(ValueError):
-        parse_move(json.dumps(broken), NOW)
+    with caplog.at_level("WARNING", logger="briefing.jobs"):
+        job = parse_move(json.dumps(broken), NOW)
+
+    assert job.today_change_percent is None
+    assert job.job_id == broken["eventId"] and job.symbol == broken["payload"]["symbol"]
+    assert any("todayChangePercent" in r.getMessage() for r in caplog.records)
 
 
 def test_move_with_unknown_detection_type_is_rejected():

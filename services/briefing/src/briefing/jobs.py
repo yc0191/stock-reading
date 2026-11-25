@@ -219,19 +219,24 @@ def parse_move(message: str | bytes, now: datetime) -> _Job:
             created_at=now,
             detected_at=parse_timestamp(move["occurredAt"]) if move.get("occurredAt") else None,
             detection_type=payload.get("detectionType"),
-            today_change_percent=_optional_float(payload.get("todayChangePercent")),
+            today_change_percent=_optional_float(payload.get("todayChangePercent"), "todayChangePercent", move["eventId"]),
             level=level_of(payload.get("detectionType")),
         )
     except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ValueError(f"malformed market.move event: {error!r}") from error
 
 
-def _optional_float(value: Any) -> float | None:
-    """선택 칸의 숫자. 칸이 없으면 None이고, 숫자가 아니면 형식 오류로 본다."""
+def _optional_float(value: Any, field_name: str, event_id: str) -> float | None:
+    """선택 칸의 숫자. 칸이 없거나 숫자가 아니면 None이다.
+
+    숫자가 아닌 값은 계약 위반이지만 선택 칸 하나 때문에 급변동 리포트 전체를 버리지 않고, 그 칸만 없는 것으로 읽는다.
+    """
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError(f"not a number: {value!r}")
+        log.warning("market.move %s: %s is not a number (%s); reading the event without it",
+                    event_id, field_name, type(value).__name__)
+        return None
     return float(value)
 
 
