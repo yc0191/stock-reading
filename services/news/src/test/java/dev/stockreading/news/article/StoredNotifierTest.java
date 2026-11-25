@@ -36,6 +36,7 @@ import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
 import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.kafka.core.KafkaTemplate;
 
 import dev.stockreading.news.Topics;
@@ -134,6 +135,59 @@ class StoredNotifierTest {
         assertThat(payload.get("articleCount").asInt()).isEqualTo(3);
         assertThat(payload.get("storedCount").asInt()).isEqualTo(1);
         assertThat(texts(payload.get("unprocessedEventIds"))).containsExactly(B.toString(), C.toString());
+    }
+
+    // DB 오류를 던지면 오류 처리기가 간격 없이 재시도를 다 써 버리고 저장 끝을 버린다. 한도 안에서 다시 읽어 이어 간다.
+    @Test
+    void aReadFailureIsRetriedWithinTheWaitLimitAndThePublishGoesOn() throws IOException {
+        recorded.putAll(Map.of(A, ArticleResult.STORED, B, ArticleResult.MERGED));
+        beforeRead = read -> {
+            if (read == 1) {
+                throw new DataAccessResourceFailureException("db down");
+            }
+        };
+
+        notifier(Duration.ofMinutes(1)).onCompleted(completion(List.of(A, B), null));
+
+        JsonNode payload = mapper.readTree(storedJson()).get("payload");
+        assertThat(reads).hasValue(2);
+        assertThat(payload.get("storedCount").asInt()).isEqualTo(1);
+        assertThat(payload.get("mergedCount").asInt()).isEqualTo(1);
+        assertThat(payload.get("unprocessedEventIds")).isEmpty();
+    }
+
+    // 한도까지 읽지 못하면 알림을 버리지 않고 확인하지 못한 기사를 미처리로 담아 낸다. 브리핑은 저장된 것만 조회해 이어 간다.
+    @Test
+    void readFailuresUntilTheWaitLimitStillPublishWithTheUnreadArticlesAsUnprocessed() throws IOException {
+        recorded.put(A, ArticleResult.STORED);
+        beforeRead = read -> {
+            if (read > 1) {
+                throw new DataAccessResourceFailureException("db down");
+            }
+        };
+
+        notifier(Duration.ofMillis(50)).onCompleted(completion(List.of(A, B, C), null));
+
+        JsonNode payload = mapper.readTree(storedJson()).get("payload");
+        assertThat(ContractSchemas.validate(SCHEMA, storedJson())).isEmpty();
+        assertThat(reads.get()).isGreaterThan(2);
+        assertThat(payload.get("storedCount").asInt()).isEqualTo(1);
+        assertThat(texts(payload.get("unprocessedEventIds"))).containsExactly(B.toString(), C.toString());
+    }
+
+    // 다시 처리하는 완료처럼 기다리지 않는 경우에도, 읽기 실패로 알림을 버리지 않고 모두 미처리로 낸다.
+    @Test
+    void aReadFailureWithoutWaitPublishesEveryArticleAsUnprocessed() throws IOException {
+        beforeRead = read -> {
+            throw new DataAccessResourceFailureException("db down");
+        };
+
+        notifier(Duration.ofMinutes(1)).onCompleted(staleCompletion(List.of(B, A), null));
+
+        JsonNode payload = mapper.readTree(storedJson()).get("payload");
+        assertThat(reads).hasValue(1);
+        assertThat(payload.get("articleCount").asInt()).isEqualTo(2);
+        assertThat(texts(payload.get("unprocessedEventIds"))).containsExactly(A.toString(), B.toString());
     }
 
     @Test
