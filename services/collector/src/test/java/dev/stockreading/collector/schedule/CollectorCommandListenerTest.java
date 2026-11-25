@@ -5,12 +5,17 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.lang.reflect.Method;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -39,6 +44,7 @@ class CollectorCommandListenerTest {
 
     private static final String SAMPLE_EVENT_ID = "6f1d2c3b-4a59-4e7f-8d10-2b3c4d5e6f70";
 
+    private final MutableClock clock = new MutableClock(Instant.parse("2026-10-25T13:00:00Z"));
     private CollectorJobs jobs;
     private CollectorCommandListener listener;
     private ListAppender<ILoggingEvent> logs;
@@ -47,7 +53,7 @@ class CollectorCommandListenerTest {
     void setUp() {
         jobs = mock(CollectorJobs.class);
         when(jobs.startOnDemand(any())).thenReturn(Outcome.STARTED);
-        listener = new CollectorCommandListener(jobs, JsonMapper.builder().build());
+        listener = new CollectorCommandListener(jobs, JsonMapper.builder().build(), clock);
         logs = new ListAppender<>();
         logs.start();
         ((Logger) LoggerFactory.getLogger(CollectorCommandListener.class)).addAppender(logs);
@@ -134,6 +140,52 @@ class CollectorCommandListenerTest {
         verify(callback, never()).seekToBeginning(any(Collection.class));
     }
 
+    // 켜져 있는 동안의 재분배로 다시 배정받으면 끝으로 옮기지 않고, 처음 배정받은 시각 이후에 보낸 명령부터 읽는다.
+    // 끝으로 옮기면 재분배 사이에 온 명령이 실행되지 않는다. 커밋된 위치부터 읽으면 켜진 뒤 처리한 명령이 없을 때
+    // 꺼져 있던 동안 쌓인 명령까지 실행된다(끝으로 옮긴 위치는 처리한 명령이 있어야 커밋된다).
+    @Test
+    void aRebalanceWhileRunningReadsTheCommandsSentSinceThePartitionWasFirstAssigned() {
+        TopicPartition partition = new TopicPartition(Topics.COLLECTOR_COMMAND, 0);
+        Instant startedAt = clock.instant();
+        listener.onPartitionsAssigned(Map.of(partition, 7L), mock(ConsumerSeekCallback.class));
+        clock.advance(Duration.ofMinutes(30));
+        ConsumerSeekCallback again = mock(ConsumerSeekCallback.class);
+
+        listener.onPartitionsAssigned(Map.of(partition, 7L), again);
+
+        verify(again).seekToTimestamp(List.of(partition), startedAt.toEpochMilli());
+        verify(again, never()).seekToEnd(any(Collection.class));
+    }
+
+    // 재분배 때 처음 받는 파티션이 섞여 있으면 그 파티션만 끝으로 옮긴다.
+    @Test
+    void onlyPartitionsAssignedForTheFirstTimeAreMovedToTheEnd() {
+        TopicPartition known = new TopicPartition(Topics.COLLECTOR_COMMAND, 0);
+        TopicPartition added = new TopicPartition(Topics.COLLECTOR_COMMAND, 1);
+        long knownAt = clock.millis();
+        listener.onPartitionsAssigned(Map.of(known, 7L), mock(ConsumerSeekCallback.class));
+        clock.advance(Duration.ofMinutes(1));
+        ConsumerSeekCallback callback = mock(ConsumerSeekCallback.class);
+
+        listener.onPartitionsAssigned(Map.of(known, 9L, added, 0L), callback);
+
+        verify(callback).seekToEnd(Set.of(added));
+        verify(callback).seekToTimestamp(List.of(known), knownAt);
+    }
+
+    // 재분배 뒤 커밋된 위치부터 다시 읽어 이미 실행한 명령을 또 받아도 한 번만 실행한다.
+    @Test
+    void aCommandReadAgainAfterARebalanceRunsOnlyOnce() throws IOException {
+        String message = command(UUID.randomUUID().toString(), "collect-post-close");
+        listener.onCommand(message);
+        listener.onPartitionsAssigned(Map.of(new TopicPartition(Topics.COLLECTOR_COMMAND, 0), 7L),
+                mock(ConsumerSeekCallback.class));
+
+        listener.onCommand(message);
+
+        verify(jobs, times(1)).startOnDemand(Job.COLLECT_POST_CLOSE);
+    }
+
     @Test
     void listensOnTheCommandTopicInItsOwnGroup() throws NoSuchMethodException {
         Method method = CollectorCommandListener.class.getDeclaredMethod("onCommand", String.class);
@@ -151,5 +203,32 @@ class CollectorCommandListenerTest {
 
     private List<String> messages(Level level) {
         return logs.list.stream().filter(e -> e.getLevel() == level).map(ILoggingEvent::getFormattedMessage).toList();
+    }
+
+    private static final class MutableClock extends Clock {
+        private Instant now;
+
+        MutableClock(Instant now) {
+            this.now = now;
+        }
+
+        void advance(Duration duration) {
+            now = now.plus(duration);
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneId.of("Asia/Seoul");
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
     }
 }
