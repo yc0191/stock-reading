@@ -22,10 +22,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.MDC;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.autoconfigure.task.TaskSchedulingAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 import dev.stockreading.collector.insight.IntradayProperties;
 import dev.stockreading.collector.marketdata.MarketDayPort;
@@ -280,13 +284,24 @@ class CollectorTimersTest {
                 });
     }
 
+    @EnableScheduling
+    static class SchedulingOn {
+    }
+
     @Test
     void schedulerHasMoreThanOneThreadSoLongJobsDoNotStopTheOneSecondTimer() {
-        yamlRunner().run(context -> {
-            Integer size = context.getEnvironment().getProperty("spring.task.scheduling.pool.size", Integer.class);
-            // 오래 걸리는 작업(뉴스·장 시작 전·장중·마감 후) 넷이 겹쳐도 1초 타이머와 다른 tick 발행기가 돌 자리가 남아야 한다.
-            assertThat(size).isGreaterThanOrEqualTo(6);
-        });
+        // 설정 값만 읽으면 키 이름이 바뀌거나 가상 스레드 스케줄러로 바뀌어 값이 무시될 때 알 수 없다.
+        // 그래서 운영과 같은 Boot 자동 설정이 만든 스케줄러의 스레드 수를 본다.
+        yamlRunner()
+                .withConfiguration(AutoConfigurations.of(TaskSchedulingAutoConfiguration.class))
+                .withUserConfiguration(SchedulingOn.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).hasSingleBean(ThreadPoolTaskScheduler.class);
+                    ThreadPoolTaskScheduler scheduler = context.getBean(ThreadPoolTaskScheduler.class);
+                    // 오래 걸리는 작업(뉴스·장 시작 전·장중·마감 후) 넷이 겹쳐도 1초 타이머와 다른 tick 발행기가 돌 자리가 남아야 한다.
+                    assertThat(scheduler.getScheduledThreadPoolExecutor().getCorePoolSize()).isGreaterThanOrEqualTo(6);
+                });
     }
 
     @Test
