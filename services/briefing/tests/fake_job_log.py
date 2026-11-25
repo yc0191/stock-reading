@@ -5,7 +5,7 @@ entries는 job_log 줄(일마다 한 줄), starts·finishes는 job_run의 시작
 import json
 
 from briefing.compose import KST
-from briefing.job_log import EntryType, parse_move_run, with_representative
+from briefing.job_log import EntryType, JobResult, RunStatus, parse_move_run, with_representative
 
 
 class FakeJobLog:
@@ -43,6 +43,15 @@ class FakeJobLog:
             self._failed.add(result.job_id)
             return False
         self.finishes.append(result)
+        return True
+
+    def fail_if_running(self, job_id, reason, now):
+        """진행 중일 때만 실패로 끝낸다. 끝 줄이 이미 있으면(끝난 작업) 그대로 둔다."""
+        if self.fail:
+            self._failed.add(job_id)
+            return False
+        if not any(r.job_id == job_id for r in self.finishes):
+            self.finishes.append(JobResult(job_id, RunStatus.FAILED, now, failure_reason=reason))
         return True
 
     def record_step(self, step):

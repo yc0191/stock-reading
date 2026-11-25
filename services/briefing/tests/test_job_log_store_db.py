@@ -207,6 +207,21 @@ def test_unfinished_runs_are_failed_once_with_the_restart_reason_and_a_log_line_
     assert len(fetch(connect, f"SELECT 1 FROM {LOG_TABLE} WHERE job_id = 'it-restart-old'")) == 1
 
 
+def test_fail_if_running_fails_a_running_run_and_leaves_a_finished_one(store, connect):
+    for job_id in ("it-fail-running", "it-fail-done"):
+        start(store, job_id)
+    assert store.finish(JobResult("it-fail-done", RunStatus.SUCCEEDED, AT, generated_by=GeneratedBy.LLM)) is True
+    now = AT + timedelta(minutes=5)
+
+    assert store.fail_if_running("it-fail-running", "result_handling_error", now) is True
+    assert store.fail_if_running("it-fail-done", "result_handling_error", now) is True
+
+    runs = dict((row[0], row[1:]) for row in fetch(
+        connect, f"SELECT job_id, status, failure_reason, finished_at FROM {RUN_TABLE} WHERE job_id LIKE 'it-fail-%'"))
+    assert runs["it-fail-running"] == ("failed", "result_handling_error", now)
+    assert runs["it-fail-done"] == ("succeeded", None, AT)  # 이미 끝난 작업은 그대로
+
+
 def test_a_moves_grouped_line_is_accepted_and_read_back_with_every_grouped_move(store, connect):
     start(store, "it-group-1")
     moves = [{"eventId": "it-g1", "price": 10000, "changePercent": 1.5}, {"eventId": "it-g2", "price": 10100}]
