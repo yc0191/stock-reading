@@ -44,8 +44,8 @@ def ensure_topics(bootstrap: str) -> None:
 
 def run(settings: Settings, stop: threading.Event) -> None:
     connect = connector(settings.db_host, settings.db_port, settings.db_name, settings.db_user, settings.db_password)
-    checker = Checker(PostgresRunStore(connect), PostgresScalarQuery(connect), S3ResultStore(settings.results_bucket),
-                      settings.criteria_dir, settings.deploy_version)
+    checker = Checker(PostgresRunStore(connect), PostgresScalarQuery(connect, settings.deploy_version),
+                      S3ResultStore(settings.results_bucket), settings.criteria_dir, settings.deploy_version)
     ensure_topics(settings.kafka_bootstrap)
     consumer = Consumer({"bootstrap.servers": settings.kafka_bootstrap, "group.id": "ops-checker",
                          "auto.offset.reset": "earliest", "enable.auto.commit": False, **COMMON})

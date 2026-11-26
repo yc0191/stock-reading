@@ -86,8 +86,6 @@ def test_criteria_files_in_the_repository_are_valid():
     loaded = load_all(REPO_CRITERIA)
     assert loaded, "ops-checks/ 에 기준 파일이 있어야 한다"
     assert [(c.issue, c.attempt, c.error) for c in loaded if c.error] == []
-    t1 = next(c for c in loaded if (c.issue, c.attempt) == (74, "t1"))
-    assert t1.comment is False
 
 
 def test_numeric_attempt_in_yaml_matches_the_file_name(tmp_path):

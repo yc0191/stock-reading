@@ -9,7 +9,7 @@ import pytest
 
 from ops_checker import store
 from ops_checker.metrics import MetricError
-from ops_checker.store import PostgresRunStore, PostgresScalarQuery, ResultRow, RunRecord, connector
+from ops_checker.store import DEPLOY_VERSION_SETTING, PostgresRunStore, PostgresScalarQuery, ResultRow, RunRecord, connector
 
 URL, USER, PASSWORD = (os.environ.get(k) for k in ("OPS_IT_DB_URL", "OPS_IT_DB_USER", "OPS_IT_DB_PASSWORD"))
 pytestmark = pytest.mark.skipif(not (URL and USER and PASSWORD), reason="OPS_IT_DB_URL·OPS_IT_DB_USER·OPS_IT_DB_PASSWORD 없음")
@@ -25,8 +25,9 @@ def connect():
 def test_reads_one_cell_and_rejects_writes_and_slow_queries(monkeypatch):
     # 실제 상한까지 기다리지 않게 상한을 1초로 줄여 시간 초과 처리만 확인한다.
     monkeypatch.setattr(store, "SQL_TIMEOUT_SECONDS", 1)
-    query = PostgresScalarQuery(connect)
+    query = PostgresScalarQuery(connect, "abc1234")
     assert query.scalar("SELECT 0.25::numeric") == [(Decimal("0.25"),)]
+    assert query.scalar(f"SELECT current_setting('{DEPLOY_VERSION_SETTING}')") == [("abc1234",)]
     with pytest.raises(MetricError) as write:
         query.scalar("CREATE TABLE ops.should_not_exist (x int)")
     assert write.value.reason in ("read-only-violation", "sql-failed")
@@ -37,6 +38,8 @@ def test_reads_one_cell_and_rejects_writes_and_slow_queries(monkeypatch):
         query.scalar("SELECT pg_sleep(2)")
     assert slow.value.reason == "timeout"
     assert query.scalar("SELECT 1") == [(1,)]   # 실패 뒤에도 연결이 되살아 있다
+    # 실패한 트랜잭션 뒤에도 다음 지표에 운영 버전이 다시 들어간다.
+    assert query.scalar(f"SELECT current_setting('{DEPLOY_VERSION_SETTING}')") == [("abc1234",)]
 
 
 def test_run_and_results_are_written_once_per_event_id():

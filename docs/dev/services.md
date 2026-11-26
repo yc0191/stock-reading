@@ -47,7 +47,7 @@ services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests
 ### 기준 파일 쓰기와 운영 반영
 
 1. 판정 기준을 `ops-checks/<이슈>-<시도>.yml`로 씁니다(형식은 `criteria.py`, 언제 쓰는지는 [incidents](../incidents/README.md)).
-2. 지표 SQL을 개발 DB에서 읽기 전용으로 먼저 돌려, 한 행 한 칸(0~1 비율 또는 빈 값)을 내는지 확인합니다.
+2. 지표 SQL을 개발 DB에서 읽기 전용으로 먼저 돌려, 한 행 한 칸(0~1 비율 또는 빈 값)을 내는지 확인합니다. 그날 운영 버전은 `current_setting('ops_checker.deploy_version')`으로 읽습니다(확인기가 지표마다 넣는 값, 이름의 원본은 `store.py`의 `DEPLOY_VERSION_SETTING`). 개발 DB에서 돌릴 때는 같은 트랜잭션에서 `set_config`로 먼저 넣습니다.
 3. 운영 배포 전에 머지해 이미지에 실려 나가게 합니다. 처음 운영에 반영할 때 할 일은 [`infra/deploy/README.md`](../../infra/deploy/README.md)의 "조치 판정 확인기 운영 반영"에 있습니다.
 
 ## 이메일 발송기 (`notifier`)
