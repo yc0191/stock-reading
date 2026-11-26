@@ -1,6 +1,7 @@
 """데일리 판을 받을 멤버 읽기와 브리핑 계정의 권한을 실제 Postgres로 확인한다. 핵심은 브리핑 계정이 멤버 번호·수신 설정·포트폴리오는
 읽어도 개인정보인 메일 주소(member_mail.email)와 멤버 이름은 읽지 못하고, personal에 쓰지도 못한다는 것이다.
 그날 급변동 목록을 거르려고 포트폴리오의 국내 주식(member_portfolio.stock_id, market.stock의 종목코드·이름)도 읽는다.
+아침 판 합침 구간의 급변동을 판에 맡길지 고르려고 종목코드가 국내 ETF인지(market.etf)도 읽는다.
 
 BRIEFING_IT_DB_*(읽는 계정)와 값을 넣는 WRITER_IT_DB_*(personal 쓰기 계정), MARKET_IT_DB_*(market 주인 계정)가 모두 있을 때만 실행하고,
 없으면 건너뛴다. 대상은 scripts/test-all.sh가 market → personal 초기화 → personal 마이그레이션 순서로 준비한 테스트 전용 DB다.
@@ -122,6 +123,13 @@ def test_the_post_close_board_reads_each_members_korean_stocks_with_their_names(
     # 국내 주식만 이름과 함께 읽고(미국 주식 BMEMSU는 빠짐), 주식만 있고 국내 ETF가 없는 멤버는 받는 사람이 아니다.
     assert rows[world["night-only"]] == (("BMEMS1", "BMEM STOCK ONE"), ("BMEMS2", None))
     assert rows[world["both"]] == () and world["stock-only"] not in rows
+
+
+def test_only_a_korean_etf_symbol_is_read_as_a_domestic_etf(briefing, world):
+    """아침 판 합침 구간에 급변동을 판에 맡길지 고르는 판단. 국내 주식·미국 ETF·없는 종목코드는 국내 ETF가 아니다."""
+    store = PostgresMemberStore(briefing)
+    assert store.is_domestic_etf("BMEM01") is True
+    assert [store.is_domestic_etf(s) for s in ("BMEMS1", US_ETF, "BMEMZZ")] == [False, False, False]
 
 
 def denied(connect, sql):

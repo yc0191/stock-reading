@@ -37,6 +37,9 @@ WHERE m.enabled AND mail.enabled AND mail.{column} AND s.market = 'KR'
 ORDER BY 1, 2, 3
 """
 
+# 아침 판 합침 구간의 급변동을 판에 맡길지 고를 때 쓴다. 판은 국내 ETF의 개장 흐름만 담는다.
+DOMESTIC_ETF_SQL = "SELECT 1 FROM market.etf WHERE market = 'KR' AND symbol = %s"
+
 
 @dataclass
 class PostgresMemberStore:
@@ -68,3 +71,18 @@ class PostgresMemberStore:
         # 판은 ETF가 중심이라 국내 ETF가 없는 멤버에게는 지금처럼 판을 짜지 않는다(주식만 있는 멤버는 받는 사람이 아니다).
         return tuple(MemberPortfolio(member_id, tuple(items), tuple(stocks.get(member_id, ())))
                      for member_id, items in etfs.items())
+
+    def is_domestic_etf(self, symbol: str) -> bool | None:
+        """종목코드가 국내 ETF인가. 읽지 못하면 None(판단을 호출한 쪽에 맡긴다)."""
+        try:
+            connection = self.connect()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(DOMESTIC_ETF_SQL, (symbol,))
+                    return cursor.fetchone() is not None
+            finally:
+                connection.close()
+        except Exception as error:  # noqa: BLE001 - 읽지 못해도 급변동 처리는 이어 간다
+            # 예외 메시지에는 접속 정보가 섞일 수 있어 종류 이름만 남긴다.
+            log.error("reading whether a symbol is a domestic ETF failed: %s", type(error).__name__)
+            return None

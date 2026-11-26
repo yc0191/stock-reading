@@ -97,6 +97,55 @@ def test_the_same_event_id_is_held_once(parts):
     assert len(job_log.starts) == 1
 
 
+def etf_parts(answer):
+    """국내 ETF인지 묻는 함수를 단 합침 단계. answer는 종목코드 → True/False/None(읽지 못함)."""
+    sink, job_log, asked = Sink(), FakeJobLog(), []
+
+    def is_domestic_etf(symbol):
+        asked.append(symbol)
+        return answer(symbol)
+
+    return MorningMerge(sink, job_log, is_domestic_etf=is_domestic_etf), sink, job_log, asked
+
+
+def test_a_window_move_of_a_stock_goes_straight_to_the_report_flow():
+    """아침 판은 ETF의 개장 흐름만 담으므로 개별 주식 변동은 판이 끝날 때까지 기다리지 않는다(#108)."""
+    merge, sink, job_log, asked = etf_parts(lambda symbol: symbol != "STOCK1")
+    assert merge.on_move(move("stock", symbol="STOCK1", as_of=at(9, 0)), at(9, 0, 5)) is False
+    assert asked == ["STOCK1"]
+    assert job_log.starts == [] and merge.next_deadline() is None
+
+    # 나중에 판 결과가 나와도 넘길 것이 없다(리포트 흐름이 이미 맡았다).
+    merge.on_morning_result(at(9, 10), True, at(9, 16), frozenset({"TEST01"}), at(9, 0))
+    assert sink.calls == [] and job_log.finishes == []
+
+
+def test_a_window_move_of_a_domestic_etf_is_still_held_for_the_morning_edition():
+    merge, sink, job_log, _ = etf_parts(lambda symbol: symbol == "TEST01")
+    assert merge.on_move(move("etf", symbol="TEST01", as_of=at(9, 0)), at(9, 0, 5)) is True
+    assert sink.calls == [] and [s.job_id for s in job_log.starts] == ["etf"]
+
+    merge.on_morning_result(at(9, 10), True, at(9, 16), frozenset({"TEST01"}), at(9, 0))
+    assert [(f.job_id, f.failure_reason) for f in job_log.finishes] == [("etf", REASON_MERGED_INTO_MORNING)]
+
+
+def test_a_window_move_is_held_when_whether_it_is_an_etf_cannot_be_read():
+    """읽지 못하면 모아 둔다. ETF 변동이 판과 리포트로 두 번 나가지 않고, 판에 없으면 판 결과 때 리포트로 넘어간다."""
+    merge, sink, job_log, _ = etf_parts(lambda symbol: None)
+    assert merge.on_move(move("unknown", symbol="STOCK1", as_of=at(9, 0)), at(9, 0, 5)) is True
+    assert [s.job_id for s in job_log.starts] == ["unknown"]
+
+    merge.on_morning_result(at(9, 10), True, at(9, 16), frozenset({"TEST01"}), at(9, 0))
+    assert [c[0] for c in sink.calls] == ["unknown"]
+
+
+def test_whether_it_is_an_etf_is_asked_only_for_window_moves():
+    merge, _, _, asked = etf_parts(lambda symbol: False)
+    merge.on_move(move("early", as_of=at(8, 59, 59)), at(9, 0))
+    merge.on_move(move("late", as_of=at(9, 10)), at(9, 10, 1))
+    assert asked == []
+
+
 # ---- 아침 판 결과 ----
 
 def test_a_sent_morning_edition_closes_the_held_moves_as_merged_and_makes_no_report(parts):
@@ -360,6 +409,32 @@ def test_the_runner_releases_a_held_move_to_the_report_flow_when_the_morning_edi
     # 리포트 흐름으로 넘어가 근거 조회가 시작됐고(요청 출구에 시세 이력 요청이 쌓임) 합쳤다는 기록은 없다.
     assert [f for f in store.finishes if f.failure_reason == REASON_MERGED_INTO_MORNING] == []
     assert any(e.entry_type.value == "moves-grouped" and e.job_id == "in-window" for e in store.entries)
+
+
+def test_the_runner_holds_an_etf_window_move_and_hands_a_stock_window_move_to_the_report_flow():
+    """BriefingRunner가 멤버 저장소에 국내 ETF인지 묻고, 개별 주식 변동은 아침 판을 기다리지 않는다(#108)."""
+    clock, store = Clock(at(9, 0)), FakeJobLog()
+    created = []
+
+    def consumer_factory(config):
+        created.append(FakeConsumer(config))
+        return created[-1]
+
+    runner = main.BriefingRunner("localhost:9092", None, store, clock=clock, consumer_factory=consumer_factory,
+                                 producer_factory=FakeProducer, declare_topics=lambda _bootstrap: None,
+                                 daily_settings=DailySettings(morning_merge_enabled=True), api_factory=FakeApi,
+                                 member_store=FakeMembers(etfs={"TEST01"}))
+    runner.open()
+    consumer = created[-1]
+    clock.now = at(9, 0, 5)
+    consumer.queue.append(FakeMessage("market.move", move("etf", symbol="TEST01", as_of=at(9, 0))))
+    consumer.queue.append(FakeMessage("market.move", move("stock", symbol="STOCK1", as_of=at(9, 0))))
+    runner.run_once()
+
+    # ETF만 모아 두었다. 개별 주식은 급변동 묶음으로 넘어가 묶음 기록이 남았다.
+    assert [d.job_id for d in runner.merge._pending[DAY.date()]] == ["etf"]
+    grouped = {e.job_id for e in store.entries if e.entry_type.value == "moves-grouped"}
+    assert "stock" in grouped and "etf" not in grouped
 
 
 def test_with_the_merge_switched_off_a_window_move_goes_straight_to_the_report_flow():
