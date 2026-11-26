@@ -38,6 +38,41 @@ class LlmReply:
     usage: LlmUsage | None
 
 
+class CachedUser(str):
+    """앞부분을 캐시할 수 있는 사용자 입력. 글은 그대로 하나의 문자열(JSON)이고 breaks는 블록을 나누는 글자 위치다.
+
+    같은 작업의 호출들이 앞부분(처음 작성의 근거 입력, 찾은 순서대로 덧붙인 재검색 기사)을 똑같이 보내므로, 그 경계에서
+    블록을 나눠 캐시 표시를 붙이면 앞 호출이 쓴 캐시를 다음 호출이 읽는다. str을 이어 받아 가짜 클라이언트·작업 기록은
+    지금처럼 글 하나로 다룬다(잘라 붙이면 보통 str이 되어 캐시 표시 없이 보낸다).
+    """
+
+    breaks: tuple[int, ...]
+
+    def __new__(cls, text: str, breaks: tuple[int, ...] = ()) -> CachedUser:
+        made = super().__new__(cls, text)
+        made.breaks = tuple(b for b in breaks if 0 < b < len(text))
+        return made
+
+
+def user_blocks(user: str, addendum: str = "") -> list[dict[str, Any]]:
+    """CachedUser를 경계마다 블록으로 나눈다. 캐시 표시는 첫 경계(처음 작성의 근거 입력 끝)와 마지막 경계에만 붙인다.
+
+    캐시 표시는 요청당 4개까지이고(지시문에 하나), 표시 사이의 경계는 다음 호출이 앞 호출의 캐시를 찾는 자리로만 쓴다.
+    덧붙임은 근거 뒤 마지막 블록으로 보낸다. 지시문 블록 뒤에 두면 처음 작성과 앞부분이 달라져 근거 캐시를 읽지 못한다.
+    """
+    breaks = getattr(user, "breaks", ())
+    cuts = (0, *breaks, len(user))
+    blocks: list[dict[str, Any]] = []
+    for n, (start, end) in enumerate(zip(cuts, cuts[1:])):
+        block: dict[str, Any] = {"type": "text", "text": str(user[start:end])}
+        if breaks and n in (0, len(breaks) - 1):
+            block["cache_control"] = {"type": "ephemeral"}
+        blocks.append(block)
+    if addendum:
+        blocks.append({"type": "text", "text": addendum})
+    return blocks
+
+
 class LlmClient(Protocol):
     def complete(self, system: str, user: str, output_schema: dict[str, Any], addendum: str = "") -> LlmReply: ...
 
@@ -112,17 +147,21 @@ class AnthropicClient:
         return f"AnthropicClient(model={self.model!r})"
 
     def complete(self, system: str, user: str, output_schema: dict[str, Any], addendum: str = "") -> LlmReply:
-        # 캐싱 표시는 지시문 블록에만 붙인다. 다시 쓰기 덧붙임은 별도 블록이라, 같은 종류의 처음 작성 호출과
-        # 첫 블록이 같아 그 캐시를 그대로 읽는다.
+        # 캐싱 표시는 지시문 블록에 붙인다. 다시 쓰기 덧붙임은 별도 블록이라, 같은 종류의 처음 작성 호출과
+        # 첫 블록이 같아 그 캐시를 그대로 읽는다. 앞부분을 캐시할 입력(CachedUser)이면 근거도 블록으로 나눠 캐시하고
+        # 덧붙임은 근거 뒤에 둔다.
         blocks: list[dict[str, Any]] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
-        if addendum:
+        content: str | list[dict[str, Any]] = str(user)
+        if getattr(user, "breaks", ()):
+            content = user_blocks(user, addendum)
+        elif addendum:
             blocks.append({"type": "text", "text": addendum})
         try:
             response = self._client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
                 system=blocks,
-                messages=[{"role": "user", "content": user}],
+                messages=[{"role": "user", "content": content}],
                 output_config={"format": {"type": "json_schema", "schema": output_schema}},
             )
         except self._anthropic.APIError as error:

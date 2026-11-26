@@ -33,6 +33,8 @@ REASON_CODE_CHECKED = "code-checked"
 REASON_REVIEWED = "reviewed"
 REASON_REVIEW_FAILED = "review-failed"
 REASON_FIX_FAILED = "fix-failed"
+# 문제 문장 여럿을 한 번에 고친 호출 하나(입력·응답·사용량, 받아들인 문장과 거부한 문장). 사용량은 이 줄에만 남긴다.
+REASON_FIX_CALLED = "fix-called"
 REASON_CHOSEN = "body-chosen"
 # sentence-fixed 줄의 사유
 REASON_FIXED = "fixed-after-review"
@@ -114,12 +116,11 @@ def code_check(sentences: tuple[MailSentence, ...], sources: Mapping[str, Source
                 problems.append(Problem(s.no, PROBLEM_OUT_OF_RANGE, f"범위 밖에 발행된 기사({ref})를 인용함"))
         if s.weak:
             problems.append(Problem(s.no, PROBLEM_WEAK_LEFT, "근거 약함 표시가 남음"))
-    for ref, nos in cited_by.items():
-        if len(nos) < 2:
-            continue
-        for no in nos:
-            others = ", ".join(str(n) for n in nos if n != no)
-            problems.append(Problem(no, PROBLEM_SHARED_ARTICLE, f"{others}번 문장과 같은 기사({ref})를 이유로 씀"))
+    # 같은 기사를 여러 문장이 쓰면 메일에서 먼저 나온 문장은 그대로 두고 뒤 문장만 고친다. 모두 고치면 호출이 늘고
+    # 먼저 나온 문장까지 그 기사를 잃는다.
+    for ref, (first, *later) in cited_by.items():
+        for no in later:
+            problems.append(Problem(no, PROBLEM_SHARED_ARTICLE, f"{first}번 문장이 먼저 이유로 쓴 기사({ref})를 이유로 씀"))
     return tuple(sorted(problems, key=lambda p: (p.sentence_no, p.kind)))
 
 
@@ -259,6 +260,52 @@ class FixCall:
     llm_input: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class BatchFixCall:
+    """문제 문장 여럿을 한 번에 고치는 호출. 근거 입력을 한 번만 보내고 문장마다 따로 검증한다.
+
+    item_schema는 문장 하나를 고친 결과의 형식이고(흐름이 sentenceNo를 더해 목록으로 받는다), user는 흐름이 만든
+    칸(mail, fixes)을 처음 작성과 같은 근거 입력 뒤에 붙인 입력을 만든다.
+    """
+
+    system: str
+    addendum: str
+    item_schema: dict[str, Any]
+    user: Callable[[Mapping[str, Any]], str]
+
+
+FIXES_KEY = "fixes"
+
+
+def batch_fix_schema(item_schema: Mapping[str, Any]) -> dict[str, Any]:
+    item = {**item_schema, "properties": {"sentenceNo": {"type": "integer"}, **item_schema["properties"]},
+            "required": ["sentenceNo", *item_schema["required"]]}
+    return {"type": "object", "properties": {FIXES_KEY: {"type": "array", "items": item}},
+            "required": [FIXES_KEY], "additionalProperties": False}
+
+
+class InvalidFixes(InvalidLlmOutput):
+    pass
+
+
+def split_fixes(text: str, wanted: frozenset[int]) -> dict[int, str]:
+    """한 번에 고친 응답을 문장 번호별 글(sentenceNo를 뺀 JSON)로 나눈다. 고칠 문장이 아닌 번호와 두 번째 답은 버린다.
+    형식이 틀리면 InvalidFixes(호출 전체를 다시 시도한다)."""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as cause:
+        raise InvalidFixes("fixes is not valid JSON") from cause
+    if not isinstance(data, dict) or not isinstance(data.get(FIXES_KEY), list):
+        raise InvalidFixes("fixes does not have a list")
+    out: dict[int, str] = {}
+    for raw in data[FIXES_KEY]:
+        item = output_item(raw, "fix", InvalidFixes)
+        no = item.get("sentenceNo")
+        if isinstance(no, int) and not isinstance(no, bool) and no in wanted and no not in out:
+            out[no] = json.dumps({k: v for k, v in item.items() if k != "sentenceNo"}, ensure_ascii=False)
+    return out
+
+
 class FinalCheckAdapter(Protocol):
     """본문(draft)을 다루는 쪽. 급변동과 데일리 판이 각자 구현한다."""
 
@@ -275,6 +322,8 @@ class FinalCheckAdapter(Protocol):
         """(코드가 쓴 첫 요약 줄 또는 None, 메일 글 전체)."""
 
     def fix_call(self, draft: Any, sentence: MailSentence) -> FixCall: ...
+
+    # 문제 문장을 한 번에 고치는 어댑터는 batch_fix_call(draft) -> BatchFixCall을 더 둔다(없으면 문장마다 고친다).
 
     def parse_fix(self, draft: Any, sentence: MailSentence, text: str) -> Any:
         """고친 문장 응답을 근거 번호 규칙대로 검증한다. 어기면 InvalidLlmOutput."""
@@ -374,7 +423,9 @@ class FinalCheck:
 
     def _fix(self, job_id: str, draft: Any, inspection: _Inspection, targets: Mapping[int, list[str]],
              now: datetime) -> Any | None:
-        """문제 문장만 하나씩 고친다. 하나도 못 고치면 None."""
+        """문제 문장만 고친다. 하나도 못 고치면 None."""
+        if hasattr(self.adapter, "batch_fix_call"):
+            return self._fix_batch(job_id, draft, inspection, targets, now)
         by_no = {s.no: s for s in inspection.sentences}
         fixed: dict[int, Any] = {}
         accepted: dict[int, tuple[CallAttempt, list[str]]] = {}
@@ -406,6 +457,72 @@ class FinalCheck:
                 job_id=job_id, entry_type=EntryType.SENTENCE_FIXED, stage=STAGE_FINAL_CHECK, reason=REASON_FIXED,
                 occurred_at=now, sentence_no=no, before=by_no[no].text, after=after[no].text,
                 attempts=attempt.attempt, data={"problems": reasons, **attempt.as_record()}))
+        return new
+
+    def _fix_batch(self, job_id: str, draft: Any, inspection: _Inspection, targets: Mapping[int, list[str]],
+                   now: datetime) -> Any | None:
+        """문제 문장을 한 호출로 함께 고친다. 문장마다 따로 검증해 통과한 문장만 쓰고, 남은 문장만 다음 시도에 다시 보낸다.
+        시도 횟수 상한은 문장마다 고칠 때와 같다. 하나도 못 고치면 None."""
+        call = self.adapter.batch_fix_call(draft)
+        schema = batch_fix_schema(call.item_schema)
+        by_no = {s.no: s for s in inspection.sentences}
+        first_line, _ = self.adapter.mail(draft)
+        mail = {"firstLine": first_line, "sentences": [s.as_input() for s in inspection.sentences]}
+        fixed: dict[int, Any] = {}
+        fixed_at: dict[int, int] = {}
+        left = dict(targets)
+        tried = 0
+        for attempt in range(1, self.max_attempts + 1):
+            if not left:
+                break
+            tried = attempt
+            fixes = [{"sentenceNo": no, "kind": by_no[no].kind, "sentence": by_no[no].text,
+                      "refs": list(by_no[no].refs), "problems": reasons} for no, reasons in left.items()]
+            user = call.user({"mail": mail, FIXES_KEY: fixes})
+            response: str | None = None
+            usage: LlmUsage | None = None
+            try:
+                reply = self.client.complete(call.system, user, schema, call.addendum)
+                response, usage = reply.text, reply.usage
+                answers = split_fixes(response, frozenset(left))
+            except (LlmCallError, InvalidLlmOutput) as error:
+                self._record_rejected(job_id, (CallAttempt(attempt, user, response, str(error), type(error).__name__,
+                                                           attempt_usage(usage, error)),), now)
+                log.warning("final check fixes attempt %d/%d failed for job %s: %s", attempt, self.max_attempts,
+                            job_id, error)
+                continue
+            rejected: dict[str, str] = {}
+            for no in list(left):
+                if no not in answers:
+                    rejected[str(no)] = "no fix returned for the sentence"
+                    continue
+                try:
+                    fixed[no] = self.adapter.parse_fix(draft, by_no[no], answers[no])
+                except InvalidLlmOutput as error:
+                    rejected[str(no)] = str(error)
+                    continue
+                fixed_at[no] = attempt
+                del left[no]
+            if rejected:
+                log.warning("final check fixes attempt %d/%d rejected %d sentences for job %s", attempt,
+                            self.max_attempts, len(rejected), job_id)
+            # 사용량은 이 줄에만 남긴다. 문장별 줄(sentence-fixed, fix-failed)에 나눠 적으면 비용을 여러 번 센다.
+            self._record(job_id, EntryType.FINAL_CHECK, REASON_FIX_CALLED, now, attempts=attempt,
+                         data={**CallAttempt(attempt, user, response, usage=usage).as_record(),
+                               "fixedSentences": sorted(n for n, at in fixed_at.items() if at == attempt),
+                               "rejectedSentences": rejected})
+        for no, reasons in left.items():
+            self._record(job_id, EntryType.FINAL_CHECK, REASON_FIX_FAILED, now, sentence_no=no, attempts=tried,
+                         data={"problems": reasons})
+        if not fixed:
+            return None
+        new = self.adapter.apply(draft, fixed)
+        after = {s.no: s for s in self.adapter.sentences(new)}
+        for no in sorted(fixed):
+            self.job_log.record(JobLogEntry(
+                job_id=job_id, entry_type=EntryType.SENTENCE_FIXED, stage=STAGE_FINAL_CHECK, reason=REASON_FIXED,
+                occurred_at=now, sentence_no=no, before=by_no[no].text, after=after[no].text,
+                attempts=fixed_at[no], data={"problems": targets[no]}))
         return new
 
     def _choose(self, job_id: str, draft: Any, now: datetime, chosen: str, why: str,

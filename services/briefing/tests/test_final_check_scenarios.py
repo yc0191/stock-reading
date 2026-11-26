@@ -167,14 +167,15 @@ def test_move_review_failing_every_attempt_publishes_the_current_body():
 def test_move_two_sentences_citing_the_same_article_are_reviewed_and_fixed_without_a_rewrite():
     a2 = article("a2", T - timedelta(minutes=20))
     flow = move_flow([move_output((STRONG_TEXT, ["a1"], None), ("둘째 원인입니다.", ["a1"], None))], [],
-                     [review(), one_cause(STRONG_TEXT, ["a1"]), one_cause("둘째 원인을 고쳤습니다.", ["a2"]), review()])
+                     [review(), one_cause("둘째 원인을 고쳤습니다.", ["a2"]), review()])
     flow.to_report([A1, a2])
 
+    # 먼저 나온 원인은 그 기사를 그대로 쓰고 뒤 원인만 고친다.
     first = json.loads(flow.check_llm.calls[0][1])
-    assert {p["kind"] for p in first["codeCheck"]} == {"article-cited-by-two-sentences"}
+    assert [(p["sentenceNo"], p["kind"]) for p in first["codeCheck"]] == [(2, "article-cited-by-two-sentences")]
     text = published_text(flow)
-    assert "둘째 원인을 고쳤습니다." in text
-    assert chosen(flow.records)["problemCounts"] == {"beforeFix": 2, "afterFix": 0}
+    assert STRONG_TEXT in text and "둘째 원인을 고쳤습니다." in text
+    assert chosen(flow.records)["problemCounts"] == {"beforeFix": 1, "afterFix": 0}
 
 
 # ---- 데일리 판 ----
@@ -221,19 +222,24 @@ def first_check_outputs(flow_edition):
     return 3 if flow_edition == "post-close" else 1
 
 
-def fixed_to(edition):
+def fixes(no, statement, *refs):
+    """데일리 판은 문제 문장을 한 호출로 고친다. 응답은 문장 번호마다 고친 문장과 근거 번호다."""
+    return json.dumps({"fixes": [{"sentenceNo": no, "statement": statement, "refs": list(refs)}]}, ensure_ascii=False)
+
+
+def fixed_to(edition, no):
     """고친 문장 응답. 다시 쓴 문장이 인용한 재검색 기사(r1)를 함께 쓰면 겹침이 되므로 첫 요약의 근거 번호를 쓴다."""
-    return json.dumps({"statement": FIXED, "refs": ["B1" if edition == "morning" else "E1"]}, ensure_ascii=False)
+    return fixes(no, FIXED, "B1" if edition == "morning" else "E1")
 
 
 def test_daily_fix_citing_the_article_another_sentence_uses_keeps_the_body_before_the_fix(edition):
     no = first_check_outputs(edition)
-    flow = daily_flow(edition, [review(no), json.dumps({"statement": FIXED, "refs": ["r1"]}), review()])
+    flow = daily_flow(edition, [review(no), fixes(no, FIXED, "r1"), review()])
 
-    # 고친 본문은 검토 문제는 없지만 두 문장이 같은 기사(r1)를 이유로 써서 문제 수가 줄지 않는다.
+    # 고친 본문은 검토 문제는 없지만 뒤의 다시 쓴 문장이 앞 문장과 같은 기사(r1)를 이유로 써서 문제 수가 줄지 않는다.
     assert FIXED not in daily_text(flow)
     data = chosen(flow.records)
-    assert data["chosen"] == CHOSE_BEFORE and data["problemCounts"] == {"beforeFix": 1, "afterFix": 2}
+    assert data["chosen"] == CHOSE_BEFORE and data["problemCounts"] == {"beforeFix": 1, "afterFix": 1}
 
 
 def test_daily_without_rewrite_or_problem_is_code_checked_and_published_without_a_review(edition):
@@ -264,14 +270,16 @@ def test_daily_with_a_rewritten_sentence_and_no_problem_reviews_the_whole_mail_o
 
 def test_daily_with_a_problem_fixes_only_that_sentence_and_publishes_the_fixed_body(edition):
     no = first_check_outputs(edition)
-    fix_bad = json.dumps({"statement": FIXED, "refs": ["zz"]}, ensure_ascii=False)
-    flow = daily_flow(edition, [review(no), fix_bad, fixed_to(edition), review()])
+    flow = daily_flow(edition, [review(no), fixes(no, FIXED, "zz"), fixed_to(edition, no), review()])
     assert strong_no(flow) == no
 
     system, user, _ = flow.check_llm.calls[1]
     assert system == (MORNING_PROMPT if edition == "morning" else SYSTEM_PROMPT_POST_CLOSE) + DAILY_FIX_ADDENDUM
     data = json.loads(user)
-    assert data["fix"]["sentence"] == STRONG_DAILY and "items" in data
+    assert [f["sentence"] for f in data["fixes"]] == [STRONG_DAILY] and "items" in data
+    # 고치기 입력은 처음 작성·다시 쓰기와 같은 근거 입력으로 시작해 그 캐시를 읽는다.
+    rewrite_user = flow.report_llm.calls[-1][1]
+    assert user[:user.breaks[-1]] == rewrite_user[:rewrite_user.breaks[-1]]
     assert len(flow.check_llm.calls) == 4
     text = daily_text(flow)
     assert FIXED in text and REWRITTEN in text and STRONG_DAILY not in text
@@ -282,7 +290,7 @@ def test_daily_with_a_problem_fixes_only_that_sentence_and_publishes_the_fixed_b
 
 def test_daily_with_problems_left_after_the_fix_publishes_the_body_before_the_fix(edition):
     no = first_check_outputs(edition)
-    flow = daily_flow(edition, [review(no), fixed_to(edition), review(no, no + 1)])
+    flow = daily_flow(edition, [review(no), fixed_to(edition, no), review(no, no + 1)])
 
     assert len(flow.check_llm.calls) == 3
     text = daily_text(flow)
@@ -301,7 +309,7 @@ def test_daily_review_failing_every_attempt_publishes_the_current_body(edition):
 
 def test_a_morning_fix_naming_an_etf_in_a_shared_sentence_is_rejected_and_the_body_before_the_fix_stays():
     # 아침 판 밤사이 이슈는 멤버 모두에게 같은 글이라 고친 문장도 ETF 종목코드를 쓰면 받지 않는다.
-    bad = json.dumps({"statement": "TEST01이 오를 수 있습니다.", "refs": ["B1"]}, ensure_ascii=False)
+    bad = fixes(1, "TEST01이 오를 수 있습니다.", "B1")
     flow = daily_flow("morning", [review(1), bad, bad, bad])
 
     assert "TEST01이 오를 수 있습니다." not in daily_text(flow)

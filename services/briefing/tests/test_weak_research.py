@@ -726,8 +726,9 @@ def test_daily_with_one_weak_sentence_researches_only_that_sentence_and_rewrites
     flow.stable([in_range(flow), out_of_range(flow)], flow.rid(2))
 
     rewrite = json.loads(flow.report_llm.calls[1][1])
-    research_item = next(i for i in rewrite["items"] if i["name"] == "재검색 기사")
-    assert [e["ref"] for e in research_item["entries"]] == ["r1"]
+    # 재검색 기사는 items 밖에 찾은 순서대로 붙는다(처음 작성의 근거 칸을 그대로 두어 캐시를 읽는다).
+    assert all(i["name"] != "재검색 기사" for i in rewrite["items"])
+    assert [e["ref"] for e in rewrite["researchArticles"]] == ["r1"]
     assert rewrite["rewrite"]["sentenceNo"] == 2 and rewrite["rewrite"]["newRefs"] == ["r1"]
     assert all(i["name"] != "재검색 기사" for i in json.loads(flow.report_llm.calls[0][1])["items"])
     (event,) = flow.published()

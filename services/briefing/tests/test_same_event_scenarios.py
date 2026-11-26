@@ -165,10 +165,13 @@ def test_daily_groups_same_event_articles_in_the_first_write_and_the_rewrite_and
     system, user = flow.report_llm.calls[1][:2]
     addendum = REWRITE_ADDENDUM if edition == "morning" else REWRITE_ADDENDUM_POST_CLOSE
     assert system.endswith(addendum)
-    rewrite = item_entries(user, "ETF별 기사")
-    assert sorted(refs_of(rewrite), key=str) == [["e1", "e2", "r1"], "e3"]
-    assert group_in(rewrite)["r1"]["research"] is True
-    assert refs_of(item_entries(user, "재검색 기사")) == ["r2"]
+    # 처음 작성의 근거 칸은 그대로 두고(앞 호출의 캐시를 읽는다), 재검색 기사는 찾은 순서대로 뒤에 붙으며
+    # 같은 사건인 앞 기사를 sameEventAs로 가리킨다.
+    assert item_entries(user, "ETF별 기사") == first
+    assert all(i["name"] != "재검색 기사" for i in json.loads(user)["items"])
+    research = json.loads(user)["researchArticles"]
+    assert [(r["ref"], sorted(r.get("sameEventAs", []))) for r in research] == [("r1", ["e1", "e2"]), ("r2", [])]
+    assert user.startswith(flow.report_llm.calls[0][1][:-1])
 
     (event,) = flow.published()
     text = event.value["payload"]["text"]
@@ -185,7 +188,9 @@ def test_daily_groups_same_event_articles_in_the_first_write_and_the_rewrite_and
 
 @pytest.mark.parametrize("prompt", [MOVE_PROMPT, MORNING_PROMPT, SYSTEM_PROMPT_POST_CLOSE])
 def test_report_prompts_explain_groups_synthesis_and_conflicting_articles(prompt):
-    assert SAME_EVENT_KEY in prompt and "research가 true" in prompt
+    # 급변동은 재검색 기사를 묶음 안에 research 표시로 넣고, 데일리 판은 뒤에 붙인 재검색 기사가 앞 기사를 가리킨다.
+    research = "research가 true" if prompt == MOVE_PROMPT else "sameEventAs"
+    assert SAME_EVENT_KEY in prompt and research in prompt
     assert "여러 기사에 나뉘어 나온 사실" in prompt
     assert "단정하지 않고 양쪽을 모두 씁니다" in prompt and "2천억~3천억 원으로 엇갈립니다" in prompt
     assert "문장 안에 근거 번호나 ref·articleId 값을 직접 쓰지 않습니다" in prompt
@@ -194,6 +199,13 @@ def test_report_prompts_explain_groups_synthesis_and_conflicting_articles(prompt
 @pytest.mark.parametrize("addendum", [MOVE_REWRITE_ADDENDUM, REWRITE_ADDENDUM, REWRITE_ADDENDUM_POST_CLOSE])
 def test_rewrite_addenda_tell_the_llm_to_read_the_whole_group(addendum):
     assert "같은 사건 묶음(sameEventArticles)" in addendum and "단정하지 않습니다" in addendum
+    if addendum is not MOVE_REWRITE_ADDENDUM:
+        assert "sameEventAs" in addendum and "otherSentenceRefs" in addendum
+
+
+def test_daily_prompts_cite_one_article_for_one_sentence_only():
+    for prompt in (MORNING_PROMPT, SYSTEM_PROMPT_POST_CLOSE):
+        assert "한 기사(ref)는 한 문장의 이유로만 인용합니다" in prompt
 
 
 def test_query_prompt_asks_for_concrete_events_or_other_articles_on_a_found_event():

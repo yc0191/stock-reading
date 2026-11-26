@@ -18,7 +18,9 @@ from briefing.final_check import (
     PROBLEM_SHARED_ARTICLE,
     PROBLEM_UNKNOWN_REF,
     PROBLEM_WEAK_LEFT,
+    REASON_FIX_CALLED,
     REVIEW_SYSTEM_PROMPT,
+    BatchFixCall,
     FinalCheck,
     FixCall,
     InvalidReview,
@@ -29,6 +31,8 @@ from briefing.final_check import (
     parse_review,
     passes,
     quality_count,
+    batch_fix_schema,
+    split_fixes,
 )
 from briefing.job_log import EntryType
 from briefing.llm import LlmCallError
@@ -52,11 +56,18 @@ def test_code_check_finds_each_of_the_four_problems():
                           SOURCES, SINCE, UNTIL)
     kinds = [(p.sentence_no, p.kind) for p in problems]
     assert (1, PROBLEM_UNKNOWN_REF) in kinds
-    # 같은 기사를 두 문장이 이유로 쓰면 두 문장 모두에 남는다.
-    assert (1, PROBLEM_SHARED_ARTICLE) in kinds and (2, PROBLEM_SHARED_ARTICLE) in kinds
+    # 같은 기사를 두 문장이 이유로 쓰면 먼저 나온 문장은 두고 뒤 문장에만 남는다.
+    assert (1, PROBLEM_SHARED_ARTICLE) not in kinds and (2, PROBLEM_SHARED_ARTICLE) in kinds
     assert (2, PROBLEM_WEAK_LEFT) in kinds
     assert (3, PROBLEM_OUT_OF_RANGE) in kinds
-    assert len(problems) == 5
+    assert len(problems) == 4
+
+
+def test_code_check_marks_every_later_sentence_that_shares_the_first_ones_article():
+    problems = code_check((sentence(1, ["a1"]), sentence(2, ["a2"]), sentence(3, ["a1"]), sentence(4, ["a1"])),
+                          SOURCES, SINCE, UNTIL)
+    assert [(p.sentence_no, p.kind) for p in problems] == [(3, PROBLEM_SHARED_ARTICLE), (4, PROBLEM_SHARED_ARTICLE)]
+    assert problems[0].detail == "1번 문장이 먼저 이유로 쓴 기사(a1)를 이유로 씀"
 
 
 def test_code_check_range_includes_both_ends_and_ignores_non_articles():
@@ -204,11 +215,12 @@ def test_a_rewritten_sentence_calls_the_review_with_the_whole_mail_and_the_code_
 
 def test_a_fixable_code_problem_calls_the_review_even_without_a_rewrite():
     draft = Draft((sentence(1, ["a1"]), sentence(2, ["a1"])))
-    result, llm, log = run(draft, review(), fix("문장 1을 고쳤습니다.", "a1"), fix("문장 2를 고쳤습니다.", "a2"), review())
-    # 검토가 문제를 내지 않아도 코드 검사가 찾은 두 문장을 고친다. 고친 뒤 겹침이 없어져 고친 본문을 낸다.
+    result, llm, log = run(draft, review(), fix("문장 2를 고쳤습니다.", "a2"), review())
+    # 검토가 문제를 내지 않아도 코드 검사가 찾은 뒤 문장을 고친다. 먼저 나온 문장은 그 기사를 그대로 쓴다.
     assert [c[2]["codeCheck"][0]["kind"] for c in llm.calls[:1]] == [PROBLEM_SHARED_ARTICLE]
+    assert llm.calls[1][2]["fix"]["sentenceNo"] == 2
     assert [s.refs for s in result.sentences] == [("a1",), ("a2",)]
-    assert chosen(log)["chosen"] == CHOSE_AFTER and chosen(log)["problemCounts"] == {"beforeFix": 2, "afterFix": 0}
+    assert chosen(log)["chosen"] == CHOSE_AFTER and chosen(log)["problemCounts"] == {"beforeFix": 1, "afterFix": 0}
 
 
 def test_fix_changes_only_the_named_sentences_and_records_before_and_after():
@@ -278,3 +290,81 @@ def test_an_unfixable_sentence_is_shown_to_the_review_but_cannot_be_named():
     assert llm.calls[0][2]["sentences"][0]["fixable"] is False
     (rejected,) = log.of_type(EntryType.LLM_REJECTED)
     assert rejected.data["rejection"] == "problem names a sentence that was not given as fixable"
+
+
+# ---- 흐름: 문제 문장을 한 번에 고치는 어댑터 ----
+
+class BatchAdapter(Adapter):
+    """한 호출로 고치는 어댑터. 입력은 근거 자료 뒤에 흐름이 만든 칸(mail, fixes)을 붙인 JSON이다."""
+
+    def batch_fix_call(self, draft):
+        return BatchFixCall("지시문", "한 번에 고치기 덧붙임",
+                            {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+                            lambda tail: json.dumps({"evidence": ["a1", "a2"], **tail}, ensure_ascii=False))
+
+
+def fixes(*items):
+    return json.dumps({"fixes": [{"sentenceNo": no, "text": text, "refs": list(refs)} for no, text, *refs in items]},
+                      ensure_ascii=False)
+
+
+def run_batch(draft, *outputs):
+    llm, log = Llm(*outputs), FakeJobLog()
+    result = FinalCheck(BatchAdapter(), llm, 3, log).run(draft, NOW)
+    return result, llm, log
+
+
+THREE = Draft((sentence(1, ["a1"]), sentence(2, ["a2"], rewritten=True), sentence(3, ["a2"])))
+
+
+def test_batch_fix_sends_the_evidence_once_for_all_problem_sentences_and_records_usage_once():
+    result, llm, log = run_batch(THREE, review(1, 2),
+                                 fixes((1, "문장 1을 고쳤습니다.", "a1"), (2, "문장 2를 고쳤습니다.", "a2"),
+                                       (3, "문장 3을 고쳤습니다.", "a1")),
+                                 review())
+    assert [s.text for s in result.sentences] == ["문장 1을 고쳤습니다.", "문장 2를 고쳤습니다.", "문장 3을 고쳤습니다."]
+    # 검토가 고른 1·2번과 코드 검사가 찾은 3번(2번이 먼저 쓴 기사)을 한 호출로 고친다.
+    assert len(llm.calls) == 3
+    system, addendum, user = llm.calls[1]
+    assert (system, addendum) == ("지시문", "한 번에 고치기 덧붙임") and user["evidence"] == ["a1", "a2"]
+    assert [f["sentenceNo"] for f in user["fixes"]] == [1, 2, 3] and len(user["mail"]["sentences"]) == 3
+    assert user["fixes"][2]["problems"] == ["2번 문장이 먼저 이유로 쓴 기사(a2)를 이유로 씀"]
+    (called,) = [e for e in log.of_type(EntryType.FINAL_CHECK) if e.reason == REASON_FIX_CALLED]
+    assert called.data["fixedSentences"] == [1, 2, 3] and called.data["usage"] is not None
+    fixed = log.of_type(EntryType.SENTENCE_FIXED)
+    assert [(e.sentence_no, e.attempts) for e in fixed] == [(1, 1), (2, 1), (3, 1)]
+    # 사용량은 호출 줄에만 있어 비용을 한 번만 센다.
+    assert all("usage" not in e.data for e in fixed)
+    assert chosen(log)["chosen"] == CHOSE_AFTER
+
+
+def test_batch_fix_retries_only_the_sentences_whose_fix_was_rejected():
+    result, llm, log = run_batch(REWRITTEN, review(1, 2),
+                                 fixes((1, "문장 1을 고쳤습니다.", "a1"), (2, "bad", "zz")),
+                                 fixes((2, "문장 2를 고쳤습니다.", "a2")),
+                                 review())
+    assert [s.text for s in result.sentences] == ["문장 1을 고쳤습니다.", "문장 2를 고쳤습니다."]
+    assert [f["sentenceNo"] for f in llm.calls[2][2]["fixes"]] == [2]
+    called = [e for e in log.of_type(EntryType.FINAL_CHECK) if e.reason == REASON_FIX_CALLED]
+    assert [(e.attempts, e.data["fixedSentences"], list(e.data["rejectedSentences"])) for e in called] == [
+        (1, [1], ["2"]), (2, [2], [])]
+    fixed = log.of_type(EntryType.SENTENCE_FIXED)
+    assert [(e.sentence_no, e.attempts) for e in fixed] == [(1, 1), (2, 2)]
+
+
+def test_batch_fix_that_never_parses_records_each_failed_sentence_and_keeps_the_body():
+    result, llm, log = run_batch(REWRITTEN, review(1, 2), "not json", FAILED, json.dumps({"fixes": "x"}))
+    assert result is REWRITTEN and len(llm.calls) == 4
+    assert [e.attempts for e in log.of_type(EntryType.LLM_REJECTED)] == [1, 2, 3]
+    failed = [e for e in log.of_type(EntryType.FINAL_CHECK) if e.reason == "fix-failed"]
+    assert [(e.sentence_no, e.attempts) for e in failed] == [(1, 3), (2, 3)]
+    assert chosen(log)["why"] == "문제 문장을 하나도 고치지 못함"
+
+
+def test_batch_fix_ignores_numbers_that_were_not_asked_and_second_answers():
+    assert split_fixes(fixes((2, "a"), (2, "b"), (5, "c")), frozenset({2})) == {2: '{"text": "a", "refs": []}'}
+    with pytest.raises(InvalidLlmOutput):
+        split_fixes("[]", frozenset({1}))
+    schema = batch_fix_schema({"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]})
+    item = schema["properties"]["fixes"]["items"]
+    assert item["required"] == ["sentenceNo", "text"] and "sentenceNo" in item["properties"]

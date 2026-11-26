@@ -18,7 +18,7 @@ READING_GUIDE = """당신은 ETF 투자자에게 하루 시장 흐름을 짧게 
 - 공시의 hoursBeforeAsOf는 공시 접수 시각이 기준 시각보다 몇 시간 전인지입니다.
 - 보유 ETF별 하루 등락의 rate는 일봉 원문의 등락률(%)입니다.
 - 항목의 missing(있을 때만 담깁니다)은 값이 비어 있는 대상(ETF)과 그 이유(reason)입니다. 자료 없음 ETF에는 숫자를 쓰지 않습니다(등락 숫자를 짐작하거나 지어내지 않고, 구성 종목 비중 등 다른 숫자도 그 ETF 문장에 쓰지 않습니다). ref가 없으므로 문장의 근거로 인용하지 않습니다. 필요하면 "일부 ETF는 자료가 없다"고만 씁니다.
-- 항목 "재검색 기사"는 근거가 부족해 다시 검색해 찾은 기사이며(있을 때만 담깁니다) 기사 번호(ref)로 인용합니다. minutesBeforeAsOf는 기사 발행 시각이 판 기준 시각보다 몇 분 전인지입니다.
+- researchArticles(있을 때만 담깁니다)는 근거가 부족해 다시 검색해 찾은 기사이며 찾은 순서대로 들어 있고 기사 번호(ref)로 인용합니다. minutesBeforeAsOf는 기사 발행 시각이 판 기준 시각보다 몇 분 전인지입니다. researchTruncated가 true이면 상한 때문에 일부만 받았다는 뜻입니다.
 - etfInfo(있을 때만 담깁니다)는 보유 ETF의 이름(name)·추종 대상(tracks)·업종(sector)과 비중 순위(rank, 1이 가장 큼) 순의 구성 종목(members)입니다. ETF가 무엇을 따라가고 무엇이 담겨 있는지 이해하는 맥락으로만 쓰고, 이것을 등락의 원인으로 단정하지 않습니다. ref가 없어 인용할 수 없으며, 문장의 근거는 ref가 있는 자료에서 찾습니다.
 - 상태 표시: "있음"은 자료가 있다는 뜻, "없음"은 범위 안에 자료가 없다는 뜻, "잘림"은 상한 때문에 일부만 받았다는 뜻, "너무 큼"은 원문이 커서 빠졌다는 뜻, "해당 없음"은 보유 ETF에 미국 종목이 없어 조회하지 않았다는 뜻입니다."""
 
@@ -73,9 +73,11 @@ MORNING_RULES = """규칙:
 
 # 두 판이 함께 쓰는 같은 사건 기사 묶음 읽는 법과 기사끼리 말이 다를 때 쓰는 법. 판마다 항목 설명 뒤에 붙는다.
 SAME_EVENT_GUIDE = """
-- 항목 "ETF별 기사"·"재검색 기사"의 entries 한 칸이 sameEventArticles이면 제목 낱말과 발행 시각이 가까워 코드가 같은 사건을 다룬 기사로 묶은 것입니다. 묶음 안의 기사도 저마다 ref가 있어 그 ref로 인용하며, 묶음 자체에는 근거 번호가 없습니다. 묶음 안에서 research가 true인 기사는 다시 검색해 찾은 기사입니다. 묶이지 않은 기사는 한 칸에 하나씩 들어 있습니다.
-- 같은 사건 묶음은 한 기사만 보지 말고 묶음 안 기사들의 제목·요약을 함께 읽어, 여러 기사에 나뉘어 나온 사실(누가, 무엇을, 수치, 발언)을 모아 한 문장으로 씁니다. 내용을 가져온 기사의 ref는 모두 refs에 넣습니다.
+- 항목 "ETF별 기사"의 entries 한 칸이 sameEventArticles이면 제목 낱말과 발행 시각이 가까워 코드가 같은 사건을 다룬 기사로 묶은 것입니다. 묶음 안의 기사도 저마다 ref가 있어 그 ref로 인용하며, 묶음 자체에는 근거 번호가 없습니다. 묶이지 않은 기사는 한 칸에 하나씩 들어 있습니다.
+- researchArticles의 기사에 sameEventAs가 있으면 그 목록의 ref(항목 "ETF별 기사"나 먼저 찾은 재검색 기사)와 같은 사건으로 코드가 본 기사입니다. 그 기사들과 한 묶음으로 읽습니다.
+- 같은 사건 묶음(sameEventArticles, sameEventAs로 이어진 기사)은 한 기사만 보지 말고 묶음 안 기사들의 제목·요약을 함께 읽어, 여러 기사에 나뉘어 나온 사실(누가, 무엇을, 수치, 발언)을 모아 한 문장으로 씁니다. 내용을 가져온 기사의 ref는 모두 refs에 넣습니다.
 - 기사끼리 수치나 해석이 다르면 어느 쪽이 맞다고 단정하지 않고 양쪽을 모두 씁니다. 수치는 "보도에 따라 2천억~3천억 원으로 엇갈립니다"처럼 범위로 쓰고, 해석이 갈리면 "...를 이유로 드는 보도와 ...를 우려하는 보도가 함께 나왔습니다"처럼 씁니다. 양쪽 기사의 ref를 모두 refs에 넣어 코드가 두 근거 번호를 함께 보이게 합니다.
+- 한 기사(ref)는 한 문장의 이유로만 인용합니다. 기사 하나가 여러 문장에 걸치면 가장 맞는 문장 하나에만 넣고, 다른 문장은 그 문장에 맞는 다른 자료를 인용합니다.
 - 문장 안에 근거 번호나 ref·articleId 값을 직접 쓰지 않습니다. 근거 번호는 코드가 refs로 붙입니다."""
 
 SYSTEM_PROMPT = (READING_GUIDE + MORNING_GUIDE_EXTRA + SAME_EVENT_GUIDE + "\n\n" + MORNING_RULES).replace(
@@ -216,12 +218,12 @@ OUTPUT_SCHEMA_MORNING: dict[str, Any] = {
 REWRITE_ADDENDUM_POST_CLOSE = """
 
 다시 쓰기 요청:
-- 입력의 rewrite 칸은 근거가 약하다고 한 ETF 이유 한 문장(sentence, symbol은 그 ETF 종목코드)과 그 부족한 점(shortfall)입니다. newRefs는 그 부족한 점을 채우려고 새로 찾아 항목 "재검색 기사"에 담은 기사의 ref입니다.
+- 입력의 rewrite 칸은 근거가 약하다고 한 ETF 이유 한 문장(sentence, symbol은 그 ETF 종목코드)과 그 부족한 점(shortfall)입니다. newRefs는 그 부족한 점을 채우려고 새로 찾아 researchArticles에 담은 기사의 ref입니다. otherSentenceRefs(있을 때만)는 다른 문장이 이미 이유로 인용한 기사 번호이며, 이 문장의 refs에는 넣지 않습니다.
 - 이번에는 위의 출력 형식 대신 다음 JSON 하나만 냅니다. points에는 다시 쓴 이유 문장 하나만 담고 다른 문장은 쓰지 않으며, insufficientEvidence는 false로 둡니다.
 {"points":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"insufficientEvidence":false}
 - 새 기사로 부족한 점이 채워지면 weak를 false로, 그래도 약하면 weak를 true로 하고 shortfall에 아직 부족한 점을 씁니다. 새 기사에 없는 내용은 지어내지 않습니다.
 - 새 기사로도 이유를 찾지 못하면 위의 규칙대로 refs를 빈 목록으로 두고 weak를 true로 합니다.
-- 새 기사가 같은 사건 묶음(sameEventArticles)에 들었으면 묶음의 다른 기사와 함께 읽어 종합하고, 기사끼리 수치·해석이 다르면 위의 규칙대로 양쪽을 쓰고 단정하지 않습니다.
+- 새 기사에 sameEventAs가 있거나 새 기사가 같은 사건 묶음(sameEventArticles)의 기사를 가리키면 그 기사들과 함께 읽어 종합하고, 기사끼리 수치·해석이 다르면 위의 규칙대로 양쪽을 쓰고 단정하지 않습니다.
 - 근거 번호·단정 금지·티커 금지·구성 종목 이슈 되풀이 금지 같은 위의 규칙은 그대로 지킵니다."""
 
 # 아침 판 ETF별 예상 하나를 다시 쓸 때의 출력 형식. 새 근거로 방향이 바뀔 수 있어 방향을 함께 받는다.
@@ -247,7 +249,7 @@ OUTPUT_SCHEMA_OUTLOOK_REWRITE: dict[str, Any] = {
 REWRITE_ADDENDUM_OUTLOOK = """
 
 다시 쓰기 요청:
-- 입력의 rewrite 칸은 근거가 약하다고 한 ETF별 예상 하나(symbol은 그 ETF 종목코드, direction은 원래 방향, sentence는 그 이유)와 그 부족한 점(shortfall)입니다. newRefs는 그 부족한 점을 채우려고 새로 찾아 항목 "재검색 기사"에 담은 기사의 ref입니다.
+- 입력의 rewrite 칸은 근거가 약하다고 한 ETF별 예상 하나(symbol은 그 ETF 종목코드, direction은 원래 방향, sentence는 그 이유)와 그 부족한 점(shortfall)입니다. newRefs는 그 부족한 점을 채우려고 새로 찾아 researchArticles에 담은 기사의 ref입니다. otherSentenceRefs(있을 때만)는 다른 문장이 이미 이유로 인용한 기사 번호이며, 이 문장의 refs에는 넣지 않습니다.
 - 위의 출력 형식 대신 다음 JSON 하나만 냅니다. points에는 다시 쓴 예상 하나만 담고, insufficientEvidence는 false로 둡니다.
 {"points":[{"direction":"상승","statement":"...","refs":["..."],"weak":false,"shortfall":""}],"insufficientEvidence":false}
 - direction과 statement는 위의 etfs 규칙(방향의 뜻, 근거 번호, '예상 어려움'일 때 refs 빈 목록과 weak true)을 그대로 따릅니다. 새 기사로 근거가 채워졌으면 방향을 새로 정할 수 있습니다.
@@ -256,10 +258,10 @@ REWRITE_ADDENDUM_OUTLOOK = """
 REWRITE_ADDENDUM = """
 
 다시 쓰기 요청:
-- 입력의 rewrite 칸은 근거가 약하다고 한 문장 하나(sentence)와 그 부족한 점(shortfall)입니다. newRefs는 그 부족한 점을 채우려고 새로 찾아 항목 "재검색 기사"에 담은 기사의 ref입니다.
+- 입력의 rewrite 칸은 근거가 약하다고 한 문장 하나(sentence)와 그 부족한 점(shortfall)입니다. newRefs는 그 부족한 점을 채우려고 새로 찾아 researchArticles에 담은 기사의 ref입니다. otherSentenceRefs(있을 때만)는 다른 문장이 이미 이유로 인용한 기사 번호이며, 이 문장의 refs에는 넣지 않습니다.
 - rewrite의 kind가 "fx"면 환율 이슈 칸, "rate"면 금리 이슈 칸의 문장이며 위의 fxIssue·rateIssue 규칙을 따릅니다(금리 기사가 여전히 없으면 정해진 문장을 쓰고 refs는 빈 목록, weak는 true입니다). kind가 "krPrev"면 전 거래일 한국 증시 칸의 이유 문장이며 위의 krPrevIssue 규칙을 따릅니다. kind가 없으면 밤사이 이슈 문장입니다.
 - 위의 출력 형식 대신 다음 JSON 하나만 냅니다. points에는 다시 쓴 문장 하나만 담고 다른 문장은 쓰지 않으며, insufficientEvidence는 false로 둡니다. etfs·fxIssue·rateIssue·otherIssues·krPrevIssue는 쓰지 않습니다.
 {"points":[{"statement":"...","refs":["..."],"weak":false,"shortfall":""}],"insufficientEvidence":false}
 - 새 기사로 부족한 점이 채워지면 weak를 false로, 그래도 약하면 weak를 true로 하고 shortfall에 아직 부족한 점을 씁니다. 새 기사에 없는 내용은 지어내지 않습니다.
-- 새 기사가 같은 사건 묶음(sameEventArticles)에 들었으면 묶음의 다른 기사와 함께 읽어 종합하고, 기사끼리 수치·해석이 다르면 위의 규칙대로 양쪽을 쓰고 단정하지 않습니다.
+- 새 기사에 sameEventAs가 있거나 새 기사가 같은 사건 묶음(sameEventArticles)의 기사를 가리키면 그 기사들과 함께 읽어 종합하고, 기사끼리 수치·해석이 다르면 위의 규칙대로 양쪽을 쓰고 단정하지 않습니다.
 - 근거 번호·단정 금지·ETF 이름 금지 같은 위의 규칙은 그대로 지킵니다."""

@@ -4,7 +4,7 @@ import pytest
 
 import logging
 
-from briefing.llm import DEFAULT_MODEL, AnthropicClient, LlmCallError, LlmConfig, LlmUsage, llm_config
+from briefing.llm import DEFAULT_MODEL, AnthropicClient, CachedUser, LlmCallError, LlmConfig, LlmUsage, llm_config
 from fake_anthropic import FAKE_KEY, fake_sdk  # noqa: F401 - 픽스처
 
 SCHEMA = {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}
@@ -82,6 +82,36 @@ def test_rewrite_addendum_goes_in_a_second_block_so_the_first_block_matches_the_
     assert rewrite["system"][0] == first["system"][0]
     assert rewrite["system"][1] == {"type": "text", "text": "addendum"}
     assert len(rewrite["system"]) == 2
+
+
+def test_cached_user_is_split_at_its_breaks_with_marks_on_the_evidence_end_and_the_last_break(fake_sdk):
+    fake_sdk.behaviour = lambda _kwargs: types.SimpleNamespace(
+        stop_reason="end_turn", content=[types.SimpleNamespace(type="text", text=VALID)])
+    client = AnthropicClient(FAKE_KEY, DEFAULT_MODEL)
+    text = '{"items": []' + ', "researchArticles": [{"ref": "r1"}' + ', {"ref": "r2"}' + '], "rewrite": {}}'
+    cuts = (12, 12 + 33, 12 + 33 + 15)
+
+    client.complete("system", CachedUser(text, cuts), SCHEMA, "addendum")
+    client.complete("system", CachedUser(text[:cuts[1]] + "]}", cuts[:2]), SCHEMA)
+    rewrite, first = client._client.messages.requests
+
+    # 덧붙임은 근거 뒤에 둔다. 지시문 블록은 덧붙임이 없는 호출과 같아 같은 캐시를 읽는다.
+    assert rewrite["system"] == first["system"] and len(rewrite["system"]) == 1
+    blocks = rewrite["messages"][0]["content"]
+    assert "".join(b["text"] for b in blocks[:-1]) == text and blocks[-1] == {"type": "text", "text": "addendum"}
+    assert [b.get("cache_control") is not None for b in blocks] == [True, False, True, False, False]
+    # 앞 호출의 블록은 다음 호출의 앞 블록과 글자까지 같다(캐시 경계가 맞는다).
+    assert [b["text"] for b in first["messages"][0]["content"][:2]] == [b["text"] for b in blocks[:2]]
+
+
+def test_plain_user_text_and_breaks_outside_the_text_keep_the_one_block_request(fake_sdk):
+    fake_sdk.behaviour = lambda _kwargs: types.SimpleNamespace(
+        stop_reason="end_turn", content=[types.SimpleNamespace(type="text", text=VALID)])
+    client = AnthropicClient(FAKE_KEY, DEFAULT_MODEL)
+
+    client.complete("system", CachedUser("user", (0, 4, 9)), SCHEMA, "addendum")
+    [request] = client._client.messages.requests
+    assert request["messages"][0]["content"] == "user" and len(request["system"]) == 2
 
 
 def test_search_query_call_also_carries_the_cache_mark(fake_sdk):

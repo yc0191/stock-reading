@@ -316,3 +316,61 @@ def test_writer_gives_up_when_every_answer_names_an_etf_in_a_shared_sentence():
     llm = FakeLlm(bad, bad, bad)
     result = DailyLlmWriter(llm, max_attempts=3).write(i, build_sections(i))
     assert result.body is None and len(result.rejected) == 3
+
+
+# ---- 캐시를 읽는 입력(처음 작성 -> 재검색 뒤 다시 쓰기 -> 고치기) ----
+
+def news(article_id, title, minutes_before):
+    from briefing.sources import Article
+    return Article(article_id, title, "FAKE 요약입니다.", AT - timedelta(minutes=minutes_before), "TEST 신문",
+                   f"https://news.example.com/{article_id}")
+
+
+def with_articles(i, *research, truncated=False):
+    from dataclasses import replace
+    from briefing.daily_inputs import EtfArticles
+    etf_news = (news("e1", "TEST 반도체 수출 규제 발표", 120), news("e2", "TEST 환율 소식", 90))
+    return replace(i, etf_articles=(EtfArticles("TEST01", etf_news, True),), research_articles=tuple(research),
+                   research_articles_truncated=truncated)
+
+
+def test_llm_user_keeps_the_first_write_input_and_earlier_research_as_the_same_leading_blocks():
+    from briefing.daily_report import llm_user
+    base = with_articles(daily_input())
+    r1, r2 = news("r1", "TEST 반도체 수출 규제 발표 후속", 60), news("r2", "해외 원유 가격 하락", 30)
+    first = llm_user(base, build_sections(base))
+    once = llm_user(with_articles(base, r1), build_sections(with_articles(base, r1)), tail={"rewrite": {"n": 1}})
+    twice = with_articles(base, r1, r2, truncated=True)
+    later = llm_user(twice, build_sections(twice), tail={"fixes": []})
+
+    # 앞 호출이 보낸 블록(근거 입력, 먼저 찾은 기사)은 다음 호출의 앞 블록과 글자까지 같다.
+    assert first.breaks == (len(first) - 1,) and once[:once.breaks[0]] == first[:first.breaks[0]]
+    assert later[:later.breaks[1]] == once[:once.breaks[1]] and len(later.breaks) == 3
+    data = json.loads(later)
+    assert all(item["name"] != "재검색 기사" for item in data["items"])
+    assert [(a["ref"], a.get("sameEventAs")) for a in data["researchArticles"]] == [("r1", ["e1"]), ("r2", None)]
+    assert data["researchTruncated"] is True and data["fixes"] == []
+    # 검색어를 만드는 입력은 지금처럼 재검색 기사를 items에 담는다.
+    assert any(item["name"] == "재검색 기사" for item in build_llm_input(twice, build_sections(twice))["items"])
+
+
+def test_rewrite_tells_which_articles_other_sentences_already_cite():
+    from briefing.daily_report import DailyOutput, Point, refs_cited_by_others
+
+    class Capture:
+        def __init__(self):
+            self.users = []
+
+        @as_reply
+        def complete(self, system, user, output_schema, addendum=""):
+            self.users.append(json.loads(user))
+            return json.dumps({"points": [{"statement": "다시 쓴 문장입니다.", "refs": ["r1"], "weak": False,
+                                           "shortfall": ""}], "insufficientEvidence": False}, ensure_ascii=False)
+
+    i = with_articles(daily_input(), news("r1", "TEST 금리 소식", 30))
+    current = Point("약한 문장입니다.", ("B1",), "부족합니다")
+    output = DailyOutput((Point("앞 문장입니다.", ("e1", "B1")), current), False)
+    llm = Capture()
+    DailyLlmWriter(llm).rewrite_point(i, build_sections(i), current, 2, ("r1",), refs_cited_by_others(output, current))
+    # 배경 자료(B1)는 여러 문장이 함께 써도 되므로 기사 번호만 알린다.
+    assert llm.users[0]["rewrite"]["otherSentenceRefs"] == ["e1"]

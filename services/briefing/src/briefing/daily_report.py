@@ -15,7 +15,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Callable, Mapping
 
 from briefing.compose import KST
-from briefing.article_groups import RESEARCH_MARK, ArticleRow, GroupedArticles, group_article_lists
+from briefing.article_groups import RESEARCH_MARK, ArticleRow, GroupedArticles, group_article_lists, same_event
 from briefing.config import DEFAULT_DAILY_SETTINGS, DEFAULT_SETTINGS, CoreSettings, DailySettings
 from briefing.daily_inputs import (
     PRE_OPEN_NOTICE,
@@ -54,8 +54,8 @@ from briefing.llm_output import (
     parse_output_object,
     ticker_pattern,
 )
-from briefing.llm import (API_KEY_ENV, AcceptedAttempt, AnthropicClient, LlmCallError, LlmClient, LlmUsage,
-                          attempt_usage,
+from briefing.llm import (API_KEY_ENV, AcceptedAttempt, AnthropicClient, CachedUser, LlmCallError, LlmClient,
+                          LlmUsage, attempt_usage,
                           llm_config)
 from briefing.open_flow import OPEN_SOURCE_TEXT, OpenFlow, signed
 from briefing.price_series import DailyCloses, IntradaySeries
@@ -857,8 +857,12 @@ def article_groups(sections: tuple[Section, ...], core: CoreSettings = DEFAULT_S
 
 def build_llm_input(i: DailyInput, sections: tuple[Section, ...],
                     settings: DailySettings = DEFAULT_DAILY_SETTINGS,
-                    core: CoreSettings = DEFAULT_SETTINGS, *, group: bool = True) -> dict[str, Any]:
+                    core: CoreSettings = DEFAULT_SETTINGS, *, group: bool = True,
+                    with_research: bool = True) -> dict[str, Any]:
     # 검색어 입력처럼 기사 칸을 쓰지 않는 곳은 group=False로 묶기를 건너뛴다.
+    # 본문 작성 입력(llm_user)은 재검색 기사를 items 밖 뒤쪽에 따로 붙이므로 with_research=False로 뺀다.
+    if not with_research:
+        sections = tuple(s for s in sections if s.name != ITEM_RESEARCH)
     grouped = dict(zip((s.name for s in _article_sections(sections)), article_groups(sections, core).lists)) \
         if group else {}
     data: dict[str, Any] = {
@@ -881,6 +885,62 @@ def build_llm_input(i: DailyInput, sections: tuple[Section, ...],
     else:
         data["outlookEtfs"] = _outlook_etfs_input(i)
     return data
+
+
+# 재검색 기사 칸의 키. 근거 입력 뒤에 찾은 순서대로 덧붙인다.
+RESEARCH_KEY = "researchArticles"
+# 앞에 놓인 기사 중 같은 사건으로 보이는 기사의 ref 목록. 묶음 안에 넣으면 앞 칸이 바뀌어 캐시를 읽지 못하므로 가리키기만 한다.
+SAME_EVENT_AS_KEY = "sameEventAs"
+RESEARCH_TRUNCATED_KEY = "researchTruncated"
+
+
+def research_llm_entries(i: DailyInput, sections: tuple[Section, ...],
+                         core: CoreSettings = DEFAULT_SETTINGS) -> list[dict[str, Any]]:
+    """재검색 기사를 찾은 순서대로 낸다. 앞 기사(ETF별 기사, 먼저 찾은 재검색 기사)와 같은 사건이면 그 ref를 붙인다.
+
+    다음 호출은 기사가 뒤에 더 붙을 뿐 앞 칸이 그대로라 앞 호출이 쓴 캐시를 읽는다.
+    """
+    research = next((s for s in sections if s.name == ITEM_RESEARCH), None)
+    if research is None:
+        return []
+    by_ref = {e.ref: e for e in research.entries}
+    earlier = [(e.ref, ArticleRow(e.llm, e.llm["title"], e.published_at))
+               for s in sections if s.name == ITEM_ETF_ARTICLES for e in s.entries]
+    out: list[dict[str, Any]] = []
+    for a in dict.fromkeys(a.article_id for a in i.research_articles):
+        e = by_ref.get(a)
+        if e is None:
+            continue
+        row = ArticleRow(e.llm, e.llm["title"], e.published_at)
+        same = [ref for ref, other in earlier if same_event(row, other, core)]
+        out.append({**e.llm, SAME_EVENT_AS_KEY: same} if same else dict(e.llm))
+        earlier.append((e.ref, row))
+    return out
+
+
+def llm_user(i: DailyInput, sections: tuple[Section, ...], settings: DailySettings = DEFAULT_DAILY_SETTINGS,
+             core: CoreSettings = DEFAULT_SETTINGS, tail: Mapping[str, Any] | None = None) -> CachedUser:
+    """본문 작성·문장 다시 쓰기·고치기가 보내는 입력(JSON 글 하나).
+
+    처음 작성의 근거 입력 -> 찾은 순서대로의 재검색 기사 -> 호출마다 다른 칸(tail) 차례로 놓아, 같은 작업의 호출이
+    앞부분을 똑같이 보내게 한다. 블록 경계(breaks)는 근거 입력 끝과 재검색 기사마다의 끝이다.
+    """
+    base = json.dumps(build_llm_input(i, sections, settings, core, with_research=False), ensure_ascii=False)
+    parts = [base[:-1]]
+    research = research_llm_entries(i, sections, core)
+    for n, entry in enumerate(research):
+        lead = f', "{RESEARCH_KEY}": [' if n == 0 else ", "
+        parts.append(lead + json.dumps(entry, ensure_ascii=False))
+    rest: dict[str, Any] = {}
+    if research and i.research_articles_truncated:
+        rest[RESEARCH_TRUNCATED_KEY] = True
+    rest.update(tail or {})
+    end = ("]" if research else "") + (", " + json.dumps(rest, ensure_ascii=False)[1:-1] if rest else "") + "}"
+    breaks, at = [], 0
+    for part in parts:
+        at += len(part)
+        breaks.append(at)
+    return CachedUser("".join(parts) + end, tuple(breaks))
 
 
 def _outlook_etfs_input(i: DailyInput) -> list[dict[str, Any]]:
@@ -1446,7 +1506,7 @@ class DailyLlmWriter:
             | frozenset(t for f in i.filings or () for t in f.tickers) | i.member_us_symbols()
 
     def write(self, i: DailyInput, sections: tuple[Section, ...]) -> DailyWriteResult:
-        user = json.dumps(build_llm_input(i, sections, self.settings, self.core), ensure_ascii=False)
+        user = llm_user(i, sections, self.settings, self.core)
         groups = article_groups(sections, self.core).record()
         allowed = frozenset(e.ref for s in sections for e in s.entries)
         post_close = i.edition == EDITION_POST_CLOSE
@@ -1479,20 +1539,26 @@ class DailyLlmWriter:
         return DailyWriteResult(None, tuple(rejected))
 
     def rewrite_point(self, i: DailyInput, sections: tuple[Section, ...], current: Point, no: int,
-                      new_refs: tuple[str, ...]) -> PointRewrite:
-        """근거가 약한 문장 하나만 다시 쓴다. 나머지 문장은 건드리지 않는다. i와 sections에는 새로 찾은 기사까지 들어 있다."""
-        data = build_llm_input(i, sections, self.settings, self.core)
+                      new_refs: tuple[str, ...], other_refs: tuple[str, ...] = ()) -> PointRewrite:
+        """근거가 약한 문장 하나만 다시 쓴다. 나머지 문장은 건드리지 않는다. i와 sections에는 새로 찾은 기사까지 들어 있다.
+        other_refs는 다른 문장이 인용한 근거 번호이며, 그중 기사 번호만 이 문장의 이유로 다시 쓰지 말라고 알린다."""
         groups = article_groups(sections, self.core).record()
-        data["rewrite"] = {"sentenceNo": no, "sentence": {"statement": current.statement, "refs": list(current.refs)},
-                           "shortfall": current.shortfall, "newRefs": list(new_refs)}
+        rewrite: dict[str, Any] = {"sentenceNo": no,
+                                   "sentence": {"statement": current.statement, "refs": list(current.refs)},
+                                   "shortfall": current.shortfall, "newRefs": list(new_refs)}
         if current.symbol is not None:
-            data["rewrite"]["symbol"] = current.symbol
+            rewrite["symbol"] = current.symbol
         # 밤사이 이슈·ETF 이유의 입력 모양은 그대로 두고, 환율·금리·전 거래일 칸과 ETF별 예상에만 종류(와 방향)를 알린다.
         if current.kind in (POINT_FX, POINT_RATE, POINT_KR_PREV, POINT_OUTLOOK):
-            data["rewrite"]["kind"] = current.kind
+            rewrite["kind"] = current.kind
         if current.direction is not None:
-            data["rewrite"]["direction"] = current.direction
-        user = json.dumps(data, ensure_ascii=False)
+            rewrite["direction"] = current.direction
+        # 마지막 검사는 같은 기사를 두 문장이 이유로 쓰면 고치게 하므로, 다른 문장이 이미 쓴 기사를 미리 알린다.
+        articles = {e.ref for s in sections for e in s.entries if e.kind == KIND_NEWS}
+        taken = [ref for ref in dict.fromkeys(other_refs) if ref in articles]
+        if taken:
+            rewrite["otherSentenceRefs"] = taken
+        user = llm_user(i, sections, self.settings, self.core, {"rewrite": rewrite})
         allowed = frozenset(e.ref for s in sections for e in s.entries)
         post_close = i.edition == EDITION_POST_CLOSE
         tickers = self.forbidden_tickers(i) if post_close else frozenset()
@@ -1540,6 +1606,13 @@ class DailyLlmWriter:
                             direction=direction if outlook else current.direction)
             return PointRewrite(point, tuple(rejected), AcceptedAttempt(attempt, user, raw, usage, groups))
         return PointRewrite(None, tuple(rejected))
+
+
+def refs_cited_by_others(output: DailyOutput, current: Point) -> tuple[str, ...]:
+    """current가 아닌 문장들이 인용한 근거 번호(메일 차례, 겹침 없음)."""
+    others = (p for p in (*output.points, *output.issues, *output.others, *output.outlooks, *output.reviews)
+              if p is not current)
+    return tuple(dict.fromkeys(ref for p in others for ref in p.refs))
 
 
 def _rewritten_direction(raw: str, point: Point) -> str:
