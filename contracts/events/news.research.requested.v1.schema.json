@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://stock-reading.local/contracts/news.research.requested.v1",
   "title": "news.research.requested v1",
-  "description": "브리핑이 근거가 부족한 작업 하나에 대해 수집기에 뉴스 재검색을 요청한다. 수집기는 기존 뉴스 수집과 같은 하루 호출 상한과 거르기 규칙으로 검색해 기사를 news.collected(researchJobId 포함)로 발행하고, 끝나면 collection.completed(jobType research-news, researchJobId 포함)를 한 건 보낸다. 응답 이벤트는 따로 없고, 브리핑은 그 완료를 받은 뒤 news.articles.requested(researchJobId 포함)로 기사를 다시 조회한다. 검색어는 보유 종목을 드러낼 수 있으므로 로그에 남기지 않는다. 메시지 키는 symbol이다.",
+  "description": "브리핑이 근거가 부족한 작업 하나에 대해 수집기에 뉴스 재검색을 요청한다. 수집기는 기존 뉴스 수집과 같은 하루 호출 상한과 거르기 규칙으로 검색해 기사를 news.collected(researchJobId 포함)로 발행한다. 같은 검색어를 최근(정기 뉴스 수집 주기) 안에 정기 수집이나 다른 재검색이 이미 검색했으면 다시 검색하지 않고 그 결과를 지금 시각으로 다시 걸러 같은 방식으로 발행하며, 이때는 하루 호출 상한을 쓰지 않는다. 기사를 다 보내면 collection.completed(jobType research-news, researchJobId 포함)를 한 건 보낸다. 응답 이벤트는 따로 없고, 브리핑은 그 완료를 받은 뒤 news.articles.requested(researchJobId 포함)로 기사를 다시 조회한다. 검색어는 보유 종목을 드러낼 수 있으므로 로그에 남기지 않는다. 메시지 키는 symbol이다.",
   "type": "object",
   "required": ["eventId", "eventType", "schemaVersion", "occurredAt", "producedAt", "correlationId", "payload"],
   "properties": {

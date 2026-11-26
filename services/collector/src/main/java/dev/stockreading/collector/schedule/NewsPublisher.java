@@ -94,6 +94,7 @@ class NewsPublisher {
 
     /**
      * 재검색 요청 하나를 처리한다. 검색어마다 기존 수집(같은 하루 호출 상한, 같은 거르기·중복 합치기)을 거치고,
+     * 최근 검색한 검색어는 그 결과를 다시 쓴다(NewsCollector.researchWithStatus).
      * 기사 태그는 요청의 종목 하나다. 완료 알림의 scheduledFor 는 요청 시각이다.
      */
     void publishResearch(String correlationId, String requestedAt, String researchJobId, String symbol,
@@ -107,7 +108,7 @@ class NewsPublisher {
             collection = new NewsCollection(List.of(), Set.of(symbol), OffsetDateTime.now(clock));
         } else {
             try {
-                collection = collector.collectWithStatus(newsQueries);
+                collection = collector.researchWithStatus(newsQueries);
             } catch (RuntimeException e) {
                 // 정기 수집과 달리 브리핑이 이 완료 알림을 기다리므로, 실패해도 그 종목을 못 모은 것으로 알린다.
                 log.warn("news research collect failed corr={} jobId={} errorType={}",

@@ -12,6 +12,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
@@ -41,9 +42,13 @@ class NewsCollectorTest {
 
     private final NewsSearchPort search = mock(NewsSearchPort.class);
     private final NewsCollector collector =
-            new NewsCollector(search, new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 100, 0), CLOCK, ms -> { }, NO_QUERIES);
+            new NewsCollector(search, new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 100, 0), CLOCK, ms -> { }, NO_QUERIES, recent(CLOCK));
 
     private ListAppender<ILoggingEvent> logs;
+
+    private static RecentSearchesPort recent(Clock clock) {
+        return new MemoryRecentSearches(clock, new RecentSearchProperties(Duration.ofMinutes(15), Duration.ZERO, 100));
+    }
 
     @BeforeEach
     void attachLogs() {
@@ -156,7 +161,7 @@ class NewsCollectorTest {
     @Test
     void queriesBeyondTheDailyCallLimitAreSkippedWithoutCallingTheApi() {
         NewsCollector limited = new NewsCollector(search,
-                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 2, 0), CLOCK, ms -> { }, NO_QUERIES);
+                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 2, 0), CLOCK, ms -> { }, NO_QUERIES, recent(CLOCK));
         when(search.search(anyString(), anyInt())).thenReturn(List.of());
 
         limited.collect(List.of(query("가", "A"), query("나", "A"), query("다", "A")));
@@ -170,7 +175,7 @@ class NewsCollectorTest {
     @Test
     void failedCallsStillCountTowardTheDailyLimit() {
         NewsCollector limited = new NewsCollector(search,
-                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 1, 0), CLOCK, ms -> { }, NO_QUERIES);
+                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 1, 0), CLOCK, ms -> { }, NO_QUERIES, recent(CLOCK));
         when(search.search(eq("가"), anyInt())).thenThrow(new NewsSearchApiException("boom"));
 
         limited.collect(List.of(query("가", "A"), query("나", "A")));
@@ -201,7 +206,7 @@ class NewsCollectorTest {
     @Test
     void symbolsOfQueriesSkippedByTheDailyLimitAreReportedAsIncomplete() {
         NewsCollector limited = new NewsCollector(search,
-                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 1, 0), CLOCK, ms -> { }, NO_QUERIES);
+                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 1, 0), CLOCK, ms -> { }, NO_QUERIES, recent(CLOCK));
         when(search.search(anyString(), anyInt())).thenReturn(List.of());
 
         NewsCollection result = limited.collectWithStatus(
@@ -245,7 +250,7 @@ class NewsCollectorTest {
             return List.of();
         });
         NewsCollector timed = new NewsCollector(search,
-                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 100, 0), moving, ms -> { }, NO_QUERIES);
+                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 100, 0), moving, ms -> { }, NO_QUERIES, recent(CLOCK));
 
         NewsCollection result = timed.collectWithStatus(List.of(query("가", "A"), query("나", "A")));
 
@@ -255,7 +260,7 @@ class NewsCollectorTest {
 
     private NewsCollector collectorWithInterval(long intervalMs, int dailyLimit, List<Long> pauses) {
         return new NewsCollector(search,
-                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, dailyLimit, intervalMs), CLOCK, pauses::add, NO_QUERIES);
+                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, dailyLimit, intervalMs), CLOCK, pauses::add, NO_QUERIES, recent(CLOCK));
     }
 
     @Test
@@ -332,7 +337,7 @@ class NewsCollectorTest {
 
     private NewsCollector collectorWithQueries(String queries) {
         return new NewsCollector(search, new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 100, 0),
-                CLOCK, ms -> { }, received(queries));
+                CLOCK, ms -> { }, received(queries), recent(CLOCK));
     }
 
     @Test
@@ -424,6 +429,6 @@ class NewsCollectorTest {
 
     private NewsCollector collectorWithLimit(String queries, int dailyLimit) {
         return new NewsCollector(search, new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, dailyLimit, 0),
-                CLOCK, ms -> { }, received(queries));
+                CLOCK, ms -> { }, received(queries), recent(CLOCK));
     }
 }

@@ -184,6 +184,15 @@ collector:
     # 브리핑의 뉴스 재검색 요청 하나에서 실제로 검색할 검색어 수 상한. 넘는 검색어는 버린다.
     # 검색어마다 위 하루 호출 상한을 한 번씩 쓴다. 0 이하이면 시작 단계에서 실패한다.
     max-queries: ${NEWS_RESEARCH_MAX_QUERIES:3}
+  news-reuse:
+    # 재검색이 같은 검색어를 이 기간 안에 이미 검색했으면(정기 수집 포함) 검색하지 않고 그 결과를 다시 쓴다.
+    # 정기 뉴스 수집 주기(collector.schedule.news-interval-ms)와 같게 둔다.
+    window: 15m
+    # 다른 쪽이 같은 검색어를 검색 중일 때 그 결과를 기다리는 상한. 넘으면 직접 검색한다.
+    # 검색 한 번의 최대 시간(연결 제한 + 응답 제한, collector.news-search.timeout-seconds 두 번)보다 길게 둔다.
+    wait-limit: 25s
+    # 메모리에 남길 검색어 수 상한. 넘으면 지난 결과, 그다음 오래된 검색어부터 지운다.
+    max-entries: 2000
   edgar:
     base-url: https://data.sec.gov
     ticker-map-url: https://www.sec.gov/files/company_tickers_exchange.json

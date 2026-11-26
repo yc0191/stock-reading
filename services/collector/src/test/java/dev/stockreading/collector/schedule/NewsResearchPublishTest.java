@@ -82,7 +82,7 @@ class NewsResearchPublishTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<NewsQuery>> queries = ArgumentCaptor.forClass(List.class);
-        verify(collector).collectWithStatus(queries.capture());
+        verify(collector).researchWithStatus(queries.capture());
         assertThat(queries.getValue()).containsExactly(
                 new NewsQuery("테스트 재검색어 하나", Set.of("TEST01")),
                 new NewsQuery("테스트 재검색어 둘", Set.of("TEST01")));
@@ -144,7 +144,7 @@ class NewsResearchPublishTest {
     @Test
     void wholeSearchFailureStillSendsTheCompletionWithTheSymbolIncomplete() throws IOException {
         // 정기 수집과 달리 브리핑이 이 완료를 기다리므로, 실패해도 완료를 보내야 브리핑이 시간 초과까지 기다리지 않는다.
-        when(collector.collectWithStatus(anyList())).thenThrow(new IllegalStateException("search failed"));
+        when(collector.researchWithStatus(anyList())).thenThrow(new IllegalStateException("search failed"));
 
         publisher.publishResearch(CORRELATION_ID, REQUESTED_AT, JOB_ID, "*", QUERIES);
 
@@ -160,7 +160,7 @@ class NewsResearchPublishTest {
     void noUsableQueryMeansNothingWasSearchedAndTheSymbolIsIncomplete() throws IOException {
         publisher.publishResearch(CORRELATION_ID, REQUESTED_AT, JOB_ID, "TEST01", List.of());
 
-        verify(collector, never()).collectWithStatus(anyList());
+        verify(collector, never()).researchWithStatus(anyList());
         JsonNode payload = mapper.readTree(completionJson()).get("payload");
         assertThat(payload.get("incompleteSymbols")).extracting(JsonNode::asString).containsExactly("TEST01");
     }
@@ -193,7 +193,7 @@ class NewsResearchPublishTest {
         collect(Set.of("TEST01"), item("https://news.example.com/a", "TEST01"));
 
         publisher.publishResearch(CORRELATION_ID, REQUESTED_AT, JOB_ID, "TEST01", QUERIES);
-        when(collector.collectWithStatus(anyList())).thenThrow(new IllegalStateException("테스트 재검색어 하나"));
+        when(collector.researchWithStatus(anyList())).thenThrow(new IllegalStateException("테스트 재검색어 하나"));
         publisher.publishResearch(CORRELATION_ID, REQUESTED_AT, JOB_ID, "TEST01", QUERIES);
 
         assertThat(logs.list).isNotEmpty();
@@ -203,7 +203,7 @@ class NewsResearchPublishTest {
     }
 
     private void collect(Set<String> incompleteSymbols, NewsItem... items) {
-        when(collector.collectWithStatus(any())).thenReturn(new NewsCollection(List.of(items), incompleteSymbols, STARTED_AT));
+        when(collector.researchWithStatus(any())).thenReturn(new NewsCollection(List.of(items), incompleteSymbols, STARTED_AT));
     }
 
     private String completionJson() {

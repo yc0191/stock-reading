@@ -28,6 +28,7 @@ import dev.stockreading.collector.news.NewsCollector;
 import dev.stockreading.collector.news.NewsSearchPort;
 import dev.stockreading.collector.news.SearchQueriesPort;
 import dev.stockreading.collector.news.NewsSearchProperties;
+import dev.stockreading.collector.news.RecentSearchProperties;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -35,7 +36,7 @@ import tools.jackson.databind.json.JsonMapper;
 class DataSourceWiringTest {
 
     @Configuration
-    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, MarketStatusProperties.class, NewsSearchProperties.class, DartProperties.class,
+    @EnableConfigurationProperties({CollectorProperties.class, BrokerProperties.class, MarketStatusProperties.class, NewsSearchProperties.class, RecentSearchProperties.class, DartProperties.class,
             InsightProperties.class, PriceCheckProperties.class})
     // 검색어는 DB에서 읽는 빈(DbSearchQueries)이라 이 배선 테스트에서는 빼고 빈 목록으로 대신한다.
     @ComponentScan(basePackages = {

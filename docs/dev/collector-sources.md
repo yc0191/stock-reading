@@ -2,7 +2,7 @@
 
 수집기는 시세, 뉴스 검색, 공시를 외부에서 받아 이벤트로 넘깁니다. 시세 기본은 가짜 데이터(시뮬레이터)이며, `COLLECTOR_MARKET_DATA_SOURCE=broker`일 때만 외부 API를 씁니다. 시세 제공자 API는 조회만 호출합니다([CLAUDE.md](../../CLAUDE.md) 설계 규칙). 기본값과 그 이유의 원본은 `services/collector/src/main/resources/application.yml`의 `collector.*`와 그 주석입니다. 이벤트 모양의 원본은 `contracts/events/`입니다.
 
-- 뉴스: 정기 뉴스 수집(`collect-news`)마다 검색해 기사마다 `news.collected`를 보냅니다. 기사를 다 보낸 뒤 `collection.completed`를 한 건 보냅니다([ADR-010](../adr/010-event-format.md)). 브리핑의 재검색 요청(`news.research.requested`)도 같은 방식으로 검색하고, 끝나면 `jobType` `research-news`로 완료 알림을 보냅니다. 검색 한 번마다 거른 건수를 `news filtered ...` 로그 한 줄로 남기며, 검색어와 종목은 쓰지 않습니다(`NewsCollector`).
+- 뉴스: 정기 뉴스 수집(`collect-news`)마다 검색해 기사마다 `news.collected`를 보냅니다. 기사를 다 보낸 뒤 `collection.completed`를 한 건 보냅니다([ADR-010](../adr/010-event-format.md)). 브리핑의 재검색 요청(`news.research.requested`)도 같은 방식으로 검색하고, 끝나면 `jobType` `research-news`로 완료 알림을 보냅니다. 재검색은 정기 수집이나 다른 재검색이 최근 검색한 검색어를 다시 검색하지 않고 그 결과를 지금 시각으로 다시 걸러 보냅니다. 같은 검색어를 다른 쪽이 검색 중이면 그 결과를 기다립니다. 정기 수집은 늘 검색합니다(`NewsCollector`, `RecentSearchesPort`). 검색 한 번마다 거른 건수를 `news filtered ...` 로그 한 줄로 남기며, 검색어와 종목은 쓰지 않습니다(`NewsCollector`).
 - 공시: 미국 종목 공시(SEC EDGAR)는 장 시작 전 수집에서 `filing.collected`로 보냅니다. DART 공시는 조회 클라이언트(`DartClient`)까지만 있고 이벤트로 보내지 않습니다.
 - 키 값(`*_KEY`, `*_SECRET`, `DART_API_KEY`)은 Parameter Store에서 가져옵니다([config.md](config.md)). 주소와 헤더 이름은 비밀이 아니지만 코드에 두지 않고 `.env`에 직접 적습니다. 자리 표시는 `.env.example`에 있습니다.
 
@@ -46,6 +46,7 @@ scripts/collector-command.sh collect-news   # 뉴스 수집 한 번
 | `NEWS_SEARCH_DAILY_CALL_LIMIT` | 하루 검색 호출 상한, 재시작하면 0부터 (`collector.news-search.daily-call-limit`) |
 | `NEWS_SEARCH_CALL_INTERVAL_MS` | 검색 호출 사이 대기 (`collector.news-search.call-interval-ms`) |
 | `NEWS_RESEARCH_MAX_QUERIES` | 재검색 요청 하나의 검색어 수 상한 (`collector.news-research.max-queries`) |
+| (환경변수 없음) | 재검색이 최근 검색 결과를 다시 쓰는 기간, 검색 중인 결과를 기다리는 상한, 기억할 검색어 수. 기억은 수집기 메모리에만 있어 재시작하면 비어 그 직후 한 번은 다시 검색함 (`collector.news-reuse.*`) |
 | `DART_API_KEY` | 국내 공시 API 키 (`collector.dart.api-key`) |
 | `EDGAR_USER_AGENT` | SEC EDGAR 요청의 User-Agent(`회사명 연락이메일`). 개인 정보라 `.env`에만 둠. 비면 공시를 조회하지 않음 (`collector.edgar.user-agent`) |
 | `EDGAR_FORMS` | 수집할 공시 형식. 비거나 틀리면 시작 실패 (`collector.edgar.forms`) |
@@ -64,7 +65,7 @@ scripts/collector-command.sh collect-news   # 뉴스 수집 한 번
 
 - 검색어는 수집기가 시작할 때 `market.news_search_target` 뷰에서 한 번 읽습니다. 바꾸면 재시작해야 반영됩니다. 종목 이름으로 검색하려면 `search_by_name`을 켭니다. 값은 SQL로 넣으며, 예시는 `docs/examples/holdings.example.sql`입니다([setup.md](setup.md)).
 - 기사 태그를 ETF 구성 종목으로 넓히는 일은 뉴스처리기가 합니다([services.md](services.md)의 뉴스처리기 절).
-- 하루 정기 수집 호출 수는 (하루 정기 수집 횟수, `collector.schedule.news-interval-ms`로 정해짐) × 검색어 수입니다. 이것과 재검색 호출을 더한 값이 `NEWS_SEARCH_DAILY_CALL_LIMIT`을 넘지 않게 검색어 수를 정합니다.
+- 하루 정기 수집 호출 수는 (하루 정기 수집 횟수, `collector.schedule.news-interval-ms`로 정해짐) × 검색어 수입니다. 이것과 재검색 호출을 더한 값이 `NEWS_SEARCH_DAILY_CALL_LIMIT`을 넘지 않게 검색어 수를 정합니다. 최근 검색 결과를 다시 쓴 재검색은 호출에 들지 않으므로 이 합은 위쪽 어림입니다.
 - 상한에 닿으면 남은 검색어를 건너뛰고, 그 종목을 `incompleteSymbols`에 담습니다. 수집기 로그에는 `news daily call limit reached`가 남습니다. 미국 티커 검색이 빠지면 그 티커를 담은 관심 ETF 코드가 들어갑니다.
 
 ## 시세·지수·공시 수집이 내는 이벤트
