@@ -107,6 +107,9 @@ ITEM_US_INDEX = "미국 지수"
 ITEM_EXCHANGE = "환율"
 ITEM_US_STOCKS = "미국 종목 직전 장 등락"
 ITEM_FILINGS = "범위 안 미국 공시"
+NO_FILINGS_IN_RANGE = "범위 안에 접수된 공시 없음"
+# 수집기가 공시를 못 받았다고 알린 판에서 저장된 공시가 0건이면, 없었다가 아니라 모른다고 쓴다.
+FILINGS_NOT_COLLECTED = "공시 수집 실패"
 # 아침 판의 시장종합(해외 시세·투자자별 순매수). Claude 입력에만 담고, 인용되면 근거 목록에 나온다.
 ITEM_MARKET_SUMMARY = "시장종합"
 ITEM_KR_TODAY = "그날 한국 증시"
@@ -142,6 +145,8 @@ KIND_US_CLOSE = "해외 등락률"
 KIND_MEMBER = "구성 종목 이슈"
 KIND_OPEN_FLOW = "개장 시세"
 NO_REASON_LABEL = "이유를 찾지 못한 ETF"
+# 규칙 기반 본문은 ETF마다 이유를 쓰지 않으므로 '이유를 찾지 못한' 수 대신 코드가 실제로 세는 것을 그대로 쓴다.
+NO_RELATED_LABEL = "관련 기사·공시·종목 이슈 없는 ETF"
 KIND_BACKGROUND = "시장 자료"
 
 # 마감 후 판 출력의 문장 종류. 재검색은 아침 판과 같은 번호 체계로 문장을 가리키므로 두 종류를 한 목록에 담는다.
@@ -251,6 +256,8 @@ class DailyInput:
     open_flow_start: datetime | None = None
     # 아침 판만: 전 거래일 장 마감 뒤 받은 시장종합. 조회를 끝내 받지 못했거나 구간 안에 마감 뒤 받은 값이 없으면 None.
     prev_market: Background | None = None
+    # 수집기 판 시작 알림이 공시(sec-filings)를 못 받았다고 알렸는가.
+    filings_not_collected: bool = False
     # 판을 만든 설정. 글자판을 다시 만드는 곳까지 설정을 넘기지 않아도 같은 장 시작 시각으로 판정하게 한다.
     settings: DailySettings = DEFAULT_DAILY_SETTINGS
 
@@ -549,7 +556,9 @@ def _filings_section(i: DailyInput) -> Section:
     if i.filings is None:
         return _missing(ITEM_FILINGS)
     if not i.filings:
-        return Section(ITEM_FILINGS, MARK_PRESENT, ("범위 안에 접수된 공시 없음",))
+        if i.filings_not_collected:
+            return _missing(ITEM_FILINGS, FILINGS_NOT_COLLECTED)
+        return Section(ITEM_FILINGS, MARK_PRESENT, (NO_FILINGS_IN_RANGE,))
     names = _us_member_names(i)
     lines, entries = [], []
     for f in sorted(i.filings, key=lambda f: f.accepted_at, reverse=True):
@@ -1387,11 +1396,12 @@ def conclusion(i: DailyInput, output: DailyOutput | None = None) -> str:
     if _shown(worst[1]) < 0:
         parts.append(f"가장 크게 내림 {worst[0].label()} {_signed(worst[1])}")
     if output is not None and not output.insufficient_evidence:
-        unexplained = claude_no_reason_count(output)
+        unexplained, label = claude_no_reason_count(output), NO_REASON_LABEL
     else:
         unexplained = no_reason_count(etfs, i.member_issues, i.etf_articles or (), i.filings or ())
+        label = NO_RELATED_LABEL
     if unexplained:
-        parts.append(f"{NO_REASON_LABEL} {unexplained}개")
+        parts.append(f"{label} {unexplained}개")
     return CONCLUSION_PREFIX + " · ".join(parts)
 
 

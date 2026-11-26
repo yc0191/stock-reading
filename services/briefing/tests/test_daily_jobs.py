@@ -537,6 +537,22 @@ def test_llm_failing_every_time_falls_back_to_the_rule_based_body_and_records_ll
     assert final.attempts == 3 and final.data["llm"]["input"]
 
 
+def test_an_etf_reason_does_not_point_to_a_rate_section_without_an_article(core):
+    # 금리 칸이 '기사 없음'인데 ETF 이유가 그 칸을 보라고 하면 메일에서 그 표시만 지운다.
+    output = json.loads(good_output("B1"))
+    output["etfs"][0]["reason"] = "미국 지수가 오른 영향을 줄 수 있습니다(환율·금리 이슈 참고)."
+    c, requests, _, _ = core(FakeLlm(json.dumps(output, ensure_ascii=False)))
+    c.on_collection_ready(tick(at=OPEN_AT), OPEN_AT)
+    c.api.reply(daily_response(etfs=[etf(open_flow=OPEN_FLOW)]), OPEN_AT)
+    c.api.reply(filings_response(), OPEN_AT)
+    answer_news(c, requests, OPEN_AT)
+
+    [event] = published(requests)
+    text = event.value["payload"]["text"]
+    assert "미국 지수가 오른 영향을 줄 수 있습니다(환율 이슈 참고)." in text
+    assert "금리 이슈 참고" not in text and "받은 자료에 금리 관련 기사가 없습니다." in text
+
+
 def test_insufficient_evidence_is_marked_in_the_body(core):
     llm = FakeLlm(json.dumps({"points": [], "insufficientEvidence": True}))
     c, requests, _, _ = core(llm)

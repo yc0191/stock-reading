@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 
 from briefing.config import DailySettings
 from briefing.daily_jobs import DailyCore
+from briefing.daily_report import FILINGS_NOT_COLLECTED, ITEM_FILINGS, NO_DATA, NO_FILINGS_IN_RANGE
 from briefing.daily_start import STALE_DATA_ITEM
 from briefing.job_log import EntryType
 from briefing.queries import QueryKind
@@ -51,6 +52,37 @@ def test_the_sources_the_collector_missed_are_marked_first_in_the_edition(core):
     assert event.value["correlationId"] == f"daily-morning-{MORNING_AT.isoformat()}"
     [entry] = details.of_type(EntryType.MISSING_ITEMS)
     assert entry.data["missingItems"][0] == "수집 못 받은 자료: 세계지수, 해외 일봉, new-kind"
+
+
+def test_filings_the_collector_could_not_fetch_are_shown_as_no_data_not_as_no_filings(core):
+    # 수집기가 공시를 못 받은 날 저장된 공시 0건은 '공시가 없었음'이 아니라 '모름'이다.
+    c, requests, _, details = core()
+    c.on_collection_ready(tick(missing=("sec-filings",)), MORNING_AT)
+    job_id = requests.api.of(QueryKind.DAILY)[0].payload["jobId"]
+    c.api.reply(daily_response(job_id=job_id), MORNING_AT)
+    c.api.reply(filings_response(job_id=job_id, filings=[]), MORNING_AT)
+    answer_news(c, requests, MORNING_AT)
+
+    [event] = published(requests)
+    text = event.value["payload"]["text"]
+    assert f"{NO_DATA} ({FILINGS_NOT_COLLECTED})" in text
+    assert NO_FILINGS_IN_RANGE not in text
+    assert event.value["payload"]["missingItems"][:2] == ["수집 못 받은 자료: 미국 공시", ITEM_FILINGS]
+    [entry] = details.of_type(EntryType.MISSING_ITEMS)
+    assert ITEM_FILINGS in entry.data["missingItems"]
+
+
+def test_filings_received_as_empty_still_say_none_were_filed(core):
+    c, requests, _, _ = core()
+    c.on_collection_ready(tick(missing=("world-index",)), MORNING_AT)
+    job_id = requests.api.of(QueryKind.DAILY)[0].payload["jobId"]
+    c.api.reply(daily_response(job_id=job_id), MORNING_AT)
+    c.api.reply(filings_response(job_id=job_id, filings=[]), MORNING_AT)
+    answer_news(c, requests, MORNING_AT)
+
+    [event] = published(requests)
+    assert NO_FILINGS_IN_RANGE in event.value["payload"]["text"]
+    assert FILINGS_NOT_COLLECTED not in event.value["payload"]["text"]
 
 
 def test_a_notice_without_missing_sources_adds_no_item(core):

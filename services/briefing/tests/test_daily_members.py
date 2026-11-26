@@ -433,3 +433,24 @@ def test_whether_a_symbol_is_a_domestic_etf_is_none_when_the_store_cannot_be_rea
         raise OSError("connection refused")
 
     assert PostgresMemberStore(broken).is_domestic_etf("TEST01") is None
+
+
+def test_a_member_whose_rate_cell_was_dropped_gets_no_rate_note_while_the_others_keep_it():
+    # 금리 칸이 TEST01 등락(E1)을 인용해 TEST01을 보지 않는 멤버 2에게는 빠진다. 그 멤버의 ETF 이유에 남은
+    # '(금리 이슈 참고)'는 내용 없는 칸을 가리키므로 지우고, 금리 칸이 남은 멤버 1에게는 그대로 둔다.
+    output = json.loads(post_close_output(symbols=("TEST01", "TEST02", "TEST03"),
+                                          reasons={**REASONS, "TEST02": "둘 이유 문장입니다(금리 이슈 참고)."}))
+    output["rateIssue"] = {"statement": "금리가 올랐다는 흐름이 있습니다.", "refs": ["E1"], "weak": False, "shortfall": ""}
+    requests, settings = Requests(), DailySettings()
+    core = DailyCore(requests, requests.api,
+                     DailyLlmWriter(FakeLlm(json.dumps(output, ensure_ascii=False)), settings.llm_max_attempts),
+                     Details(), settings, members=FakeMembers(MEMBERS[:2]))
+    core.on_collection_ready(tick(POST_CLOSE_JOB, POST_CLOSE_AT), POST_CLOSE_AT)
+    core.api.reply(daily_response(etfs=three_etfs(), background=POST_CLOSE_BACKGROUND), POST_CLOSE_AT)
+    answer_news(core, requests, POST_CLOSE_AT)
+
+    by_member = {e.value["payload"]["memberId"]: e.value["payload"] for e in requests.topic("briefing.daily.generated")}
+    one, two = by_member[1], by_member[2]
+    assert "둘 이유 문장입니다(금리 이슈 참고)." in one["text"] and "금리가 올랐다는 흐름" in one["text"]
+    assert "금리가 올랐다는 흐름" not in two["text"]
+    assert "둘 이유 문장입니다." in two["text"] and "금리 이슈 참고" not in two["text"] + two["html"]

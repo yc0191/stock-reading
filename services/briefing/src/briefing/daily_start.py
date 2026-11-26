@@ -30,18 +30,20 @@ STATUS_MARKET_CLOSED = "market-closed"
 MISSING_SOURCES_ITEM = "수집 못 받은 자료"
 STALE_DATA_ITEM = "수집 완료 알림을 받지 못해 자료가 낡았을 수 있음"
 # 수집기 missingSources 의 자료 종류 이름을 판에 쓰는 이름. 모르는 이름은 그대로 쓴다.
+SEC_FILINGS_SOURCE = "sec-filings"
 SOURCE_LABELS = {
     "world-index": "세계지수",
     "overseas-daily-price": "해외 일봉",
-    "sec-filings": "미국 공시",
+    SEC_FILINGS_SOURCE: "미국 공시",
     "daily-price": "일봉",
     "exchange-rate-summary": "환율종합",
     "market-summary": "시장종합",
 }
 
 
-# 판 작업을 시작하는 곳(DailyCore.start): 작업 id, 판, 추적 ID, 판 기준 시각, 시작시킨 입력 원문, 지금, 판에 붙일 빠진 자료.
-StartEdition = Callable[[str, str, str, datetime, str, datetime, tuple[str, ...]], None]
+# 판 작업을 시작하는 곳(DailyCore.start): 작업 id, 판, 추적 ID, 판 기준 시각, 시작시킨 입력 원문, 지금, 판에 붙일 빠진 자료,
+# 수집기가 못 받았다고 알린 자료 종류(missingSources 원래 이름).
+StartEdition = Callable[[str, str, str, datetime, str, datetime, tuple[str, ...], tuple[str, ...]], None]
 
 
 @dataclass
@@ -93,7 +95,7 @@ class DailyStart:
             return
         notes = (f"{MISSING_SOURCES_ITEM}: {', '.join(SOURCE_LABELS.get(m, m) for m in missing)}",) if missing else ()
         raw = message.decode("utf-8") if isinstance(message, bytes) else message
-        self._start_once(key, job_id, edition, correlation_id, scheduled_for, raw, now, notes)
+        self._start_once(key, job_id, edition, correlation_id, scheduled_for, raw, now, notes, missing)
 
     def check_deadlines(self, now: datetime) -> None:
         """한도 시각이 지났는데 오늘(평일) 그 판을 시작하지 않았고 휴장 알림도 없으면, 있는 자료로 판을 시작한다."""
@@ -117,10 +119,13 @@ class DailyStart:
             with correlation_context(correlation_id):
                 log.warning("no %s for the %s edition by %s; starting with the data at hand",
                             DAILY_COLLECTION_COMPLETED, edition, stamp)
-                self._start_once(key, job_id, edition, correlation_id, deadline, raw, now, (STALE_DATA_ITEM,))
+                # 알림이 없어 무엇을 못 받았는지 모르므로 못 받은 자료는 비워 둔다(공시 0건도 '없음'으로 쓴다).
+                # 대신 판 맨 앞에 자료가 낡았을 수 있다는 줄이 붙는다.
+                self._start_once(key, job_id, edition, correlation_id, deadline, raw, now, (STALE_DATA_ITEM,), ())
 
     def _start_once(self, key: tuple[date, str], job_id: str, edition: str, correlation_id: str,
-                    scheduled_for: datetime, raw: str, now: datetime, notes: tuple[str, ...]) -> None:
+                    scheduled_for: datetime, raw: str, now: datetime, notes: tuple[str, ...],
+                    missing: tuple[str, ...]) -> None:
         """같은 날 같은 판은 한 번만 만든다. 이 실행이 기억하지 못해도(재시작) DB에 그날 그 판의 휴장 기록이나 작업 기록이 있으면
         만들지 않는다."""
         day = key[0]
@@ -143,4 +148,4 @@ class DailyStart:
         if made is None:
             # 읽지 못하면 판을 빠뜨리는 것보다 두 번 만드는 편을 택한다.
             log.warning("could not read whether the daily %s for %s was made; making it: job=%s", edition, day, job_id)
-        self._start(job_id, edition, correlation_id, scheduled_for, raw, now, notes)
+        self._start(job_id, edition, correlation_id, scheduled_for, raw, now, notes, missing)

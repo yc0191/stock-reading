@@ -35,7 +35,8 @@ from briefing.daily_morning import outlook_records
 from briefing.daily_inputs import (EtfArticles, is_prev_close, member_issues, moves_with_market, notable_candidates,
                                    prev_close_range)
 from briefing.daily_relevance import split_related
-from briefing.daily_start import DailyStart
+from briefing.daily_issue_notes import settle_rate_notes
+from briefing.daily_start import SEC_FILINGS_SOURCE, DailyStart
 from briefing.daily_review import MORNING_READ_FAILED, NO_ACTUAL_RATES, NO_MORNING_CALLS, ReviewInput, parse_calls
 from briefing.daily_report import (
     Section,
@@ -233,6 +234,8 @@ class _DailyJob:
     intraday_since: datetime | None = None
     # 판을 시작시킨 쪽이 알린 빠진 자료(못 받은 수집 자료, 알림 없이 시작함). 판의 자료 없음 목록 맨 앞에 붙는다.
     notes: tuple[str, ...] = ()
+    # 수집기가 공시를 못 받았다고 알렸는가. 그러면 저장된 공시 0건을 '공시 없음'으로 쓰지 않는다.
+    filings_not_collected: bool = False
     # 아침 판만: 전 거래일 마감 시장종합 조회와 그 받은 시각 구간, 받은 응답의 시장종합(작업 기록용), 마감 값으로 쓸 수 있는 것.
     prev_market: Exchange = field(default_factory=Exchange)
     prev_market_range: tuple[datetime, datetime] | None = None
@@ -286,9 +289,9 @@ class DailyCore:
         self._starter.check_deadlines(now)
 
     def start(self, job_id: str, edition: str, correlation_id: str, scheduled_for: datetime, raw: str,
-               now: datetime, notes: tuple[str, ...]) -> None:
+               now: datetime, notes: tuple[str, ...], missing_sources: tuple[str, ...]) -> None:
         job = _DailyJob(job_id, edition, correlation_id, scheduled_for, range_start(scheduled_for, self.settings),
-                        notes=notes)
+                        notes=notes, filings_not_collected=SEC_FILINGS_SOURCE in missing_sources)
         if edition == EDITION_MORNING:
             job.open_flow_since = open_flow_start(scheduled_for, self.core_settings)
             job.prev_market_range = prev_close_range(scheduled_for, self.core_settings.background_window)
@@ -627,6 +630,7 @@ class DailyCore:
             background=job.background,
             filings=job.filings_data,
             filings_truncated=job.filings_truncated,
+            filings_not_collected=job.filings_not_collected,
             open_flow_start=job.open_flow_since,
             prev_market=job.prev_market_data,
             settings=self.settings,
@@ -877,8 +881,9 @@ class DailyCore:
             try:
                 mine = member_input(daily_input, member)
                 mine_sections = member_sections(mine, sections, self.settings)
-                mine_draft = replace(draft, output=member_output(draft.output, mine, mine_sections,
-                                                                 foreign_us_names(daily_input, mine)))
+                mine_output = member_output(draft.output, mine, mine_sections, foreign_us_names(daily_input, mine))
+                # 멤버마다 금리 칸이 빠질 수 있어(남의 근거·종목을 쓴 문장) 가른 뒤에도 다시 건다.
+                mine_draft = replace(draft, output=settle_rate_notes(mine_output) if mine_output is not None else None)
                 text = daily_text(mine, mine_sections, mine_draft.output, status_text)
                 missing = [*job.notes, *missing_items(mine_sections), *status_missing]
                 event, _ = self._daily_event(job, now, member.member_id, mine, mine_sections, mine_draft, text,
@@ -893,6 +898,9 @@ class DailyCore:
 
     def _publish(self, job: _DailyJob, now: datetime, daily_input: DailyInput, sections: tuple[Section, ...],
                  draft: _Draft, research_count: int = 0) -> None:
+        # 다시 쓰기·고치기가 모두 끝난 글에 한 번 건다. 금리 칸이 근거 없이 나가면 ETF 이유가 그 칸을 보라고 하지 않는다.
+        if draft.output is not None:
+            draft = replace(draft, output=settle_rate_notes(draft.output))
         missing = [*job.notes, *missing_items(sections)]
         by_ref = {e.ref: e for s in sections for e in s.entries}
         report = self._status_report(job, now, draft, research_count)
