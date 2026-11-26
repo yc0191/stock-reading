@@ -9,6 +9,7 @@
 | 읽기 전용 SQL 실행과 확인기 장부 쓰기 | store.py, config.py | 없음 - 가짜 연결 없이 실제 DB 테스트가 확인 | test_flow.py (가짜 장부) | test_postgres_db.py [DB, 켜는 조건: OPS_IT_DB_URL·OPS_IT_DB_USER·OPS_IT_DB_PASSWORD, ops 마이그레이션 적용 뒤] |
 | 판 시작 알림 처리 | flow.py | test_flow.py | test_flow.py | 없음 - 실제 Kafka·Postgres·S3로 끝까지 도는 자동 테스트는 아직 없음 [서비스 흐름] |
 | S3 결과 파일 | results.py | test_flow.py | test_flow.py | 없음 - 실제 버킷은 Terraform 적용 뒤 운영 첫 장날 사람이 확인 [외부 API] |
+| 판정 워크플로 실행 요청 | dispatch.py | test_dispatch.py | test_flow.py (가짜 요청) | 없음 - 실제 GitHub 호출은 배포 뒤 첫 장날 사람이 확인 [외부 API] |
 | Kafka 실행부 | main.py, `__init__.py` | test_main.py | 없음 - 가짜 브로커 시험이 아직 없음 | 없음 - 실제 Kafka로 확인하는 자동 테스트는 아직 없음 [서비스 흐름] |
 
 테스트 도우미: fakes.py

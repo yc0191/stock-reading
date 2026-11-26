@@ -207,4 +207,8 @@ services:
       AWS_DEFAULT_REGION: ${AWS_REGION:?AWS_REGION 값이 비어 있음}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      # 결과 파일을 올린 뒤 판정 워크플로를 부르는 토큰(이 저장소의 Actions 실행만 허용)과 저장소(<소유자>/<이름>).
+      # 비밀 설정에서 받으며, 비어 있으면 부르지 않고 예약 실행에 맡긴다.
+      OPS_GITHUB_TOKEN: ${OPS_GITHUB_TOKEN:-}
+      OPS_VERDICT_REPO: ${OPS_VERDICT_REPO:-}
       DEPLOY_VERSION: ${DEPLOY_VERSION:-dev}

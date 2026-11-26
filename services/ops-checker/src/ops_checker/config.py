@@ -21,6 +21,10 @@ class Settings:
     results_bucket: str
     deploy_version: str
     criteria_dir: Path
+    # 판정 워크플로 실행 요청. 토큰이나 저장소(<소유자>/<이름>)가 비면 요청하지 않는다.
+    github_token: str = field(default="", repr=False)
+    verdict_repo: str = ""
+    verdict_ref: str = "develop"
 
     @staticmethod
     def from_env(env: dict[str, str] | None = None) -> "Settings":
@@ -42,4 +46,8 @@ class Settings:
             results_bucket=need("OPS_RESULTS_BUCKET"),
             deploy_version=env.get("DEPLOY_VERSION", "dev"),
             criteria_dir=Path(env.get("OPS_CRITERIA_DIR", "/app/ops-checks")),
+            github_token=env.get("OPS_GITHUB_TOKEN", ""),
+            verdict_repo=env.get("OPS_VERDICT_REPO", ""),
+            # 예약 실행과 같은 브랜치(저장소 기본 브랜치)의 기준 파일로 판정한다.
+            verdict_ref=env.get("OPS_VERDICT_REF", "develop"),
         )

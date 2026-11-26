@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from ops_checker.criteria import Criteria, load_all
+from ops_checker.dispatch import NoTrigger, VerdictTrigger
 from ops_checker.metrics import ERROR, MetricResult, ScalarQuery, evaluate
 from ops_checker.results import EDITION, CheckEntry, ResultStore, UploadError, build_result, result_key
 from ops_checker.store import ResultRow, RunRecord, RunStore
@@ -31,13 +32,15 @@ class MalformedNotification(ValueError):
 
 class Checker:
     def __init__(self, store: RunStore, query: ScalarQuery, results: ResultStore, criteria_dir: Path,
-                 deploy_version: str, clock: Callable[[], datetime] = lambda: datetime.now(KST)) -> None:
+                 deploy_version: str, clock: Callable[[], datetime] = lambda: datetime.now(KST),
+                 trigger: VerdictTrigger | None = None) -> None:
         self._store = store
         self._query = query
         self._results = results
         self._criteria_dir = criteria_dir
         self._deploy_version = deploy_version
         self._clock = clock
+        self._trigger = trigger or NoTrigger()
 
     def handle(self, message: str | bytes) -> str:
         """알림 하나를 처리한다. 형식이 잘못된 알림은 MalformedNotification. 처리 결과 이름을 돌려준다."""
@@ -64,6 +67,9 @@ class Checker:
         if not self._store.record(run, [row for e in entries for row in _rows(e)]):
             return DUPLICATE
         log.info("check run %s day=%s outcome=%s", event_id, day, outcome)
+        if outcome != FAILED:
+            # 결과 파일이 올라간 뒤에만 판정을 부른다. 올리기에 실패한 날은 판정해도 '결과 파일 없음'뿐이다.
+            self._trigger.fire()
         return outcome
 
     def _check(self, criteria: Criteria) -> CheckEntry:
