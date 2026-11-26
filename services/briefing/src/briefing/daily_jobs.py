@@ -57,6 +57,7 @@ from briefing.daily_report import (
     missing_items,
     rule_based_text,
     sentence_slots,
+    refs_cited_by_others,
     slot_point,
     with_slot_point,
 )
@@ -748,7 +749,8 @@ class DailyCore:
         current = slot_point(draft.draft.output, no)
         rewritten_input = replace(draft.input, research_articles=research_articles)
         sections = build_sections(rewritten_input, self.settings)
-        result = self.writer.rewrite_point(rewritten_input, sections, current, no, tuple(a.article_id for a in articles))
+        result = self.writer.rewrite_point(rewritten_input, sections, current, no, tuple(a.article_id for a in articles),
+                                           refs_cited_by_others(draft.draft.output, current))
         missing = missing_items(sections)
         for attempt in result.rejected:
             self._detail(draft.job, STAGE_LLM, EntryType.LLM_REJECTED, REASON_LLM_REJECTED, attempt.error_type,

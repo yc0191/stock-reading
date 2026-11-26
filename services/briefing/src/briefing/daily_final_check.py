@@ -1,5 +1,5 @@
 """데일리 판(아침 판, 마감 후 판)의 마지막 검사 어댑터. Claude가 쓴 문장(요약, ETF 이유, 눈에 띄는 점, 환율·금리 이슈,
-그 밖의 이슈, ETF별 예상, 아침 예상 대조 이유)을 메일 문장으로 보고, 고칠 때는 그 문장 하나만 다시 받는다."""
+그 밖의 이슈, ETF별 예상, 아침 예상 대조 이유)을 메일 문장으로 보고, 고칠 때는 문제 문장들만 한 호출로 다시 받는다."""
 from __future__ import annotations
 
 import json
@@ -16,15 +16,15 @@ from briefing.daily_report import (
     DailyLlmWriter,
     DailyOutput,
     Point,
-    build_llm_input,
     conclusion,
     llm_text,
+    llm_user,
     member_repeat_reason,
     sentence_slots,
     summary_banned_names,
 )
 from briefing.events import EDITION_POST_CLOSE
-from briefing.final_check import FinalCheck, FixCall, MailSentence, Source
+from briefing.final_check import BatchFixCall, FinalCheck, MailSentence, Source
 from briefing.job_log import JobLogPort
 from briefing.llm_output import (
     InvalidLlmOutput,
@@ -54,10 +54,10 @@ FIX_SCHEMA: dict[str, Any] = {
 FIX_ADDENDUM = """
 
 마지막 검토 뒤 고치기 요청:
-- 입력의 mail은 나가기 직전 메일의 문장 목록(sentences, firstLine은 코드가 쓴 결론 줄)이고, fix 칸은 검토에서 문제가 나온 문장 하나(sentenceNo, kind, sentence, refs)와 그 문제(problems)입니다.
-- 그 문장 하나만 problems가 풀리도록 고쳐 씁니다. 다른 문장과 모순되거나 같은 내용을 되풀이하지 않게 하고, 결론 줄과 본문에 맞게 씁니다. 다른 문장과 같은 기사를 이유로 썼다는 문제이면 그 기사 대신 다른 자료를 인용하거나 그 문장에 맞는 내용만 남깁니다.
-- 이번에는 위의 출력 형식 대신 다음 JSON 하나만 냅니다. statement는 고친 문장, refs는 그 문장의 근거 번호입니다.
-{"statement":"...","refs":["..."]}
+- 입력의 mail은 나가기 직전 메일의 문장 목록(sentences, firstLine은 코드가 쓴 결론 줄)이고, fixes 칸은 검토에서 문제가 나온 문장들(sentenceNo, kind, sentence, refs)과 그 문제(problems)입니다.
+- fixes의 문장마다 그 문장만 problems가 풀리도록 고쳐 씁니다. 다른 문장과 모순되거나 같은 내용을 되풀이하지 않게 하고(함께 고치는 문장끼리도), 결론 줄과 본문에 맞게 씁니다. 먼저 나온 문장이 이유로 쓴 기사를 이유로 썼다는 문제이면 그 기사 대신 다른 자료를 인용하거나 그 문장에 맞는 내용만 남깁니다.
+- 이번에는 위의 출력 형식 대신 다음 JSON 하나만 냅니다. fixes에는 고친 문장마다 한 칸을 fixes 입력의 차례대로 담고, sentenceNo는 그 문장 번호, statement는 고친 문장, refs는 그 문장의 근거 번호입니다.
+{"fixes":[{"sentenceNo":1,"statement":"...","refs":["..."]}]}
 - 원래 refs가 빈 목록인 문장(요약 줄, 이유를 찾지 못한 문장)은 refs를 빈 목록으로 둡니다. 원래 refs가 있으면 입력에 있는 근거 번호를 하나 이상 넣습니다.
 - 요약 줄(kind가 summary)과 아침 판의 환율·금리 이슈(kind가 fx, rate)·그 밖의 이슈(kind가 other)·전 거래일 한국 증시(kind가 krPrev)에는 ETF 이름이나 종목코드를 쓰지 않습니다. 근거 약함 표시는 바꾸지 않습니다.
 - 자료에 없는 내용을 지어내지 않고, 근거 번호·단정 금지·티커 금지·구성 종목 이슈 되풀이 금지 같은 위의 규칙은 그대로 지킵니다."""
@@ -124,12 +124,12 @@ class DailyFinalCheck:
         first = conclusion(i, output) if i.edition == EDITION_POST_CLOSE else None
         return first, draft.draft.text
 
-    def fix_call(self, draft: DailyDraft, sentence: MailSentence) -> FixCall:
-        # 처음 작성과 같은 지시문 블록을 써서 그 캐시를 읽고, 고치기 요청은 덧붙임 블록으로 보낸다.
-        i = draft.input
+    def batch_fix_call(self, draft: DailyDraft) -> BatchFixCall:
+        # 처음 작성·다시 쓰기와 같은 지시문과 근거 입력을 앞에 두어 그 캐시를 읽고, 고치기 요청은 근거 뒤에 붙인다.
+        i, w = draft.input, self.writer
         system = SYSTEM_PROMPT_POST_CLOSE if i.edition == EDITION_POST_CLOSE else SYSTEM_PROMPT
-        return FixCall(system, FIX_ADDENDUM, FIX_SCHEMA,
-                       build_llm_input(i, draft.sections, self.writer.settings, self.writer.core))
+        return BatchFixCall(system, FIX_ADDENDUM, FIX_SCHEMA,
+                            lambda tail: llm_user(i, draft.sections, w.settings, w.core, tail))
 
     def parse_fix(self, draft: DailyDraft, sentence: MailSentence, text: str) -> tuple[str, tuple[str, ...]]:
         """고친 문장과 근거 번호. 원래 근거 번호가 있던 문장은 목록 안 번호를 하나 이상, 없던 문장은 빈 목록이어야 한다."""
