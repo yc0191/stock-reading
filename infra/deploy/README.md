@@ -67,13 +67,14 @@ sudo /opt/stock-reading/infra/deploy/server/apply-deploy.sh recover
 
 ## 조치 판정 확인기 운영 반영
 
-확인기(`ops-checker`)는 수집기의 판 시작 알림으로 개장일 마감 후 판에 기준 파일(`ops-checks/`)의 지표를 읽기 전용으로 계산해 DB `ops` 스키마와 S3 결과 파일에 남기고, 평일 18:00(한국 시간) GitHub Actions(`ops-verdict`)가 그 결과로 이슈를 판정합니다([ADR-014](../../docs/adr/014-ops-checker.md)). 처음 운영에 반영할 때 아래를 순서대로 합니다(작업자가 직접).
+확인기(`ops-checker`)는 수집기의 판 시작 알림으로 개장일 마감 후 판에 기준 파일(`ops-checks/`)의 지표를 읽기 전용으로 계산해 DB `ops` 스키마와 S3 결과 파일에 남긴 뒤 GitHub Actions(`ops-verdict`)를 불러 그 결과로 이슈를 판정하게 합니다. 평일 예약 실행은 그 요청이 실패한 날의 대비입니다([ADR-014](../../docs/adr/014-ops-checker.md)). 처음 운영에 반영할 때 아래를 순서대로 합니다(작업자가 직접).
 
 1. `terraform apply`: 결과 버킷(공개 차단, 암호화, 보관 기간 지나면 삭제), 확인기용 쓰기 전용 사용자(`results/`에 올리기만 허용), Actions용 읽기 전용 신분을 만듭니다([`infra/terraform`](../terraform/README.md)). ECR에 확인기 저장소가 있어야 이미지가 올라갑니다.
 2. Parameter Store(`DEPLOY_CONFIG_PARAM_PATH` 아래)에 `OPS_CHECKER_DB_PASSWORD`와, 확인기용 쓰기 전용 사용자(`terraform output ops_results_writer_iam_user`)의 접근 키(`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)를 넣습니다. 키는 콘솔에서 만들고, 서버 계정의 키는 넣지 않습니다. 값은 로그·문서에 남기지 않습니다. 비밀번호는 배포 때 `flyway-migrate`가 `ops` 계정을 만들 때도 씁니다.
 3. 서비스 서버 `/etc/stock-reading/deploy.env`에 `OPS_RESULTS_BUCKET`(결과 버킷 이름)을 넣습니다(`server/deploy.env.example`). 비어 있으면 확인기가 뜨지 않습니다.
 4. GitHub 저장소 변수 `AWS_REGION`·`OPS_RESULTS_BUCKET`과 읽기 신분(`OPS_RESULTS_AWS_ROLE_ARN`, 접근 키를 쓰는 계정은 비밀값 `OPS_RESULTS_AWS_ACCESS_KEY_ID`·`OPS_RESULTS_AWS_SECRET_ACCESS_KEY`)을 넣습니다(`terraform output`).
 5. 확인기가 든 버전이 서비스 서버에 배포되어 첫 개장일 결과 파일이 올라온 것을 확인한 뒤, 저장소 변수 `OPS_VERDICT_ENABLED`를 `true`로 켭니다. 그 전에 켜면 결과 파일이 없다는 실패 알림이 옵니다. 손 실행(`workflow_dispatch`)은 이 값과 상관없이 돕니다.
+6. 확인기가 판정을 바로 부르게 하려면 GitHub에서 이 저장소만, Actions 읽기·쓰기 권한만 주는 fine-grained 토큰을 만들어 Parameter Store에 `OPS_GITHUB_TOKEN`(SecureString)과 `OPS_VERDICT_REPO`(`<소유자>/<저장소>`)를 넣습니다. 둘 중 하나라도 비면 확인기는 부르지 않고 예약 실행이 판정합니다. 토큰이 만료되기 전에 새로 만들어 바꿉니다.
 
 - 확인기는 서버 밖에 포트를 열지 않고 Kafka·DB·S3로 나가기만 합니다.
 - 결과 파일 올리기에 실패한 날(그날 `ops` 장부의 `check_run`이 오류로 남습니다)의 결과는 다시 만들 수 없습니다. 수동 재계산 명령은 아직 없습니다.

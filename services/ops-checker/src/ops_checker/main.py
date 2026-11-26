@@ -13,6 +13,7 @@ from confluent_kafka import Consumer, KafkaError
 from confluent_kafka.admin import AdminClient, NewTopic
 
 from ops_checker.config import DAILY_COLLECTION_COMPLETED_PARTITIONS, DAILY_COLLECTION_COMPLETED_TOPIC, Settings
+from ops_checker.dispatch import GithubDispatch
 from ops_checker.flow import Checker, MalformedNotification
 from ops_checker.results import S3ResultStore
 from ops_checker.store import PostgresRunStore, PostgresScalarQuery, connector
@@ -45,7 +46,8 @@ def ensure_topics(bootstrap: str) -> None:
 def run(settings: Settings, stop: threading.Event) -> None:
     connect = connector(settings.db_host, settings.db_port, settings.db_name, settings.db_user, settings.db_password)
     checker = Checker(PostgresRunStore(connect), PostgresScalarQuery(connect, settings.deploy_version),
-                      S3ResultStore(settings.results_bucket), settings.criteria_dir, settings.deploy_version)
+                      S3ResultStore(settings.results_bucket), settings.criteria_dir, settings.deploy_version,
+                      trigger=GithubDispatch(settings.github_token, settings.verdict_repo, settings.verdict_ref))
     ensure_topics(settings.kafka_bootstrap)
     consumer = Consumer({"bootstrap.servers": settings.kafka_bootstrap, "group.id": "ops-checker",
                          "auto.offset.reset": "earliest", "enable.auto.commit": False, **COMMON})

@@ -168,3 +168,32 @@ def test_malformed_notifications_are_rejected_without_side_effects(tmp_path, bad
 def test_build_result_without_checks_is_valid_json():
     doc = json.loads(build_result(date(2026, 11, 18), "market-closed", "v", []))
     assert doc["checks"] == []
+
+
+class CountingTrigger:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def fire(self) -> bool:
+        self.calls += 1
+        return True
+
+
+def test_verdict_is_requested_only_after_the_result_file_is_uploaded(tmp_path):
+    criteria_file(tmp_path, 900, "a", metrics=metric_block("m", "SELECT m"))
+    for status, expected in (("collected", OK), ("market-closed", HOLIDAY)):
+        trigger = CountingTrigger()
+        checker = Checker(FakeStore(), FakeQuery({"SELECT m": [(0.1,)]}), FakeResults(), tmp_path, VERSION,
+                          clock=lambda: NOW, trigger=trigger)
+        assert checker.handle(notification(status=status)) == expected
+        assert trigger.calls == 1
+        assert checker.handle(notification(status=status)) == DUPLICATE   # 같은 알림을 다시 받아도 다시 부르지 않는다
+        assert trigger.calls == 1
+
+    trigger = CountingTrigger()
+    checker = Checker(FakeStore(), FakeQuery({"SELECT m": [(0.1,)]}), FakeResults(fail=True), tmp_path, VERSION,
+                      clock=lambda: NOW, trigger=trigger)
+    assert checker.handle(notification()) == FAILED
+    assert checker.handle(notification(edition="morning")) == IGNORED
+    assert checker.handle(notification(scheduled="2026-11-17T16:30:00+09:00")) == STALE
+    assert trigger.calls == 0
