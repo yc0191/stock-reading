@@ -45,7 +45,6 @@ def build_result(day: date, status: str, deploy_version: str, entries: list[Chec
                      "pass": m.threshold,
                      "verdict": m.verdict,
                      "reason": m.reason} for m in e.metrics],
-        "human": list(e.criteria.human),
     } for e in entries]
     doc = {"day": day.isoformat(), "edition": EDITION, "status": status,
            "deploy_version": deploy_version, "checks": checks}

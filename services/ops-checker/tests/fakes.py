@@ -67,10 +67,10 @@ class FakeResults:
 
 
 def criteria_file(directory: Path, issue: int, attempt: str, *, metrics: str, days: int = 2, comment: str = "true",
-                  human: str = "human: []") -> Path:
+                  extra: str = "") -> Path:
     path = directory / f"{issue}-{attempt}.yml"
     path.write_text(f"issue: {issue}\nattempt: {attempt}\ncomment: {comment}\nfix_commit: \"abc1234\"\n"
-                    f"days: {days}\nmetrics:\n{metrics}\n{human}\n", encoding="utf-8")
+                    f"days: {days}\nmetrics:\n{metrics}\n{extra}\n", encoding="utf-8")
     return path
 
 

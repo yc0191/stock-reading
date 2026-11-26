@@ -33,8 +33,3 @@ metrics:
             AND json_typeof(l.data -> 'missingItems') = 'array' AND item LIKE '장중 차트:%'))::numeric
           / (SELECT count(*) FROM sent) END
     pass: "== 0"
-human:
-  - 상 메일의 원인이 3개 이내이고 칸마다 한 문장으로 짧은지
-  - 근거 목록이 메일 맨 아래에 한 번만 있고 '확인하지 못한 것'이 메일에 없는지
-  - 장중 차트(09:00부터 변동 5분 뒤까지, 전일 종가 점선, 앞선 급변동 표시)가 메일 안에 보이는지
-  - 그날 앞선 급변동이 있었다면 '오늘 흐름' 목록이 나왔는지

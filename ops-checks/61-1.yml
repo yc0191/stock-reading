@@ -30,9 +30,3 @@ metrics:
           SELECT 1 FROM json_array_elements_text(items) AS item WHERE item LIKE '흐름 그래프:%') ELSE false END)::numeric
           / (SELECT count(*) FROM members) END
     pass: "== 0"
-human:
-  - 미국 지수가 해석 한 줄과 보유 ETF가 따라가는 지수 위주로 나오고, 관계없는 지수와 오래된 '등락률 자료 없음' 지수가 빠졌는지
-  - 전날 한국 증시(코스피·코스닥) 등락과 그 이유가 있는지
-  - 미국 공시가 회사 이름과 공시 내용으로 나오는지
-  - ETF 개장 흐름 그래프와 ETF마다 등락 이유 한 줄이 있는지
-  - ETF별 예상이 결정대로(장 시작 전 자료만으로) 나오는지

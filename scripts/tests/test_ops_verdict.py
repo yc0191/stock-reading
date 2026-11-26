@@ -46,7 +46,7 @@ class World:
     def criteria(self, issue, days=2, comment=True, attempt="t1"):
         text = (f"issue: {issue}\nattempt: \"{attempt}\"\ncomment: {'true' if comment else 'false'}\n"
                 f"fix_commit: \"{self.fix}\"\ndays: {days}\nmetrics:\n  - key: m1\n"
-                f"    sql: SELECT 0.1 AS {SQL_MARKER}\n    pass: \"< 0.5\"\nhuman:\n  - \"메일 확인\"\n").encode()
+                f"    sql: SELECT 0.1 AS {SQL_MARKER}\n    pass: \"< 0.5\"\n").encode()
         (self.criteria_dir / f"{issue}-{attempt}.yml").write_bytes(text)
         self.hashes[(issue, attempt)] = hashlib.sha256(text).hexdigest()
         self.issues.setdefault(str(issue), {"open": True, "labels": ["verifying"], "comments": []})
@@ -57,8 +57,7 @@ class World:
         if issue is not None and status == "collected":
             checks = [{"issue": issue, "attempt": attempt, "criteria_hash": hash_ or self.hashes[(issue, attempt)],
                        "comment": True, "days": 2,
-                       "metrics": [{"key": "m1", "value": value, "pass": "< 0.5", "verdict": verdict, "reason": reason}],
-                       "human": ["메일 확인"]}]
+                       "metrics": [{"key": "m1", "value": value, "pass": "< 0.5", "verdict": verdict, "reason": reason}]}]
         (self.results_dir / day).mkdir(exist_ok=True)
         (self.results_dir / day / "post-close.json").write_text(json.dumps(
             {"day": day, "edition": "post-close", "status": status, "deploy_version": deploy or self.deploy,
@@ -82,7 +81,7 @@ def test_two_passing_days_post_day_comments_final_comment_and_remove_label(w):
     assert r.failures == []
     assert len(t.comments) == 3
     assert "1/2일째" in t.comments[0] and "2/2일째" in t.comments[1]
-    assert "10.00%" in t.comments[0] and "< 0.5" in t.comments[0] and "사람 확인 필요 1개" in t.comments[0]
+    assert "10.00%" in t.comments[0] and "< 0.5" in t.comments[0] and "사람 확인" not in t.comments[0]
     assert "verdict=pass" in t.comments[2] and "결과: 통과" in t.comments[2]
     assert "check-passed" not in t.comments[2] and "check-failed" not in t.comments[2]
     assert t.remove_labels == ["verifying"]

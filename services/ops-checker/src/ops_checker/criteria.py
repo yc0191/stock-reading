@@ -32,7 +32,6 @@ class Criteria:
     comment: bool = True
     days: int | None = None
     metrics: tuple[Metric, ...] = ()
-    human: tuple[str, ...] = ()
     error: str | None = None
 
 
@@ -90,11 +89,9 @@ def _problem(doc: object, issue: int, attempt: str) -> str | None:
             parse_pass(expr)
         except (ValueError, InvalidOperation):
             return "bad-pass-expression"
-    human = doc.get("human", [])
-    if human is None:
-        human = []
-    if not isinstance(human, list) or not all(isinstance(h, str) for h in human):
-        return "bad-human"
+    # 판정은 지표로만 한다. 사람이 확인할 항목(human)은 두지 않는다.
+    if "human" in doc:
+        return "human-not-allowed"
     return None
 
 
@@ -119,7 +116,6 @@ def load_file(path: Path) -> Criteria | None:
         issue=issue, attempt=attempt, criteria_hash=digest,
         comment=doc.get("comment", True), days=doc["days"],
         metrics=tuple(Metric(m["key"], m["sql"], m["pass"]) for m in doc["metrics"]),
-        human=tuple(doc.get("human") or ()),
     )
 
 

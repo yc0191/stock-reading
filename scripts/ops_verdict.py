@@ -188,14 +188,12 @@ def pct(value: Any) -> str:
     return f"{value * 100:.2f}%" if isinstance(value, (int, float)) else "-"
 
 
-def day_comment(c: Criteria, day: str, verdict: str, nth: int, metrics: list[dict], human_count: int) -> str:
+def day_comment(c: Criteria, day: str, verdict: str, nth: int, metrics: list[dict]) -> str:
     rows = "\n".join(f"| {safe(m['key'], KEY_RE, '-')} | {pct(m.get('value'))} | {safe(m.get('pass'), PASS_RE, '-')} "
                      f"| {VERDICT_LABEL[m['verdict']]} |" for m in metrics)
     lines = [f"<!-- ops-check day={day} attempt={c.attempt} verdict={verdict} -->",
              f"**조치 판정** 이슈 #{c.issue} 시도 {c.attempt}, {day} 마감 후 판 ({nth}/{c.days}일째: {VERDICT_LABEL[verdict]})",
              "", "| 지표 | 비율 | 통과선 | 판정 |", "|---|---|---|---|", rows]
-    if human_count:
-        lines += ["", f"사람 확인 필요 {human_count}개: 기준 파일의 human 항목은 자동으로 잴 수 없어 사람이 확인합니다."]
     return "\n".join(lines)
 
 
@@ -254,7 +252,7 @@ def judge_criteria(c: Criteria, days: dict[str, dict[str, Any] | None], info: di
             continue
         counted[day] = verdict
         report.summary.append(f"{tag} {day}: {VERDICT_LABEL[verdict]} ({len(counted)}/{c.days}일째)")
-        todo.comments.append(day_comment(c, day, verdict, len(counted), entry["metrics"], len(entry.get("human") or [])))
+        todo.comments.append(day_comment(c, day, verdict, len(counted), entry["metrics"]))
 
     if actionable and len(counted) >= c.days:
         verdict = "pass" if all(v == "pass" for v in counted.values()) else "fail"

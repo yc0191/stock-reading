@@ -16,10 +16,16 @@ def test_fingerprint_is_sha256_of_the_file_bytes(tmp_path):
 
 
 def test_valid_file_is_read_with_defaults(tmp_path):
-    path = criteria_file(tmp_path, 901, "t1", metrics=metric_block("m", "SELECT 0.1"), human="human:\n  - 사람 확인")
+    path = criteria_file(tmp_path, 901, "t1", metrics=metric_block("m", "SELECT 0.1"))
     c = load_file(path)
     assert c.error is None and (c.issue, c.attempt, c.days, c.comment) == (901, "t1", 2, True)
-    assert c.human == ("사람 확인",) and c.metrics[0].key == "m"
+    assert c.metrics[0].key == "m"
+
+
+def test_human_items_are_not_allowed(tmp_path):
+    # 판정은 지표로만 한다. 사람이 확인할 항목을 적은 파일은 형식 오류다.
+    path = criteria_file(tmp_path, 901, "t1", metrics=metric_block("m", "SELECT 0.1"), extra="human:\n  - 사람 확인")
+    assert load_file(path).error == "human-not-allowed"
 
 
 def test_comment_false_is_kept(tmp_path):

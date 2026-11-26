@@ -59,8 +59,3 @@ metrics:
         ELSE (SELECT count(*) FROM asked WHERE sentence_no IN (SELECT sentence_no FROM rewritten))::numeric
           / (SELECT count(*) FROM asked) END
     pass: ">= 0.7"
-human:
-  - 요약에 그날 큰 뉴스와 지수 등락의 이유가 들어갔는지
-  - 환율·금리 칸이 '기사 없음'·'근거 약함'만으로 끝나지 않았는지
-  - 꼬리말의 '자료 없음' 반복이 정리됐는지
-  - 하루 등락 차트와 장중·기간 흐름 그래프가 보이는지(기간 그래프는 일봉이 쌓인 뒤부터)

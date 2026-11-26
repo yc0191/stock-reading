@@ -45,8 +45,7 @@ def test_b12_closed_post_close_records_holiday_without_computing(tmp_path):
 
 
 def test_b13_collected_post_close_computes_every_criteria_file(tmp_path):
-    criteria_file(tmp_path, 900, "a", metrics=metric_block("one", "SELECT one") + "\n" + metric_block("two", "SELECT two"),
-                  human="human:\n  - 확인할 것")
+    criteria_file(tmp_path, 900, "a", metrics=metric_block("one", "SELECT one") + "\n" + metric_block("two", "SELECT two"))
     criteria_file(tmp_path, 901, "b", metrics=metric_block("three", "SELECT three", ">= 0.5"))
     checker, store, query, results = setup(tmp_path, {"one": [(0.1,)], "two": [(0.9,)], "three": [(0.6,)]})
     assert checker.handle(notification()) == OK
@@ -55,7 +54,7 @@ def test_b13_collected_post_close_computes_every_criteria_file(tmp_path):
     assert [(r.issue, r.metric, r.verdict) for r in store.rows] == [(900, "one", "pass"), (900, "two", "fail"), (901, "three", "pass")]
     assert all(r.criteria_hash and r.threshold for r in store.rows)
     checks = body(results)["checks"]
-    assert [c["issue"] for c in checks] == [900, 901] and checks[0]["human"] == ["확인할 것"]
+    assert [c["issue"] for c in checks] == [900, 901] 
 
 
 def test_b14_same_event_id_twice_records_and_uploads_once(tmp_path):
@@ -121,15 +120,14 @@ def test_b18_upload_failure_on_a_holiday_is_also_an_error(tmp_path):
 
 
 def test_b19_result_file_has_only_the_agreed_fields_and_the_file_hash(tmp_path):
-    path = criteria_file(tmp_path, 900, "a", metrics=metric_block("m", "SELECT secret_table_name"), days=3,
-                         human="human:\n  - 사람 확인")
+    path = criteria_file(tmp_path, 900, "a", metrics=metric_block("m", "SELECT secret_table_name"), days=3)
     checker, store, _, results = setup(tmp_path, {"secret_table_name": [(0.25,)]})
     checker.handle(notification())
     doc = body(results)
     assert set(doc) == {"day", "edition", "status", "deploy_version", "checks"}
     assert (doc["day"], doc["edition"], doc["status"], doc["deploy_version"]) == ("2026-11-18", "post-close", "collected", VERSION)
     check = doc["checks"][0]
-    assert set(check) == {"issue", "attempt", "criteria_hash", "comment", "days", "metrics", "human"}
+    assert set(check) == {"issue", "attempt", "criteria_hash", "comment", "days", "metrics"}
     assert check["criteria_hash"] == hashlib.sha256(path.read_bytes()).hexdigest()
     assert check["metrics"] == [{"key": "m", "value": 0.25, "pass": "< 0.5", "verdict": "pass", "reason": None}]
     assert "secret_table_name" not in results.puts[0][1].decode()

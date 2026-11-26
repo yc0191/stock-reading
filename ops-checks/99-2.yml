@@ -35,7 +35,3 @@ metrics:
           WHERE l.job_id = mids.job_id AND l.entry_type = 'representative-article'))::numeric
           / (SELECT count(*) FROM mids) END
     pass: "== 1"
-human:
-  - 마감 후 판 '그날 급변동'에 그날 급변동이 모두 대표 기사(또는 관련 기사 없음)와 함께 나왔는지
-  - 상 급변동 줄에 '메일 보냄'이 붙고 중 급변동에는 메일이 오지 않았는지
-  - 마감 후 판 서버 상태에 급변동이 상(메일)·중(기록)으로 나뉘어 세어졌는지

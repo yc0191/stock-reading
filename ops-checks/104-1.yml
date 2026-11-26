@@ -20,7 +20,3 @@ metrics:
           SELECT 1 FROM json_array_elements_text(items) AS item WHERE item = '전 거래일 한국 증시') ELSE false END)::numeric
           / (SELECT count(*) FROM members) END
     pass: "== 0"
-human:
-  - 아침 판 맨 위 '전 거래일 한국 증시' 칸에 코스피·코스닥 마감 등락률이 나오는지
-  - 그 아래 이유 한 문장이 전 거래일 마감 이야기이고 오늘 개장 직후 숫자와 섞이지 않았는지
-  - 월요일 판이 금요일 마감 값을 보여 주는지

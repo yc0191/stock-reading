@@ -1,0 +1,27 @@
+# #108 장 시작 급변동을 아침 판에 모으는 것을 국내 ETF로만 좁힘, 시도 1. 지표와 통과값은 이슈의 "시도 1 · 판정 기준" 댓글을 옮긴 것이다.
+# 확인기는 마감 후 판 시작 알림 때 돌므로 그날 09:00~09:10 합침 구간은 이미 끝나 있다. 그래서 오늘을 잰다.
+# 급변동 작업 기록(job_run)의 input은 작업을 시작시킨 market.move 이벤트 원문이라, 시세처리기가 변동을 낸 시각(producedAt)과
+# 작업 시작 시각(started_at)의 차이가 브리핑이 변동을 붙잡아 둔 시간이다. 조치 전에는 개별 주식 변동도 아침 판이 끝날 때까지(약 18분) 붙잡혔다.
+# 국내 ETF가 아닌 종목은 market.etf(market='KR')에 없는 종목이다.
+# 오늘 운영 버전이 조치 전 버전(04c0c6e)이면(배포 실패) 비워 판정 보류한다.
+issue: 108
+attempt: 1
+fix_commit: "60b823b"
+days: 2
+metrics:
+  - key: open_stock_move_held_ratio
+    # 오늘 09:00~09:10에 나온 국내 ETF가 아닌 종목의 급변동 작업 중, 변동이 나온 뒤 2분 넘게 지나 작업이 시작된 작업의 비율.
+    # 통과는 0(모두 2분 안에 시작, 붙잡히지 않음). 0보다 크면 실패(하나라도 붙잡힘). 그런 작업이 없는 날은 비워 판정 보류한다.
+    sql: >-
+      WITH win AS (SELECT (now() AT TIME ZONE 'Asia/Seoul')::date + TIME '09:00' AS start_local
+        WHERE current_setting('ops_checker.deploy_version', true) NOT LIKE '04c0c6e%'),
+      moves AS (SELECT r.started_at, (r.input ->> 'producedAt')::timestamptz AS produced_at
+        FROM briefing.job_run r, win
+        WHERE r.job_kind = 'move'
+          AND (r.input ->> 'producedAt')::timestamptz >= win.start_local AT TIME ZONE 'Asia/Seoul'
+          AND (r.input ->> 'producedAt')::timestamptz < (win.start_local + INTERVAL '10 minutes') AT TIME ZONE 'Asia/Seoul'
+          AND NOT EXISTS (SELECT 1 FROM market.etf e WHERE e.market = 'KR' AND e.symbol = r.input -> 'payload' ->> 'symbol'))
+      SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM moves) THEN NULL
+        ELSE (SELECT count(*) FROM moves WHERE started_at > produced_at + INTERVAL '2 minutes')::numeric
+          / (SELECT count(*) FROM moves) END
+    pass: "== 0"
