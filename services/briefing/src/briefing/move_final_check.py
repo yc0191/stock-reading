@@ -61,7 +61,7 @@ class MoveFinalCheck:
         return as_of - s.evidence_window, as_of + s.delta
 
     def mail(self, draft: MoveDraft) -> tuple[str | None, str]:
-        return move_headline(draft.input), draft.report.text
+        return move_headline(draft.input, self.writer.settings), draft.report.text
 
     def fix_call(self, draft: MoveDraft, sentence: MailSentence) -> FixCall:
         # 처음 작성과 같은 지시문 블록을 써서 그 캐시를 읽고, 고치기 요청은 덧붙임 블록으로 보낸다.
@@ -79,7 +79,7 @@ class MoveFinalCheck:
         causes = list(draft.report.output.causes)
         for no, cause in fixed.items():
             causes[no - 1] = cause
-        return replace(draft, report=llm_report(draft.input, LlmOutput(tuple(causes), False)))
+        return replace(draft, report=llm_report(draft.input, LlmOutput(tuple(causes), False), self.writer.settings))
 
 
 def move_final_check(writer: ReportWriter, job_log: JobLogPort) -> FinalCheck | None:

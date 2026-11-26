@@ -213,8 +213,11 @@ def parse_move_run(job_id: str, raw_input: str, target: str, status: str, genera
         payload = json.loads(raw_input)["payload"]
         percent = float(payload["changePercent"])
         detection_type = payload.get("detectionType")
-        if payload.get("todayChangePercent") is not None:
-            today = float(payload["todayChangePercent"])
+        raw_today = payload.get("todayChangePercent")
+        if raw_today is not None:
+            # 급변동 리포트(jobs.parse_move)와 같이 숫자가 아닌 값은 모르는 것으로 둔다. 글자 숫자도 바꾸지 않는다.
+            if isinstance(raw_today, (int, float)) and not isinstance(raw_today, bool):
+                today = float(raw_today)
         elif detection_type == "prevClose":
             today = percent
     except (KeyError, TypeError, ValueError, AttributeError):

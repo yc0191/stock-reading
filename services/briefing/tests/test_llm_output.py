@@ -60,3 +60,15 @@ def test_move_and_daily_use_the_same_insufficient_evidence_check():
         parse_daily(json.dumps({"points": [], "insufficientEvidence": False}), frozenset())
     assert parse_move(json.dumps({"causes": [], "insufficientEvidence": True}), frozenset()).insufficient_evidence
     assert parse_daily(json.dumps({"points": [], "insufficientEvidence": True}), frozenset()).insufficient_evidence
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("담긴 종목이 영향을 줬을 수 있습니다(환율 이슈 참고)(금리 이슈 참고).",
+     "담긴 종목이 영향을 줬을 수 있습니다(환율·금리 이슈 참고)."),
+    ("영향을 줬을 수 있습니다(금리 이슈 참고) (환율 이슈 참고)", "영향을 줬을 수 있습니다(환율·금리 이슈 참고)"),
+    # 하나만 붙었거나 같은 괄호가 두 번이면 건드리지 않는다.
+    ("영향을 줬을 수 있습니다(환율 이슈 참고).", "영향을 줬을 수 있습니다(환율 이슈 참고)."),
+    ("(금리 이슈 참고)(금리 이슈 참고)", "(금리 이슈 참고)(금리 이슈 참고)"),
+])
+def test_an_fx_and_a_rate_note_side_by_side_become_one(text, expected):
+    assert output_sentence({"reason": text}, "reason", "etf", InvalidLlmOutput) == expected

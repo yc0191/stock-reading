@@ -349,8 +349,7 @@ def high_today(report_input: ReportInput) -> tuple[float, bool] | None:
     return i.today_change_percent, abs(round(i.change_percent, 2) - round(i.today_change_percent, 2)) <= 0.01
 
 
-def today_first(report_input: ReportInput,
-                settings: CoreSettings = DEFAULT_SETTINGS) -> tuple[float, int | None] | None:
+def today_first(report_input: ReportInput, settings: CoreSettings) -> tuple[float, int | None] | None:
     """머리말과 메일 제목에 오늘 등락을 먼저 쓸 때의 (오늘 등락률, 분). 짧은 시간 변동이고 둘 다 알 때만 있다.
 
     분이 짧은 시간 변동 구간 상한을 넘으면(다시 보낸 변동) 분을 None으로 두어 '짧은 시간'으로 쓰게 한다.

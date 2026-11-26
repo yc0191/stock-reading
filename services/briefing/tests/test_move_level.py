@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from briefing.config import CoreSettings
+from briefing.config import DEFAULT_SETTINGS, CoreSettings
 from briefing.job_log import LEVEL_HIGH, LEVEL_MID, level_of, parse_move_run
 from briefing.jobs import parse_move
 from briefing.report import _today_first_entry, build_llm_input, comparison_facts
@@ -46,7 +46,7 @@ def test_the_first_high_move_headline_starts_with_the_today_change_only():
     first = rule_based_text(ready)["text"].split("\n")[0]
 
     assert first == "[TEST01] 14:39 기준 오늘 -7.20% 하락 (10,000 → 9,280)"
-    assert _today_first_entry(ready) == {"todayChangePercent": -7.2, "baseKind": "prevClose"}
+    assert _today_first_entry(ready, DEFAULT_SETTINGS) == {"todayChangePercent": -7.2, "baseKind": "prevClose"}
 
 
 def test_a_later_high_move_headline_adds_the_change_against_the_base_price():
@@ -55,7 +55,7 @@ def test_a_later_high_move_headline_adds_the_change_against_the_base_price():
     first = rule_based_text(ready)["text"].split("\n")[0]
 
     assert first == "[TEST01] 14:39 기준 오늘 -14.00% · 기준가 대비 -7.53% 하락 (9,300 → 8,600)"
-    assert _today_first_entry(ready) == {"todayChangePercent": -14.0, "baseKind": "earlierMove"}
+    assert _today_first_entry(ready, DEFAULT_SETTINGS) == {"todayChangePercent": -14.0, "baseKind": "earlierMove"}
 
 
 def test_a_high_move_that_turns_against_the_day_is_a_rebound_and_a_missing_today_change_keeps_the_old_headline():
@@ -65,7 +65,7 @@ def test_a_high_move_that_turns_against_the_day_is_a_rebound_and_a_missing_today
     assert rule_based_text(rebound)["text"].split("\n")[0] == (
         "[TEST01] 14:39 기준 오늘 -2.00% · 기준가 대비 +7.10% 반등 (10,000 → 10,710)")
     assert rule_based_text(unknown)["text"].split("\n")[0] == "[TEST01] 14:39 기준 상승 +7.10% (10,000 → 10,710), 기준가 대비"
-    assert _today_first_entry(unknown) == {}
+    assert _today_first_entry(unknown, DEFAULT_SETTINGS) == {}
 
 
 def test_a_high_move_reports_the_base_price_move_but_compares_the_today_change_with_the_market():

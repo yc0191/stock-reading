@@ -635,9 +635,9 @@ def test_without_notables_the_section_is_left_out_of_the_text_and_the_html():
 def test_the_conclusion_ends_with_the_count_of_etfs_without_a_reason_and_leaves_it_out_at_zero():
     i = day_input([etf_row("TEST01", "1.00"), etf_row("TEST02", "2.00")],
                   articles=(EtfArticles("TEST01", (), True), EtfArticles("TEST02", (ARTICLE,), True)))
-    assert conclusion(i).endswith(" · 이유를 찾지 못한 ETF 1개")
+    assert conclusion(i).endswith(" · 관련 기사·공시·종목 이슈 없는 ETF 1개")
     none = day_input([etf_row("TEST01", "1.00")], articles=(EtfArticles("TEST01", (ARTICLE,), True),))
-    assert "이유를 찾지 못한" not in conclusion(none)
+    assert "없는 ETF" not in conclusion(none)
     # 기사 응답을 못 받은 ETF와 기사를 요청하지 않은 판은 세지 않는다.
     unknown = day_input([etf_row("TEST01", "1.00")], articles=(EtfArticles("TEST01", (), False),))
     assert "이유를 찾지 못한" not in conclusion(unknown)

@@ -51,7 +51,9 @@ def etf_terms(info: EtfInfo | None, settings: DailySettings = DEFAULT_DAILY_SETT
         return ()
     base = [n for n in (info.name, _without_brand(info.name) if info.name else None, info.tracks) if n]
     names = (*base, *(_trimmed(n, settings) for n in base), *(m.name for m in info.members))
-    return tuple(dict.fromkeys(n for n in (_normalize(n) for n in names if n) if len(n) >= MIN_TERM_LENGTH))
+    common = frozenset(_normalize(t) for t in settings.relevance_common_terms)
+    return tuple(dict.fromkeys(n for n in (_normalize(n) for n in names if n)
+                               if len(n) >= MIN_TERM_LENGTH and n not in common))
 
 
 def market_terms(info: EtfInfo | None, settings: DailySettings = DEFAULT_DAILY_SETTINGS) -> tuple[str, ...]:

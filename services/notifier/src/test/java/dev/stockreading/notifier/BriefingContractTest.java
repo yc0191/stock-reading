@@ -65,6 +65,20 @@ class BriefingContractTest {
                 .readValue(ContractSchemas.sample("briefing.generated.sample.json"), BriefingEnvelope.class);
         assertThat(older.payload().todayChangePercent()).isNull();
         assertThat(older.payload().moveMinutes()).isNull();
+        assertThat(older.payload().detectedAt()).isNull();
+    }
+
+    @Test
+    void windowBriefingWithDetectionTimeMatchesTheSchemaAndIsRead() throws IOException {
+        String window = ContractSchemas.sample("briefing.generated.sample.json")
+                .replace("\"payload\": {", "\"payload\": {\n    \"todayChangePercent\": -2.1,\n    \"moveMinutes\": 3,\n"
+                        + "    \"detectedAt\": \"2026-10-20T16:03:05+09:00\",");
+
+        assertThat(ContractSchemas.validate("briefing.generated.v1.schema.json", window)).isEmpty();
+        assertThat(JsonMapper.builder().build().readValue(window, BriefingEnvelope.class).payload().detectedAt())
+                .isEqualTo("2026-10-20T16:03:05+09:00");
+        assertThat(ContractSchemas.validate("briefing.generated.v1.schema.json",
+                window.replace("2026-10-20T16:03:05+09:00", "16:03"))).isNotEmpty();
     }
 
     @Test

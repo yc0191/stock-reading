@@ -75,6 +75,19 @@ def member_input(full: DailyInput, member: MemberPortfolio) -> DailyInput:
     )
 
 
+def whole_input(full: DailyInput, members: tuple[MemberPortfolio, ...] | None) -> DailyInput:
+    """작업 기록에 남길 판 전체 글의 자료. 그날 급변동 줄에 모든 멤버의 국내 주식 이름을 붙인다.
+    같은 주식을 여러 멤버가 담으면 이름을 아는 멤버의 것을 쓴다."""
+    if full.review is None or not members:
+        return full
+    names: dict[str, str | None] = {}
+    for m in members:
+        for symbol, name in m.stocks:
+            if names.get(symbol) is None:
+                names[symbol] = name
+    return replace(full, review=replace(full.review, stock_names=tuple(names.items())))
+
+
 def _entry_key(entry: Entry) -> tuple | None:
     """ETF·구성 종목에 묶인 근거를 가리키는 값. 멤버마다 목록이 달라 번호가 밀리는 종류만 해당한다."""
     llm = entry.llm

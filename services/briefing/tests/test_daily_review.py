@@ -247,6 +247,16 @@ def test_a_move_row_without_a_percent_keeps_the_row_and_one_without_a_target_is_
                           None) is None
 
 
+
+@pytest.mark.parametrize("value", ["-2.10", True, [1.0]])
+def test_a_move_row_with_a_non_numeric_today_change_reads_it_as_unknown_like_the_move_report(value):
+    # 급변동 리포트가 숫자가 아닌 오늘 등락을 없는 것으로 읽으므로, 그날 급변동 줄도 같은 값을 숫자로 바꾸지 않는다.
+    raw = json.dumps({"payload": {"symbol": "TEST01", "changePercent": -1.5, "detectionType": "window",
+                                  "todayChangePercent": value}})
+    run = parse_move_run("j1", raw, json.dumps(move_target("TEST01", "2026-10-20T10:15:00+09:00")),
+                         "succeeded", None, None)
+    assert (run.change_percent, run.today_change_percent, run.level) == (-1.5, None, "mid")
+
 # ---- 가상: 마감 후 판 한 건을 처음부터 끝까지 ----
 
 def seed_morning(store, outlooks, at=MORNING_AT, job_id="TEST-MORNING-1"):

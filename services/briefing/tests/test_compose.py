@@ -54,6 +54,24 @@ def test_window_headline_shows_today_change_before_the_short_change():
     assert line == "[TEST 샘플 ETF(TEST01)] 16:00 기준 오늘 -2.00% · 1분 새 +1.00% 반등 (12,000 → 12,120)"
 
 
+def test_window_headline_says_when_the_today_change_was_read_if_it_is_after_the_move_minute():
+    # 시각은 움직임이 시작된 때이고 오늘 등락은 감지 때 가격이라, 분이 다르면 오늘 등락이 언제 값인지 밝힌다.
+    later = window_headline("TEST01", 12_000, 12_120, 1.0, -2.0, 3, AS_OF, None, AS_OF + timedelta(minutes=3, seconds=5))
+    same_minute = window_headline("TEST01", 12_000, 12_120, 1.0, -2.0, 1, AS_OF, None, AS_OF + timedelta(seconds=40))
+
+    assert later == "[TEST01] 16:00 기준 오늘 -2.00%(16:03 감지 기준) · 3분 새 +1.00% 반등 (12,000 → 12,120)"
+    assert same_minute == "[TEST01] 16:00 기준 오늘 -2.00% · 1분 새 +1.00% 반등 (12,000 → 12,120)"
+
+
+def test_window_headline_compares_the_detection_minute_in_korean_time_whatever_zone_it_comes_in():
+    # 감지 시각이 UTC로 와도 한국 시간으로 바꿔 비교한다. 같은 순간이면 붙이지 않고, 분이 다르면 한국 시간으로 쓴다.
+    same_instant = AS_OF.astimezone(timezone.utc) + timedelta(seconds=30)
+    later = AS_OF.astimezone(timezone.utc) + timedelta(minutes=2)
+
+    assert "감지 기준" not in window_headline("TEST01", 12_000, 12_120, 1.0, -2.0, 1, AS_OF, None, same_instant)
+    assert "오늘 -2.00%(16:02 감지 기준) ·" in window_headline("TEST01", 12_000, 12_120, 1.0, -2.0, 2, AS_OF, None, later)
+
+
 @pytest.mark.parametrize("change,today,word", [
     (1.0, -2.0, "반등"), (-1.0, 2.0, "반락"), (1.0, 2.0, "상승"), (-1.0, -2.0, "하락"),
     # 오늘 등락이 0.00이면(반올림해 0이어도) 반대 방향이 아니다.

@@ -104,9 +104,10 @@ def run(move_json, market_fetched_at=T - timedelta(minutes=5)):
     return ready
 
 
-def rule_based_text(report_input):
+def rule_based_text(report_input, settings=S):
     published = Recorder()
-    stage = ReportStage(RuleBasedWriter(), published, FakeJobLog(), clock=lambda: T + timedelta(minutes=10))
+    stage = ReportStage(RuleBasedWriter(settings=settings), published, FakeJobLog(),
+                        clock=lambda: T + timedelta(minutes=10), settings=settings)
     stage.on_ready(report_input)
     (event,) = published.sent
     assert validate("briefing.generated.v1.schema.json", event.value) == []
@@ -197,11 +198,11 @@ def test_llm_input_carries_today_change_only_for_a_window_move_that_has_it():
 
 @pytest.mark.parametrize("change,previous,price,today,first_line", [
     # 오늘 등락과 짧은 변동 방향이 반대면 반등/반락
-    (1.0, 12_000, 12_120, -2.0, "[TEST01] 14:39 기준 오늘 -2.00% · 1분 새 +1.00% 반등 (12,000 → 12,120)"),
-    (-1.0, 12_000, 11_880, 1.2, "[TEST01] 14:39 기준 오늘 +1.20% · 1분 새 -1.00% 반락 (12,000 → 11,880)"),
+    (1.0, 12_000, 12_120, -2.0, "[TEST01] 14:39 기준 오늘 -2.00%(14:40 감지 기준) · 1분 새 +1.00% 반등 (12,000 → 12,120)"),
+    (-1.0, 12_000, 11_880, 1.2, "[TEST01] 14:39 기준 오늘 +1.20%(14:40 감지 기준) · 1분 새 -1.00% 반락 (12,000 → 11,880)"),
     # 같은 방향이거나 오늘 등락이 0.00이면 상승/하락
-    (-1.0, 12_000, 11_880, -2.0, "[TEST01] 14:39 기준 오늘 -2.00% · 1분 새 -1.00% 하락 (12,000 → 11,880)"),
-    (1.0, 12_000, 12_120, 0.0, "[TEST01] 14:39 기준 오늘 +0.00% · 1분 새 +1.00% 상승 (12,000 → 12,120)"),
+    (-1.0, 12_000, 11_880, -2.0, "[TEST01] 14:39 기준 오늘 -2.00%(14:40 감지 기준) · 1분 새 -1.00% 하락 (12,000 → 11,880)"),
+    (1.0, 12_000, 12_120, 0.0, "[TEST01] 14:39 기준 오늘 +0.00%(14:40 감지 기준) · 1분 새 +1.00% 상승 (12,000 → 12,120)"),
 ])
 def test_window_first_line_shows_today_change_first(change, previous, price, today, first_line):
     payload = rule_based_text(run(move(change=change, previous=previous, price=price, today=today)))
@@ -213,14 +214,18 @@ def test_window_first_line_shows_today_change_first(change, previous, price, tod
 def test_window_first_line_counts_the_minutes_from_the_move_to_its_detection():
     payload = rule_based_text(run(move(today=-2.0, detected=T + 185 * SEC)))
 
-    assert payload["text"].splitlines()[0] == "[TEST01] 14:39 기준 오늘 -2.00% · 3분 새 +1.00% 반등 (12,000 → 12,120)"
+    assert payload["text"].splitlines()[0] == "[TEST01] 14:39 기준 오늘 -2.00%(14:42 감지 기준) · 3분 새 +1.00% 반등 (12,000 → 12,120)"
     assert payload["moveMinutes"] == 3
+    # 메일 제목도 첫 줄처럼 감지 시각을 밝히도록 그 시각을 넘긴다.
+    assert payload["detectedAt"] == "2026-10-20T14:42:05+09:00"
 
 
 def test_window_first_line_says_one_minute_when_detected_within_a_minute():
     payload = rule_based_text(run(move(today=-2.0, detected=T + 20 * SEC)))
 
     assert payload["text"].splitlines()[0] == "[TEST01] 14:39 기준 오늘 -2.00% · 1분 새 +1.00% 반등 (12,000 → 12,120)"
+    # 같은 분에 감지했으면 첫 줄에 감지 시각을 쓰지 않으므로 제목 칸도 보내지 않는다.
+    assert "detectedAt" not in payload
 
 
 def test_window_move_redetected_long_after_its_move_time_says_short_time_without_minutes():
@@ -228,14 +233,14 @@ def test_window_move_redetected_long_after_its_move_time_says_short_time_without
     # '35분 새'는 거짓이므로 분을 쓰지 않는다.
     payload = rule_based_text(run(move(today=-2.0, detected=T + timedelta(minutes=35))))
 
-    assert payload["text"].splitlines()[0] == "[TEST01] 14:39 기준 오늘 -2.00% · 짧은 시간 +1.00% 반등 (12,000 → 12,120)"
+    assert payload["text"].splitlines()[0] == "[TEST01] 14:39 기준 오늘 -2.00%(15:14 감지 기준) · 짧은 시간 +1.00% 반등 (12,000 → 12,120)"
     assert payload["todayChangePercent"] == -2.0 and "moveMinutes" not in payload
 
 
 def test_window_move_detected_exactly_at_the_window_limit_still_shows_its_minutes():
     payload = rule_based_text(run(move(today=-2.0, detected=T + timedelta(minutes=S.window_move_max_minutes))))
 
-    assert payload["text"].splitlines()[0] == "[TEST01] 14:39 기준 오늘 -2.00% · 5분 새 +1.00% 반등 (12,000 → 12,120)"
+    assert payload["text"].splitlines()[0] == "[TEST01] 14:39 기준 오늘 -2.00%(14:44 감지 기준) · 5분 새 +1.00% 반등 (12,000 → 12,120)"
     assert payload["moveMinutes"] == 5
 
 
@@ -244,6 +249,27 @@ def test_window_move_without_today_change_keeps_the_previous_first_line_and_no_t
 
     assert payload["text"].splitlines()[0] == "[TEST01] 14:39 기준 상승 +1.00% (12,000 → 12,120), 1분 사이"
     assert "todayChangePercent" not in payload and "moveMinutes" not in payload
+
+
+def test_window_move_without_today_change_redetected_long_after_its_move_time_says_short_time_without_minutes():
+    # 오늘 등락률이 없어도 변동률은 구간(5분) 안의 값이라 다시 보낸 변동에 '35분 사이'를 쓰면 거짓이다.
+    payload = rule_based_text(run(move(change=1.0, today=None, detected=T + timedelta(minutes=35))))
+
+    assert payload["text"].splitlines()[0] == "[TEST01] 14:39 기준 상승 +1.00% (12,000 → 12,120), 짧은 시간 사이"
+
+
+def test_window_minute_limit_is_read_from_the_settings_the_report_was_written_with():
+    # 시세처리기 구간을 3분으로 줄였으면 4분은 구간 밖이다. 기본값(5분)으로 읽으면 '4분 새'라는 거짓 숫자가 나간다.
+    narrow = CoreSettings(window_move_max_minutes=3)
+
+    with_today = rule_based_text(run(move(today=-2.0, detected=T + timedelta(minutes=4))), narrow)
+    without_today = rule_based_text(run(move(today=None, detected=T + timedelta(minutes=4))), narrow)
+
+    assert with_today["text"].splitlines()[0] == \
+        "[TEST01] 14:39 기준 오늘 -2.00%(14:43 감지 기준) · 짧은 시간 +1.00% 반등 (12,000 → 12,120)"
+    assert "moveMinutes" not in with_today
+    assert without_today["text"].splitlines()[0] == \
+        "[TEST01] 14:39 기준 상승 +1.00% (12,000 → 12,120), 짧은 시간 사이"
 
 
 def test_prev_close_move_keeps_its_first_line_and_sends_no_title_fields():

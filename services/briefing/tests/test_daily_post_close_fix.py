@@ -165,15 +165,18 @@ def test_the_count_ignores_a_missing_final_period_and_other_sentences_that_only_
     assert claude_no_reason_count(output) == 1
 
 
-def test_a_rule_based_edition_keeps_counting_by_the_data():
+def test_a_rule_based_edition_counts_by_the_data_and_names_what_it_counted():
+    # 규칙 기반 본문은 ETF마다 이유를 쓰지 않으므로 '이유를 찾지 못한'이라 하면 나머지는 이유가 있는 것처럼 읽힌다.
     llm = FakeLlm(*[LlmCallError("down")] * 3)
     payload = run_post_close(regular_rows(), llm, REGULAR_AT, POST_CLOSE_BACKGROUND)
     assert payload["generatedBy"] == "rule-based"
-    assert "이유를 찾지 못한 ETF 3개" in payload["text"]
+    assert "관련 기사·공시·종목 이슈 없는 ETF 3개" in payload["text"]
+    assert "이유를 찾지 못한 ETF" not in payload["text"]
 
 
 # ---- 관계없는 기사 거르기 ----
 
+from briefing.config import DailySettings  # noqa: E402
 from briefing.daily_relevance import MIN_TERM_LENGTH, etf_terms, split_related  # noqa: E402
 from briefing.sources import Article, EtfInfo, EtfMember  # noqa: E402
 
@@ -240,6 +243,22 @@ def test_a_name_that_is_only_digits_after_the_brand_is_not_compared_on_its_own()
     stray, named = news("FAKE 환율", "달러가 1200원 선을 넘었습니다."), news("TEST 200 거래 동향")
     kept, dropped = split_related(info, (stray, named))
     assert kept == (named,) and dropped == (stray,)
+
+
+def test_a_common_word_left_after_the_brand_is_not_compared_on_its_own():
+    # 접두어를 떼면 '배당'뿐이라 상관없는 배당 기사에도 걸리므로, 전체 이름과 추종 대상으로만 비교한다.
+    info = EtfInfo((), False, "ACMEX 배당", "TEST 배당 INDEX")
+    assert etf_terms(info) == ("acmex배당", "test배당index")
+    stray, named = news("FAKE 회사 배당 확대"), news("ACMEX 배당 거래 동향")
+    kept, dropped = split_related(info, (stray, named))
+    assert kept == (named,) and dropped == (stray,)
+
+
+def test_the_common_words_come_from_the_settings_and_ignore_case_and_spacing():
+    info = EtfInfo((), False, "ACMEX Alpha Fund", "ALPHA FUND")
+    assert etf_terms(info, DailySettings(relevance_common_terms=("Alpha  Fund",))) == ("acmexalphafund",)
+    assert "ai" in etf_terms(EtfInfo((), False, "ACMEX AI"), DailySettings(relevance_common_terms=()))
+    assert etf_terms(EtfInfo((), False, "ACMEX AI")) == ("acmexai",)
 
 
 def info_row(symbol):
@@ -550,3 +569,16 @@ def test_dow_term_does_not_match_korean_company_name():
     terms = DailySettings().relevance_us_market_terms
     assert "다우" not in terms and {"다우존스", "다우지수"} <= set(terms)
     assert not any(t in "다우기술 실적 발표" for t in terms)
+
+
+@pytest.mark.parametrize("rule", [
+    # 빈 자료를 근거 번호 붙은 문장에 섞으면 번호가 빈 자료의 근거처럼 읽힌다.
+    "자료가 비어 있다는 말은 근거 번호를 붙인 문장에 섞지 않습니다",
+    # 환율·금리 참고 괄호는 하나로, 금리 칸을 가리켰으면 금리 칸에 그 기사를 쓴다.
+    '"(환율·금리 이슈 참고)" 하나로 붙입니다',
+    "rateIssue는 그 기사를 근거로 쓰고 기사가 없다고 쓰지 않습니다",
+])
+def test_both_edition_prompts_carry_the_mail_polish_rules(rule):
+    from briefing.daily_prompts import SYSTEM_PROMPT
+
+    assert rule in SYSTEM_PROMPT and rule in SYSTEM_PROMPT_POST_CLOSE

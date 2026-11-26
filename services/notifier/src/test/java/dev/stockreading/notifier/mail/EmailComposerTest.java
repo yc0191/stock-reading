@@ -90,7 +90,13 @@ class EmailComposerTest {
 
     /** 짧은 시간 변동 브리핑. todayChangePercent·moveMinutes가 있으면 제목에 오늘 등락을 먼저 쓴다(#66). */
     private static BriefingEnvelope windowBriefing(String name, String change, String today, String minutes) {
+        return windowBriefing(name, change, today, minutes, null);
+    }
+
+    private static BriefingEnvelope windowBriefing(String name, String change, String today, String minutes,
+            String detectedAt) {
         String extras = (today == null ? "" : ", \"todayChangePercent\": " + today)
+                + (detectedAt == null ? "" : ", \"detectedAt\": \"" + detectedAt + "\"")
                 + (minutes == null ? "" : ", \"moveMinutes\": " + minutes)
                 + (name == null ? "" : ", \"name\": \"" + name + "\"");
         String json = """
@@ -143,6 +149,16 @@ class EmailComposerTest {
     void briefingWithoutTodayChangeKeepsThePreviousSubject() {
         assertThat(composer("").compose(windowBriefing(null, "1.00", null, null)).subject())
                 .isEqualTo("[TEST01] 상승 +1.00% 브리핑");
+    }
+
+    @Test
+    void windowSubjectSaysWhenTheTodayChangeWasReadInKoreanTime() {
+        // 앞의 시각은 움직임이 시작된 때이고 오늘 등락은 감지 때 값이라, 브리핑이 감지 시각을 주면 본문 첫 줄처럼 밝힌다.
+        assertThat(composer("").compose(windowBriefing(null, "1.00", "-2.00", "3", "2026-10-20T05:42:05Z")).subject())
+                .isEqualTo("[TEST01] 14:39 기준 오늘 -2.00%(14:42 감지 기준) · 3분 새 +1.00% 반등 브리핑");
+        // 읽을 수 없는 감지 시각은 붙이지 않는다(제목은 그대로 나간다).
+        assertThat(composer("").compose(windowBriefing(null, "1.00", "-2.00", "3", "not-a-time")).subject())
+                .isEqualTo("[TEST01] 14:39 기준 오늘 -2.00% · 3분 새 +1.00% 반등 브리핑");
     }
 
     @Test

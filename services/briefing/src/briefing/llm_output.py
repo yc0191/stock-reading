@@ -34,7 +34,17 @@ def output_sentence(item: dict, name: str, noun: str, error: type[InvalidLlmOutp
         raise error(f"{noun} has no {name}")
     text = value.strip()
     check_no_json_residue(text, f"{noun} {name}", error)
-    return text
+    return merge_issue_notes(text)
+
+
+# 환율·금리 단서를 문장 끝 괄호로 붙이라고 하면 모델이 '(환율 이슈 참고)(금리 이슈 참고)'처럼 두 겹으로 쓰기도 한다.
+_TWO_ISSUE_NOTES = re.compile(r"\((환율|금리) 이슈 참고\)\s*\((?!\1)(환율|금리) 이슈 참고\)")
+MERGED_ISSUE_NOTE = "(환율·금리 이슈 참고)"
+
+
+def merge_issue_notes(text: str) -> str:
+    """잇달아 붙은 환율·금리 참고 괄호 두 개를 하나로 합친다. 순서와 사이 공백은 상관없다."""
+    return _TWO_ISSUE_NOTES.sub(MERGED_ISSUE_NOTE, text)
 
 
 # 모델이 JSON 조각을 문장 칸에 흘린 흔적(예: '...더 있어야 합니다.}],')을 가리는 기호.

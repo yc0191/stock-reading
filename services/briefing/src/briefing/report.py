@@ -17,7 +17,8 @@ from typing import Any, Callable, Mapping, Protocol
 
 from briefing.article_groups import RESEARCH_MARK, ArticleRow, GroupedArticles, group_article_lists
 from briefing.config import DEFAULT_SETTINGS, CoreSettings
-from briefing.compose import DISCLAIMER, KST, NO_EVIDENCE, direction_of, headline, high_headline, window_headline
+from briefing.compose import (DISCLAIMER, KST, NO_EVIDENCE, direction_of, headline, high_headline, shows_detection,
+                              window_headline)
 from briefing.events import BRIEFING_GENERATED_TOPIC, OutboundEvent, format_timestamp
 from briefing.jobs import ReportInput
 from briefing.job_log import (
@@ -51,6 +52,7 @@ from briefing.move_figures import (
     high_today,
     report_figures,
     today_first,
+    window_minutes,
 )
 from briefing.move_flow import flow_input
 from briefing.move_prompts import OUTPUT_SCHEMA, REWRITE_ADDENDUM, SYSTEM_PROMPT, system_prompt  # noqa: F401 - 다른 모듈이 여기서 가져온다
@@ -234,20 +236,20 @@ class RuleBasedWriter:
             notes.extend(f"- {fact}" for fact in facts)
         if not evidence:
             notes.append(NO_EVIDENCE)
-        view = MoveView(move_headline(i), tuple(m.line() for m in i.earlier_moves), tuple(notes),
+        view = MoveView(move_headline(i, self.settings), tuple(m.line() for m in i.earlier_moves), tuple(notes),
                         evidence_title="근거 후보:",
                         evidence=tuple(_view_evidence(n, e) for n, e in enumerate(evidence, start=1)),
                         closing=DISCLAIMER)
         return Report(view_text(view), GENERATED_BY_RULE, evidence, view=view)
 
 
-def move_headline(report_input: ReportInput) -> str:
+def move_headline(report_input: ReportInput, settings: CoreSettings) -> str:
     """머리말: 종목, 시각, 방향과 변동률, 몇 분 사이 움직였는지. 짧은 시간 변동은 오늘 등락을 먼저 쓴다."""
     i = report_input
-    first = today_first(i)
+    first = today_first(i, settings)
     if first is not None:
         return window_headline(i.symbol, i.previous_price, i.price, i.change_percent, first[0], first[1], i.as_of,
-                               display_name(i))
+                               display_name(i), i.detected_at)
     high = high_today(i)
     if high is not None:
         return high_headline(i.symbol, i.previous_price, i.price, i.change_percent, high[0], high[1], i.as_of,
@@ -261,8 +263,13 @@ def move_headline(report_input: ReportInput) -> str:
     if i.detected_at is None or i.detection_type != "window":
         # 이전 형식은 움직인 구간을 알 수 없어 시간을 쓰지 않는다.
         return line
-    minutes = int((i.detected_at - i.as_of).total_seconds() // 60)
-    return f"{line}, {minutes}분 사이" if minutes >= 1 else f"{line}, 1분 안에"
+    minutes = window_minutes(i)
+    if minutes > settings.window_move_max_minutes:
+        # 오늘 등락을 먼저 쓰는 머리말과 같은 까닭으로, 구간 상한을 넘는 분은 거짓이라 쓰지 않는다.
+        return f"{line}, 짧은 시간 사이"
+    # window_minutes는 1분 미만도 1로 세므로, 1분이 안 된 변동만 따로 '1분 안에'로 쓴다.
+    under_a_minute = i.detected_at - i.as_of < timedelta(minutes=1)
+    return f"{line}, 1분 안에" if under_a_minute else f"{line}, {minutes}분 사이"
 
 
 _UNCHECKED_STATUS = {MARK_MISSING: "기간 안에 받은 자료 없음", MARK_TRUNCATED: "상한 때문에 일부만 받음",
@@ -659,7 +666,7 @@ class LlmWriter:
                 log.warning("LLM report attempt %d/%d failed for job %s: %s",
                             attempt, self.max_attempts, report_input.job_id, reason)
                 continue
-            return replace(llm_report(report_input, output), failed_attempts=tuple(failed),
+            return replace(llm_report(report_input, output, self.settings), failed_attempts=tuple(failed),
                            accepted=AcceptedAttempt(attempt, user, response, usage, groups))
         raise ReportError(f"LLM report failed after {self.max_attempts} attempts: {reason}", self.max_attempts,
                           tuple(failed))
@@ -706,13 +713,13 @@ def us_symbols_in_input(i: ReportInput) -> frozenset[str]:
         | frozenset(t for f in i.filings for t in f.tickers) | (i.etf.us_tickers() if i.etf else frozenset())
 
 
-def llm_report(report_input: ReportInput, output: LlmOutput) -> Report:
+def llm_report(report_input: ReportInput, output: LlmOutput, settings: CoreSettings) -> Report:
     i = report_input
-    by_id = evidence_catalog(i)
+    by_id = evidence_catalog(i, settings)
     flow = tuple(m.line() for m in i.earlier_moves)
     if output.insufficient_evidence:
         # 근거 부족이면 LLM이 함께 낸 문장도 쓰지 않는다. 억지 원인이 섞이지 않게 한다.
-        view = MoveView(move_headline(i), flow, (LLM_INSUFFICIENT,), closing=LLM_DISCLAIMER)
+        view = MoveView(move_headline(i, settings), flow, (LLM_INSUFFICIENT,), closing=LLM_DISCLAIMER)
         return Report(view_text(view), GENERATED_BY_LLM, (), insufficient_evidence=True, output=output, view=view)
 
     cited: list[str] = []
@@ -725,7 +732,7 @@ def llm_report(report_input: ReportInput, output: LlmOutput) -> Report:
     causes = tuple(MoveViewCause(
         c.title, c.detail, _numbers(c.refs, number), c.meaning, _numbers(c.meaning_refs, number),
         c.conflict, _numbers(c.conflict_refs, number)) for c in output.causes)
-    view = MoveView(move_headline(i), flow, (), causes,
+    view = MoveView(move_headline(i, settings), flow, (), causes,
                     evidence=tuple(_view_evidence(number[ref], by_id[ref]) for ref in cited), closing=LLM_DISCLAIMER)
     return Report(view_text(view), GENERATED_BY_LLM, tuple(by_id[x] for x in cited),
                   weak_shortfalls=tuple(c.shortfall for c in output.causes if c.shortfall), output=output, view=view)
@@ -754,7 +761,7 @@ def build_report_writer(env: Mapping[str, str],
 # ---- 발행 ----
 
 def briefing_event(report_input: ReportInput, report: Report, now: datetime, html: str | None = None,
-                   images: list[dict[str, str]] | None = None) -> OutboundEvent:
+                   images: list[dict[str, str]] | None = None, *, settings: CoreSettings) -> OutboundEvent:
     """html·images는 선택 칸이라 있을 때만 싣는다(데일리 판과 같은 모양). 글자판(text)은 언제나 함께 싣는다."""
     i = report_input
     as_of = format_timestamp(i.as_of)
@@ -777,7 +784,7 @@ def briefing_event(report_input: ReportInput, report: Report, now: datetime, htm
                 "generatedBy": report.generated_by,
                 "evidence": [_evidence_entry(e) for e in report.evidence],
                 **_name_entry(i),
-                **_today_first_entry(i),
+                **_today_first_entry(i, settings),
                 **({"html": html} if html else {}),
                 **({"images": images} if html and images else {}),
             },
@@ -793,16 +800,18 @@ def display_name(report_input: ReportInput) -> str | None:
     return None
 
 
-def _today_first_entry(report_input: ReportInput) -> dict[str, float | int | str]:
+def _today_first_entry(report_input: ReportInput, settings: CoreSettings) -> dict[str, float | int | str]:
     """메일 제목도 머리말처럼 오늘 등락을 먼저 쓰도록 같은 값을 넘긴다. 상은 baseKind로 기준가 종류(전일 종가·앞선 상)도 알린다. 머리말이 이전 모양이면 칸을 빼고,
     분을 쓰지 않는 머리말('짧은 시간')이면 moveMinutes만 뺀다."""
     high = high_today(report_input)
     if high is not None:
         return {"todayChangePercent": high[0], "baseKind": BASE_PREV_CLOSE if high[1] else BASE_EARLIER_MOVE}
-    first = today_first(report_input)
+    first = today_first(report_input, settings)
     if first is None:
         return {}
-    return {"todayChangePercent": first[0]} | ({} if first[1] is None else {"moveMinutes": first[1]})
+    i = report_input
+    return ({"todayChangePercent": first[0]} | ({} if first[1] is None else {"moveMinutes": first[1]})
+            | ({"detectedAt": format_timestamp(i.detected_at)} if shows_detection(i.as_of, i.detected_at) else {}))
 
 
 def _name_entry(report_input: ReportInput) -> dict[str, str]:
@@ -868,7 +877,7 @@ class ReportStage:
         self._record_accepted(report_input, result.accepted, now, sentence_no, round)
         causes = list(report.output.causes)
         causes[sentence_no - 1] = result.cause
-        return llm_report(report_input, LlmOutput(tuple(causes), False))
+        return llm_report(report_input, LlmOutput(tuple(causes), False), self.settings)
 
     def publish(self, report_input: ReportInput, report: Report, research_count: int = 0) -> None:
         """최종 결과를 job_run에 적고, 이 작업의 줄이 모두 저장됐을 때만 발행한다."""
@@ -894,11 +903,12 @@ class ReportStage:
 
     def _event(self, i: ReportInput, report: Report, now: datetime) -> tuple[OutboundEvent, tuple[str, ...]]:
         """글자판과 같은 내용의 HTML·차트를 담은 이벤트. 내용(view)이 없는 보고서는 글자판만 싣는다."""
+        s = self.settings
         if report.view is None:
-            return briefing_event(i, report, now), ()
-        mail = build_move_mail(i, report.view, self.settings,
-                               lambda html, images: briefing_event(i, report, now, html, images))
-        return briefing_event(i, report, now, mail.html, list(mail.images)), mail.notes
+            return briefing_event(i, report, now, settings=s), ()
+        mail = build_move_mail(i, report.view, s,
+                               lambda html, images: briefing_event(i, report, now, html, images, settings=s))
+        return briefing_event(i, report, now, mail.html, list(mail.images), settings=s), mail.notes
 
     def _skip_without_evidence(self, i: ReportInput, report: Report, research_count: int, now: datetime) -> None:
         """본문에 인용한 근거가 하나도 없으면 메일을 보내지 않는다. 결과와 이유는 작업 기록에 남긴다."""

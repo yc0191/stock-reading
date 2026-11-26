@@ -36,14 +36,22 @@ def window_direction(change_percent: float, today_change_percent: float) -> str:
     return direction_of(change_percent)
 
 
+def shows_detection(as_of: datetime, detected_at: datetime | None) -> bool:
+    """짧은 시간 변동 첫 줄에 오늘 등락의 감지 시각을 밝히는가. 앞의 시각은 움직임이 시작된 때이고 오늘 등락은 감지 때 가격의
+    값이라, 한국 시간 분이 다르면 오늘 등락이 그 시각의 값처럼 읽힌다. 메일 제목(발송기)도 같은 판단을 따른다."""
+    return detected_at is not None and f"{detected_at.astimezone(KST):%H:%M}" != f"{as_of.astimezone(KST):%H:%M}"
+
+
 def window_headline(symbol: str, previous_price: int, price: int, change_percent: float,
-                    today_change_percent: float, minutes: int | None, as_of: datetime, name: str | None = None) -> str:
+                    today_change_percent: float, minutes: int | None, as_of: datetime, name: str | None = None,
+                    detected_at: datetime | None = None) -> str:
     """짧은 시간 변동의 머리말. 몇 분 사이의 변동률보다 그날 흐름(오늘 등락)을 먼저 보여 준다.
 
     분이 None이면 구간을 정확히 알 수 없는 것이라(다시 보낸 변동) '짧은 시간'으로 쓴다.
     """
     span = "짧은 시간" if minutes is None else f"{minutes}분 새"
-    return (f"[{label_of(symbol, name)}] {as_of.astimezone(KST):%H:%M} 기준 오늘 {today_change_percent:+.2f}% · "
+    read_at = f"({detected_at.astimezone(KST):%H:%M} 감지 기준)" if shows_detection(as_of, detected_at) else ""
+    return (f"[{label_of(symbol, name)}] {as_of.astimezone(KST):%H:%M} 기준 오늘 {today_change_percent:+.2f}%{read_at} · "
             f"{span} {change_percent:+.2f}% {window_direction(change_percent, today_change_percent)} "
             f"({previous_price:,} → {price:,})")
 

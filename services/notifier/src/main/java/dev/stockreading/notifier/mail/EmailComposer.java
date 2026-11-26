@@ -80,8 +80,23 @@ public class EmailComposer {
                     label, time, today, change, windowDirection(change, today));
         }
         String span = payload.moveMinutes() == null ? "짧은 시간" : payload.moveMinutes() + "분 새";
-        return "[%s] %s 기준 오늘 %+.2f%% · %s %+.2f%% %s 브리핑".formatted(
-                label, time, today, span, change, windowDirection(change, today));
+        return "[%s] %s 기준 오늘 %+.2f%%%s · %s %+.2f%% %s 브리핑".formatted(
+                label, time, today, detectedNote(payload.detectedAt()), span, change, windowDirection(change, today));
+    }
+
+    /**
+     * 앞의 시각은 움직임이 시작된 때이고 오늘 등락은 감지 때 값이라, 브리핑이 감지 시각을 주면 본문 첫 줄처럼 밝힌다.
+     * 브리핑이 분이 다를 때만 보내므로 여기서는 다시 비교하지 않는다. 읽을 수 없는 값이면 붙이지 않는다.
+     */
+    private static String detectedNote(String detectedAt) {
+        if (detectedAt == null) {
+            return "";
+        }
+        try {
+            return "(" + OffsetDateTime.parse(detectedAt).atZoneSameInstant(KST).format(HH_MM) + " 감지 기준)";
+        } catch (DateTimeParseException e) {
+            return "";
+        }
     }
 
     /** 오늘 등락과 방향이 반대면 반등·반락, 같거나 오늘 등락이 0.00이면 상승·하락. 브리핑 첫 줄과 같은 규칙이다. */
