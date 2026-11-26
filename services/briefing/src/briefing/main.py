@@ -267,6 +267,8 @@ class BriefingRunner:
                                on_morning_result=self.merge.on_morning_result,
                                final=daily_final_check(self.daily_writer, self.job_log))
         self.merge.morning_in_progress = self.daily.morning_in_progress
+        if self.member_store is not None:
+            self.merge.is_domestic_etf = self.member_store.is_domestic_etf
         self._consumer = self._consumer_factory({
             "bootstrap.servers": self.bootstrap,
             "group.id": "briefing",

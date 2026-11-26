@@ -1,6 +1,8 @@
 """장 시작(09:00)부터 아침 판 시작 시각 사이의 급변동을 아침 판에 합치는 단계. Kafka를 모르며 메시지와 시각을 인자로 받는다.
 
-그 시간대의 급변동은 급변동 리포트·메일을 따로 만들지 않고 모아 둔다. 아침 판이 그 시간대 시세를 개장 흐름으로 담기 때문이다.
+그 시간대의 국내 ETF 급변동은 급변동 리포트·메일을 따로 만들지 않고 모아 둔다. 아침 판이 그 시간대 ETF 시세를 개장 흐름으로
+담기 때문이다. 판이 담지 않는 종목(개별 주식)은 모으지 않고 바로 급변동 리포트 흐름으로 보낸다. ETF인지 읽지 못하면 모아 둔다
+(모은 변동은 판 결과에 따라 어차피 리포트로 넘어가므로 알림이 사라지지 않고, ETF 변동이 판과 리포트로 두 번 나가지 않는다).
 아침 판 결과가 나오면 다음 중 하나로 끝낸다.
 - 아침 판이 나갔고 그 변동의 ETF 개장 흐름이 판에 실제로 담겼으며 변동 시각이 판이 읽은 개장 흐름 구간 안이다:
   작업 기록을 '아침 판에 합침'으로 끝낸다. 리포트는 만들지 않는다.
@@ -58,6 +60,8 @@ class MorningMerge:
     settings: DailySettings = DEFAULT_DAILY_SETTINGS
     # 그 날의 아침 판이 진행 중인가. 진행 중이면 기다린다(늦게 성공한 판과 급변동 리포트가 둘 다 나가지 않게).
     morning_in_progress: Callable[[date], bool] = lambda day: False
+    # 종목코드가 국내 ETF인가. None이면 읽지 못한 것이고 모으는 쪽으로 본다. 기본값은 모두 모은다(이전 동작).
+    is_domestic_etf: Callable[[str], bool | None] = lambda symbol: None
     _pending: dict[date, list[_Deferred]] = field(default_factory=dict, init=False)
     # 아침 판 결과가 이미 나온 날. 그 뒤 오는 합침 구간의 변동은 합칠 곳이 없으므로 바로 리포트로 간다.
     _resolved: set[date] = field(default_factory=set, init=False)
@@ -73,7 +77,8 @@ class MorningMerge:
         return local.weekday() < 5 and self.settings.market_open <= local.time() < self.settings.morning_merge_end
 
     def on_move(self, message: str | bytes, now: datetime) -> bool:
-        """market.move 수신. 합치려고 모아 뒀으면 True, 그렇지 않으면(리포트로 가야 하면) False. 형식이 잘못되면 ValueError."""
+        """market.move 수신. 합치려고 모아 뒀으면 True, 그렇지 않으면(구간 밖이거나 국내 ETF가 아니어서 리포트로 가야 하면) False.
+        형식이 잘못되면 ValueError."""
         move = parse_move(message, now)
         day = move.as_of.astimezone(KST).date()
         if move.job_id in self._seen:
@@ -81,6 +86,11 @@ class MorningMerge:
             return True
         if not self.in_window(move.as_of) or day in self._resolved \
                 or now >= self.window_end(day) + self.settings.morning_merge_grace:
+            return False
+        if self.is_domestic_etf(move.symbol) is False:
+            # 종목코드는 로그에 쓰지 않는다.
+            log.info("market.move not held: not a domestic ETF, so the morning edition does not carry it (job=%s)",
+                     move.job_id)
             return False
         self._seen[move.job_id] = None
         while len(self._seen) > self.settings.remembered_move_ids:

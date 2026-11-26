@@ -400,3 +400,10 @@ def test_a_summary_that_names_an_etf_is_retried_so_other_members_never_read_it()
     answer_news(core, requests, POST_CLOSE_AT)
     assert len(llm.calls) == 2
     assert all("TEST 하나가" not in e.value["payload"]["text"] for e in requests.topic("briefing.daily.generated"))
+
+
+def test_whether_a_symbol_is_a_domestic_etf_is_none_when_the_store_cannot_be_read():
+    def broken():
+        raise OSError("connection refused")
+
+    assert PostgresMemberStore(broken).is_domestic_etf("TEST01") is None
