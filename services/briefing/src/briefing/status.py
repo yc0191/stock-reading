@@ -60,6 +60,7 @@ FAILURE_REASON_NAMES = {
     "filings_no_response": "공시 무응답",
     "llm_error": "LLM 오류",
     "interrupted_by_restart": "재시작으로 중단",
+    "result_handling_error": "조회 결과 처리 오류",
 }
 
 JOB_KIND_MOVE = "move"

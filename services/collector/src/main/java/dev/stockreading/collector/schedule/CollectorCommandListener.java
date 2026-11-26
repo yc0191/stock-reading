@@ -1,5 +1,10 @@
 package dev.stockreading.collector.schedule;
 
+import java.time.Clock;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -32,20 +37,45 @@ class CollectorCommandListener implements ConsumerSeekAware {
 
     private final CollectorJobs jobs;
     private final ObjectMapper mapper;
+    private final Clock clock;
 
     // 메모리 기반 중복 방지. 재시작하면 초기화되지만, 재시작 전 명령은 아래 seekToEnd 로 다시 읽지 않는다.
     private final Set<String> processedCommands = ConcurrentHashMap.newKeySet();
+    // 켜진 뒤 파티션을 처음 배정받은 시각(밀리초). 재시작하면 비므로 재시작 뒤 첫 배정은 다시 끝으로 옮긴다.
+    private final Map<TopicPartition, Long> firstAssignedAt = new ConcurrentHashMap<>();
 
-    CollectorCommandListener(CollectorJobs jobs, ObjectMapper mapper) {
+    CollectorCommandListener(CollectorJobs jobs, ObjectMapper mapper, Clock clock) {
         this.jobs = jobs;
         this.mapper = mapper;
+        this.clock = clock;
     }
 
     // 읽은 위치가 커밋된 그룹은 재시작하면 꺼져 있던 동안 쌓인 명령부터 읽어 한꺼번에 실행한다.
-    // 명령은 "지금" 실행하라는 뜻이므로 파티션을 배정받을 때마다 끝으로 옮겨, 켜진 뒤에 보낸 명령만 실행한다.
+    // 명령은 "지금" 실행하라는 뜻이므로 켜진 뒤 처음 배정받은 파티션은 끝으로 옮겨, 켜진 뒤에 보낸 명령만 실행한다.
+    // 켜져 있는 동안의 재분배로 다시 배정받은 파티션은 끝으로 옮기지 않는다. 옮기면 재분배 사이에 온 명령이 건너뛰어진다.
+    // 커밋된 위치부터 읽지도 않는다. 켜진 뒤 처리한 명령이 없으면 끝으로 옮긴 위치가 커밋되지 않아 꺼져 있던 동안의
+    // 명령부터 다시 읽게 된다. 그래서 처음 배정받은 시각 이후에 보낸 명령부터 읽고, 그중 이미 실행한 것은 eventId 중복
+    // 방지가 거른다. 시각은 명령을 보낸 쪽 시계라 몇 초 어긋날 수 있다.
     @Override
     public void onPartitionsAssigned(Map<TopicPartition, Long> assignments, ConsumerSeekCallback callback) {
-        callback.seekToEnd(assignments.keySet());
+        long now = clock.millis();
+        Set<TopicPartition> first = new HashSet<>();
+        Map<Long, List<TopicPartition>> again = new HashMap<>();
+        assignments.keySet().forEach(partition -> {
+            Long assignedAt = firstAssignedAt.putIfAbsent(partition, now);
+            if (assignedAt == null) {
+                first.add(partition);
+            } else {
+                again.computeIfAbsent(assignedAt, at -> new ArrayList<>()).add(partition);
+            }
+        });
+        if (!first.isEmpty()) {
+            callback.seekToEnd(first);
+        }
+        again.forEach((assignedAt, partitions) -> callback.seekToTimestamp(partitions, assignedAt));
+        if (!again.isEmpty()) {
+            log.info("collector command partitions reassigned; reading commands sent since they were first assigned");
+        }
     }
 
     // 다른 리스너와 그룹을 나눠 둔다. 같은 그룹이면 토픽 배정이 섞여 어느 한쪽이 메시지를 놓칠 수 있다.

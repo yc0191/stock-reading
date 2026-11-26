@@ -150,7 +150,7 @@ SELECT * FROM briefing.job_step WHERE correlation_id = '<추적 ID>' ORDER BY id
 
 - 끝내 실패한 작업은 `job_run.status = 'failed'`, 사유는 `failure_reason`, 단계가 실패한 줄은 `entry_type = 'step-failed'`입니다.
 - 급변동 실패 사유는 `ports.py`의 `FailureReason`입니다. `collection_not_covered`는 저장 끝 알림을 대기 상한 안에 받지 못한 것, `*_no_response`는 그 자료를 최대 시도 안에 받지 못한 것, `llm_error`는 LLM 출력이 시도 상한까지 검사를 통과하지 못했거나 호출이 실패한 것입니다.
-- `interrupted_by_restart`는 모든 작업 종류에(`job_log.py`), `members_unreadable`은 데일리 판에(`daily_jobs.py`) 붙습니다.
+- `interrupted_by_restart`는 모든 작업 종류에(`job_log.py`), `result_handling_error`는 조회 결과를 작업에 넘기다 예상하지 못한 오류가 난 작업에(`main.py`의 `deliver_results`, 어느 조회였는지는 그 `step-failed` 줄의 `data.queryKind`), `members_unreadable`은 데일리 판에(`daily_jobs.py`) 붙습니다.
 - 성공으로 끝났지만 리포트가 없으면 `failure_reason`에 `no_evidence`, `merged_into_morning`이 남습니다(`job_log.py`의 `REASON_*`). 레벨 중은 사유 없이 성공으로 끝나고 `representative-article` 줄이 남습니다.
 - `representative-article` 줄을 쓰려면 Flyway `V6__add_representative_article_entry_type.sql`이 먼저 적용돼 있어야 합니다(`job_log`의 기록 종류 값 제한).
 

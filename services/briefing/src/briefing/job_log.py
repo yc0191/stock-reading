@@ -111,6 +111,8 @@ REASON_REPRESENTATIVE_NONE = "no-article"
 # 재시작으로 끝나지 못한 작업의 실패 사유(job_run.failure_reason). 코드의 단계 실패 사유(ports.FailureReason)와 달리
 # 작업이 아니라 프로세스가 원인이라 여기에 둔다.
 REASON_INTERRUPTED = "interrupted_by_restart"
+# 조회 결과를 작업에 넘기다 예상하지 못한 오류가 났다(job_run.failure_reason). 코드 결함이 원인이라 단계 실패 사유와 따로 둔다.
+REASON_RESULT_ERROR = "result_handling_error"
 # 장 시작~아침 판 시작 사이 급변동을 따로 보내지 않고 아침 판에 합쳤다(성공으로 끝난 작업의 사유이며 리포트는 없다)
 REASON_MERGED_INTO_MORNING = "merged_into_morning"
 # 최종 본문에 인용한 근거가 하나도 없어 결과 이벤트를 발행하지 않았다. 작업 상태는 succeeded, 발행 이벤트는 없다.
@@ -249,6 +251,9 @@ class JobLogPort(Protocol):
     def fail_unfinished(self, now: datetime) -> list[str]:
         """시작할 때 부른다. 진행 중으로 남은 이전 실행의 작업을 실패로 끝내고 그 작업 id를 돌려준다."""
 
+    def fail_if_running(self, job_id: str, reason: str, now: datetime) -> bool:
+        """작업이 아직 진행 중일 때만 실패로 끝낸다. 이미 끝난 작업은 그대로 둔다. 끝내 저장하지 못했으면 False."""
+
     def morning_outlooks(self, day: date) -> list[Mapping[str, Any]] | None:
         """그날(한국 시간) 아침 판이 남긴 etf-outlook 줄의 data를 기록이 늦은 것부터 돌려준다. 읽지 못하면 None."""
 
@@ -285,6 +290,9 @@ class DiscardJobLog:
 
     def fail_unfinished(self, now: datetime) -> list[str]:
         return []
+
+    def fail_if_running(self, job_id: str, reason: str, now: datetime) -> bool:
+        return True
 
     def morning_outlooks(self, day: date) -> list[Mapping[str, Any]] | None:
         return []

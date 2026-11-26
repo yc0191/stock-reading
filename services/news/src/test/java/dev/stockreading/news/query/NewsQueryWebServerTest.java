@@ -92,17 +92,20 @@ class NewsQueryWebServerTest {
     private final int port;
     private final FilingQueryRepository repository;
     private final FilingsQuery listener;
+    private final ArticleQueryRepository articles;
 
     @Autowired
-    NewsQueryWebServerTest(@LocalServerPort int port, FilingQueryRepository repository, FilingsQuery listener) {
+    NewsQueryWebServerTest(@LocalServerPort int port, FilingQueryRepository repository, FilingsQuery listener,
+            ArticleQueryRepository articles) {
         this.port = port;
         this.repository = repository;
         this.listener = listener;
+        this.articles = articles;
     }
 
     @BeforeEach
     void setUp() {
-        reset(repository);
+        reset(repository, articles);
         appender.start();
         controllerLog.addAppender(appender);
     }
@@ -117,7 +120,11 @@ class NewsQueryWebServerTest {
     }
 
     private HttpResponse<String> post(String body) throws Exception {
-        return http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/internal/news/filings"))
+        return post("filings", body);
+    }
+
+    private HttpResponse<String> post(String path, String body) throws Exception {
+        return http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/internal/news/" + path))
                         .header("Content-Type", "application/json")
                         .header(CorrelationId.HTTP_HEADER, CORRELATION_ID)
                         .POST(HttpRequest.BodyPublishers.ofString(body)).build(),
@@ -164,5 +171,19 @@ class NewsQueryWebServerTest {
 
         assertThat(response.statusCode()).isEqualTo(500);
         assertThat(response.body()).doesNotContain("secret-detail").doesNotContain("news.filing");
+    }
+
+    @Test
+    void anArticlesStorageFailureIsAServerErrorWithoutTheInternalDetailInTheBody() throws Exception {
+        // 기사 조회는 종목 범위와 재검색 작업 두 갈래로 읽으므로 어느 쪽으로 와도 저장소가 실패하게 한다.
+        DataAccessResourceFailureException failure = new DataAccessResourceFailureException("secret-detail news.article");
+        when(articles.findByRange(any(), any(), any(), any(), anyInt())).thenThrow(failure);
+        when(articles.findByResearchJob(any(), any(), any(), anyInt())).thenThrow(failure);
+        String request = ContractSchemas.sample("news.articles.requested.sample.json");
+
+        HttpResponse<String> response = post("articles", reader.readTree(request).get("payload").toString());
+
+        assertThat(response.statusCode()).isEqualTo(500);
+        assertThat(response.body()).doesNotContain("secret-detail").doesNotContain("news.article");
     }
 }

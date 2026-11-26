@@ -36,7 +36,7 @@ from briefing.events import (
     OutboundEvent,
 )
 from briefing.http_queries import HttpQueries, base_urls
-from briefing.job_log import JobLogPort
+from briefing.job_log import REASON_RESULT_ERROR, EntryType, JobLogEntry, JobLogPort
 from briefing.job_log_store import PostgresJobLog, psycopg_connector
 from briefing.job_step import StepRecordingLlm, job_scope
 from briefing.jobs import BriefingCore
@@ -305,6 +305,19 @@ class BriefingRunner:
                     on_result(result, self.clock())
                 except ValueError as error:
                     log.error("skipping %s result for job %s: %s", query.kind.value, query.job_id, error)
+                except Exception as error:  # noqa: BLE001 - 작업 하나의 오류로 수신 루프 전체가 멈추지 않게 한다
+                    log.exception("%s result for job %s stopped by an error", query.kind.value, query.job_id)
+                    self._fail_on_result_error(result, error)
+
+    def _fail_on_result_error(self, result: QueryResult, error: Exception) -> None:
+        # 진행 중으로 남지 않게 실패로 끝내고, 어느 조회 결과에서 무슨 오류였는지를 기록에 남겨 나중에 찾아볼 수 있게 한다.
+        # 예외 메시지에는 외부 응답 조각이 섞일 수 있어 종류 이름만 남긴다. 이미 끝난 작업(결과를 낸 뒤의 오류)은 덮지 않는다.
+        query, now = result.query, self.clock()
+        self.job_log.record(JobLogEntry(
+            job_id=query.job_id, entry_type=EntryType.STEP_FAILED, stage=query.stage, reason=REASON_RESULT_ERROR,
+            occurred_at=now, error_type=type(error).__name__, attempts=result.attempts,
+            data={"queryKind": query.kind.value}))
+        self.job_log.fail_if_running(query.job_id, REASON_RESULT_ERROR, now)
 
     def handle_message(self, message) -> None:
         # 작업 상태와 모으는 중인 변동은 메모리에만 두므로, 읽은 위치를 처리 전에 바로 확정한다. 브리핑이 재시작되면
@@ -329,6 +342,10 @@ class BriefingRunner:
             except ValueError as error:
                 log.error("skipping malformed message at %s[%d]@%d: %s",
                           message.topic(), message.partition(), message.offset(), error)
+            except Exception:  # noqa: BLE001 - 메시지 하나의 오류로 수신 루프 전체가 멈추지 않게 한다
+                # 읽은 위치는 이미 확정했으므로 이 메시지는 다시 오지 않는다. 원문은 외부 값이 담길 수 있어 남기지 않는다.
+                log.exception("message at %s[%d]@%d stopped by an error; skipped",
+                              message.topic(), message.partition(), message.offset())
 
     def _on_move(self, message: str | bytes, now: datetime) -> None:
         # 장 시작~아침 판 시작 사이 변동은 아침 판이 담으므로 모아 두고, 그 밖의 변동은 급변동 리포트로 간다.

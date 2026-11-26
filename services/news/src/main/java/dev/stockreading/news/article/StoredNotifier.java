@@ -18,6 +18,7 @@ import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
@@ -37,6 +38,8 @@ import tools.jackson.databind.ObjectMapper;
  *
  * <p>기다리지 않고 지금 결과로 바로 내는 경우가 둘 있다. 수집이 끝난 지 {@code staleAfter} 이상 지난 완료(밀려 있다가 늦게 받음)와,
  * 이미 한 번 기다린 완료를 전송 실패 등으로 다시 처리할 때다. 그래서 한 번의 처리는 대기 한도 + 전송 시간을 넘지 않는다.
+ *
+ * <p>처리 결과를 읽다 DB 오류가 나도 대기 한도까지 같은 간격으로 다시 읽고, 끝내 읽지 못한 기사는 미처리로 담아 낸다.
  */
 @Component
 class StoredNotifier {
@@ -121,10 +124,23 @@ class StoredNotifier {
         Instant deadline = clock.instant().plus(waitLimit);
         Map<UUID, ArticleResult> processed = new HashMap<>();
         Set<UUID> waiting = new LinkedHashSet<>(articleIds);
+        int readFailures = 0;
         while (true) {
-            processed.putAll(results.resultsOf(waiting));
-            waiting.removeAll(processed.keySet());
+            try {
+                processed.putAll(results.resultsOf(waiting));
+                waiting.removeAll(processed.keySet());
+            } catch (DataAccessException e) {
+                // 예외로 던지면 오류 처리기가 간격 없이 재시도를 다 써 버리고 저장 끝을 버려, 브리핑이 자기 한도까지 기다린다.
+                // 한도까지 같은 간격으로 다시 읽고, 끝내 읽지 못한 기사는 미처리로 담아 알린다.
+                readFailures++;
+                log.warn("could not read article results; retrying until the wait limit waiting={} errorType={}",
+                        waiting.size(), e.getClass().getSimpleName());
+            }
             if (waiting.isEmpty() || !clock.instant().isBefore(deadline)) {
+                if (readFailures > 0) {
+                    log.warn("article results read failed {} time(s) while waiting; unprocessed={}",
+                            readFailures, waiting.size());
+                }
                 return processed;
             }
             try {

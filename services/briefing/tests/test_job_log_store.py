@@ -16,6 +16,7 @@ from briefing.job_log import (
 )
 from briefing.job_log_store import (
     FAIL_UNFINISHED_SQL,
+    FAIL_RUNNING_SQL,
     FINISH_RUN_SQL,
     INSERT_MARKET_CLOSED_SQL,
     INSERT_SQL,
@@ -143,6 +144,17 @@ def test_finish_updates_the_run_line_with_its_end_state_and_the_mail_briefing_id
     failed = JobResult(JOB_ID, RunStatus.FAILED, AT, failure_reason="llm_error")
     store_for(db, sleeps).finish(failed)
     assert db.statements[-1][1] == ("failed", "llm_error", None, AT, None, 0, 0, None, JOB_ID)
+
+
+def test_fail_if_running_only_touches_a_run_line_that_is_still_running(sleeps):
+    db = FakeDb()
+
+    assert store_for(db, sleeps).fail_if_running(JOB_ID, "result_handling_error", AT) is True
+
+    ((sql, params),) = db.statements
+    assert sql is FAIL_RUNNING_SQL
+    assert "status = %s" in sql.split("WHERE", 1)[1]
+    assert params == ("failed", "result_handling_error", AT, JOB_ID, "running")
 
 
 def test_record_inserts_one_row_with_every_field_and_keeps_the_related_data_as_given(sleeps):

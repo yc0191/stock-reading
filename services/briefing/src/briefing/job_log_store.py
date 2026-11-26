@@ -60,6 +60,13 @@ SET status = %s, failure_reason = %s, generated_by = %s, finished_at = %s, final
 WHERE job_id = %s
 """
 
+# 이미 끝난 작업(성공해 결과를 낸 작업 등)을 실패로 덮지 않도록 진행 중일 때만 고친다.
+FAIL_RUNNING_SQL = f"""
+UPDATE {RUN_TABLE}
+SET status = %s, failure_reason = %s, finished_at = %s
+WHERE job_id = %s AND status = %s
+"""
+
 INSERT_SQL = f"""
 INSERT INTO {LOG_TABLE} (job_id, entry_type, stage, sentence_no, round, before, after, reason, error_type, attempts,
                          data, occurred_at)
@@ -163,6 +170,10 @@ class PostgresJobLog:
                   result.final_text, result.weak_count, result.research_count, result.result_event_id,
                   result.job_id)
         return self._save(FINISH_RUN_SQL, params, result.job_id, f"finish/{result.status.value}")
+
+    def fail_if_running(self, job_id: str, reason: str, now: datetime) -> bool:
+        params = (RunStatus.FAILED.value, reason, now, job_id, RunStatus.RUNNING.value)
+        return self._save(FAIL_RUNNING_SQL, params, job_id, "finish/failed-if-running")
 
     def record_step(self, step: JobStep) -> bool:
         # 호출 기록은 진단용이라 저장하지 못해도 작업을 '기록 실패'로 표시하지 않는다(조회 작업 스레드에서도 불린다).

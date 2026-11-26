@@ -736,3 +736,76 @@ def test_a_query_result_is_handed_over_on_the_loop_with_its_trace_id_and_job(set
     # 결과를 넘기는 동안 로그 줄의 추적 ID와 LLM 호출 기록(job_step)의 작업이 그 조회의 것이다.
     assert seen == [(MOVE["correlationId"], JOB_ID, 2)]
     assert current_trace() is None and current_job() is None
+
+
+def test_an_unexpected_error_while_handing_over_a_result_fails_only_that_job_and_the_loop_keeps_going(setup):
+    from briefing.job_log import REASON_RESULT_ERROR
+    make, _, store, _ = setup
+    runner, consumer, _ = make()
+    feed(runner, consumer, move_message(), completed_message())
+    query = runner.api.of(QueryKind.HISTORY)[0]
+
+    def broken(_result, _now):
+        raise KeyError("points")
+
+    runner.api.done.append((broken, main.QueryResult(query, None, 2, "timeout")))
+    runner.run_once()
+
+    # 예외가 실행부 밖으로 나가지 않으므로 루프가 멈추지 않는다. 작업은 진행 중으로 남지 않고 사유와 함께 실패로 끝난다.
+    [line] = [f for f in store.failures if f.reason == REASON_RESULT_ERROR]
+    assert (line.job_id, line.stage, line.error_type, line.attempts) == (JOB_ID, query.stage, "KeyError", 2)
+    assert line.data["queryKind"] == QueryKind.HISTORY.value
+    assert "detail" not in line.data  # 예외 메시지에는 외부 응답 조각이 섞일 수 있어 남기지 않는다
+    [result] = [r for r in store.results() if r.job_id == JOB_ID]
+    assert (result.status.value, result.failure_reason) == ("failed", REASON_RESULT_ERROR)
+
+    # 다음 변동도 평소처럼 받아 조회를 맡긴다.
+    before = len(runner.api.of(QueryKind.HISTORY))
+    feed(runner, consumer, move_message(event_id="00000000-0000-4000-8000-0000000000aa"), completed_message(
+        event_id="00000000-0000-4000-8000-000000000102"))
+    assert len(runner.api.of(QueryKind.HISTORY)) == before + 1
+
+
+def test_an_unexpected_error_while_handling_a_message_skips_only_that_message_and_the_loop_keeps_going(setup):
+    make, _, _, _ = setup
+    runner, consumer, _ = make()
+    original = runner._on_news_stored
+    calls = []
+
+    def broken_once(message, now):
+        calls.append(message)
+        if len(calls) == 1:
+            raise KeyError("payload")
+        original(message, now)
+
+    runner._on_news_stored = broken_once
+    first = completed_message()
+
+    # 처리기가 예상하지 못한 오류를 내도 실행부 밖으로 나가지 않는다. 그 메시지는 확정한 뒤 건너뛴다.
+    feed(runner, consumer, move_message(), first)
+    assert consumer.commits[-1] is first
+    assert asked(runner, QueryKind.HISTORY) == []
+
+    # 다음 저장 끝 알림은 평소처럼 근거 조회로 이어진다.
+    feed(runner, consumer, completed_message(event_id="00000000-0000-4000-8000-000000000102"))
+    assert len(asked(runner, QueryKind.HISTORY)) == 1
+
+
+def test_an_error_after_the_job_already_finished_does_not_turn_it_into_a_failure(setup):
+    from briefing.job_log import REASON_RESULT_ERROR, JobResult, RunStatus
+    make, clock, store, _ = setup
+    runner, consumer, _ = make()
+    feed(runner, consumer, move_message(), completed_message())
+    query = runner.api.of(QueryKind.HISTORY)[0]
+
+    def finished_then_broken(_result, now):
+        # 결과를 낸 뒤(작업 한 줄이 이미 성공으로 끝난 뒤)의 오류
+        store.finish(JobResult(JOB_ID, RunStatus.SUCCEEDED, now))
+        raise KeyError("after publish")
+
+    runner.api.done.append((finished_then_broken, main.QueryResult(query, None, 1, "timeout")))
+    runner.run_once()
+
+    # 오류 줄은 남기지만 이미 끝난 작업의 상태는 그대로 둔다.
+    assert [f.reason for f in store.failures if f.job_id == JOB_ID] == [REASON_RESULT_ERROR]
+    assert [(r.status.value, r.failure_reason) for r in store.results() if r.job_id == JOB_ID] == [("succeeded", None)]

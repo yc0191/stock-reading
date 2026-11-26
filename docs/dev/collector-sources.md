@@ -15,7 +15,7 @@
 작업 하나를 지금 1회 돌리려면 `scripts/collector-command.sh <명령>`을 씁니다. 스크립트는 `collector.command` 토픽으로 명령 한 건을 보냅니다(계약은 `contracts/events/collector.command.v1.schema.json`). 수집기는 시세 시간대와 타이머 켜기 설정에 상관없이 받은 즉시 실행합니다.
 
 - 같은 작업이 돌고 있으면 건너뛰고, 모르는 명령은 무시합니다. 둘 다 수집기 로그에만 남습니다.
-- 같은 `eventId`는 한 번만 실행합니다. 수집기가 꺼져 있던 동안 보낸 명령은 실행하지 않습니다.
+- 같은 `eventId`는 한 번만 실행합니다. 수집기가 꺼져 있던 동안 보낸 명령은 실행하지 않습니다. 켜져 있는 동안 Kafka 재분배가 일어나도 그 사이에 보낸 명령은 실행합니다.
 - `KAFKA_CONTAINER`, `KAFKA_BOOTSTRAP`(컨테이너 안에서 붙을 주소)으로 대상을 바꿉니다. 기본값은 스크립트에 있습니다.
 - `scripts/publish-daily-notice.sh <morning|post-close>`는 수집기 알림을 꺼 둔 로컬에서 데일리 판 시작 알림을 손으로 보낼 때만 씁니다. 같은 날 이미 만든 판은 다시 만들어지지 않습니다.
 
