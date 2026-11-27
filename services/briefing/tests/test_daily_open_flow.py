@@ -6,7 +6,8 @@ from datetime import datetime, timedelta
 
 from briefing.config import CoreSettings
 from briefing.daily_members import MemberPortfolio, member_input, member_sections
-from briefing.daily_report import ITEM_OPEN_FLOW, build_llm_input, build_sections, missing_items
+from briefing.daily_sections import ITEM_OPEN_FLOW, build_sections, missing_items
+from briefing.daily_report import build_llm_input
 from briefing.open_flow import OpenFlow, in_range, open_flow_start, parse_open_flow, signed
 from briefing.queries import QueryKind
 from contracts import validate_payload

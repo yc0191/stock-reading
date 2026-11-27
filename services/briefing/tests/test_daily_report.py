@@ -6,7 +6,7 @@ import pytest
 
 from fake_anthropic import as_reply
 from briefing.config import DailySettings
-from briefing.daily_report import (
+from briefing.daily_sections import (
     DAILY_DISCLAIMER,
     ITEM_ETFS,
     ITEM_ETF_ARTICLES,
@@ -19,20 +19,14 @@ from briefing.daily_report import (
     ITEM_US_INDEX,
     ITEM_US_STOCKS,
     NO_DATA,
-    OUTPUT_SCHEMA,
-    SYSTEM_PROMPT,
-    SYSTEM_PROMPT_POST_CLOSE,
     DailyInput,
-    DailyLlmWriter,
     EtfDay,
-    InvalidDailyOutput,
-    build_daily_writer,
-    build_llm_input,
     build_sections,
     missing_items,
-    parse_output,
-    rule_based_text,
 )
+from briefing.daily_prompts import OUTPUT_SCHEMA, SYSTEM_PROMPT, SYSTEM_PROMPT_POST_CLOSE
+from briefing.daily_report import DailyLlmWriter, build_daily_writer, build_llm_input, rule_based_text
+from briefing.daily_output import InvalidDailyOutput, parse_output
 from briefing.sources import Background, CloseRate, EtfInfo, EtfMember, Filing, IndexRate
 
 KST = timezone(timedelta(hours=9))
@@ -355,7 +349,8 @@ def test_llm_user_keeps_the_first_write_input_and_earlier_research_as_the_same_l
 
 
 def test_rewrite_tells_which_articles_other_sentences_already_cite():
-    from briefing.daily_report import DailyOutput, Point, refs_cited_by_others
+    from briefing.daily_output import DailyOutput, Point
+    from briefing.daily_report import refs_cited_by_others
 
     class Capture:
         def __init__(self):

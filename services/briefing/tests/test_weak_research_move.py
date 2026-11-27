@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from briefing.config import CoreSettings
-from briefing.daily_report import parse_output as parse_daily
+from briefing.daily_output import parse_output as parse_daily
 from briefing.job_log import EntryType, RunStatus
 from briefing.llm_output import InvalidLlmOutput, output_weak_shortfall
 from briefing.report import parse_output as parse_move

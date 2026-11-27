@@ -247,7 +247,8 @@ def test_the_daily_writer_groups_with_the_core_settings_the_service_passes(monke
     import briefing.main as main
     from briefing.config import DEFAULT_SETTINGS
     from briefing.daily_inputs import EtfArticles
-    from briefing.daily_report import build_daily_writer, build_sections
+    from briefing.daily_report import build_daily_writer
+    from briefing.daily_sections import build_sections
     from test_daily_writing import AT, Sequence, day_input, etf_row, llm_output
 
     def article(article_id, title, hours):

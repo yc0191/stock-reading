@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from briefing.daily_report import POINT_RATE, DailyOutput, Point
+from briefing.daily_output import POINT_RATE, DailyOutput, Point
 from briefing.llm_output import MERGED_ISSUE_NOTE
 
 FX_NOTE = "(환율 이슈 참고)"

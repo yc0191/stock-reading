@@ -10,7 +10,8 @@ import pytest
 from fake_anthropic import as_reply
 from briefing.config import CoreSettings, DailySettings
 from briefing.daily_jobs import DailyCore
-from briefing.daily_report import DAILY_INSUFFICIENT, DailyLlmWriter
+from briefing.daily_sections import DAILY_INSUFFICIENT
+from briefing.daily_report import DailyLlmWriter
 from briefing.job_log import EntryType, RunStatus
 from briefing.llm_output import WEAK_NOTE_PREFIX
 from briefing.research import QueryWriter, ResearchReason, ResearchStep
@@ -35,7 +36,7 @@ from test_daily_jobs import (
     filings_response,
     tick,
 )
-from test_research import QUERIES, articles, queries
+from test_research import QUERIES, queries
 from test_weak_research_move import S, SEC, SECOND_SHORTFALL, SHORTFALL, STILL_SHORTFALL, STRONG_TEXT
 
 

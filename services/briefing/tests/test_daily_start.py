@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from briefing.config import DailySettings
 from briefing.daily_jobs import DailyCore
-from briefing.daily_report import FILINGS_NOT_COLLECTED, ITEM_FILINGS, NO_DATA, NO_FILINGS_IN_RANGE
+from briefing.daily_sections import FILINGS_NOT_COLLECTED, ITEM_FILINGS, NO_DATA, NO_FILINGS_IN_RANGE
 from briefing.daily_start import STALE_DATA_ITEM
 from briefing.job_log import EntryType
 from briefing.queries import QueryKind

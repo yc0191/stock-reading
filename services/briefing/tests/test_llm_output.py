@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from briefing.daily_report import InvalidDailyOutput
-from briefing.daily_report import parse_output as parse_daily
+from briefing.daily_output import InvalidDailyOutput
+from briefing.daily_output import parse_output as parse_daily
 from briefing.llm_output import (
     InvalidLlmOutput,
     check_items_present,

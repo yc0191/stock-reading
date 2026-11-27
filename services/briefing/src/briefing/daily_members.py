@@ -10,19 +10,17 @@ from dataclasses import dataclass, replace
 from typing import Protocol
 
 from briefing.daily_inputs import EtfArticles
-from briefing.daily_report import (
+from briefing.daily_sections import (
     KIND_DAY,
     KIND_OPEN_FLOW,
     KIND_MEMBER,
     KIND_US_CLOSE,
-    POINT_NOTABLE,
     DailyInput,
-    DailyOutput,
     Entry,
-    Point,
     Section,
     build_sections,
 )
+from briefing.daily_output import POINT_NOTABLE, DailyOutput, Point
 from briefing.daily_review import ReviewInput
 from briefing.llm_output import ticker_pattern
 from briefing.sources import US_MARKET, EtfMember

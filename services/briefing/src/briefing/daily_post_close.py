@@ -6,31 +6,24 @@ from decimal import Decimal
 from typing import Callable
 
 from briefing.compose import KST, label_of
-from briefing.daily_report import (
+from briefing.daily_sections import (
     DAILY_DISCLAIMER,
     DAILY_INSUFFICIENT,
     ITEM_ETFS,
     ITEM_KR_TODAY,
     MINUS,
     NO_DATA,
-    POINT_ETF,
-    POINT_FX,
-    POINT_NOTABLE,
-    POINT_RATE,
-    POINT_REVIEW,
     DailyInput,
-    DailyOutput,
     Entry,
     Section,
     etf_line,
-    conclusion,
     fallback_note,
     etf_groups,
     etf_name,
-    headline,
     member_line,
-    section_title,
 )
+from briefing.daily_output import POINT_ETF, POINT_FX, POINT_NOTABLE, POINT_RATE, POINT_REVIEW, DailyOutput
+from briefing.daily_report import conclusion, headline, section_title
 from briefing.daily_review import NOT_COMPARED, review_tally_line
 from briefing.job_log import (
     LEVEL_HIGH,

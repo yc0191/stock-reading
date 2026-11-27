@@ -7,7 +7,8 @@ from briefing.daily_inputs import PRE_OPEN_NOTICE, is_before_open
 from briefing.daily_jobs import DailyCore
 from briefing.daily_prompts import NO_REASON_STATEMENT, SYSTEM_PROMPT_POST_CLOSE
 from briefing.llm import LlmCallError
-from briefing.daily_report import DailyInput, DailyLlmWriter, EtfDay
+from briefing.daily_sections import DailyInput, EtfDay
+from briefing.daily_report import DailyLlmWriter
 from fake_news import answer_news
 from test_daily_jobs import (
     POST_CLOSE_JOB,
@@ -157,7 +158,8 @@ def test_the_no_reason_count_is_left_out_when_claude_found_a_reason_for_every_et
 
 
 def test_the_count_ignores_a_missing_final_period_and_other_sentences_that_only_mention_it():
-    from briefing.daily_report import DailyOutput, Point, POINT_ETF, claude_no_reason_count
+    from briefing.daily_output import DailyOutput, Point, POINT_ETF
+    from briefing.daily_report import claude_no_reason_count
     output = DailyOutput((
         Point("받은 자료에서 이유를 찾지 못했습니다", (), "부족", POINT_ETF, "TEST01"),
         Point("받은 자료에서 이유를 찾지 못했습니다. 다만 환율이 영향을 줬을 수 있습니다.", ("B1",), None, POINT_ETF, "TEST02"),
@@ -324,7 +326,7 @@ def test_an_etf_without_info_keeps_its_articles():
 
 import json  # noqa: E402
 
-from briefing.daily_report import InvalidDailyOutput, parse_post_close_output  # noqa: E402
+from briefing.daily_output import InvalidDailyOutput, parse_post_close_output  # noqa: E402
 
 FX_SENTENCE = "원/달러 환율이 내려 미국 자산에 투자하는 ETF의 원화 가격에 영향을 줬을 수 있습니다."
 RATE_SENTENCE = "받은 자료에 금리 관련 기사가 없습니다."

@@ -9,20 +9,9 @@ from typing import Any, Mapping
 
 from briefing.daily_jobs import DailyDraft
 from briefing.daily_prompts import NO_REASON_STATEMENT, SYSTEM_PROMPT, SYSTEM_PROMPT_POST_CLOSE
-from briefing.daily_report import (
-    KIND_NEWS,
-    POINT_ETF,
-    POINT_NOTABLE,
-    DailyLlmWriter,
-    DailyOutput,
-    Point,
-    conclusion,
-    llm_text,
-    llm_user,
-    member_repeat_reason,
-    sentence_slots,
-    summary_banned_names,
-)
+from briefing.daily_sections import KIND_NEWS
+from briefing.daily_output import POINT_ETF, POINT_NOTABLE, DailyOutput, Point, member_repeat_reason, sentence_slots
+from briefing.daily_report import DailyLlmWriter, conclusion, llm_text, llm_user, summary_banned_names
 from briefing.events import EDITION_POST_CLOSE
 from briefing.final_check import BatchFixCall, FinalCheck, MailSentence, Source
 from briefing.job_log import JobLogPort

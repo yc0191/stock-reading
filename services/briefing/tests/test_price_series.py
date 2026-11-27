@@ -7,7 +7,7 @@ from dataclasses import replace
 
 from briefing.config import CoreSettings
 from briefing.daily_chart import chart_bars, intraday_lines, line_charts, period_lines, period_locator
-from briefing.daily_report import DailyInput, EtfDay
+from briefing.daily_sections import DailyInput, EtfDay
 from briefing.sources import EtfInfo
 from briefing.price_series import (
     DailyClose,

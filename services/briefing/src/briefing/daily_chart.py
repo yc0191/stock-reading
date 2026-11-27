@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from briefing.compose import KST
-from briefing.daily_report import RELATION_WATCH, DailyInput, EtfDay, etf_groups
+from briefing.daily_sections import RELATION_WATCH, DailyInput, EtfDay, etf_groups
 
 log = logging.getLogger("briefing.daily_chart")
 
