@@ -8,7 +8,7 @@ from decimal import Decimal
 
 from fake_anthropic import as_reply
 from briefing.config import DEFAULT_SETTINGS
-from briefing.jobs import ReportInput
+from briefing.move_job import ReportInput
 from briefing.move_figures import (
     KOSDAQ_NAME,
     KOSPI_NAME,

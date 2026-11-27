@@ -13,7 +13,7 @@ from briefing.article_groups import RESEARCH_MARK, ArticleRow, GroupedArticles, 
 from briefing.config import DEFAULT_SETTINGS, CoreSettings
 from briefing.compose import KST, direction_of, headline, high_headline, window_headline
 from briefing.events import format_timestamp
-from briefing.jobs import ReportInput
+from briefing.move_job import ReportInput
 from briefing.job_log import DETECTION_PREV_CLOSE_HIGH
 from briefing.move_figures import (
     EXCHANGE_RATE_API,

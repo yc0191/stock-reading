@@ -5,7 +5,7 @@ import pytest
 
 from briefing.compose import KST
 from briefing.events import RESEARCH_JOB_KINDS, research_request_event
-from briefing.jobs import parse_move
+from briefing.move_job import parse_move
 from contracts import CONTRACTS_DIR, sample, validate
 
 NOW = datetime(2026, 10, 20, 16, 1, 0, tzinfo=KST)

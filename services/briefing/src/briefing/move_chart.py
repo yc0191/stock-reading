@@ -16,7 +16,7 @@ from briefing.daily_chart import DOWN_COLOR, FLAT_COLOR, UP_COLOR, load_fonts
 from briefing.move_flow import FlowMove
 
 if TYPE_CHECKING:
-    from briefing.jobs import ReportInput
+    from briefing.move_job import ReportInput
 
 CHART_CONTENT_ID = "chart-move"
 CHART_ALT = "장중 가격 차트"

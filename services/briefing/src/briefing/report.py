@@ -17,7 +17,7 @@ from typing import Any, Callable, Mapping, Protocol
 
 from briefing.config import DEFAULT_SETTINGS, CoreSettings
 from briefing.compose import DISCLAIMER, NO_EVIDENCE
-from briefing.jobs import ReportInput
+from briefing.move_job import ReportInput
 from briefing.job_log import GeneratedBy
 from briefing.move_figures import comparison_facts
 from briefing.move_prompts import OUTPUT_SCHEMA, REWRITE_ADDENDUM, system_prompt

@@ -13,7 +13,7 @@ from typing import Any, Callable
 from briefing.config import DEFAULT_SETTINGS, CoreSettings
 from briefing.compose import KST, shows_detection
 from briefing.events import BRIEFING_GENERATED_TOPIC, OutboundEvent, format_timestamp
-from briefing.jobs import ReportInput
+from briefing.move_job import ReportInput
 from briefing.job_log import (
     REASON_LLM_ACCEPTED,
     REASON_LLM_CALL_FAILED,

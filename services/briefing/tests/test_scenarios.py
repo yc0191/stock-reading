@@ -784,7 +784,7 @@ def early_research_completed(research_id):
 
 def run_without_the_regular_collection(core, rec):
     """정기 수집 완료는 끝내 오지 않는다. T+5분 재검색의 완료만으로 리포트 입력까지 간다."""
-    from briefing.jobs import early_research_id
+    from briefing.move_job import early_research_id
     core.on_move(move(), T)
     core.on_tick(T + S.early_research_delay)
     request_at = T + S.early_research_delay

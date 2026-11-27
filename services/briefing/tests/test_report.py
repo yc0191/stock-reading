@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from fake_anthropic import as_reply
-from briefing.jobs import ReportInput
+from briefing.move_job import ReportInput
 from briefing.job_log import REASON_NO_EVIDENCE
 from briefing.ports import FailureReason
 from fake_job_log import FakeJobLog
