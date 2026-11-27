@@ -1,0 +1,25 @@
+# #108 장 시작 급변동 버리기, 시도 2. 지표와 통과값은 이슈의 "시도 2 · 판정 기준" 댓글을 옮긴 것이다.
+# 시도 1(국내 ETF만 붙잡고 주식은 바로 보냄)은 운영에 나가기 전에 조치가 바뀌어 재지 않고 끝났다.
+# 이번 조치는 평일 09:00~09:10에 생긴 급변동을 종류와 상관없이 버리고, 작업 기록을 성공·사유 dropped_at_market_open으로
+# 끝낸다(move_merge.py). 구간 끝 09:10은 브리핑 DailySettings.morning_merge_end다.
+# 확인기는 마감 후 판 시작 알림 때 돌므로 그날 구간은 이미 끝나 있다. 그래서 오늘을 잰다.
+# 변동 시각은 작업 기록(job_run)의 input인 market.move 원문의 payload.asOf다(브리핑이 구간을 가르는 시각과 같다).
+issue: 108
+attempt: 2
+fix_commit: "25eb53f"
+days: 2
+metrics:
+  - key: open_move_not_dropped_ratio
+    # 오늘 09:00~09:10에 생긴 급변동 작업 중 버림으로 끝나지 않았거나 결과 이벤트(메일)를 낸 작업의 비율.
+    # 통과는 0(모두 버려짐). 0보다 크면 실패(하나라도 버려지지 않음). 그런 작업이 없는 날은 비워 판정 보류한다.
+    sql: >-
+      WITH win AS (SELECT ((now() AT TIME ZONE 'Asia/Seoul')::date + TIME '09:00') AT TIME ZONE 'Asia/Seoul' AS start),
+      moves AS (SELECT r.failure_reason, r.result_event_id FROM briefing.job_run r, win
+        WHERE r.job_kind = 'move'
+          AND (r.input -> 'payload' ->> 'asOf')::timestamptz >= win.start
+          AND (r.input -> 'payload' ->> 'asOf')::timestamptz < win.start + INTERVAL '10 minutes')
+      SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM moves) THEN NULL
+        ELSE (SELECT count(*) FROM moves
+          WHERE coalesce(failure_reason, '') <> 'dropped_at_market_open' OR result_event_id IS NOT NULL)::numeric
+          / (SELECT count(*) FROM moves) END
+    pass: "== 0"

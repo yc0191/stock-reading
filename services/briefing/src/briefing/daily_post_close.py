@@ -27,6 +27,7 @@ from briefing.daily_report import conclusion, headline, section_title
 from briefing.daily_review import NOT_COMPARED, review_tally_line
 from briefing.job_log import (
     LEVEL_HIGH,
+    REASON_DROPPED_AT_MARKET_OPEN,
     REASON_MERGED_INTO_MORNING,
     REASON_NO_EVIDENCE,
     MoveRun,
@@ -56,8 +57,10 @@ MOVES_TITLE = "그날 급변동"
 MOVES_NONE = "없음"
 MOVES_NOT_READ = "기록을 읽지 못했습니다"
 # 급변동 결과 표시. 상은 리포트·메일 결과, 중은 대표 기사다. 모르는 상태 값은 그대로 보인다.
-# 따로 리포트를 만들지 않고 아침 판이 개장 흐름으로 담은 급변동
+# 따로 리포트를 만들지 않고 아침 판이 개장 흐름으로 담은 급변동(예전 기록)
 MOVE_MERGED_TEXT = "아침 판에 합침"
+# 장 시작~아침 판 시작 사이라 리포트를 만들지 않고 버린 급변동(move_merge.py)
+MOVE_DROPPED_TEXT = "장 시작 구간이라 보내지 않음"
 MOVE_MAIL_SENT_TEXT = "메일 보냄"
 MOVE_RESULT_TEXT = {RunStatus.SUCCEEDED.value: "성공", RunStatus.FAILED.value: "실패", RunStatus.RUNNING.value: "진행 중"}
 MOVE_NO_ARTICLE_TEXT = "관련 기사 없음"
@@ -168,6 +171,8 @@ def move_line(move: MoveRun, names: dict[str, str]) -> str:
     succeeded = move.status == RunStatus.SUCCEEDED.value
     if succeeded and move.failure_reason == REASON_MERGED_INTO_MORNING:
         return f"{head} · {MOVE_MERGED_TEXT}"
+    if succeeded and move.failure_reason == REASON_DROPPED_AT_MARKET_OPEN:
+        return f"{head} · {MOVE_DROPPED_TEXT}"
     if succeeded and move.failure_reason == REASON_NO_EVIDENCE:
         return f"{head} · 근거 없어 보내지 않음"
     # 레벨 중이어도 리포트를 만든 작업(중 규칙이 생기기 전 기록)은 상처럼 보인다.

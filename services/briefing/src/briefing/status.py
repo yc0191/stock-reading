@@ -14,7 +14,13 @@ from typing import Any, Mapping, Protocol
 
 from briefing.compose import KST
 from briefing.events import parse_timestamp
-from briefing.job_log import LEVEL_HIGH, LEVEL_MID, REASON_MERGED_INTO_MORNING, REASON_NO_EVIDENCE
+from briefing.job_log import (
+    LEVEL_HIGH,
+    LEVEL_MID,
+    REASON_DROPPED_AT_MARKET_OPEN,
+    REASON_MERGED_INTO_MORNING,
+    REASON_NO_EVIDENCE,
+)
 
 log = logging.getLogger("briefing.status")
 
@@ -257,8 +263,10 @@ class _Moves:
     no_evidence: int = 0
     running: int = 0
     rule_based: int = 0
-    # 아침 판에 합쳐 따로 리포트를 만들지 않은 변동(성공으로 끝났지만 리포트가 없다)
+    # 아침 판에 합쳐 따로 리포트를 만들지 않은 변동(예전 기록. 성공으로 끝났지만 리포트가 없다)
     merged: int = 0
+    # 장 시작~아침 판 시작 사이라 버린 변동(성공으로 끝났지만 리포트가 없다). 상·중 어디에도 세지 않는다.
+    dropped: int = 0
     # 급변동 리포트 멈춤 설정이 있던 때의 지난 기록(성공으로 끝났지만 리포트가 없다). 상·중 어디에도 세지 않는다.
     paused: int = 0
     reasons: dict[str, int] = field(default_factory=dict)
@@ -272,6 +280,8 @@ def _tally_moves(runs: list[JobRunRow]) -> _Moves:
         moves.total += 1
         if r.status == STATUS_SUCCEEDED and r.failure_reason == REASON_MERGED_INTO_MORNING:
             moves.merged += 1
+        elif r.status == STATUS_SUCCEEDED and r.failure_reason == REASON_DROPPED_AT_MARKET_OPEN:
+            moves.dropped += 1
         elif r.status == STATUS_SUCCEEDED and r.failure_reason == LEGACY_REASON_PAUSED:
             moves.paused += 1
         elif r.status == STATUS_SUCCEEDED and r.failure_reason == REASON_NO_EVIDENCE:
@@ -320,7 +330,9 @@ def _briefing_line(runs: list[JobRunRow] | None) -> str:
         return f"- 브리핑: {NO_DATA}"
     m = _tally_moves(runs)
     failed = f"실패 {m.failed}" + (f"[{_reasons_text(m.reasons)}]" if m.reasons else "")
-    no_report = (f" · 아침 판에 합침 {m.merged}" if m.merged else "") + (f" · 지난 리포트 멈춤 {m.paused}" if m.paused else "")
+    no_report = ((f" · 아침 판에 합침 {m.merged}" if m.merged else "")
+                 + (f" · 장 시작 구간이라 보내지 않음 {m.dropped}" if m.dropped else "")
+                 + (f" · 지난 리포트 멈춤 {m.paused}" if m.paused else ""))
     return (f"- 브리핑: 급변동 {m.total}건(상 {m.high}(메일) · 중 {m.mid}(기록) · {failed} · 진행 중 {m.running} · 규칙 기반 {m.rule_based}{no_report})"
             f" · 근거 없어 보내지 않은 급변동 {m.no_evidence}건 · 아침 판 {_morning_text(_morning(runs))}")
 

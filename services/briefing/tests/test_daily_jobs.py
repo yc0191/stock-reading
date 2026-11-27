@@ -685,7 +685,7 @@ def test_edition_is_not_published_when_its_log_could_not_be_saved(caplog):
     assert published(requests) == []
     assert "result event not published" in caplog.text and "TEST01" not in caplog.text
     assert "result was not saved" in caplog.text
-    assert not c.morning_in_progress(MORNING_AT.date())  # 작업은 정리되어 더 기다리지 않는다
+    assert c._jobs == {}  # 작업은 정리되어 더 기다리지 않는다
 
 
 def test_post_close_edition_also_leaves_its_lines_under_its_own_job_kind(core):

@@ -8,11 +8,7 @@ import pytest
 
 from briefing import trace
 from briefing.config import CoreSettings
-from briefing.move_merge import MorningMerge
 from briefing.trace import CORRELATION_ID_KEY, CorrelationIdFilter, correlation_context
-from fake_job_log import FakeJobLog
-from test_move_group import move
-from test_move_merge import at
 from test_runner import (  # noqa: F401 - setup은 픽스처
     MOVE,
     FakeMessage,
@@ -178,22 +174,6 @@ def test_the_daily_total_time_limit_logs_with_the_job_id(lines, caplog, edition)
     expired = lines()
     assert any("reached the total time limit" in message for _, message in expired)
     assert {cid for cid, _ in expired} == {event.value["correlationId"]}
-
-
-def test_releasing_a_held_move_runs_with_its_id():
-    seen = []
-    merge = MorningMerge(lambda message, now: seen.append((json.loads(message)["eventId"], trace.current())),
-                         FakeJobLog())
-    for event_id, as_of in (("m1", at(9, 3)), ("m2", at(9, 4))):
-        event = json.loads(move(event_id, as_of=as_of))
-        event["correlationId"] = f"c-{event_id}"
-        merge.on_move(json.dumps(event), as_of + timedelta(seconds=5))
-
-    # 합침 기한이 지나 보류한 변동을 넘기는 일은 메시지 처리 밖에서 일어난다.
-    merge.on_tick(at(9, 40))
-
-    assert seen == [("m1", "c-m1"), ("m2", "c-m2")]
-    assert trace.current() is None
 
 
 def test_log_lines_while_handling_a_query_result_carry_the_queries_trace_id(setup, lines):

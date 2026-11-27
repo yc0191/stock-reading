@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, time, timedelta
+from datetime import datetime, time, timedelta
 from typing import Any, Callable
 
 from briefing.compose import KST
@@ -234,9 +234,6 @@ class DailyCore:
     status: StatusPort | None = None
     # 판을 받을 멤버와 그 포트폴리오를 읽는 곳. 없으면 받을 멤버를 모르므로 판을 발행하지 않는다.
     members: MemberPort | None = None
-    # 아침 판의 결과(판 시각, 나갔는가, 판에 개장 흐름이 담긴 종목코드, 개장 흐름을 읽은 구간 시작)를 받는 곳.
-    # 장 시작 뒤 급변동을 아침 판에 합쳤는지 정하는 데 쓴다.
-    on_morning_result: Callable[[datetime, bool, datetime, frozenset[str], datetime | None], None] | None = None
     # 있을 때만 LLM 본문을 발행 직전 마지막 검사(코드 검사, 필요하면 LLM 검토와 고침)에 거친다.
     final: FinalCheck | None = None
     _jobs: dict[str, _DailyJob] = field(default_factory=dict, init=False)
@@ -399,11 +396,6 @@ class DailyCore:
         self._note_excluded(job, "filings", len(filings) - len(kept))
         job.filings_data, job.filings_truncated = kept, truncated
         self._finish(job, now)
-
-    def morning_in_progress(self, day: date) -> bool:
-        """그 날의 아침 판이 시작됐고 아직 끝나지 않았는가."""
-        return any(j.edition == EDITION_MORNING and j.scheduled_for.astimezone(KST).date() == day
-                   for j in self._jobs.values())
 
     # ---- 요청 ----
 
@@ -833,10 +825,6 @@ class DailyCore:
             # 멤버마다 이벤트가 따로라 작업 한 줄에는 첫 멤버의 것만 싣고, 나머지는 member-briefing 줄에 있다.
             result_event_id=events[0][1].value["eventId"] if events else None)
         saved = record_result(self.job_log, result)
-        if job.edition == EDITION_MORNING and self.on_morning_result is not None:
-            # 나가지 않은 아침 판(실패, 기록 저장 실패)은 합쳐 둔 급변동을 받지 못했으므로 그 변동을 따로 알린다.
-            flowed = frozenset(e.symbol for e in job.etfs or () if e.open_flow is not None and e.open_flow.present)
-            self.on_morning_result(job.scheduled_for, saved and not failed, now, flowed, job.open_flow_since)
         if not saved:
             del self._jobs[job.job_id]
             return

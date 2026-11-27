@@ -113,8 +113,11 @@ REASON_REPRESENTATIVE_NONE = "no-article"
 REASON_INTERRUPTED = "interrupted_by_restart"
 # 조회 결과를 작업에 넘기다 예상하지 못한 오류가 났다(job_run.failure_reason). 코드 결함이 원인이라 단계 실패 사유와 따로 둔다.
 REASON_RESULT_ERROR = "result_handling_error"
-# 장 시작~아침 판 시작 사이 급변동을 따로 보내지 않고 아침 판에 합쳤다(성공으로 끝난 작업의 사유이며 리포트는 없다)
+# 장 시작~아침 판 시작 사이 급변동을 따로 보내지 않고 아침 판에 합쳤다(성공으로 끝난 작업의 사유이며 리포트는 없다).
+# 지금은 새로 쓰지 않고(아래 REASON_DROPPED_AT_MARKET_OPEN으로 바뀜) 예전 기록을 읽을 때만 쓴다.
 REASON_MERGED_INTO_MORNING = "merged_into_morning"
+# 장 시작~아침 판 시작 사이 급변동이라 리포트를 만들지 않고 버렸다(성공으로 끝난 작업의 사유이며 리포트는 없다). move_merge.py
+REASON_DROPPED_AT_MARKET_OPEN = "dropped_at_market_open"
 # 최종 본문에 인용한 근거가 하나도 없어 결과 이벤트를 발행하지 않았다. 작업 상태는 succeeded, 발행 이벤트는 없다.
 REASON_NO_EVIDENCE = "no_evidence"
 
