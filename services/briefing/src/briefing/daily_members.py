@@ -42,10 +42,6 @@ class MemberPort(Protocol):
         """사용 중이고 그 판 수신을 켠 멤버 중 포트폴리오에 국내 ETF가 있는 멤버(번호 순)와 그 멤버의 국내 주식. 읽지 못하면 None."""
         ...
 
-    def is_domestic_etf(self, symbol: str) -> bool | None:
-        """종목코드가 국내 ETF인가. 읽지 못하면 None."""
-        ...
-
 
 def member_input(full: DailyInput, member: MemberPortfolio) -> DailyInput:
     """판 전체 자료에서 이 멤버의 ETF에 관련된 것만 남긴 자료. 응답을 받지 못해 ETF 목록이 없으면 그대로 None이다.

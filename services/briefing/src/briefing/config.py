@@ -153,16 +153,14 @@ class DailySettings:
     # 아니라고 보고 자료 없음으로 둔다. 장중 수집의 마지막 회차(15:30)는 장이 끝나는 순간의 값이라 종가가 반영됐는지 알 수 없어,
     # 마감 후 수집(16:30, 재시도 16:48까지) 값만 통과하도록 그 사이 시각으로 둔다. 범위는 배경 자료와 같은 CoreSettings.background_window다.
     prev_close_after: time = time(16, 0)
-    # 장 시작부터 이 시각 전까지의 급변동은 급변동 리포트를 따로 만들지 않고 아침 판에 합친다. 수집기가 아침 판 시작 알림을 내는
-    # 시각(collector.daily-briefing.morning-cron 기본 평일 09:10)과 같아야 한다. 합침 구간이 끝난 뒤 이 시간이 지나도 아침 판
-    # 결과가 없으면 모아 둔 변동을 급변동 리포트로 넘긴다.
+    # 장 시작부터 이 시각 전까지의 급변동은 급변동 리포트를 만들지 않고 버린다(move_merge.py). 수집기가 아침 판 시작 알림을 내는
+    # 시각(collector.daily-briefing.morning-cron 기본 평일 09:10)과 같아야 한다.
     morning_merge_end: time = time(9, 10)
-    # 합침을 켠다. 수집기의 데일리 판 시작 알림을 켜는 값(collector.daily-briefing.enabled = COLLECTOR_DAILY_BRIEFING_ENABLED)과
-    # 짝이다. 알림이 오지 않는데 켜 두면 합침 구간의 급변동이 grace만큼 늦게 나가므로 꺼져 있으면 바로 리포트를 만든다.
+    # 장 시작 구간 버림을 켠다. 수집기의 데일리 판 시작 알림을 켜는 값(collector.daily-briefing.enabled =
+    # COLLECTOR_DAILY_BRIEFING_ENABLED)과 짝이다. 아침 판이 없는 환경에서는 꺼져 있어 그 시간대도 바로 리포트를 만든다.
     morning_merge_enabled: bool = False
-    # 합침 경로가 기억하는 eventId 수. 급변동 묶음기(remembered_jobs)와 같은 상한이다.
+    # 장 시작 구간 버림이 기억하는 eventId 수. 급변동 묶음기(remembered_jobs)와 같은 상한이다.
     remembered_move_ids: int = 10000
-    morning_merge_grace: timedelta = timedelta(minutes=30)
     # 기사가 그 ETF와 관계있는지 볼 때 추종 대상·ETF 이름에서 앞의 나라 이름과 끝의 접미어를 뗀 것도 비교어로 쓴다
     # (예: '미국 나스닥100 지수' → '나스닥100'). 뗀 결과가 숫자·기호뿐이거나 2글자 미만이면 쓰지 않는다.
     relevance_country_prefixes: tuple[str, ...] = ("미국", "한국", "중국", "일본", "인도", "베트남", "유럽", "글로벌")
@@ -185,7 +183,7 @@ class DailySettings:
     # '자료가 낡았을 수 있음'을 표시한다. 수집기 알림 시각(아침 09:10, 마감 후 수집 16:30 뒤)보다 뒤여야 한다.
     morning_deadline: time = time(9, 20)
     post_close_deadline: time = time(17, 30)
-    # 한도 시각 안전장치를 켠다. 합침(morning_merge_enabled)과 같은 환경변수(COLLECTOR_DAILY_BRIEFING_ENABLED)로 켠다.
+    # 한도 시각 안전장치를 켠다. 장 시작 구간 버림(morning_merge_enabled)과 같은 환경변수(COLLECTOR_DAILY_BRIEFING_ENABLED)로 켠다.
     # 수집기 알림을 꺼 둔 로컬에서 평일마다 판이 저절로 나가지 않게 한다.
     deadline_enabled: bool = False
     # 서버 상태 절의 '주의': 판 시각에 시작한 지 이만큼 넘게 진행 중인 작업은 멈춘 것으로 본다.

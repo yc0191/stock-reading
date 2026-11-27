@@ -43,7 +43,7 @@ from briefing.jobs import BriefingCore
 from briefing.llm import AnthropicClient
 from briefing.member_store import PostgresMemberStore
 from briefing.move_group import MoveGrouper
-from briefing.move_merge import MorningMerge
+from briefing.move_merge import MarketOpenDrop
 from briefing.move_final_check import move_final_check
 from briefing.queries import OnResult, QueryPort, QueryResult
 from briefing.report_stage import ReportStage
@@ -202,7 +202,7 @@ class BriefingRunner:
         self._producer: Producer | None = None
         self.core: BriefingCore | None = None
         self.grouper: MoveGrouper | None = None
-        self.merge: MorningMerge | None = None
+        self.open_drop: MarketOpenDrop | None = None
         self.research: ResearchReportStage | None = None
         self.sentences: SentenceResearch | None = None
         self._running = threading.Event()
@@ -261,15 +261,11 @@ class BriefingRunner:
         self.core = BriefingCore(publisher, self.api, self.research, self.settings, self.job_log)
         # 같은 종목의 급변동은 모아서 작업 하나로 넘긴다.
         self.grouper = MoveGrouper(self.core.on_move, self.job_log, self.settings)
-        # 장 시작부터 아침 판 시작 사이의 급변동은 따로 리포트를 만들지 않고 아침 판에 합친다(실패하면 리포트로 넘긴다).
-        self.merge = MorningMerge(self.grouper.on_move, self.job_log, self.daily_settings)
+        # 장 시작부터 아침 판 시작 사이의 급변동은 리포트를 만들지 않고 버린다.
+        self.open_drop = MarketOpenDrop(self.job_log, self.daily_settings)
         self.daily = DailyCore(publisher, self.api, self.daily_writer, self.job_log, self.daily_settings,
                                sentences=self.sentences, status=self.status_store, members=self.member_store,
-                               on_morning_result=self.merge.on_morning_result,
                                final=daily_final_check(self.daily_writer, self.job_log))
-        self.merge.morning_in_progress = self.daily.morning_in_progress
-        if self.member_store is not None:
-            self.merge.is_domestic_etf = self.member_store.is_domestic_etf
         self._consumer = self._consumer_factory({
             "bootstrap.servers": self.bootstrap,
             "group.id": "briefing",
@@ -351,8 +347,9 @@ class BriefingRunner:
                               message.topic(), message.partition(), message.offset())
 
     def _on_move(self, message: str | bytes, now: datetime) -> None:
-        # 장 시작~아침 판 시작 사이 변동은 아침 판이 담으므로 모아 두고, 그 밖의 변동은 급변동 리포트로 간다.
-        if not self.daily_settings.morning_merge_enabled or not self.merge.on_move(message, now):
+        # 아침 판이 켜져 있으면 장 시작~아침 판 시작 사이 변동은 버리고, 그 밖의 변동은 급변동 리포트로 간다.
+        # 아침 판이 꺼져 있으면 그 시간대도 다른 시간과 같이 리포트로 간다.
+        if not self.daily_settings.morning_merge_enabled or not self.open_drop.on_move(message, now):
             self.grouper.on_move(message, now)
 
     def _on_collection_completed(self, message: str | bytes, now: datetime) -> None:
@@ -394,7 +391,7 @@ class BriefingRunner:
     # ---- 내부 ----
 
     def _next_deadline(self) -> datetime | None:
-        deadlines = [d for d in (self.grouper.next_deadline(), self.merge.next_deadline(), self.core.next_deadline(),
+        deadlines = [d for d in (self.grouper.next_deadline(), self.core.next_deadline(),
                                  self.sentences.next_deadline()) if d is not None]
         return min(deadlines) if deadlines else None
 
@@ -407,11 +404,7 @@ class BriefingRunner:
 
     def _tick(self) -> None:
         now = self.clock()
-        # 아침 판에 합치려고 모아 둔 변동 중 때가 지난 것을 먼저 리포트 흐름으로 넘기고, 모은 변동을 내보낸다.
-        # 그래야 방금 만든 작업의 제한 시간을 같은 순서에서 볼 수 있다.
-        deadline = self.merge.next_deadline()
-        if deadline is not None and now >= deadline:
-            self.merge.on_tick(now)
+        # 모은 변동을 먼저 내보낸다. 그래야 방금 만든 작업의 제한 시간을 같은 순서에서 볼 수 있다.
         deadline = self.grouper.next_deadline()
         if deadline is not None and now >= deadline:
             self.grouper.on_tick(now)
@@ -431,8 +424,6 @@ class BriefingRunner:
             return
         try:
             abandoned = self.grouper.abandon_pending(self.clock())
-            if self.merge is not None:
-                abandoned += self.merge.abandon_pending(self.clock())
         except Exception:  # noqa: BLE001 - 종료를 막지 않는다
             log.exception("could not record pending market.move groups at shutdown")
             return
@@ -468,8 +459,8 @@ def build_runner(env: Mapping[str, str]) -> BriefingRunner:
     bootstrap = env.get("KAFKA_BOOTSTRAP", "localhost:9092")
     connect = psycopg_connector(db_conninfo(env))
     store = PostgresJobLog(connect)
-    # 아침 판 합침과 한도 시각 안전장치는 수집기의 판 시작 알림을 켜는 값과 같은 환경변수로 켠다. 알림을 꺼 둔 곳에서는
-    # 합칠 판이 없고, 평일마다 판이 저절로 나가면 안 된다.
+    # 장 시작 구간 급변동 버림과 한도 시각 안전장치는 수집기의 판 시작 알림을 켜는 값과 같은 환경변수로 켠다. 알림을 꺼 둔
+    # 곳에서는 아침 판이 없으므로 그 시간대 급변동도 보내고, 평일마다 판이 저절로 나가면 안 된다.
     daily_on = env.get("COLLECTOR_DAILY_BRIEFING_ENABLED", "").strip().lower() == "true"
     daily_settings = replace(DEFAULT_DAILY_SETTINGS, morning_merge_enabled=daily_on, deadline_enabled=daily_on)
     # 같은 사건 기사 묶기 기준값은 급변동·데일리 작성기와 서비스가 같은 CoreSettings를 쓴다.
