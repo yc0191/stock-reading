@@ -31,7 +31,7 @@ paths:
 
 ## 4. 근거 번호와 LLM 입력
 
-- 근거 번호: 원래 식별자(기사 번호, 공시 접수번호)를 그대로 쓰고, 없으면 코드가 접두어와 순번을 붙입니다(`report.py`의 `*_REF_PREFIX`). 번호를 `evidence_catalog`에 넣어야 인용할 수 있습니다.
+- 근거 번호: 원래 식별자(기사 번호, 공시 접수번호)를 그대로 쓰고, 없으면 코드가 접두어와 순번을 붙입니다(`move_evidence.py`의 `*_REF_PREFIX`). 번호를 `evidence_catalog`에 넣어야 인용할 수 있습니다.
 - `build_llm_input`에 넣을 항목(제목, 시각, 변동보다 얼마나 전인지, 원문 여부)을 정하고, 읽는 법이 필요하면 `SYSTEM_PROMPT`에 적습니다.
 - `briefing.generated` 근거의 `kind` 값을 정합니다. 출처는 제공자 이름 대신 중립 표현을 씁니다.
 - `jobs.py`의 `_log_collection`에 건수·제외·잘림을 더합니다. 종목코드와 티커는 로그에 쓰지 않습니다.

@@ -27,16 +27,9 @@ from briefing.move_mail import CHART_MISSING_ITEM, CHART_OVERSIZED_ITEM, render_
 from briefing.queries import QueryKind, QueryResult
 from briefing.final_check import MailSentence
 from briefing.move_final_check import MoveFinalCheck
-from briefing.report import (
-    MAX_CAUSES,
-    Report,
-    LlmWriter,
-    InvalidOutput,
-    ReportStage,
-    RuleBasedWriter,
-    build_llm_input,
-    parse_output,
-)
+from briefing.report import MAX_CAUSES, Report, LlmWriter, InvalidOutput, RuleBasedWriter, parse_output
+from briefing.report_stage import ReportStage
+from briefing.move_evidence import build_llm_input
 from briefing.sentence_research import MoveDraft
 from briefing.sources import Article, PricePoint
 from contracts import sample, validate

@@ -13,13 +13,10 @@ from fake_anthropic import as_reply
 from briefing.config import CoreSettings
 from briefing.jobs import BriefingCore
 from briefing.ports import FailureReason
-from briefing.report import (
-    SYSTEM_PROMPT,
-    LlmWriter,
-    ReportStage,
-    RuleBasedWriter,
-    build_llm_input,
-)
+from briefing.move_prompts import SYSTEM_PROMPT
+from briefing.report import LlmWriter, RuleBasedWriter
+from briefing.report_stage import ReportStage
+from briefing.move_evidence import build_llm_input
 from briefing.sources import (
     BACKGROUND_SOURCE,
     CLOSE_RATE_SOURCE,
@@ -688,7 +685,7 @@ def run_with_figures(core):
 
 
 def figure_ref(report_input, name):
-    from briefing.report import figure_entries
+    from briefing.move_evidence import figure_entries
     (entry,) = [e for e in figure_entries(report_input) if e.name == name]
     return entry.ref
 

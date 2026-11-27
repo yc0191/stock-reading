@@ -10,7 +10,9 @@ import pytest
 from briefing.config import DEFAULT_SETTINGS, CoreSettings
 from briefing.job_log import LEVEL_HIGH, LEVEL_MID, level_of, parse_move_run
 from briefing.jobs import parse_move
-from briefing.report import _today_first_entry, build_llm_input, comparison_facts
+from briefing.report_stage import _today_first_entry
+from briefing.move_evidence import build_llm_input
+from briefing.move_figures import comparison_facts
 from test_move_compare import comparison, move, rule_based_text, run
 
 

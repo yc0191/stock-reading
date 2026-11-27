@@ -15,9 +15,10 @@ from briefing.daily_prompts import REWRITE_ADDENDUM, REWRITE_ADDENDUM_POST_CLOSE
 from briefing.daily_prompts import SYSTEM_PROMPT as MORNING_PROMPT
 from briefing.daily_prompts import SYSTEM_PROMPT_POST_CLOSE
 from briefing.job_log import EntryType
-from briefing.report import REWRITE_ADDENDUM as MOVE_REWRITE_ADDENDUM
-from briefing.report import SYSTEM_PROMPT as MOVE_PROMPT
-from briefing.report import InvalidOutput, build_llm_input, evidence_catalog, parse_output
+from briefing.move_prompts import REWRITE_ADDENDUM as MOVE_REWRITE_ADDENDUM
+from briefing.move_prompts import SYSTEM_PROMPT as MOVE_PROMPT
+from briefing.report import InvalidOutput, parse_output
+from briefing.move_evidence import build_llm_input, evidence_catalog
 from briefing.research import QUERY_SYSTEM_PROMPT
 from briefing.sources import Article
 from contracts import validate
@@ -218,7 +219,7 @@ def _no_grouping(*args, **kwargs):
 
 def test_the_search_query_input_does_not_group_articles_and_keeps_the_same_fields(grouped_move_input, monkeypatch):
     import briefing.daily_report as daily_report
-    import briefing.report as report
+    import briefing.move_evidence as move_evidence
     from briefing.daily_jobs import DailySentences
     from briefing.sentence_research import MoveDraft, MoveSentences
     from test_daily_writing import weak_draft
@@ -230,7 +231,7 @@ def test_the_search_query_input_does_not_group_articles_and_keeps_the_same_field
     day_draft = weak_draft("0.50")
     grouped_day = daily_report.build_llm_input(day_draft.input, day_draft.sections)
 
-    monkeypatch.setattr(report, "article_groups", _no_grouping)
+    monkeypatch.setattr(move_evidence, "article_groups", _no_grouping)
     monkeypatch.setattr(daily_report, "article_groups", _no_grouping)
     context = move.query_context(move_draft, None)
     day_context = daily.query_context(day_draft, None)

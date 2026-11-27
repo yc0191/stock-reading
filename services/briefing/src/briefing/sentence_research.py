@@ -23,7 +23,9 @@ from briefing.jobs import ReportInput
 from briefing.job_step import job_scope
 from briefing.ports import RequestPort
 from briefing.queries import QueryPort
-from briefing.report import Cause, Report, ReportStage, build_llm_input
+from briefing.report import Cause, Report
+from briefing.report_stage import ReportStage
+from briefing.move_evidence import build_llm_input
 from briefing.research import (
     NewsResearch,
     QueryWriter,

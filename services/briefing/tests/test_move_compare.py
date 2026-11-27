@@ -12,7 +12,10 @@ import pytest
 from briefing.config import CoreSettings
 from briefing.job_log import LEVEL_HIGH
 from briefing.jobs import BriefingCore, parse_move
-from briefing.report import ReportStage, RuleBasedWriter, build_llm_input, comparison_facts, figure_entries
+from briefing.report_stage import ReportStage
+from briefing.report import RuleBasedWriter
+from briefing.move_evidence import build_llm_input, figure_entries
+from briefing.move_figures import comparison_facts
 from contracts import sample, validate
 from fake_api import FakeApi
 from fake_job_log import FakeJobLog

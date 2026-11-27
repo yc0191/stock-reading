@@ -12,14 +12,9 @@ from briefing.daily_report import DailyLlmWriter, build_llm_input as build_daily
 from briefing.daily_sections import build_sections
 from briefing.daily_output import parse_output as parse_daily
 from briefing.llm_output import WEAK_NOTE_PREFIX, InvalidLlmOutput, weak_note_line
-from briefing.report import SYSTEM_PROMPT as MOVE_PROMPT
-from briefing.report import (
-    InvalidOutput,
-    LlmWriter,
-    ReportError,
-    build_llm_input as build_move_input,
-    parse_output as parse_move,
-)
+from briefing.move_prompts import SYSTEM_PROMPT as MOVE_PROMPT
+from briefing.report import InvalidOutput, LlmWriter, ReportError, parse_output as parse_move
+from briefing.move_evidence import build_llm_input as build_move_input
 from briefing.sources import EtfInfo, EtfMember, MemberChanges, MovedMember, etf_info_input, parse_etf_info
 from fake_news import answer_news
 from test_daily_jobs import FakeLlm as DailyFakeLlm

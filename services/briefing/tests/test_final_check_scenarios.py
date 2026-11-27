@@ -20,7 +20,7 @@ from briefing.jobs import BriefingCore
 from briefing.llm import LlmCallError
 from briefing.move_final_check import FIX_ADDENDUM as MOVE_FIX_ADDENDUM
 from briefing.move_final_check import MoveFinalCheck
-from briefing.report import SYSTEM_PROMPT as MOVE_PROMPT
+from briefing.move_prompts import SYSTEM_PROMPT as MOVE_PROMPT
 from briefing.report import LlmWriter
 from briefing.sentence_research import ResearchReportStage
 from contracts import validate

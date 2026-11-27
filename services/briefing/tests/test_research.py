@@ -14,7 +14,8 @@ from briefing.jobs import BriefingCore
 from briefing.llm import LlmCallError
 from briefing.ports import FailureReason
 from briefing.job_log import REASON_NO_EVIDENCE, EntryType, GeneratedBy, RunStatus
-from briefing.report import LLM_INSUFFICIENT, LlmWriter, ReportStage
+from briefing.report import LLM_INSUFFICIENT, LlmWriter
+from briefing.report_stage import ReportStage
 from briefing.research import (
     QUERY_SYSTEM_PROMPT,
     InvalidQueries,

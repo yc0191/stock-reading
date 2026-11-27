@@ -67,7 +67,7 @@ PYTHONPATH=services/briefing/src services/briefing/.venv/bin/python -m briefing.
 | 장 시작~아침 판 사이 급변동의 아침 판 합침 | `move_merge.py` |
 | 급변동 근거 조회와 다시 부르기 | `jobs.py`, `http_queries.py` |
 | 급변동 레벨 판단(상·중), 중의 대표 기사 고르기 | `job_log.py`의 `level_of`, `move_representative.py` |
-| 비교 숫자, 머리말 | `move_figures.py`, `report.py` |
+| 비교 숫자, 머리말 | `move_figures.py`, `move_evidence.py` |
 | 레벨 상 메일: 오늘 흐름, 글자판, HTML, 장중 차트 | `move_flow.py`, `move_view.py`, `move_mail.py`, `move_chart.py`, `move_prompts.py` |
 | 같은 사건 기사 묶기 | `article_groups.py` |
 | LLM 출력 검사(인용 번호, 미국 티커 거부(급변동·마감 후 판), 근거 약함 줄) | `llm_output.py` |

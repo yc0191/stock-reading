@@ -15,17 +15,14 @@ from briefing.report import (
     GENERATED_BY_RULE,
     LLM_DISCLAIMER,
     LLM_INSUFFICIENT,
-    OUTPUT_SCHEMA,
-    REWRITE_ADDENDUM,
-    SYSTEM_PROMPT,
     Cause,
     LlmWriter,
-    ReportStage,
     RuleBasedWriter,
-    build_llm_input,
     build_report_writer,
-    unchecked_items,
 )
+from briefing.move_prompts import OUTPUT_SCHEMA, REWRITE_ADDENDUM, SYSTEM_PROMPT
+from briefing.report_stage import ReportStage
+from briefing.move_evidence import build_llm_input, unchecked_items
 from briefing.sources import Article, Background, EtfInfo, PricePoint
 from contracts import validate
 from fake_anthropic import FAKE_KEY, fake_sdk  # noqa: F401 - 픽스처
