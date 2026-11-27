@@ -74,7 +74,7 @@ PYTHONPATH=services/briefing/src services/briefing/.venv/bin/python -m briefing.
 | 근거가 약한 문장 단위 재검색 | `sentence_research.py`, `research.py` |
 | 발행 직전 마지막 검사 | `final_check.py`, `move_final_check.py`, `daily_final_check.py` |
 | 데일리 판 시작, 한도 시각, 휴장 알림 | `daily_start.py` |
-| 판 작업, 멤버별 판 | `daily_jobs.py`, `daily_members.py`, `member_store.py` |
+| 판 작업, 멤버별 판 | `daily_jobs.py`, `daily_sentences.py`(재검색 어댑터), `daily_publish.py`(메일 이벤트·차트·서버 상태 절), `daily_members.py`, `member_store.py` |
 | 판 입력, 기사 관계 판정, 개장 흐름 | `daily_inputs.py`, `daily_relevance.py`, `open_flow.py` |
 | 마감 후 판의 아침 예상 대조, 그날 급변동 | `daily_review.py` |
 | 서버 상태 절 | `status.py` |

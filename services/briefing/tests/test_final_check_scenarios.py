@@ -316,7 +316,8 @@ def test_the_final_check_reads_and_fixes_the_other_issues_too():
 
 def test_the_final_check_marks_a_rewritten_outlook_by_its_research_sentence_number():
     from types import SimpleNamespace
-    from briefing.daily_jobs import DailyDraft, _Draft
+    from briefing.daily_sentences import DailyDraft
+    from briefing.daily_jobs import _Draft
     from briefing.daily_output import POINT_OUTLOOK
     from briefing.daily_sections import DailyInput
     output = DailyOutput((Point("밤사이 이슈입니다.", ("B1",)),), False,

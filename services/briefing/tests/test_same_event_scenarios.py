@@ -220,7 +220,7 @@ def _no_grouping(*args, **kwargs):
 def test_the_search_query_input_does_not_group_articles_and_keeps_the_same_fields(grouped_move_input, monkeypatch):
     import briefing.daily_report as daily_report
     import briefing.move_evidence as move_evidence
-    from briefing.daily_jobs import DailySentences
+    from briefing.daily_sentences import DailySentences
     from briefing.sentence_research import MoveDraft, MoveSentences
     from test_daily_writing import weak_draft
 

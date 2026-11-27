@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Mapping
 
-from briefing.daily_jobs import DailyDraft
+from briefing.daily_sentences import DailyDraft
 from briefing.daily_prompts import NO_REASON_STATEMENT, SYSTEM_PROMPT, SYSTEM_PROMPT_POST_CLOSE
 from briefing.daily_sections import KIND_NEWS
 from briefing.daily_output import POINT_ETF, POINT_NOTABLE, DailyOutput, Point, member_repeat_reason, sentence_slots

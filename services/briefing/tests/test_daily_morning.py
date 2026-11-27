@@ -10,7 +10,8 @@ from briefing.daily_morning import NO_OVERNIGHT, OUTLOOK_NOTE, morning_text, out
 from briefing.daily_prompts import OUTPUT_SCHEMA_MORNING, SYSTEM_PROMPT
 from briefing.daily_members import member_output
 from briefing.config import DailySettings
-from briefing.daily_jobs import DailyDraft, DailySentences, _Draft
+from briefing.daily_sentences import DailyDraft, DailySentences
+from briefing.daily_jobs import _Draft
 from briefing.daily_sections import DailyInput, EtfDay, Entry, Section, build_sections
 from briefing.daily_report import DailyLlmWriter
 from briefing.daily_output import DailyOutput, Point, InvalidDailyOutput, parse_morning_output

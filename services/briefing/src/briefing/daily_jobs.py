@@ -11,8 +11,6 @@
 """
 from __future__ import annotations
 
-import base64
-import json
 import logging
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
@@ -20,8 +18,6 @@ from typing import Any, Callable
 
 from briefing.compose import KST
 from briefing.config import DEFAULT_DAILY_SETTINGS, DEFAULT_SETTINGS, CoreSettings, DailySettings
-from briefing.daily_chart import LineChart, chart_bars, line_charts, no_data_names, render_day_chart
-from briefing.daily_html import ChartSlot, render_html
 from briefing.daily_members import (
     MemberPort,
     MemberPortfolio,
@@ -32,8 +28,7 @@ from briefing.daily_members import (
     whole_input,
 )
 from briefing.daily_morning import outlook_records
-from briefing.daily_inputs import (EtfArticles, is_prev_close, member_issues, moves_with_market, notable_candidates,
-                                   prev_close_range)
+from briefing.daily_inputs import EtfArticles, is_prev_close, member_issues, notable_candidates, prev_close_range
 from briefing.daily_relevance import split_related
 from briefing.daily_issue_notes import settle_rate_notes
 from briefing.daily_start import SEC_FILINGS_SOURCE, DailyStart
@@ -44,7 +39,6 @@ from briefing.daily_sections import (
     EDITIONS_WITH_FILINGS,
     DailyInput,
     EtfDay,
-    RELATION_HELD,
     build_sections,
     has_evidence,
     missing_items,
@@ -53,23 +47,14 @@ from briefing.daily_report import (
     GENERATED_BY_RULE,
     DailyLlmWriter,
     GENERATED_BY_LLM,
-    build_llm_input,
     daily_text,
     llm_text,
     rule_based_text,
     refs_cited_by_others,
 )
-from briefing.daily_output import DailyOutput, POINT_ETF, POINT_NOTABLE, sentence_slots, slot_point, with_slot_point
+from briefing.daily_output import DailyOutput, slot_point, with_slot_point
 from briefing.llm import usage_record
-from briefing.events import (
-    EDITION_MORNING,
-    EDITION_POST_CLOSE,
-    EDITIONS,
-    OutboundEvent,
-    daily_briefing_event,
-    format_timestamp,
-    parse_timestamp,
-)
+from briefing.events import EDITION_MORNING, EDITION_POST_CLOSE, OutboundEvent, format_timestamp, parse_timestamp
 from briefing.job_log import (
     DiscardJobLog,
     EntryType,
@@ -83,7 +68,6 @@ from briefing.job_log import (
     range_target,
     record_result,
 )
-from briefing.evidence import MARKET_WIDE
 from briefing.final_check import FinalCheck
 from briefing.move_figures import MARKET_SUMMARY_API
 from briefing.open_flow import in_range, open_flow_start, parse_open_flow
@@ -92,11 +76,9 @@ from briefing.price_series import (closes_in_range, intraday_in_range, intraday_
 from briefing.job_step import job_scope
 from briefing.ports import FailureReason, RequestPort
 from briefing.queries import Query, QueryKind, QueryPort, QueryResult
-from briefing.research import ResearchTarget
-from briefing.sentence_research import WHOLE_REPORT, SentenceResearch, WeakSentence
-from briefing.status import Operations, StatusPort, StatusReport, build_status_report, parse_operations
+from briefing.sentence_research import WHOLE_REPORT, SentenceResearch
+from briefing.status import Operations, StatusPort, parse_operations
 from briefing.sources import (
-    BACKGROUND_LABEL,
     BACKGROUND_MISSING,
     Article,
     Background,
@@ -110,18 +92,10 @@ from briefing.sources import (
     parse_etf_info,
     parse_filings,
 )
+from briefing.daily_publish import daily_event, status_report
+from briefing.daily_sentences import DailyDraft, DailySentences, EDITION_JOB_KINDS
 
 log = logging.getLogger("briefing.daily_jobs")
-
-# 차트를 싣지 못했을 때 자료 없음 목록(missingItems)에 남기는 줄.
-CHART_OVERSIZED_ITEM = "하루 등락 차트: 크기 초과"
-CHART_FAILED_ITEM = "하루 등락 차트: 그리지 못함"
-LINE_CHARTS_OVERSIZED_ITEM = "흐름 그래프: 크기 초과"
-LINE_CHARTS_FAILED_ITEM = "흐름 그래프: 그리지 못함"
-# 그림이 있는 메일의 글자판 끝에 붙인다. 글자판에는 그림을 넣지 못한다.
-CHARTS_IN_HTML_NOTE = "(그래프는 HTML 메일에 있습니다)"
-# 서버 상태 절을 만들다 실패했을 때 본문 끝에 대신 붙이는 절.
-NO_STATUS_TEXT = "──────── 서버 상태 ────────\n- 자료 없음"
 
 # 작업 기록(requests, received, notReceived)에 남기는 조회 이름
 DAILY_DATA = QueryKind.DAILY.value
@@ -778,96 +752,10 @@ class DailyCore:
             return None
         return DailyDraft(draft.job, rewritten_input, sections, replace(new, rewritten=(WHOLE_REPORT,)))
 
-    # ---- 서버 상태 절 ----
-
-    def _status_report(self, job: _DailyJob, now: datetime, draft: _Draft,
-                       research_count: int) -> StatusReport | None:
-        """마감 후 판 끝에 붙일 서버 상태 절. 만들지 못해도 판은 나간다."""
-        if job.edition != EDITION_POST_CLOSE or self.status is None:
-            return None
-        try:
-            return build_status_report(
-                range_start=job.range_start, as_of=job.scheduled_for, current_job_id=job.job_id,
-                current_rule_based=draft.generated_by == GENERATED_BY_RULE, operations=job.operations,
-                collections=self.status.collections_between(job.range_start, job.scheduled_for),
-                runs=self.status.job_runs_between(job.range_start, job.scheduled_for),
-                stuck_after=self.settings.stuck_after, current_research_count=research_count)
-        except Exception as error:  # noqa: BLE001 - 서버 상태는 덤이라 실패해도 본문을 막지 않는다
-            log.warning("server status section failed for job %s: %s", job.job_id, type(error).__name__)
-            return StatusReport(NO_STATUS_TEXT, ("서버 상태: 전체(만들지 못함)",))
-
     # ---- 발행 ----
 
     def publish_draft(self, draft: DailyDraft, now: datetime, research_count: int) -> None:
         self._finalize(draft.job, now, draft.input, draft.sections, draft.draft, research_count)
-
-    def _chart_image(self, daily_input: DailyInput) -> tuple[bytes | None, bool, str | None]:
-        """마감 후 판의 하루 등락 차트. (그림, 크기 초과 여부, 자료 없음 목록에 더할 줄). 그릴 막대가 없으면 그림이 없다."""
-        bars = chart_bars(daily_input)
-        if not bars:
-            return None, False, None
-        try:
-            png = render_day_chart(bars)
-        except Exception as error:  # noqa: BLE001 - 차트는 덤이라 실패해도 메일은 나간다
-            log.warning("daily chart failed for job %s: %s", daily_input.job_id, type(error).__name__)
-            return None, False, CHART_FAILED_ITEM
-        # 그림은 한 장씩 만들지만 상한(장 수)도 지켜서, 여러 장이 되는 날에도 같은 방식으로 뺀다.
-        image_count = 1
-        if png is not None and (image_count > self.settings.max_chart_images
-                                or len(png) > self.settings.max_chart_image_bytes):
-            return None, True, CHART_OVERSIZED_ITEM
-        return png, False, None
-
-    def _line_charts(self, daily_input: DailyInput, post_close: bool,
-                     room: int) -> tuple[tuple[LineChart, ...], str | None]:
-        """선 그래프(아침 판 개장 흐름, 마감 후 판 장중·기간 흐름). room은 남은 그림 장 수다. (그림들, 자료 없음 목록에 더할 줄)."""
-        try:
-            charts = line_charts(daily_input, post_close)
-        except Exception as error:  # noqa: BLE001 - 그래프는 덤이라 실패해도 메일은 나간다
-            log.warning("daily line charts failed for job %s: %s", daily_input.job_id, type(error).__name__)
-            return (), LINE_CHARTS_FAILED_ITEM
-        kept = tuple(c for c in charts if len(c.png) <= self.settings.max_chart_image_bytes)[:max(room, 0)]
-        return kept, LINE_CHARTS_OVERSIZED_ITEM if len(kept) < len(charts) else None
-
-    def _daily_event(self, job: _DailyJob, now: datetime, member_id: int, daily_input: DailyInput,
-                     sections: tuple[Section, ...], draft: _Draft, text: str, status_text: str | None,
-                     missing: list[str]) -> tuple[OutboundEvent, list[str]]:
-        """멤버 한 명의 글자판·HTML·차트를 담은 메일 본문 이벤트. 이벤트가 상한을 넘으면 그림만 빼고 다시 만든다."""
-        post_close = job.edition == EDITION_POST_CLOSE
-        png, oversized, chart_missing = self._chart_image(daily_input) if post_close else (None, False, None)
-        room = self.settings.max_chart_images - (1 if png is not None else 0)
-        lines, lines_missing = self._line_charts(daily_input, post_close, room)
-
-        def build(image: bytes | None, too_large: bool, charts: tuple[LineChart, ...], items: list[str]) -> OutboundEvent:
-            slot = None
-            if post_close:
-                slot = ChartSlot("chart-day" if image is not None else None, too_large, no_data_names(daily_input))
-            slots = tuple(ChartSlot(c.content_id, alt=c.alt) for c in charts)
-            html = render_html(daily_input, sections, draft.output, status_text, slot, slots)
-            # 본문에 자리가 없는 그림(예: 예상 절이 없는 아침 판의 개장 흐름)은 붙이지 않는다. 붙이면 본문에 안 보이는 첨부만 남는다.
-            charts = tuple(c for c in charts if f"cid:{c.content_id}" in html)
-            images = ([{"contentId": "chart-day", "contentType": "image/png",
-                        "data": base64.b64encode(image).decode("ascii")}] if image is not None else []) \
-                + [{"contentId": c.content_id, "contentType": "image/png", "data": base64.b64encode(c.png).decode("ascii")}
-                   for c in charts]
-            body = f"{text}\n\n{CHARTS_IN_HTML_NOTE}" if images else text
-            return daily_briefing_event(job.job_id, job.correlation_id, job.scheduled_for, now, job.edition,
-                                        job.range_start, job.scheduled_for, body, items, draft.generated_by,
-                                        member_id, html, images or None)
-
-        def too_big(event: OutboundEvent) -> bool:
-            return len(json.dumps(event.value, ensure_ascii=False).encode("utf-8")) > self.settings.max_event_bytes
-
-        items = [*missing, *(m for m in (chart_missing, lines_missing) if m)]
-        event = build(png, oversized, lines, items)
-        # 이벤트가 상한을 넘으면 흐름 그래프부터 빼고, 그래도 넘으면 하루 등락 그림까지 뺀다.
-        if lines and too_big(event):
-            items = [*missing, *(m for m in (chart_missing, LINE_CHARTS_OVERSIZED_ITEM) if m)]
-            event = build(png, oversized, (), items)
-        if png is not None and too_big(event):
-            items = [*missing, CHART_OVERSIZED_ITEM, *([LINE_CHARTS_OVERSIZED_ITEM] if lines else [])]
-            event = build(None, True, (), items)
-        return event, items
 
     def _member_events(self, job: _DailyJob, now: datetime, daily_input: DailyInput, sections: tuple[Section, ...],
                        draft: _Draft, status_text: str | None, status_missing: list[str],
@@ -883,8 +771,8 @@ class DailyCore:
                 mine_draft = replace(draft, output=settle_rate_notes(mine_output) if mine_output is not None else None)
                 text = daily_text(mine, mine_sections, mine_draft.output, status_text)
                 missing = [*job.notes, *missing_items(mine_sections), *status_missing]
-                event, _ = self._daily_event(job, now, member.member_id, mine, mine_sections, mine_draft, text,
-                                             status_text, missing)
+                event, _ = daily_event(job, now, member.member_id, mine, mine_sections, mine_draft, text, status_text,
+                                       missing, self.settings)
             except Exception as error:  # noqa: BLE001 - 멤버 한 명의 판이 실패해도 다른 멤버의 판은 낸다
                 log.error("daily %s for one member failed: job=%s %s", job.edition, job.job_id, type(error).__name__)
                 self._detail(job, STAGE_COMPOSE, EntryType.STEP_FAILED, REASON_MEMBER_FAILED, type(error).__name__, 0,
@@ -900,7 +788,7 @@ class DailyCore:
             draft = replace(draft, output=settle_rate_notes(draft.output))
         missing = [*job.notes, *missing_items(sections)]
         by_ref = {e.ref: e for s in sections for e in s.entries}
-        report = self._status_report(job, now, draft, research_count)
+        report = status_report(job, draft, research_count, self.status, self.settings)
         status_text = report.text if report is not None else None
         if report is not None:
             missing = [*missing, *report.missing]
@@ -959,128 +847,6 @@ class DailyCore:
                  "n/a" if job.etfs is None else len(job.etfs),
                  "n/a" if job.filings_data is None else len(job.filings_data), sum(job.excluded.values()))
         del self._jobs[job.job_id]
-
-
-# ---- 문장 단위 재검색 어댑터 ----
-
-EDITION_JOB_KINDS = (JobKind.MORNING.value, JobKind.POST_CLOSE.value)
-
-
-@dataclass(frozen=True)
-class DailyDraft:
-    """데일리 판 본문 한 벌. 다시 쓰면 재검색 기사가 든 입력·항목과 새 본문으로 바뀐다."""
-
-    job: _DailyJob
-    input: DailyInput
-    sections: tuple[Section, ...]
-    draft: _Draft
-
-
-@dataclass
-class DailySentences:
-    """데일리 판 본문의 문장 하나(sentence_slots의 한 자리)를 재검색의 문장 하나로 본다."""
-
-    core: DailyCore
-    _held_by_job: dict[str, frozenset[str] | None] = field(default_factory=dict, init=False)
-
-    def can_research(self, draft: DailyDraft) -> bool:
-        # 기사 조회 요청에는 종목코드가 필수라 보유 ETF 자료가 없으면 재검색하지 않는다.
-        return bool(draft.input.etfs) and self.core.writer is not None
-
-    def request_limit(self) -> int | None:
-        return self.core.settings.max_research_requests
-
-    def weak_sentences(self, draft: DailyDraft) -> tuple[WeakSentence, ...]:
-        """다시 찾을 약한 문장(밤사이 이슈, ETF 이유, 환율·금리 칸, 아침 판 ETF별 예상)을 찾을 차례로 돌려준다.
-
-        차례는 보유 ETF → 환율·금리 → 밤사이 이슈 → 관심 ETF다. 요청 합계 상한 안에서 모두 한 번씩 먼저 찾고, 남은 요청으로
-        두 번째를 찾으므로 차례가 뒤인 문장이 상한에 걸린다. 보유는 멤버 중 한 명이라도 보유한 ETF이고, 멤버를 읽지 못하면
-        모두 보유로 본다. 눈에 띄는 점은 '근거 약함'을 그대로 보여 주고, 마감 후 판에서 시장과 같은 방향(부호가 같고 차이가
-        설정값 이내)으로 움직인 ETF의 이유는 시장 전체의 움직임으로 설명되므로 따로 찾지 않는다."""
-        output = draft.draft.output
-        if output is None or output.insufficient_evidence:
-            return ()
-        etfs = {e.symbol: e for e in draft.input.etfs or ()}
-        held = self._held(draft)
-        found = []
-        for no, (name, _) in enumerate(sentence_slots(output), start=1):
-            p = slot_point(output, no)
-            if p is None or not p.shortfall or p.kind == POINT_NOTABLE:
-                continue
-            if p.kind == POINT_ETF and p.symbol in etfs and moves_with_market(
-                    etfs[p.symbol].rate, draft.input.background or (), self.core.settings):
-                continue
-            if p.symbol is not None:
-                rank = 0 if held is None or p.symbol in held else 3
-            else:
-                rank = 1 if name == "issues" else 2
-            found.append((rank, no, WeakSentence(no, p.statement, p.shortfall)))
-        return tuple(w for _, _, w in sorted(found, key=lambda f: (f[0], f[1])))
-
-    def _held(self, draft: DailyDraft) -> frozenset[str] | None:
-        """멤버 중 누구라도 보유한 ETF. 판마다 한 번 읽어 둔다. 멤버를 모르거나 읽지 못하면 None."""
-        job = draft.job
-        if job is None:
-            return None
-        if job.job_id not in self._held_by_job:
-            members = self.core.members.daily_members(job.edition) if self.core.members is not None else None
-            self._held_by_job[job.job_id] = None if members is None else frozenset(
-                symbol for m in members for symbol, relation in m.etfs if relation == RELATION_HELD)
-        return self._held_by_job[job.job_id]
-
-    def whole_insufficient(self, draft: DailyDraft) -> bool:
-        return draft.draft.insufficient_evidence
-
-    def query_context(self, draft: DailyDraft, sentence: WeakSentence | None) -> dict[str, Any]:
-        llm = build_llm_input(draft.input, draft.sections, self.core.settings, group=False)
-        # 배경은 원문(response)을 빼고 코드가 꺼낸 숫자(지수 등락률, 원/달러, 해외 시세 등)와 받은 시각만 준다. 검색어를 고르는 데
-        # 원문은 필요 없고, 원문을 넣으면 검색어 한 번에 입력이 수만 토큰이 된다(급변동은 처음부터 숫자만 준다).
-        background = [{k: v for k, v in e.llm.items() if k != "response"}
-                      for s in draft.sections for e in s.entries if e.llm.get("category") == BACKGROUND_LABEL]
-        context: dict[str, Any] = {
-            "edition": llm["edition"], "rangeStart": llm["rangeStart"], "asOf": llm["asOf"],
-            "foundArticleTitles": [a.title for a in draft.input.research_articles],
-            "background": background,
-        }
-        if "etfInfo" in llm:
-            context["etfInfo"] = llm["etfInfo"]
-        if sentence is not None:
-            context["sentence"] = sentence.text
-            context["shortfall"] = sentence.shortfall
-            point = slot_point(draft.draft.output, sentence.no)
-            if point is not None and point.symbol is not None:
-                context["etf"] = next(({"symbol": e.symbol, "name": e.label()}
-                                       for e in draft.input.etfs or () if e.symbol == point.symbol), None)
-        return context
-
-    def target(self, draft: DailyDraft, research_id: str, sentence_no: int, round: int) -> ResearchTarget:
-        job = draft.job
-        return ResearchTarget(
-            job_kind=job.edition, job_id=research_id, parent_job_id=job.job_id, sentence_no=sentence_no,
-            round=round, correlation_id=job.correlation_id, tag=MARKET_WIDE,
-            # 데일리 공시 요청처럼 정렬한 첫 ETF 코드. 재검색 조회는 종목 조건을 보지 않고 응답 짝짓기에만 쓴다.
-            reply_symbol=min(etf.symbol for etf in draft.input.etfs),
-            since=job.range_start, until=job.scheduled_for)
-
-    def correlation_id(self, draft: DailyDraft) -> str:
-        return draft.job.correlation_id
-
-    def rewrite_sentence(self, draft: DailyDraft, sentence_no: int, round: int, articles: tuple[Article, ...],
-                         research_articles: tuple[Article, ...], now: datetime) -> DailyDraft | None:
-        return self.core.rewrite_point(draft, sentence_no, round, articles, research_articles, now)
-
-    def rewrite_whole(self, draft: DailyDraft, round: int, articles: tuple[Article, ...],
-                      research_articles: tuple[Article, ...], now: datetime) -> DailyDraft | None:
-        return self.core.rewrite_whole(draft, round, research_articles, now)
-
-    def sentence_text(self, draft: DailyDraft, sentence_no: int) -> str | None:
-        if sentence_no == WHOLE_REPORT:
-            return None
-        point = slot_point(draft.draft.output, sentence_no)
-        return point.statement if point is not None else None
-
-    def publish(self, draft: DailyDraft, now: datetime, research_count: int) -> None:
-        self.core.publish_draft(draft, now, research_count)
 
 
 def _parse_etf_day(e: dict[str, Any]) -> EtfDay:

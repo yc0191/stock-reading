@@ -9,7 +9,8 @@ import pytest
 from fake_anthropic import as_reply
 from briefing.daily_html import ChartSlot, render_html
 from briefing.daily_inputs import EtfArticles, MemberIssue, NotableCandidate, KIND_OPPOSITE, moves_with_market
-from briefing.daily_jobs import DailyDraft, DailySentences, _Draft
+from briefing.daily_sentences import DailyDraft, DailySentences
+from briefing.daily_jobs import _Draft
 from briefing.config import DEFAULT_DAILY_SETTINGS
 from briefing.daily_post_close import post_close_view
 from briefing.daily_sections import (
