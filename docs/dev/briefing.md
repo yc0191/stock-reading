@@ -65,20 +65,20 @@ PYTHONPATH=services/briefing/src services/briefing/.venv/bin/python -m briefing.
 |---|---|
 | 같은 종목 변동 묶음 | `move_group.py` |
 | 장 시작~아침 판 사이 급변동의 아침 판 합침 | `move_merge.py` |
-| 급변동 근거 조회와 다시 부르기 | `jobs.py`, `http_queries.py` |
+| 급변동 근거 조회와 다시 부르기 | `jobs.py`, `move_job.py`, `http_queries.py` |
 | 급변동 레벨 판단(상·중), 중의 대표 기사 고르기 | `job_log.py`의 `level_of`, `move_representative.py` |
-| 비교 숫자, 머리말 | `move_figures.py`, `report.py` |
+| 비교 숫자, 머리말 | `move_figures.py`, `move_evidence.py` |
 | 레벨 상 메일: 오늘 흐름, 글자판, HTML, 장중 차트 | `move_flow.py`, `move_view.py`, `move_mail.py`, `move_chart.py`, `move_prompts.py` |
 | 같은 사건 기사 묶기 | `article_groups.py` |
 | LLM 출력 검사(인용 번호, 미국 티커 거부(급변동·마감 후 판), 근거 약함 줄) | `llm_output.py` |
 | 근거가 약한 문장 단위 재검색 | `sentence_research.py`, `research.py` |
 | 발행 직전 마지막 검사 | `final_check.py`, `move_final_check.py`, `daily_final_check.py` |
 | 데일리 판 시작, 한도 시각, 휴장 알림 | `daily_start.py` |
-| 판 작업, 멤버별 판 | `daily_jobs.py`, `daily_members.py`, `member_store.py` |
+| 판 작업, 멤버별 판 | `daily_jobs.py`, `daily_sentences.py`(재검색 어댑터), `daily_publish.py`(메일 이벤트·차트·서버 상태 절), `daily_members.py`, `member_store.py` |
 | 판 입력, 기사 관계 판정, 개장 흐름 | `daily_inputs.py`, `daily_relevance.py`, `open_flow.py` |
 | 마감 후 판의 아침 예상 대조, 그날 급변동 | `daily_review.py` |
 | 서버 상태 절 | `status.py` |
-| 본문(글자판·HTML·차트)과 프롬프트 | `daily_report.py`, `daily_html.py`, `daily_chart.py`, `daily_prompts.py` |
+| 본문(글자판·HTML·차트)과 프롬프트 | `daily_sections.py`(입력·항목별 섹션), `daily_report.py`(LLM 입력·본문 글·작성기), `daily_output.py`(LLM 출력 검사), `daily_html.py`, `daily_chart.py`, `daily_prompts.py` |
 
 - 급변동은 시세처리기가 정한 감지 유형(`detectionType`)으로 레벨을 나눕니다. `prevCloseHigh`면 상, 그 밖(`window`, `prevClose`, 감지 유형이 없는 이전 형식)은 중입니다.
   - 상은 근거 조회, 재검색, LLM, 메일 발행까지 지금의 리포트 흐름을 그대로 탑니다. 머리말과 메일 제목은 오늘 등락(전일 종가 대비)을 먼저 씁니다. 그날 첫 상은 기준가가 전일 종가라 오늘 등락만(`오늘 -7.20% 하락`), 두 번째 상부터는 기준가(앞선 상의 가격) 대비 변동률을 덧붙입니다(`오늘 -14.00% · 기준가 대비 -7.53% 하락`). 첫 상인지는 기준가 대비 변동률과 오늘 등락이 같은지로 가려 결과 이벤트의 `baseKind`(`prevClose`·`earlierMove`)로 발송기에 알립니다. 시장과 비교하는 숫자도 오늘 등락입니다. 등락률 색칠은 부호(+, −)가 붙은 %만 하고, 부호 없는 %와 `%p`(차이값)·%포인트는 기본 글자색으로 둡니다(데일리 판과 같음).

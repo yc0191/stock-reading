@@ -35,7 +35,7 @@ from briefing.job_log import (
     move_target,
     record_result,
 )
-from briefing.jobs import parse_move
+from briefing.move_job import parse_move
 from briefing.trace import correlation_context, from_event
 
 log = logging.getLogger("briefing.move_merge")

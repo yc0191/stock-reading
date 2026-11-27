@@ -15,7 +15,7 @@ from briefing.move_figures import KOSPI_NAME, index_figure
 from briefing.sources import BACKGROUND_OK, US_MARKET, Article, Background, CloseRate, Filing
 
 if TYPE_CHECKING:
-    from briefing.daily_report import EtfDay
+    from briefing.daily_sections import EtfDay
 
 PRE_OPEN_NOTICE = "오늘 장 자료가 아직 없습니다"
 KIND_OPPOSITE = "opposite"

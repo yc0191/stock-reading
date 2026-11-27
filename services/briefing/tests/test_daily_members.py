@@ -8,24 +8,16 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import briefing.daily_jobs as daily_jobs
+import briefing.daily_publish as daily_publish
 from briefing.config import DailySettings
 from briefing.daily_inputs import EtfArticles, MemberIssue, NotableCandidate
 from briefing.daily_jobs import DailyCore
 from briefing.daily_members import (MemberPortfolio, foreign_us_names, member_input, member_output, member_sections,
                                      whole_input)
 from briefing.daily_review import ReviewInput
-from briefing.daily_report import (
-    POINT_ETF,
-    POINT_FX,
-    POINT_NOTABLE,
-    DailyInput,
-    DailyLlmWriter,
-    DailyOutput,
-    EtfDay,
-    Point,
-    build_sections,
-    daily_text,
-)
+from briefing.daily_output import POINT_ETF, POINT_FX, POINT_NOTABLE, DailyOutput, Point
+from briefing.daily_sections import DailyInput, EtfDay, build_sections
+from briefing.daily_report import DailyLlmWriter, daily_text
 from briefing.job_log import EntryType, RunStatus
 from briefing.member_store import SELECT_SQL, PostgresMemberStore
 from briefing.sources import CloseRate, EtfInfo, EtfMember, Filing
@@ -267,7 +259,7 @@ def test_each_member_gets_their_own_event_with_only_their_etfs_relation_and_reas
 
 def test_a_members_html_and_chart_hold_only_that_members_etfs(monkeypatch):
     drawn = []
-    monkeypatch.setattr(daily_jobs, "render_day_chart", lambda bars: drawn.append([b.label for b in bars]) or b"\x89PNG\r\n\x1a\n")
+    monkeypatch.setattr(daily_publish, "render_day_chart", lambda bars: drawn.append([b.label for b in bars]) or b"\x89PNG\r\n\x1a\n")
     events, _, _ = run_post_close(MEMBERS[:2])
     assert drawn == [["TEST 하나", "TEST 둘 (관심)"], ["TEST 둘", "TEST 셋"]]
     first, second = (e.value["payload"] for e in events)

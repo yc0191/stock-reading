@@ -11,8 +11,12 @@ import pytest
 
 from briefing.config import CoreSettings
 from briefing.job_log import LEVEL_HIGH
-from briefing.jobs import BriefingCore, parse_move
-from briefing.report import ReportStage, RuleBasedWriter, build_llm_input, comparison_facts, figure_entries
+from briefing.jobs import BriefingCore
+from briefing.move_job import parse_move
+from briefing.report_stage import ReportStage
+from briefing.report import RuleBasedWriter
+from briefing.move_evidence import build_llm_input, figure_entries
+from briefing.move_figures import comparison_facts
 from contracts import sample, validate
 from fake_api import FakeApi
 from fake_job_log import FakeJobLog
@@ -63,7 +67,7 @@ def move(change=1.0, previous=12_000, price=12_120, detection="window", today=-2
 def every_move_gets_a_report(monkeypatch):
     """이 파일은 감지 유형별 머리말·비교 숫자를 시험한다. 지금 리포트를 만드는 것은 상(prevCloseHigh)뿐이므로, 유형별 입력이
     리포트 흐름을 타도록 레벨 판단만 상으로 고정한다(레벨 판단은 test_move_level.py가 시험한다)."""
-    monkeypatch.setattr("briefing.jobs.level_of", lambda detection_type: LEVEL_HIGH)
+    monkeypatch.setattr("briefing.move_job.level_of", lambda detection_type: LEVEL_HIGH)
 
 
 def market_raw(kospi="  -1.45", kospi_direction="5", kosdaq="   0.30", kosdaq_direction="2"):

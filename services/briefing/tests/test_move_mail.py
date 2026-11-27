@@ -19,7 +19,7 @@ import test_scenarios as sc
 from briefing import main
 from briefing.config import CoreSettings
 from briefing.job_log import STAGE_CHART_HISTORY, JobKind, JobStart, move_target
-from briefing.jobs import ReportInput
+from briefing.move_job import ReportInput
 from briefing.llm_output import sentence_count
 from briefing.move_chart import CHART_CONTENT_ID, chart_input, prev_close_of, render_move_chart
 from briefing.move_flow import FlowMove, earlier_moves, flow_input
@@ -27,16 +27,9 @@ from briefing.move_mail import CHART_MISSING_ITEM, CHART_OVERSIZED_ITEM, render_
 from briefing.queries import QueryKind, QueryResult
 from briefing.final_check import MailSentence
 from briefing.move_final_check import MoveFinalCheck
-from briefing.report import (
-    MAX_CAUSES,
-    Report,
-    LlmWriter,
-    InvalidOutput,
-    ReportStage,
-    RuleBasedWriter,
-    build_llm_input,
-    parse_output,
-)
+from briefing.report import MAX_CAUSES, Report, LlmWriter, InvalidOutput, RuleBasedWriter, parse_output
+from briefing.report_stage import ReportStage
+from briefing.move_evidence import build_llm_input
 from briefing.sentence_research import MoveDraft
 from briefing.sources import Article, PricePoint
 from contracts import sample, validate

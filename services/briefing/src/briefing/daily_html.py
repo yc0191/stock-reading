@@ -14,18 +14,9 @@ from html import escape
 from urllib.parse import urlparse
 
 from briefing.daily_chart import CHART_ALT
-from briefing.daily_report import (
-    DAILY_DISCLAIMER,
-    DAILY_INSUFFICIENT,
-    ITEM_RESEARCH,
-    MINUS,
-    DailyInput,
-    DailyOutput,
-    Section,
-    conclusion,
-    headline,
-    section_title,
-)
+from briefing.daily_sections import DAILY_DISCLAIMER, DAILY_INSUFFICIENT, ITEM_RESEARCH, MINUS, DailyInput, Section
+from briefing.daily_output import DailyOutput
+from briefing.daily_report import conclusion, headline, section_title
 from briefing.daily_morning import (
     FX_RATE_TITLE,
     KR_PREV_TITLE,

@@ -14,19 +14,9 @@ from briefing.daily_chart import (
     render_day_chart,
 )
 from briefing.daily_html import ChartSlot, _rate_spans, render_html
-from briefing.daily_report import (
-    DAILY_DISCLAIMER,
-    DailyInput,
-    POINT_ETF,
-    POINT_NOTABLE,
-    DailyOutput,
-    EtfDay,
-    Point,
-    build_sections,
-    conclusion,
-    daily_text,
-    etf_groups,
-)
+from briefing.daily_sections import DAILY_DISCLAIMER, DailyInput, EtfDay, build_sections, etf_groups
+from briefing.daily_output import POINT_ETF, POINT_NOTABLE, DailyOutput, Point
+from briefing.daily_report import conclusion, daily_text
 from briefing.sources import EtfInfo
 
 KST = timezone(timedelta(hours=9))

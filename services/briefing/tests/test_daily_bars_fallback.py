@@ -3,7 +3,8 @@ import json
 import logging
 
 from briefing.daily_jobs import DailyCore
-from briefing.daily_report import NO_DATA, DailyLlmWriter
+from briefing.daily_sections import NO_DATA
+from briefing.daily_report import DailyLlmWriter
 from briefing.queries import QueryKind
 from contracts import validate_payload
 from fake_news import answer_news

@@ -1,4 +1,4 @@
-"""급변동 리포트 LLM의 지시문(SYSTEM_PROMPT), 출력 형식(OUTPUT_SCHEMA), 다시 쓰기 덧붙임(REWRITE_ADDENDUM). 값은 report.py가 다시 내보낸다."""
+"""급변동 리포트 LLM의 지시문(SYSTEM_PROMPT), 출력 형식(OUTPUT_SCHEMA), 다시 쓰기 덧붙임(REWRITE_ADDENDUM)."""
 from __future__ import annotations
 
 from typing import Any

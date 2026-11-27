@@ -17,7 +17,7 @@ from briefing.job_log import DETECTION_PREV_CLOSE_HIGH
 from briefing.sources import BACKGROUND_OK, MARK_MISSING, Background, CloseRate
 
 if TYPE_CHECKING:
-    from briefing.jobs import ReportInput
+    from briefing.move_job import ReportInput
 
 EXCHANGE_RATE_API = "exchange-rate-summary"
 MARKET_SUMMARY_API = "market-summary"

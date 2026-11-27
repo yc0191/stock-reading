@@ -2,7 +2,7 @@
 import pytest
 
 from briefing.daily_issue_notes import settle_rate_notes
-from briefing.daily_report import POINT_ETF, POINT_FX, POINT_OUTLOOK, POINT_RATE, POINT_REVIEW, DailyOutput, Point
+from briefing.daily_output import POINT_ETF, POINT_FX, POINT_OUTLOOK, POINT_RATE, POINT_REVIEW, DailyOutput, Point
 
 NO_RATE_ARTICLE = Point("받은 자료에 금리 관련 기사가 없습니다.", (), "금리 기사 없음", POINT_RATE)
 RATE_WITH_ARTICLE = Point("국채금리가 올랐다는 기사가 있습니다.", ("A1",), None, POINT_RATE)

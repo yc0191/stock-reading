@@ -46,7 +46,7 @@ EDITIONS = ("morning", "post-close")
 HOLDINGS = {"TEST01": ("TESTA", "FAKEB"), "TEST02": ()}
 US_TICKERS = ("TESTA", "FAKEB")
 FAKE_STATEMENT = "[가짜 LLM] 시험용 요약 문장입니다."
-# 마감 후 판 입력의 판 이름과 ETF별 하루 등락 항목 이름(briefing/daily_report.py)
+# 마감 후 판 입력의 판 이름과 ETF별 하루 등락 항목 이름(briefing/daily_sections.py)
 POST_CLOSE_NAME = "마감 후 판"
 ETF_DAY_ITEM = "보유 ETF별 하루 등락"
 EXCHANGE_ITEM = "환율"

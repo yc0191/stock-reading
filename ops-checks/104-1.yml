@@ -1,7 +1,7 @@
 # #104 아침 판에 전 거래일 코스피·코스닥, 시도 1. 지표와 통과값은 이슈의 "시도 1 · 판정 기준" 댓글을 옮긴 것이다.
 # 확인기는 마감 후 판 시작 알림 때 돌므로 그날 아침 판은 이미 끝나 있다.
 # 전 거래일 마감 값을 꺼내지 못한 판은 멤버 판 기록(member-briefing)의 missingItems에 '전 거래일 한국 증시' 줄이 남는다
-# (daily_report.py ITEM_KR_PREV, missing_items). 한 지수만 빠진 경우는 칸이 있으므로 세지 않는다.
+# (daily_sections.py ITEM_KR_PREV, missing_items). 한 지수만 빠진 경우는 칸이 있으므로 세지 않는다.
 issue: 104
 attempt: 1
 fix_commit: "9d69884"

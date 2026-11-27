@@ -35,7 +35,7 @@ from briefing.move_flow import FLOW_TITLE
 from briefing.move_view import CONFLICT_LABEL, MoveView, cite
 
 if TYPE_CHECKING:
-    from briefing.jobs import ReportInput
+    from briefing.move_job import ReportInput
 
 log = logging.getLogger("briefing.move_mail")
 

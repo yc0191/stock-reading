@@ -12,22 +12,19 @@ from dataclasses import dataclass
 from briefing.compose import KST
 from briefing.daily_post_close import IssueRow, issue_rows
 from briefing.daily_prompts import DIRECTION_UNSURE, DIRECTIONS
-from briefing.daily_report import (
+from briefing.daily_sections import (
     DAILY_DISCLAIMER,
     DAILY_INSUFFICIENT,
     ITEM_KR_PREV,
     NO_DATA,
-    POINT_KR_PREV,
-    POINT_OUTLOOK,
     DailyInput,
-    DailyOutput,
     EtfDay,
     Section,
     etf_groups,
     etf_name,
-    headline,
-    section_lines,
 )
+from briefing.daily_output import POINT_KR_PREV, POINT_OUTLOOK, DailyOutput
+from briefing.daily_report import headline, section_lines
 from briefing.open_flow import signed
 
 KR_PREV_TITLE = ITEM_KR_PREV

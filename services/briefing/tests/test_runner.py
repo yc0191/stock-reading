@@ -327,7 +327,7 @@ def test_a_us_etf_move_sends_filings_after_context_and_flows_to_a_briefing(setup
 
 
 def test_the_early_research_completion_is_routed_to_the_move_job_and_starts_the_evidence_fetch(setup):
-    from briefing.jobs import early_research_id
+    from briefing.move_job import early_research_id
     make, _, store, _ = setup
     runner, consumer, producer = make()
     named = context_message(1)

@@ -46,7 +46,8 @@ from briefing.move_group import MoveGrouper
 from briefing.move_merge import MorningMerge
 from briefing.move_final_check import move_final_check
 from briefing.queries import OnResult, QueryPort, QueryResult
-from briefing.report import ReportStage, ReportWriter, build_report_writer
+from briefing.report_stage import ReportStage
+from briefing.report import ReportWriter, build_report_writer
 from briefing.research import QueryWriter, build_query_writer
 from briefing.sentence_research import ResearchReportStage, SentenceResearch
 from briefing.status import StatusPort, parse_collection

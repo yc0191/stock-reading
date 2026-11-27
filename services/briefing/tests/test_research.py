@@ -14,7 +14,8 @@ from briefing.jobs import BriefingCore
 from briefing.llm import LlmCallError
 from briefing.ports import FailureReason
 from briefing.job_log import REASON_NO_EVIDENCE, EntryType, GeneratedBy, RunStatus
-from briefing.report import LLM_INSUFFICIENT, LlmWriter, ReportStage
+from briefing.report import LLM_INSUFFICIENT, LlmWriter
+from briefing.report_stage import ReportStage
 from briefing.research import (
     QUERY_SYSTEM_PROMPT,
     InvalidQueries,
@@ -776,7 +777,7 @@ def test_job_log_values_carry_no_key_address_quantity_or_amount(monkeypatch):
 # ---- 구성 ----
 
 def test_report_marks_insufficient_evidence_only_when_the_llm_says_so():
-    from briefing.jobs import ReportInput
+    from briefing.move_job import ReportInput
     from briefing.sources import Article, PricePoint
 
     report_input = ReportInput(JOB_ID, SYMBOL, "corr-1", T, 10_000, 9_850, -1.5, (PricePoint(T, 9_850),),

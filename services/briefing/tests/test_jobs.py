@@ -347,8 +347,10 @@ def test_next_deadline_reports_the_earliest_timer(core, rec):
 
 def test_core_does_not_import_kafka():
     import briefing.config, briefing.events, briefing.jobs, briefing.llm, briefing.ports, briefing.sources  # noqa: E401
+    import briefing.move_job
 
-    for module in (briefing.config, briefing.events, briefing.jobs, briefing.llm, briefing.ports, briefing.sources):
+    for module in (briefing.config, briefing.events, briefing.jobs, briefing.move_job, briefing.llm, briefing.ports,
+                   briefing.sources):
         source = open(module.__file__, encoding="utf-8").read()
         assert "confluent_kafka" not in source
 
@@ -377,7 +379,7 @@ def etf_context(seq=1, etf=ETF, job_id=JOB_ID):
 
 
 def research_completed(job_id=JOB_ID, incomplete=(), started_at=T + DELTA, rid=None):
-    from briefing.jobs import early_research_id
+    from briefing.move_job import early_research_id
     event = sample("news.stored.sample.json")
     event["payload"].update(jobType="research-news", startedAt=started_at.isoformat(),
                             incompleteSymbols=list(incomplete), researchJobId=rid or early_research_id(job_id))
@@ -580,7 +582,7 @@ def test_a_job_that_is_already_fetching_does_not_start_early_research(core, rec)
 
 
 def test_early_queries_are_capped_deduplicated_and_skip_nameless_or_oversized_members():
-    from briefing.jobs import early_queries
+    from briefing.move_job import early_queries
     from briefing.research import MAX_QUERY_LENGTH
     from briefing.sources import EtfInfo, EtfMember
     members = (EtfMember("KR", "A", 1, "가"), EtfMember("KR", "B", 2, None), EtfMember("KR", "C", 3, "가"),

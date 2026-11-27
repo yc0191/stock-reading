@@ -23,7 +23,7 @@ paths:
 1. `contracts/events/<토픽>.v1.schema.json`과 `contracts/events/samples/v1/<토픽>.sample.json`
 2. 그 이벤트를 만드는 서비스의 `event/` 패키지 (`Envelope`, `EventFactory`, `*Payload`)
 3. 그 이벤트를 읽는 서비스의 이벤트 모델 (`SnapshotEnvelope`, `BriefingEnvelope` 등). 조회 본문이면 조회하는 서비스의 `*Request`·조회 클래스와 브리핑의 `queries.py`
-4. 계약 테스트: 각 Java 서비스의 `*ContractTest`, `ContractSchemas`와 브리핑의 `tests/test_contracts.py`, `tests/contracts.py`
+4. 계약 테스트: 각 Java 서비스의 `*ContractTest`, `ContractSchemas`와 브리핑의 `tests/test_contracts.py`, `tests/test_contracts_daily.py`(데일리 판), `tests/contracts.py`
 5. `docs/adr/010-event-format.md`와 README의 흐름도
 
 ## 토픽을 추가·변경할 때

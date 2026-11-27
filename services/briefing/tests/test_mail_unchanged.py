@@ -17,7 +17,7 @@ import pytest
 import test_daily_mail as dm
 import test_research as rs
 import test_scenarios as sc
-import test_weak_research as wr
+import test_weak_research_move as wr
 from briefing.config import DailySettings
 from briefing.daily_jobs import DailyCore
 from briefing.daily_report import DailyLlmWriter

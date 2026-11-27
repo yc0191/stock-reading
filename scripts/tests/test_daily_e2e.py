@@ -75,7 +75,7 @@ def test_fake_llm_cites_the_first_ref_given():
 def test_fake_llm_writes_the_morning_shape_with_one_outlook_per_etf_and_the_briefing_parser_accepts_it():
     import sys
     sys.path.insert(0, str(de.ROOT / "services" / "briefing" / "src"))
-    from briefing.daily_report import parse_morning_output
+    from briefing.daily_output import parse_morning_output
     user = json.dumps({"edition": "아침 판", "items": [{"name": "환율", "entries": [{"ref": "B1"}]}],
                        "outlookEtfs": [{"symbol": "TEST01"}, {"symbol": "TEST02"}]})
     output = json.loads(de.fake_llm_output(user))
@@ -120,7 +120,7 @@ def test_fake_llm_cites_the_exchange_entry_for_the_exchange_issue():
 def test_the_post_close_output_of_the_fake_llm_is_accepted_by_the_briefing_parser():
     import sys
     sys.path.insert(0, str(de.ROOT / "services" / "briefing" / "src"))
-    from briefing.daily_report import parse_post_close_output
+    from briefing.daily_output import parse_post_close_output
     user = json.dumps({"edition": "마감 후 판", "items": [
         {"name": "환율", "entries": [{"ref": "B3"}]},
         {"name": "보유 ETF별 하루 등락", "entries": [{"ref": "E1", "symbol": "TEST01"}]}]})
@@ -132,7 +132,7 @@ def test_the_post_close_output_of_the_fake_llm_is_accepted_by_the_briefing_parse
 def test_fake_llm_writes_a_review_reason_for_each_etf_the_code_compared_and_the_briefing_parser_accepts_it():
     import sys
     sys.path.insert(0, str(de.ROOT / "services" / "briefing" / "src"))
-    from briefing.daily_report import parse_post_close_output
+    from briefing.daily_output import parse_post_close_output
     user = json.dumps({"edition": "마감 후 판", "items": [
         {"name": "보유 ETF별 하루 등락", "entries": [{"ref": "E1", "symbol": "TEST01"}, {"ref": "E2", "symbol": "TEST02"}]}],
         "reviewEtfs": [{"symbol": "TEST02", "verdict": "빗나감"}]})

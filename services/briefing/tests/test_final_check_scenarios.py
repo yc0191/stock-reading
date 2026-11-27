@@ -11,7 +11,7 @@ import pytest
 
 from briefing.daily_final_check import FIX_ADDENDUM as DAILY_FIX_ADDENDUM
 from briefing.daily_final_check import DailyFinalCheck, _units
-from briefing.daily_report import POINT_OTHER, DailyOutput, Point
+from briefing.daily_output import POINT_OTHER, DailyOutput, Point
 from briefing.daily_prompts import SYSTEM_PROMPT as MORNING_PROMPT
 from briefing.daily_prompts import SYSTEM_PROMPT_POST_CLOSE
 from briefing.final_check import CHOSE_AFTER, CHOSE_BEFORE, REVIEW_SYSTEM_PROMPT, FinalCheck
@@ -20,23 +20,13 @@ from briefing.jobs import BriefingCore
 from briefing.llm import LlmCallError
 from briefing.move_final_check import FIX_ADDENDUM as MOVE_FIX_ADDENDUM
 from briefing.move_final_check import MoveFinalCheck
-from briefing.report import SYSTEM_PROMPT as MOVE_PROMPT
+from briefing.move_prompts import SYSTEM_PROMPT as MOVE_PROMPT
 from briefing.report import LlmWriter
 from briefing.sentence_research import ResearchReportStage
 from contracts import validate
 from test_research import A1, QUERIES, R1, T, Flow, FakeLlm, article, queries
-from test_weak_research import (
-    SHORTFALL,
-    STRONG_TEXT,
-    WEAK_TEXT,
-    DailyFlow,
-    daily_output,
-    in_range,
-    move_output,
-    one_cause,
-    point,
-    rid,
-)
+from test_weak_research_move import SHORTFALL, STRONG_TEXT, WEAK_TEXT, move_output, one_cause, rid
+from test_weak_research_daily import DailyFlow, daily_output, in_range, point
 
 FAILED = LlmCallError("LLM call failed: APIConnectionError")
 REWRITTEN = "다시 찾은 기사가 영향을 줬을 수 있습니다."
@@ -326,8 +316,10 @@ def test_the_final_check_reads_and_fixes_the_other_issues_too():
 
 def test_the_final_check_marks_a_rewritten_outlook_by_its_research_sentence_number():
     from types import SimpleNamespace
-    from briefing.daily_jobs import DailyDraft, _Draft
-    from briefing.daily_report import POINT_OUTLOOK, DailyInput
+    from briefing.daily_sentences import DailyDraft
+    from briefing.daily_jobs import _Draft
+    from briefing.daily_output import POINT_OUTLOOK
+    from briefing.daily_sections import DailyInput
     output = DailyOutput((Point("밤사이 이슈입니다.", ("B1",)),), False,
                          outlooks=(Point("예상입니다.", ("B1",), None, POINT_OUTLOOK, "TEST01", "상승"),))
     i = DailyInput("job", "morning", T, T, (), False, (), (), (), False)

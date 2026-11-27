@@ -15,22 +15,17 @@ from briefing.daily_prompts import REWRITE_ADDENDUM, REWRITE_ADDENDUM_POST_CLOSE
 from briefing.daily_prompts import SYSTEM_PROMPT as MORNING_PROMPT
 from briefing.daily_prompts import SYSTEM_PROMPT_POST_CLOSE
 from briefing.job_log import EntryType
-from briefing.report import REWRITE_ADDENDUM as MOVE_REWRITE_ADDENDUM
-from briefing.report import SYSTEM_PROMPT as MOVE_PROMPT
-from briefing.report import InvalidOutput, build_llm_input, evidence_catalog, parse_output
+from briefing.move_prompts import REWRITE_ADDENDUM as MOVE_REWRITE_ADDENDUM
+from briefing.move_prompts import SYSTEM_PROMPT as MOVE_PROMPT
+from briefing.report import InvalidOutput, parse_output
+from briefing.move_evidence import build_llm_input, evidence_catalog
 from briefing.research import QUERY_SYSTEM_PROMPT
 from briefing.sources import Article
 from contracts import validate
 from test_report import report_input
 from test_research import QUERIES, Flow, T, queries
-from test_weak_research import (
-    SHORTFALL,
-    DailyFlow,
-    daily_output,
-    move_output,
-    one_cause,
-    rid,
-)
+from test_weak_research_move import SHORTFALL, move_output, one_cause, rid
+from test_weak_research_daily import DailyFlow, daily_output
 
 # 같은 사건(테스트상사 실적)을 다룬 기사 둘과 다른 사건 기사 하나, 재검색으로 찾은 같은 사건 기사와 다른 사건 기사
 SAME_1 = "테스트상사 3분기 영업익 역대 최대"
@@ -224,8 +219,8 @@ def _no_grouping(*args, **kwargs):
 
 def test_the_search_query_input_does_not_group_articles_and_keeps_the_same_fields(grouped_move_input, monkeypatch):
     import briefing.daily_report as daily_report
-    import briefing.report as report
-    from briefing.daily_jobs import DailySentences
+    import briefing.move_evidence as move_evidence
+    from briefing.daily_sentences import DailySentences
     from briefing.sentence_research import MoveDraft, MoveSentences
     from test_daily_writing import weak_draft
 
@@ -236,7 +231,7 @@ def test_the_search_query_input_does_not_group_articles_and_keeps_the_same_field
     day_draft = weak_draft("0.50")
     grouped_day = daily_report.build_llm_input(day_draft.input, day_draft.sections)
 
-    monkeypatch.setattr(report, "article_groups", _no_grouping)
+    monkeypatch.setattr(move_evidence, "article_groups", _no_grouping)
     monkeypatch.setattr(daily_report, "article_groups", _no_grouping)
     context = move.query_context(move_draft, None)
     day_context = daily.query_context(day_draft, None)
@@ -253,7 +248,8 @@ def test_the_daily_writer_groups_with_the_core_settings_the_service_passes(monke
     import briefing.main as main
     from briefing.config import DEFAULT_SETTINGS
     from briefing.daily_inputs import EtfArticles
-    from briefing.daily_report import build_daily_writer, build_sections
+    from briefing.daily_report import build_daily_writer
+    from briefing.daily_sections import build_sections
     from test_daily_writing import AT, Sequence, day_input, etf_row, llm_output
 
     def article(article_id, title, hours):

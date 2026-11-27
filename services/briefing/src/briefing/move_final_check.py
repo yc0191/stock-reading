@@ -7,20 +7,16 @@ from typing import Any, Mapping
 
 from briefing.final_check import FinalCheck, FixCall, MailSentence, Source
 from briefing.job_log import JobLogPort
+from briefing.move_evidence import KIND_ARTICLE, build_llm_input, evidence_catalog, move_headline
+from briefing.move_prompts import OUTPUT_SCHEMA, system_prompt
 from briefing.report import (
-    KIND_ARTICLE,
-    OUTPUT_SCHEMA,
     Cause,
     InvalidOutput,
     LlmOutput,
     LlmWriter,
     ReportWriter,
-    build_llm_input,
-    evidence_catalog,
     llm_report,
-    move_headline,
     parse_output,
-    system_prompt,
     us_symbols_in_input,
 )
 from briefing.sentence_research import WHOLE_REPORT, MoveDraft, cause_text

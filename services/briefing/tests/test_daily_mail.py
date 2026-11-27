@@ -5,9 +5,10 @@ import logging
 
 import pytest
 
-import briefing.daily_jobs as daily_jobs
+import briefing.daily_publish as daily_publish
 from briefing.config import DailySettings
-from briefing.daily_jobs import CHART_FAILED_ITEM, CHART_OVERSIZED_ITEM, DailyCore
+from briefing.daily_publish import CHART_FAILED_ITEM, CHART_OVERSIZED_ITEM
+from briefing.daily_jobs import DailyCore
 from briefing.daily_report import DailyLlmWriter
 from contracts import validate
 from fake_members import FakeMembers, member
@@ -100,7 +101,7 @@ def test_no_chart_is_drawn_when_no_etf_has_a_value():
 
 
 def test_a_chart_over_the_image_limit_is_dropped_and_said_so(monkeypatch):
-    monkeypatch.setattr(daily_jobs, "render_day_chart", lambda bars: PNG_MAGIC + b"\0" * (300 * 1024 + 1))
+    monkeypatch.setattr(daily_publish, "render_day_chart", lambda bars: PNG_MAGIC + b"\0" * (300 * 1024 + 1))
     payload, _ = run()
     assert "images" not in payload and "cid:" not in payload["html"]
     assert "차트 없음(크기 초과)" in payload["html"] and CHART_OVERSIZED_ITEM in payload["missingItems"]
@@ -109,7 +110,7 @@ def test_a_chart_over_the_image_limit_is_dropped_and_said_so(monkeypatch):
 
 
 def test_a_chart_exactly_at_the_image_limit_is_kept(monkeypatch):
-    monkeypatch.setattr(daily_jobs, "render_day_chart", lambda bars: PNG_MAGIC + b"\0" * (300 * 1024 - len(PNG_MAGIC)))
+    monkeypatch.setattr(daily_publish, "render_day_chart", lambda bars: PNG_MAGIC + b"\0" * (300 * 1024 - len(PNG_MAGIC)))
     payload, _ = run()
     assert len(payload["images"]) == 1 and CHART_OVERSIZED_ITEM not in payload["missingItems"]
 
@@ -147,7 +148,7 @@ def test_an_event_over_the_event_limit_loses_only_the_chart():
 def test_a_chart_failure_still_sends_the_mail_and_logs_no_detail(monkeypatch, caplog):
     def boom(bars):
         raise RuntimeError("secret detail TEST01")
-    monkeypatch.setattr(daily_jobs, "render_day_chart", boom)
+    monkeypatch.setattr(daily_publish, "render_day_chart", boom)
     with caplog.at_level(logging.WARNING):
         payload, _ = run()
     assert "images" not in payload and CHART_FAILED_ITEM in payload["missingItems"] and payload["html"]

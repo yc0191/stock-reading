@@ -17,9 +17,8 @@ from briefing.daily_jobs import (
     DailyCore,
     range_start,
 )
-from briefing.daily_report import (
-    GENERATED_BY_LLM,
-    GENERATED_BY_RULE,
+from briefing.daily_report import GENERATED_BY_LLM, GENERATED_BY_RULE, DailyLlmWriter
+from briefing.daily_sections import (
     ITEM_ETF_ARTICLES,
     ITEM_ETFS,
     ITEM_ETFS_SPLIT_TITLE,
@@ -30,7 +29,6 @@ from briefing.daily_report import (
     ITEM_OPEN_FLOW,
     ITEM_US_INDEX,
     NO_DATA,
-    DailyLlmWriter,
 )
 from briefing.job_log import DiscardJobLog, EntryType, GeneratedBy, JobKind, JobLogEntry, RunStatus
 from briefing.llm import LlmCallError
