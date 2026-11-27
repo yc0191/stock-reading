@@ -16,6 +16,12 @@ HEADER = "| 기능 | 대상 | 단위 | 가상 | 실제 |\n|---|---|---|---|---|\
 NA = "해당 없음 - 외부 의존 없음"
 
 
+def script_text() -> str:
+    """본체와 본체가 source 하는 단계별 함수 파일(scripts/test-all-*.sh)을 합친 글. 스크립트 검사는 나눈 파일 전체에 건다."""
+    parts = [SCRIPT, *sorted((REPO_ROOT / "scripts").glob("test-all-*.sh"))]
+    return "\n".join(p.read_text(encoding="utf-8") for p in parts)
+
+
 def run_script(*args):
     return subprocess.run(["bash", str(SCRIPT), *args], capture_output=True, text=True, timeout=30)
 
@@ -133,7 +139,7 @@ def test_help_shows_the_options():
 
 
 def test_script_reads_the_map_for_the_table_and_cleans_up_on_exit():
-    text = SCRIPT.read_text(encoding="utf-8")
+    text = script_text()
     assert "run_report.py report" in text and "run_report.py db-tests" in text
     assert "trap on_exit EXIT" in text
 
@@ -447,7 +453,7 @@ def test_plan_with_live_lists_the_briefing_and_mail_step():
 
 
 def test_script_checks_every_live_key_before_calling_anything():
-    text = SCRIPT.read_text(encoding="utf-8")
+    text = script_text()
     keys = text.split('LIVE_KEYS="', 1)[1].split('"', 1)[0].split()
     assert {"BROKER_APP_KEY", "TEST_ALL_LIVE_SYMBOL", "ANTHROPIC_API_KEY", "SMTP_HOST", "TEST_ALL_LIVE_RECIPIENT"} <= set(keys)
     # 브리핑 재검색에 수집기가 실제 뉴스 검색으로 답하도록 뉴스 검색 키도 미리 확인하고 수집기에만 넘긴다.
@@ -472,7 +478,7 @@ def _live_functions(text: str) -> str:
 
 
 def test_live_keys_come_only_from_parameter_store_each_run(tmp_path):
-    text = SCRIPT.read_text(encoding="utf-8")
+    text = script_text()
     # 실제 호출에 쓰는 키는 .env·실행 환경변수 대신 매번 Parameter Store 에서 읽은 값만 쓴다.
     keys = text.split('LIVE_KEYS="', 1)[1].split('"', 1)[0].split()
     for key in keys + ["SMTP_PORT"]:
@@ -495,7 +501,7 @@ def test_live_keys_come_only_from_parameter_store_each_run(tmp_path):
 
 
 def test_live_needs_a_named_aws_profile_and_keeps_the_loader_log(tmp_path):
-    text = SCRIPT.read_text(encoding="utf-8")
+    text = script_text()
     body = text.split("run_live() {", 1)[1]
     # 프로필이 없으면 기본 자격증명으로 넘어가지 않고 Parameter Store 를 부르기 전에 멈춘다.
     assert body.index('-z "${TEST_ALL_AWS_PROFILE:-}"') < body.index("fetch_live_params")
@@ -514,7 +520,7 @@ def test_live_needs_a_named_aws_profile_and_keeps_the_loader_log(tmp_path):
 
 
 def test_script_turns_on_real_mail_only_inside_the_test_notifier():
-    text = SCRIPT.read_text(encoding="utf-8")
+    text = script_text()
     assert text.count("NOTIFIER_SEND_ENABLED=true") == 1
     notifier_block = text.split('echo "notifier 기동', 1)[1].split("NOTIFIER_PID=$!", 1)[0]
     assert "NOTIFIER_SEND_ENABLED=true" in notifier_block
@@ -524,7 +530,7 @@ def test_script_turns_on_real_mail_only_inside_the_test_notifier():
 
 
 def _is_jdk21(java_home: Path) -> bool:
-    text = SCRIPT.read_text(encoding="utf-8")
+    text = script_text()
     func = "is_jdk21() {" + text.split("is_jdk21() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
     result = subprocess.run(["bash", "-c", func + 'is_jdk21 "$1"', "bash", str(java_home)], capture_output=True, timeout=10)
     return result.returncode == 0
@@ -549,7 +555,7 @@ def test_service_ready_patterns_match_the_kafka_client_log_format():
     # Kafka 클라이언트는 "Adding newly assigned partitions: [collector.command-0]"처럼 대괄호로 감싸 찍는다.
     # 대괄호 없이 토픽 이름을 기다리면 서비스가 떠도 끝까지 맞지 않아 대기 시간 초과로 실패한다.
     import re
-    text = SCRIPT.read_text(encoding="utf-8")
+    text = script_text()
     patterns = re.findall(r'wait_for_log "[^"]+" "([^"]*Adding newly assigned partitions:[^"]*)"', text)
     # 시세 흐름 실제(market, collector), 브리핑·메일 실제(2곳), 구성 종목 리허설(market, collector)
     assert len(patterns) == 6
@@ -563,7 +569,7 @@ def test_service_ready_patterns_match_the_kafka_client_log_format():
 
 def test_live_checks_count_only_rows_saved_after_this_run_started():
     # 실제 DB 테스트가 같은 테스트 DB 에 남긴 가짜 행(조회 실패 3종 등)을 이번 실행의 결과로 세면 안 된다.
-    text = SCRIPT.read_text(encoding="utf-8")
+    text = script_text()
     body = text.split("run_live() {", 1)[1]
     assert body.index('LIVE_SINCE=$(echo "SELECT now();" | admin_sql)') < body.index('echo "수동 실행 명령 collect 1건 발행"')
     assert 'QUOTE_FLOW_LIVE_SINCE="$LIVE_SINCE"' in text and 'BRIEFING_FLOW_LIVE_SINCE="$LIVE_SINCE"' in text
@@ -582,7 +588,7 @@ def test_live_checks_count_only_rows_saved_after_this_run_started():
 
 
 def test_live_stops_before_calling_when_broker_base_url_is_not_an_https_address():
-    text = SCRIPT.read_text(encoding="utf-8")
+    text = script_text()
     body = text.split("run_live() {", 1)[1]
     guard = 'if ! [[ "$base_url" =~ ^https://[^/[:space:]]+$ ]]'
     assert body.index(guard) < body.index("bootJar")

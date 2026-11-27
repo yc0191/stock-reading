@@ -50,7 +50,7 @@ docker rm -f market-it-pg
 TEST_ALL_AWS_PROFILE=<AWS 프로필> scripts/test-all.sh --live
 ```
 
-전체 실행에 더해 시세 흐름 하나와 브리핑·메일 흐름 하나를 실제 외부 호출로 돌립니다. 호출 수, 필요한 키, 단계의 원본은 `scripts/test-all.sh` 머리 주석, `LIVE_KEYS`, `--live --plan` 출력입니다. 키 이름과 Parameter Store 경로의 대응은 `scripts/load_config.py`에 있습니다.
+전체 실행에 더해 시세 흐름 하나와 브리핑·메일 흐름 하나를 실제 외부 호출로 돌립니다. 호출 수, 필요한 키, 단계의 원본은 `scripts/test-all.sh` 머리 주석, `scripts/test-all-live.sh`의 `LIVE_KEYS`, `--live --plan` 출력입니다. 키 이름과 Parameter Store 경로의 대응은 `scripts/load_config.py`에 있습니다.
 
 안전 규칙:
 

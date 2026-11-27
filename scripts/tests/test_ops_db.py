@@ -21,6 +21,12 @@ def read(path):
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def all_script_text():
+    """전체 실행 스크립트 본체와 본체가 source 하는 단계별 함수 파일(scripts/test-all-*.sh)을 합친 글."""
+    return "\n".join(read(p.relative_to(ROOT)) for p in [ROOT / "scripts" / "test-all.sh",
+                                                         *sorted((ROOT / "scripts").glob("test-all-*.sh"))])
+
+
 def sql_lines(path):
     """주석과 빈 줄을 뺀 SQL 줄."""
     return [line.strip() for line in path.read_text(encoding="utf-8").splitlines()
@@ -110,7 +116,7 @@ def test_deploy_env_example_and_rehearsal_pass_the_results_bucket_and_region():
 
 
 def test_test_all_runs_checker_tests_with_their_own_venv_and_it_db_names():
-    script = read("scripts/test-all.sh")
+    script = all_script_text()
     assert '"$OPS_PY" -m pytest services/ops-checker --junitxml="$TMP/results/main/py/ops-checker.xml"' in script
     assert '"$OPS_PY" -m pytest $ops_files --junitxml="$TMP/results/db/py/ops-checker.xml"' in script
     assert "OPS_IT_DB_URL OPS_IT_DB_USER OPS_IT_DB_PASSWORD \\\n  QUOTE" in script
@@ -120,7 +126,7 @@ def test_test_all_runs_checker_tests_with_their_own_venv_and_it_db_names():
 
 
 def test_test_all_prepares_ops_after_briefing():
-    script = read("scripts/test-all.sh")
+    script = all_script_text()
     assert script.index("migrate_briefing; then") < script.index("init_ops; then") < script.index("migrate_ops; then")
     assert "OPS_CHECKER_DB_USER OPS_CHECKER_DB_PASSWORD" in script
 
