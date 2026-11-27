@@ -98,7 +98,7 @@ def recorded(fake, steps):
 
 def test_a_move_report_and_its_research_rewrite_leave_llm_steps_under_the_move_job():
     from test_research import JOB_ID, R1, Flow, queries
-    from test_weak_research import MOVE_ONE_WEAK, one_cause, rid
+    from test_weak_research_move import MOVE_ONE_WEAK, one_cause, rid
     flow = Flow([MOVE_ONE_WEAK, one_cause("다시 찾은 기사가 영향을 줬을 수 있습니다.", ["r1"])], [queries("검색어")])
     recorded(flow.report_llm, flow.records)
     recorded(flow.query_llm, flow.records)

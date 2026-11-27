@@ -23,14 +23,8 @@ from briefing.sources import Article
 from contracts import validate
 from test_report import report_input
 from test_research import QUERIES, Flow, T, queries
-from test_weak_research import (
-    SHORTFALL,
-    DailyFlow,
-    daily_output,
-    move_output,
-    one_cause,
-    rid,
-)
+from test_weak_research_move import SHORTFALL, move_output, one_cause, rid
+from test_weak_research_daily import DailyFlow, daily_output
 
 # 같은 사건(테스트상사 실적)을 다룬 기사 둘과 다른 사건 기사 하나, 재검색으로 찾은 같은 사건 기사와 다른 사건 기사
 SAME_1 = "테스트상사 3분기 영업익 역대 최대"

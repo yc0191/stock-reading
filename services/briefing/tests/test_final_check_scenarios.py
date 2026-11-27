@@ -25,18 +25,8 @@ from briefing.report import LlmWriter
 from briefing.sentence_research import ResearchReportStage
 from contracts import validate
 from test_research import A1, QUERIES, R1, T, Flow, FakeLlm, article, queries
-from test_weak_research import (
-    SHORTFALL,
-    STRONG_TEXT,
-    WEAK_TEXT,
-    DailyFlow,
-    daily_output,
-    in_range,
-    move_output,
-    one_cause,
-    point,
-    rid,
-)
+from test_weak_research_move import SHORTFALL, STRONG_TEXT, WEAK_TEXT, move_output, one_cause, rid
+from test_weak_research_daily import DailyFlow, daily_output, in_range, point
 
 FAILED = LlmCallError("LLM call failed: APIConnectionError")
 REWRITTEN = "다시 찾은 기사가 영향을 줬을 수 있습니다."

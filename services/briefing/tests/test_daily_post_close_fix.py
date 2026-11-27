@@ -475,7 +475,9 @@ def test_a_single_zero_percent_etf_with_a_bar_in_the_five_pm_edition_is_a_regula
 # ---- 다시 쓴 뒤의 근거 번호 ----
 
 def test_the_issue_refs_stay_in_the_published_evidence_after_a_sentence_is_rewritten():
-    from test_weak_research import DailyFlow, DailyLlm, SHORTFALL, QUERIES, daily_output, in_range, point, queries
+    from test_weak_research_daily import DailyFlow, DailyLlm, daily_output, in_range, point
+    from test_weak_research_move import SHORTFALL
+    from test_research import QUERIES, queries
 
     flow = DailyFlow("post-close", [], [])
     original = DailyLlm._post_close

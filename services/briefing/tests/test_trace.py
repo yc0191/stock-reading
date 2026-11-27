@@ -24,7 +24,9 @@ from test_runner import (  # noqa: F401 - setup은 픽스처
     move_message,
     setup,
 )
-from test_weak_research import EDITIONS, MOVE_TWO_WEAK, DailyFlow, Flow, queries, two_weak
+from test_weak_research_daily import EDITIONS, DailyFlow, two_weak
+from test_weak_research_move import MOVE_TWO_WEAK
+from test_research import Flow, queries
 
 
 @pytest.fixture

@@ -20,7 +20,7 @@ paths:
 1. 계약: 요청·응답 본문을 `contracts/events/`에 스키마와 v1 샘플로 둡니다.
 2. 조회하는 서비스: 계산은 `*Query`(요청은 `*Request` 레코드)에 두고 `*QueryController`는 그것만 부릅니다. 경로는 `/internal/<서비스>/<자료>`이고 서버 밖으로 열지 않습니다(ADR-007). 입력 오류만 400, 서버 실패는 500입니다.
 3. 브리핑: `queries.py`의 `QueryKind`에 종류를 더하고 `http_queries.py`의 `HttpQueries`로 부릅니다. 재시도는 `config.py`의 `QuerySettings`를 그대로 쓰고 새 규칙을 만들지 않습니다. 끝내 실패한 사유를 `ports.py`의 `FailureReason`과 작업 기록 제약에 더합니다.
-4. 계약 테스트: 조회하는 서비스의 컨트롤러·조회 테스트와 실제 웹 서버 테스트, 브리핑 `tests/test_contracts.py`·`tests/test_http_queries.py`
+4. 계약 테스트: 조회하는 서비스의 컨트롤러·조회 테스트와 실제 웹 서버 테스트, 브리핑 `tests/test_contracts.py`·`tests/test_contracts_daily.py`(데일리 자료)·`tests/test_http_queries.py`
 5. 조회할 수 있는 때가 따로 있으면(예: 기사는 `news.stored` 뒤) 그 알림을 받은 뒤 부릅니다. 새 알림 이벤트는 `.claude/rules/event-contract.md`를 따릅니다.
 
 ## 3. 시간 범위와 상한
