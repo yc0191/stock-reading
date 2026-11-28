@@ -113,7 +113,7 @@ run_apply scheduled 2026-11-11T00:00:05+09:00 run
 run_apply scheduled 2026-11-11T00:00:05+09:00
 upline=$(grep ' up ' "$W/docker.log")
 { [ "$RC" -eq 0 ] && [ "$(current)" = "$V2" ] && [ "$(grep -c 'run --rm -T --no-deps flyway-migrate' "$W/docker.log")" -eq 1 ] \
-  && [[ "$upline" == *"up -d --no-deps --remove-orphans collector market news notifier briefing ops-checker" ]] && [[ "$upline" != *flyway-migrate* ]] \
+  && [[ "$upline" == *"up -d --no-deps --remove-orphans redis collector market news notifier briefing ops-checker" ]] && [[ "$upline" != *flyway-migrate* ]] \
   && [ "$(grep -n 'flyway-migrate' "$W/docker.log" | head -1 | cut -d: -f1)" -lt "$(grep -n ' up ' "$W/docker.log" | cut -d: -f1)" ]; } \
   && ok "M2 표 만들기를 먼저 한 번만 돌리고, up 은 표 만들기를 뺀 서비스만 --no-deps 로 띄움" || bad "M2 (rc=$RC) $upline"
 

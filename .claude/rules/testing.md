@@ -18,7 +18,7 @@ paths:
 
 | 대상 | 명령 (저장소 루트에서) | 비고 |
 |---|---|---|
-| Java (collector, market, news, notifier) | `./gradlew cleanTest test --no-build-cache` | JDK 21과 `JAVA_HOME_21` 필요. Docker 불필요 |
+| Java (collector, market, news, notifier) | `./gradlew cleanTest test --no-build-cache` | JDK 21과 `JAVA_HOME_21` 필요. Docker 불필요(있으면 Testcontainers 테스트도 돎) |
 | 브리핑 (Python) | `services/briefing/.venv/bin/python -m pytest services/briefing` | 프로젝트 전용 venv. 시스템 파이썬을 쓰지 않음 |
 | 설정 로더·지도 검사 (Python) | `services/briefing/.venv/bin/python -m pytest -c scripts/pytest.ini scripts/tests` | 브리핑 venv를 함께 씀. 별도 ini 필요 |
 | 전체 실행 | `scripts/test-all.sh` | 위 셋과 실제 DB 테스트를 돌리고 기능별 결과 표를 출력. Docker와 개발용 Postgres 컨테이너 필요 |

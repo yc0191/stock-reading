@@ -93,6 +93,7 @@ public class NewsCollector {
         int duplicates = 0;
         int skippedByLimit = 0;
         int reused = 0;
+        int searched = 0;
         int index = 0;
         boolean called = false;
         for (NewsQuery query : queries) {
@@ -122,6 +123,7 @@ public class NewsCollector {
                 if (startedAt == null) {
                     startedAt = OffsetDateTime.now(clock);
                 }
+                searched++;
                 try {
                     found = search.search(query.query(), properties.display());
                 } catch (RuntimeException e) {
@@ -173,7 +175,11 @@ public class NewsCollector {
         }
         List<NewsItem> result = new ArrayList<>(byUrl.values());
         result.sort(Comparator.comparing(NewsItem::publishedAt).reversed());
-        return new NewsCollection(result, incompleteSymbols, startedAt != null ? startedAt : OffsetDateTime.ofInstant(now, clock.getZone()));
+        OffsetDateTime started = startedAt != null ? startedAt : OffsetDateTime.ofInstant(now, clock.getZone());
+        if (reuse) {
+            return new NewsCollection(result, incompleteSymbols, started, searched, reused);
+        }
+        return new NewsCollection(result, incompleteSymbols, started);
     }
 
     private void releaseIfOwner(boolean owner, String key) {

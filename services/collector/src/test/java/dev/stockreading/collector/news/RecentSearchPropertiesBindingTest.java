@@ -25,13 +25,14 @@ class RecentSearchPropertiesBindingTest {
     }
 
     @Test
-    void defaultsReuseForFifteenMinutesAndWaitLongerThanOneSearch() {
+    void defaultsReuseForFifteenMinutesAndHoldTheMarkLongerThanTheWait() {
         runner().run(context -> {
             assertThat(context).hasNotFailed();
             RecentSearchProperties properties = context.getBean(RecentSearchProperties.class);
             assertThat(properties.window()).isEqualTo(Duration.ofMinutes(15));
             assertThat(properties.waitLimit()).isEqualTo(Duration.ofSeconds(25));
-            assertThat(properties.maxEntries()).isEqualTo(2000);
+            assertThat(properties.lockTtl()).isGreaterThan(properties.waitLimit());
+            assertThat(properties.pollInterval()).isEqualTo(Duration.ofMillis(200));
         });
     }
 
@@ -46,6 +47,7 @@ class RecentSearchPropertiesBindingTest {
     void invalidValuesFailStartup() {
         runner().withPropertyValues("collector.news-reuse.window=0s").run(context -> assertThat(context).hasFailed());
         runner().withPropertyValues("collector.news-reuse.wait-limit=-1s").run(context -> assertThat(context).hasFailed());
-        runner().withPropertyValues("collector.news-reuse.max-entries=0").run(context -> assertThat(context).hasFailed());
+        runner().withPropertyValues("collector.news-reuse.lock-ttl=0s").run(context -> assertThat(context).hasFailed());
+        runner().withPropertyValues("collector.news-reuse.poll-interval=0s").run(context -> assertThat(context).hasFailed());
     }
 }

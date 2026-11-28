@@ -33,7 +33,9 @@
           "items": { "type": "string", "pattern": "^([0-9A-Z]{6}|\\*)$" },
           "description": "제대로 모으지 못했을 수 있는 종목코드. 검색어 호출 실패, 일일 호출 상한으로 건너뜀, 기사 전송 실패가 해당한다. 시장 전체 검색어가 그렇게 되면 \"*\"를 넣는다. 빈 배열이면 모두 모은 것이다."
         },
-        "researchJobId": { "type": "string", "format": "uuid", "description": "재검색 완료이면 끝난 요청(news.research.requested)의 jobId. 정기 수집 완료에는 없다. 선택." }
+        "researchJobId": { "type": "string", "format": "uuid", "description": "재검색 완료이면 끝난 요청(news.research.requested)의 jobId. 정기 수집 완료에는 없다. 선택." },
+        "searchedQueryCount": { "type": "integer", "minimum": 0, "description": "재검색 완료에서 검색 제공자를 직접 부른 검색어 수(실패 포함). 하루 호출 상한으로 건너뛴 검색어는 들지 않는다. 정기 수집 완료와, 재검색 중 예상 못 한 오류로 세지 못한 완료에는 없다. 이 칸을 더하기 전의 수집기가 낸 완료에도 없다. 선택." },
+        "reusedQueryCount": { "type": "integer", "minimum": 0, "description": "재검색 완료에서 최근 검색 결과를 다시 써 검색하지 않은 검색어 수. searchedQueryCount 와 함께 있거나 함께 없다. 선택." }
       }
     }
   }

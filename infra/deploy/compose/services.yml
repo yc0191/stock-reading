@@ -1,4 +1,4 @@
-# 서비스 서버(Lightsail 2GB)의 서비스 6개와 DB 표 만들기 단계. Kafka·Postgres 는 데이터 서버의 data.yml 이며 여기에 없다.
+# 서비스 서버(Lightsail 2GB)의 서비스 6개, 수집기 캐시(Redis), DB 표 만들기 단계. Kafka·Postgres 는 데이터 서버의 data.yml 이며 여기에 없다.
 # 배포 적용 스크립트(infra/deploy/server/apply-deploy.sh)가 아래처럼 부른다. DEPLOY_VERSION 이 이미지 태그다.
 #   DEPLOY_VERSION=<버전> docker compose -f services.yml --env-file <배포 설정> --env-file <비밀 설정> up -d
 # 값의 목록과 뜻은 infra/deploy/server/deploy.env.example. DB 비밀번호 8개는 비면 Compose 가 어떤 명령이든 실패한다. 로컬에서 이미지를 만들 때는 rehearsal/run-rehearsal.sh build.
@@ -47,6 +47,14 @@ services:
       OPS_CHECKER_DB_USER: ${OPS_CHECKER_DB_USER:-ops_checker}
       OPS_CHECKER_DB_PASSWORD: ${OPS_CHECKER_DB_PASSWORD:?OPS_CHECKER_DB_PASSWORD 값이 비어 있음}
 
+  # 수집기의 최근 검색 결과를 잠시 두는 캐시(ADR-008). 잃어도 되는 것만 두므로 디스크에 저장하지 않고, 설정은 command 에만 둔다.
+  # ports 를 두지 않아 서버 밖에는 열리지 않는다. 메모리 상한(maxmemory)을 넘으면 오래 안 쓴 키부터 지운다.
+  redis:
+    <<: *service
+    image: redis:8.2.2-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    mem_limit: ${REDIS_MEM_LIMIT:-96m}
+
   collector:
     <<: *service
     image: ${ECR_REGISTRY:-local}/stock-reading-collector:${DEPLOY_VERSION:-dev}
@@ -62,6 +70,8 @@ services:
       # 컨테이너 메모리 상한 안에서 힙을 작게 고정하고, 힙 밖(메타스페이스·스레드·코드 캐시)에도 상한을 둔다. 값은 로컬 리허설의 측정으로 정했다.
       JAVA_TOOL_OPTIONS: ${COLLECTOR_JAVA_OPTS:--Xms96m -Xmx224m -XX:+UseSerialGC -Xss512k -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=48m}
       SPRING_DATASOURCE_URL: jdbc:postgresql://${DATA_PRIVATE_IP:-127.0.0.1}:5432/${POSTGRES_DB:-stock}
+      # 같은 Compose 네트워크의 redis. 닿지 않아도 수집기는 다시 쓰기 없이 검색한다.
+      REDIS_HOST: redis
       POSTGRES_DB: ${POSTGRES_DB:-stock}
       COLLECTOR_DB_USER: ${COLLECTOR_DB_USER:-collector_svc}
       COLLECTOR_DB_PASSWORD: ${COLLECTOR_DB_PASSWORD:?COLLECTOR_DB_PASSWORD 값이 비어 있음}

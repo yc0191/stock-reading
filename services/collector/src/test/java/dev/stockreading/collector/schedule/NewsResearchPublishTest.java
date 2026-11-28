@@ -189,6 +189,36 @@ class NewsResearchPublishTest {
     }
 
     @Test
+    void researchCompletionCarriesHowManyQueriesWereSearchedAndReused() throws IOException {
+        when(collector.researchWithStatus(any())).thenReturn(
+                new NewsCollection(List.of(item("https://news.example.com/a", "TEST01")), Set.of(), STARTED_AT, 1, 1));
+
+        publisher.publishResearch(CORRELATION_ID, REQUESTED_AT, JOB_ID, "TEST01", QUERIES);
+
+        String json = completionJson();
+        assertThat(ContractSchemas.validate("collection.completed.v1.schema.json", json)).isEmpty();
+        JsonNode payload = mapper.readTree(json).get("payload");
+        assertThat(payload.get("searchedQueryCount").asInt()).isEqualTo(1);
+        assertThat(payload.get("reusedQueryCount").asInt()).isEqualTo(1);
+    }
+
+    @Test
+    void researchWithNoQueriesCountsZeroAndAFailedResearchLeavesTheCountsOut() throws IOException {
+        publisher.publishResearch(CORRELATION_ID, REQUESTED_AT, JOB_ID, "TEST01", List.of());
+        when(collector.researchWithStatus(anyList())).thenThrow(new IllegalStateException("boom"));
+        publisher.publishResearch(CORRELATION_ID, REQUESTED_AT, JOB_ID, "TEST01", QUERIES);
+
+        ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
+        verify(kafka, times(2)).send(eq(Topics.COLLECTION_COMPLETED), eq("research-news"), value.capture());
+        JsonNode empty = mapper.readTree(value.getAllValues().get(0)).get("payload");
+        JsonNode failed = mapper.readTree(value.getAllValues().get(1)).get("payload");
+        assertThat(empty.get("searchedQueryCount").asInt()).isZero();
+        assertThat(empty.get("reusedQueryCount").asInt()).isZero();
+        assertThat(failed.has("searchedQueryCount")).isFalse();
+        assertThat(failed.has("reusedQueryCount")).isFalse();
+    }
+
+    @Test
     void logsCarryNeitherTheQueriesNorTheSymbol() {
         collect(Set.of("TEST01"), item("https://news.example.com/a", "TEST01"));
 

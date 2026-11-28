@@ -105,7 +105,7 @@ class NewsPublisher {
         NewsCollection collection;
         if (newsQueries.isEmpty()) {
             // 쓸 검색어가 없으면 아무것도 찾지 못한 것이다. 브리핑이 결과 없음으로 판단하도록 못 모은 종목으로 알린다.
-            collection = new NewsCollection(List.of(), Set.of(symbol), OffsetDateTime.now(clock));
+            collection = new NewsCollection(List.of(), Set.of(symbol), OffsetDateTime.now(clock), 0, 0);
         } else {
             try {
                 collection = collector.researchWithStatus(newsQueries);
@@ -180,7 +180,7 @@ class NewsPublisher {
 
         CompletableFuture<Void> allSettled = CompletableFuture.allOf(settled.toArray(new CompletableFuture[0]));
         Runnable sendCompletion = () -> publishCompleted(
-                jobType, researchJobId, correlationId, scheduledFor, collection.startedAt(), confirmed, incomplete);
+                jobType, researchJobId, correlationId, scheduledFor, collection, confirmed, incomplete);
         if (allSettled.isDone()) {
             sendCompletion.run();
         } else {
@@ -191,7 +191,7 @@ class NewsPublisher {
     }
 
     private void publishCompleted(String jobType, String researchJobId, String correlationId, String scheduledFor,
-            OffsetDateTime startedAt, Set<String> articleEventIds, Set<String> incomplete) {
+            NewsCollection collection, Set<String> articleEventIds, Set<String> incomplete) {
         try {
             OffsetDateTime finishedAt = OffsetDateTime.now(clock);
             List<String> eventIds = new ArrayList<>(new TreeSet<>(articleEventIds));
@@ -199,12 +199,14 @@ class NewsPublisher {
             CollectionCompletedPayload payload = new CollectionCompletedPayload(
                     jobType,
                     scheduledFor,
-                    EventFactory.format(startedAt),
+                    EventFactory.format(collection.startedAt()),
                     EventFactory.format(finishedAt),
                     publishedCount,
                     eventIds,
                     completedSymbols(incomplete),
-                    researchJobId);
+                    researchJobId,
+                    collection.searchedQueryCount(),
+                    collection.reusedQueryCount());
             Envelope<CollectionCompletedPayload> event = EventFactory.create(
                     clock, COMPLETED_EVENT_TYPE, finishedAt, correlationId, payload);
             kafka.send(Topics.COLLECTION_COMPLETED, jobType, mapper.writeValueAsString(event));
