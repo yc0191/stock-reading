@@ -325,6 +325,26 @@ class RecentSearchReuseTest {
     }
 
     @Test
+    void researchCountsSearchedAndReusedQueriesButNotThoseSkippedByTheDailyLimit() {
+        when(search.search(anyString(), anyInt())).thenAnswer(invocation -> List.of(
+                article(invocation.getArgument(0), "https://a.example.com/" + invocation.getArgument(0).hashCode())));
+        NewsCollector collector = new NewsCollector(search,
+                new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 2, 0), clock, ms -> { }, () -> List.of(),
+                recentSearches(clock, Duration.ZERO));
+        collector.collectWithStatus(List.of(query("테스트검색어", "TEST01")));
+
+        NewsCollection research = collector.researchWithStatus(
+                List.of(query("테스트검색어", "TEST01"), query("다른검색어", "TEST01"), query("세번째검색어", "TEST01")));
+        NewsCollection regular = collector.collectWithStatus(List.of(query("테스트검색어", "TEST01")));
+
+        // 하루 상한 2회 중 정기 수집이 1회, 재검색의 다른검색어가 1회를 쓰고 세번째검색어는 건너뛴다.
+        assertThat(research.reusedQueryCount()).isEqualTo(1);
+        assertThat(research.searchedQueryCount()).isEqualTo(1);
+        assertThat(regular.reusedQueryCount()).isNull();
+        assertThat(regular.searchedQueryCount()).isNull();
+    }
+
+    @Test
     void keyIgnoresSurroundingAndRepeatedSpacesButKeepsCase() {
         assertThat(RecentSearchesPort.keyOf("  테스트   검색어 ")).isEqualTo("테스트 검색어");
         assertThat(RecentSearchesPort.keyOf("ETF")).isNotEqualTo(RecentSearchesPort.keyOf("etf"));

@@ -68,32 +68,37 @@ class CollectionCompletedContractTest {
         String research = sample()
                 .replace("\"jobType\": \"collect-news\"", "\"jobType\": \"research-news\"")
                 .replace("\"incompleteSymbols\": [\"TEST02\"]",
-                        "\"incompleteSymbols\": [\"TEST02\"],\n    \"researchJobId\": \"5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13\"");
+                        "\"incompleteSymbols\": [\"TEST02\"],\n    \"researchJobId\": \"5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13\","
+                                + "\n    \"searchedQueryCount\": 1,\n    \"reusedQueryCount\": 2");
 
-        assertThat(research).contains("researchJobId", "research-news");
+        assertThat(research).contains("researchJobId", "research-news", "reusedQueryCount");
         assertThat(ContractSchemas.validate(SCHEMA, research)).isEmpty();
         assertRejected(research.replace("5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13", "not-a-uuid"));
+        assertRejected(research.replace("\"reusedQueryCount\": 2", "\"reusedQueryCount\": -1"));
+        assertRejected(research.replace("\"searchedQueryCount\": 1", "\"searchedQueryCount\": \"1\""));
     }
 
     @Test
-    void producedCompletionCarriesResearchJobIdOnlyWhenPresent() throws IOException {
+    void producedCompletionCarriesResearchFieldsOnlyWhenPresent() throws IOException {
         ObjectMapper mapper = JsonMapper.builder().build();
         Clock clock = Clock.fixed(Instant.parse("2026-10-20T07:15:42Z"), ZoneId.of("Asia/Seoul"));
         OffsetDateTime at = OffsetDateTime.now(clock);
         String time = EventFactory.format(at);
         CollectionCompletedPayload regular = new CollectionCompletedPayload(
-                "collect-news", time, time, time, 0, List.of(), List.of(), null);
+                "collect-news", time, time, time, 0, List.of(), List.of(), null, null, null);
         CollectionCompletedPayload research = new CollectionCompletedPayload(
-                "research-news", time, time, time, 0, List.of(), List.of("TEST01"), "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13");
+                "research-news", time, time, time, 0, List.of(), List.of("TEST01"), "5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13",
+                1, 2);
 
         String regularJson = mapper.writeValueAsString(
                 EventFactory.create(clock, "collection.completed", at, "c", regular));
         String researchJson = mapper.writeValueAsString(
                 EventFactory.create(clock, "collection.completed", at, "c", research));
 
-        assertThat(regularJson).doesNotContain("researchJobId");
+        assertThat(regularJson).doesNotContain("researchJobId", "QueryCount");
         assertThat(ContractSchemas.validate(SCHEMA, regularJson)).isEmpty();
-        assertThat(researchJson).contains("\"researchJobId\":\"5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13\"");
+        assertThat(researchJson).contains("\"researchJobId\":\"5c2e8a41-7d3f-4b6a-a1c9-0e4f2b8d6a13\"",
+                "\"searchedQueryCount\":1", "\"reusedQueryCount\":2");
         assertThat(ContractSchemas.validate(SCHEMA, researchJson)).isEmpty();
     }
 
