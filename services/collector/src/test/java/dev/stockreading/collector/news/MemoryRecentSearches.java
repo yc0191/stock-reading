@@ -1,8 +1,8 @@
 package dev.stockreading.collector.news;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -12,32 +12,32 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-import org.springframework.stereotype.Component;
-
 /**
- * 수집기 메모리에 두는 최근 검색 결과 보관소. 수집기를 재시작하면 비므로 그 직후 한 번은 다시 검색한다.
- * 정기 수집(스케줄러 스레드)과 재검색(Kafka 리스너 스레드)이 함께 부르므로 스레드 사이에서 안전해야 한다.
+ * 테스트용 최근 검색 결과 보관소. 운영 구현(RedisRecentSearches)과 같은 약속(RecentSearchesPort)을 메모리로 지켜,
+ * 수집 흐름 테스트가 Docker 없이 돌게 한다. 운영 구현의 동작은 RedisRecentSearchesTest 가 진짜 Redis 로 확인한다.
+ * 정기 수집과 재검색을 여러 스레드에서 함께 부르는 테스트가 있어 스레드 사이에서 안전해야 한다.
  */
-@Component
 class MemoryRecentSearches implements RecentSearchesPort {
 
     private record Entry(Instant searchedAt, List<NewsItem> items) {
     }
 
     private final Clock clock;
-    private final RecentSearchProperties properties;
+    private final Duration window;
+    private final Duration waitLimit;
     private final Map<String, Entry> results = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<List<NewsItem>>> searching = new ConcurrentHashMap<>();
 
-    MemoryRecentSearches(Clock clock, RecentSearchProperties properties) {
+    MemoryRecentSearches(Clock clock, Duration window, Duration waitLimit) {
         this.clock = clock;
-        this.properties = properties;
+        this.window = window;
+        this.waitLimit = waitLimit;
     }
 
     @Override
     public Turn take(String key) {
         // 대기 상한은 실제로 흐른 시간으로 잰다. 주입한 시계는 테스트에서 멈춰 있을 수 있다.
-        long deadline = System.nanoTime() + properties.waitLimit().toNanos();
+        long deadline = System.nanoTime() + waitLimit.toNanos();
         while (true) {
             Optional<List<NewsItem>> recent = find(key);
             if (recent.isPresent()) {
@@ -83,7 +83,6 @@ class MemoryRecentSearches implements RecentSearchesPort {
     public void record(String key, List<NewsItem> found) {
         List<NewsItem> copy = List.copyOf(found);
         results.put(key, new Entry(clock.instant(), copy));
-        trim();
         CompletableFuture<List<NewsItem>> pending = searching.remove(key);
         if (pending != null) {
             pending.complete(copy);
@@ -112,24 +111,6 @@ class MemoryRecentSearches implements RecentSearchesPort {
     }
 
     private boolean isFresh(Entry entry, Instant now) {
-        return now.isBefore(entry.searchedAt().plus(properties.window()));
-    }
-
-    // 지난 결과를 먼저 지우고, 그래도 상한을 넘으면 오래된 검색어부터 지운다.
-    private void trim() {
-        if (results.size() <= properties.maxEntries()) {
-            return;
-        }
-        Instant now = clock.instant();
-        results.entrySet().removeIf(e -> !isFresh(e.getValue(), now));
-        int over = results.size() - properties.maxEntries();
-        if (over > 0) {
-            results.entrySet().stream()
-                    .sorted(Comparator.comparing(e -> e.getValue().searchedAt()))
-                    .limit(over)
-                    .map(Map.Entry::getKey)
-                    .toList()
-                    .forEach(results::remove);
-        }
+        return now.isBefore(entry.searchedAt().plus(window));
     }
 }

@@ -3,12 +3,16 @@ package dev.stockreading.collector;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.ZoneId;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration;
+import org.springframework.boot.data.redis.autoconfigure.DataRedisProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
@@ -69,8 +73,10 @@ class DataSourceWiringTest {
 
     private ApplicationContextRunner runner() {
         // application.yml 을 읽어, 설정 키와 환경변수 연결까지 함께 확인한다.
+        // Redis 연결은 처음 부를 때 맺으므로 Redis 가 없어도 배선은 확인된다.
         return new ApplicationContextRunner()
                 .withInitializer(new ConfigDataApplicationContextInitializer())
+                .withConfiguration(AutoConfigurations.of(DataRedisAutoConfiguration.class))
                 .withUserConfiguration(Wiring.class);
     }
 
@@ -149,6 +155,18 @@ class DataSourceWiringTest {
             assertThat(context).hasSingleBean(NewsSearchPort.class);
             assertThat(context).hasSingleBean(DisclosurePort.class);
             assertThat(context).hasSingleBean(NewsCollector.class);
+        });
+    }
+
+    @Test
+    void recentSearchesLiveInRedisWithShortTimeouts() {
+        runner().run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context).hasBean("redisRecentSearches");
+            // 제한 시간이 길면 Redis 가 죽었을 때 검색어마다 그만큼 묶인다.
+            DataRedisProperties redis = context.getBean(DataRedisProperties.class);
+            assertThat(redis.getTimeout()).isLessThanOrEqualTo(Duration.ofSeconds(1));
+            assertThat(redis.getConnectTimeout()).isLessThanOrEqualTo(Duration.ofSeconds(1));
         });
     }
 

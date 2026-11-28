@@ -47,7 +47,7 @@ class NewsCollectorTest {
     private ListAppender<ILoggingEvent> logs;
 
     private static RecentSearchesPort recent(Clock clock) {
-        return new MemoryRecentSearches(clock, new RecentSearchProperties(Duration.ofMinutes(15), Duration.ZERO, 100));
+        return new MemoryRecentSearches(clock, Duration.ofMinutes(15), Duration.ZERO);
     }
 
     @BeforeEach

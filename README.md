@@ -124,7 +124,7 @@ sequenceDiagram
 |---|---|
 | 서비스 | Java 21 · Spring Boot, 브리핑은 Python |
 | 서비스 간 통신 | 일어난 일 알리기는 Apache Kafka (KRaft), 근거 조회는 내부 HTTP |
-| 저장소 | PostgreSQL |
+| 저장소 | PostgreSQL, 잃어도 되는 캐시는 Redis |
 | 리포트 작성 | Claude API |
 | 배포 | AWS Lightsail · ECR · Terraform · Docker Compose |
 | CI/CD | GitHub Actions (테스트, 이미지 빌드), 적용은 서버가 정해진 시각에 스스로 함 |

@@ -18,7 +18,7 @@ export JAVA_HOME_21=$JAVA_HOME
 # 빌드와 테스트 (Docker 불필요)
 ./gradlew test bootJar
 
-# 인프라 기동 (Kafka, PostgreSQL, 마이그레이션)
+# 인프라 기동 (Kafka, PostgreSQL, Redis, 마이그레이션)
 cp .env.example .env        # 값 채우기
 docker compose -f infra/compose/docker-compose.yml --env-file .env up -d
 

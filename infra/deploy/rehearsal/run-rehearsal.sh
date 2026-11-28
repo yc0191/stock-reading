@@ -3,7 +3,7 @@
 # 가짜 값을 넣고 수동 명령과 판 시작 알림으로 한 바퀴 돌린 뒤 서비스별 메모리를 잰다. 외부 API·AWS·메일은 부르지 않는다(시세는 시뮬레이터, 메일은 드라이런, LLM 키 없음).
 #
 #   데이터 서버  rehearsal-data      172.30.0.10  data.yml     (Kafka, Postgres 는 이 주소에만 포트를 연다)
-#   서비스 서버  rehearsal-services  172.30.0.11  services.yml (서비스 5개와 DB 표 만들기 단계)
+#   서비스 서버  rehearsal-services  172.30.0.11  services.yml (서비스 6개, 수집기 캐시 Redis, DB 표 만들기 단계)
 #
 # 사용법: infra/deploy/rehearsal/run-rehearsal.sh [all|up|seed|tick|measure|down]   (기본 all)
 #   all      build -> up -> seed -> tick -> 기다림 -> 두 번째 배포 -> 측정 요약 -> down   (메모리는 시작부터 끝까지 5초마다 잰다)
@@ -33,7 +33,9 @@ ENV_DIR=$OUT/env
 DATA_COMPOSE="docker compose -f /repo/infra/deploy/compose/data.yml --env-file /etc/rehearsal/data.env"
 SVC_COMPOSE="docker compose -f /repo/infra/deploy/compose/services.yml --env-file /etc/rehearsal/services.env"
 SERVICE_IMAGES="collector market news notifier briefing ops-checker migrate"
-SERVICES="collector market news notifier briefing ops-checker"
+SERVICES="redis collector market news notifier briefing ops-checker"
+# 운영 compose 의 redis 이미지. 운영처럼 서비스 서버가 직접 받는다(운영 compose 의 platform 이 linux/amd64 라 개발 기계의 이미지를 옮기지 않는다).
+REDIS_IMAGE=redis:8.2.2-alpine
 
 mkdir -p "$OUT"
 
@@ -154,6 +156,7 @@ cmd_up() {
 
   echo "== 이미지 옮기기 =="
   docker save apache/kafka:4.2.2 pgvector/pgvector:0.8.7-pg17-trixie | docker exec -i "$DATA" docker load >/dev/null
+  in_svc docker pull -q --platform linux/amd64 "$REDIS_IMAGE" >/dev/null
   local images=""
   for name in $SERVICE_IMAGES; do images="$images local/stock-reading-$name:dev"; done
   # shellcheck disable=SC2086

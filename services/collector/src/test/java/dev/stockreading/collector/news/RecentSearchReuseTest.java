@@ -27,18 +27,43 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 
-/** #98 최근 검색 다시 쓰기의 끝 기준을 가짜 검색 제공자로 확인한다. */
+/**
+ * #98 최근 검색 다시 쓰기의 끝 기준을 가짜 검색 제공자로 확인한다. 보관소는 테스트용 메모리 구현이며,
+ * RedisRecentSearchesTest 가 이 클래스를 물려받아 같은 테스트를 진짜 Redis 로 한 번 더 돌린다.
+ */
 class RecentSearchReuseTest {
 
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
     private static final Instant START = Instant.parse("2026-10-22T07:10:00Z");
 
+    static final Duration WINDOW = Duration.ofMinutes(15);
+
     private final NewsSearchPort search = mock(NewsSearchPort.class);
     private final MutableClock clock = new MutableClock(START);
 
+    /** 검사할 보관소. 물려받는 테스트가 운영 구현으로 바꾼다. */
+    RecentSearchesPort recentSearches(Clock clock, Duration waitLimit) {
+        return new MemoryRecentSearches(clock, WINDOW, waitLimit);
+    }
+
+    /** 첫 claim 바로 앞에 다른 쪽이 other 를 남기는 보관소. 확인과 표시 사이의 경합을 만든다. */
+    RecentSearchesPort recordingJustBeforeFirstClaim(Clock clock, List<NewsItem> other) {
+        return new MemoryRecentSearches(clock, WINDOW, Duration.ZERO) {
+            private boolean first = true;
+
+            @Override
+            public boolean claim(String key) {
+                if (first) {
+                    first = false;
+                    record(key, other);
+                }
+                return super.claim(key);
+            }
+        };
+    }
+
     private NewsCollector collector(Duration waitLimit) {
-        MemoryRecentSearches recent = new MemoryRecentSearches(clock,
-                new RecentSearchProperties(Duration.ofMinutes(15), waitLimit, 100));
+        RecentSearchesPort recent = recentSearches(clock, waitLimit);
         return new NewsCollector(search, new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 100, 0),
                 clock, ms -> { }, () -> List.of(), recent);
     }
@@ -112,7 +137,7 @@ class RecentSearchReuseTest {
         MutableClock late = new MutableClock(OffsetDateTime.parse("2026-10-23T14:55:00+09:00").toInstant());
         NewsCollector collector = new NewsCollector(search,
                 new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 100, 0), late, ms -> { }, () -> List.of(),
-                new MemoryRecentSearches(late, new RecentSearchProperties(Duration.ofMinutes(15), Duration.ZERO, 100)));
+                recentSearches(late, Duration.ZERO));
 
         assertThat(collector.researchWithStatus(List.of(query("테스트검색어", "TEST01"))).items()).hasSize(1);
         late.advance(Duration.ofMinutes(10));
@@ -194,8 +219,7 @@ class RecentSearchReuseTest {
         when(search.search(eq("테스트검색어"), anyInt()))
                 .thenThrow(new IllegalStateException("응답 해석 실패"))
                 .thenReturn(List.of(article("테스트검색어", "https://a.example.com/1")));
-        MemoryRecentSearches recent = new MemoryRecentSearches(clock,
-                new RecentSearchProperties(Duration.ofMinutes(15), Duration.ofSeconds(5), 100));
+        RecentSearchesPort recent = recentSearches(clock, Duration.ofSeconds(5));
         NewsCollector collector = new NewsCollector(search,
                 new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 100, 0), clock, ms -> { }, () -> List.of(), recent);
 
@@ -212,19 +236,7 @@ class RecentSearchReuseTest {
     void resultRecordedJustBeforeTheClaimIsReusedInsteadOfSearchingAgain() {
         List<NewsItem> other = List.of(article("테스트검색어", "https://a.example.com/1"));
         // 확인과 표시 사이에 다른 쪽이 검색을 끝낸 상황을 만든다.
-        MemoryRecentSearches recent = new MemoryRecentSearches(clock,
-                new RecentSearchProperties(Duration.ofMinutes(15), Duration.ZERO, 100)) {
-            private boolean first = true;
-
-            @Override
-            public boolean claim(String key) {
-                if (first) {
-                    first = false;
-                    record(key, other);
-                }
-                return super.claim(key);
-            }
-        };
+        RecentSearchesPort recent = recordingJustBeforeFirstClaim(clock, other);
 
         RecentSearchesPort.Turn turn = recent.take("테스트검색어");
 
@@ -303,7 +315,7 @@ class RecentSearchReuseTest {
         when(search.search(eq("테스트검색어"), anyInt())).thenReturn(List.of(article("테스트검색어", "https://a.example.com/1")));
         NewsCollector collector = new NewsCollector(search,
                 new NewsSearchProperties("u", "id", "secret", "h1", "h2", 20, 5, 1, 0), clock, ms -> { }, () -> List.of(),
-                new MemoryRecentSearches(clock, new RecentSearchProperties(Duration.ofMinutes(15), Duration.ZERO, 100)));
+                recentSearches(clock, Duration.ZERO));
 
         collector.researchWithStatus(List.of(query("테스트검색어", "TEST01")));
         NewsCollection again = collector.researchWithStatus(List.of(query("테스트검색어", "TEST01")));
@@ -318,22 +330,7 @@ class RecentSearchReuseTest {
         assertThat(RecentSearchesPort.keyOf("ETF")).isNotEqualTo(RecentSearchesPort.keyOf("etf"));
     }
 
-    @Test
-    void oldestQueriesAreDroppedOverTheEntryLimit() {
-        MemoryRecentSearches recent = new MemoryRecentSearches(clock,
-                new RecentSearchProperties(Duration.ofMinutes(15), Duration.ZERO, 2));
-        recent.record("가", List.of());
-        clock.advance(Duration.ofSeconds(1));
-        recent.record("나", List.of());
-        clock.advance(Duration.ofSeconds(1));
-        recent.record("다", List.of());
-
-        assertThat(recent.find("가")).isEmpty();
-        assertThat(recent.find("나")).isPresent();
-        assertThat(recent.find("다")).isPresent();
-    }
-
-    private static final class MutableClock extends Clock {
+    static final class MutableClock extends Clock {
         private volatile Instant now;
 
         MutableClock(Instant start) {

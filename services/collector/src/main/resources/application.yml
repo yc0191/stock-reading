@@ -14,6 +14,14 @@ spring:
     url: jdbc:postgresql://localhost:5432/${POSTGRES_DB:stock}
     username: ${COLLECTOR_DB_USER:collector_svc}
     password: ${COLLECTOR_DB_PASSWORD:}
+  # 최근 검색 결과를 잠시 두는 Redis(ADR-008). 잃어도 되는 캐시라 닿지 않으면 그냥 검색한다.
+  # 제한 시간을 짧게 두어야 Redis가 죽었을 때 검색어마다 오래 묶이지 않는다.
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 500ms
+      connect-timeout: 500ms
   kafka:
     bootstrap-servers: localhost:9092
     consumer:
@@ -191,8 +199,11 @@ collector:
     # 다른 쪽이 같은 검색어를 검색 중일 때 그 결과를 기다리는 상한. 넘으면 직접 검색한다.
     # 검색 한 번의 최대 시간(연결 제한 + 응답 제한, collector.news-search.timeout-seconds 두 번)보다 길게 둔다.
     wait-limit: 25s
-    # 메모리에 남길 검색어 수 상한. 넘으면 지난 결과, 그다음 오래된 검색어부터 지운다.
-    max-entries: 2000
+    # 검색 중 표시(Redis 잠금)가 저절로 풀리는 시간. 표시를 잡은 쪽이 죽어도 이 시간 뒤에는 다른 쪽이 검색한다.
+    # 검색 한 번의 최대 시간보다 길게 둔다.
+    lock-ttl: 30s
+    # 다른 쪽의 검색 결과를 기다릴 때 Redis를 다시 읽는 간격.
+    poll-interval: 200ms
   edgar:
     base-url: https://data.sec.gov
     ticker-map-url: https://www.sec.gov/files/company_tickers_exchange.json
